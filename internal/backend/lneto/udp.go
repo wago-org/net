@@ -9,6 +9,7 @@ import (
 	"github.com/soypat/lneto/ethernet"
 	"github.com/soypat/lneto/ipv4"
 	lnetoudp "github.com/soypat/lneto/udp"
+	lnetocore "github.com/wago-org/net/internal/backend/lneto/core"
 	nscore "github.com/wago-org/net/internal/namespace/core"
 	udpns "github.com/wago-org/net/internal/namespace/udp"
 	"github.com/wago-org/net/internal/policy"
@@ -28,9 +29,10 @@ type udpSocket struct {
 	rx    datagramQueue
 	tx    datagramQueue
 
-	resource *quota.Allocation
-	queued   *quota.Allocation
-	closed   bool
+	portLease *lnetocore.UDPPortLease
+	resource  *quota.Allocation
+	queued    *quota.Allocation
+	closed    bool
 }
 
 type datagramQueue struct {
@@ -156,40 +158,43 @@ func (n *Namespace) tryBindUDP(local nscore.Endpoint) (nscore.Resource, nscore.P
 	if len(n.udpOrder) == int(n.udpConfig.MaxSockets) {
 		return nil, 0, nscore.Fail(nscore.FailureResourceLimit, lneto.ErrExhausted)
 	}
-	if socket := n.udpByPort[local.Port]; socket != nil && !socket.closed {
-		return nil, 0, nscore.Fail(nscore.FailureAddressInUse, lneto.ErrAlreadyRegistered)
-	}
-	if query := n.dnsByPort[local.Port]; query != nil && query.state != dnsQueryClosed {
+	portLease, ok := n.core.TryLeaseUDPPortLocked(local.Port)
+	if !ok {
 		return nil, 0, nscore.Fail(nscore.FailureAddressInUse, lneto.ErrAlreadyRegistered)
 	}
 
 	resourceReservation, err := n.quotas.ReserveResource(quota.ResourceUDP, 1)
 	if err != nil {
+		portLease.ReleaseLocked()
 		return nil, 0, mapError(err)
 	}
 	retainedBytes := uint64(n.udpConfig.MaxPayloadBytes) * uint64(n.udpConfig.ReceiveDatagrams+n.udpConfig.TransmitDatagrams)
 	queuedReservation, err := n.quotas.ReserveQueuedBytes(retainedBytes)
 	if err != nil {
 		resourceReservation.Rollback()
+		portLease.ReleaseLocked()
 		return nil, 0, mapError(err)
 	}
 	resourceAllocation, ok := resourceReservation.Commit()
 	if !ok {
 		queuedReservation.Rollback()
+		portLease.ReleaseLocked()
 		return nil, 0, nscore.Fail(nscore.FailureClosed, quota.ErrClosed)
 	}
 	queuedAllocation, ok := queuedReservation.Commit()
 	if !ok {
 		resourceAllocation.Release()
+		portLease.ReleaseLocked()
 		return nil, 0, nscore.Fail(nscore.FailureClosed, quota.ErrClosed)
 	}
 	socket := &udpSocket{
-		owner:    n,
-		local:    local,
-		rx:       newDatagramQueue(n.udpConfig.ReceiveDatagrams, n.udpConfig.MaxPayloadBytes, n.udpConfig.ReceiveBytes),
-		tx:       newDatagramQueue(n.udpConfig.TransmitDatagrams, n.udpConfig.MaxPayloadBytes, n.udpConfig.TransmitBytes),
-		resource: resourceAllocation,
-		queued:   queuedAllocation,
+		owner:     n,
+		local:     local,
+		portLease: portLease,
+		rx:        newDatagramQueue(n.udpConfig.ReceiveDatagrams, n.udpConfig.MaxPayloadBytes, n.udpConfig.ReceiveBytes),
+		tx:        newDatagramQueue(n.udpConfig.TransmitDatagrams, n.udpConfig.MaxPayloadBytes, n.udpConfig.TransmitBytes),
+		resource:  resourceAllocation,
+		queued:    queuedAllocation,
 	}
 	n.udpByPort[local.Port] = socket
 	n.udpOrder = append(n.udpOrder, socket)
@@ -297,6 +302,10 @@ func (s *udpSocket) closeLocked() error {
 			}
 			break
 		}
+	}
+	if s.portLease != nil {
+		s.portLease.ReleaseLocked()
+		s.portLease = nil
 	}
 	s.rx.clear()
 	s.tx.clear()

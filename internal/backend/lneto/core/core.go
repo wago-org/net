@@ -94,6 +94,7 @@ type Namespace struct {
 	egress                 []egressParticipant
 	egressActive           []bool
 	closers                []closeParticipant
+	udpPorts               map[uint16]*UDPPortLease
 	closed                 bool
 }
 
@@ -268,6 +269,13 @@ func (n *Namespace) Close() error {
 		closer.close()
 	}
 	n.closers = nil
+	for _, lease := range n.udpPorts {
+		lease.owner = nil
+		lease.port = 0
+		lease.active = false
+	}
+	clear(n.udpPorts)
+	n.udpPorts = nil
 	n.ingress = nil
 	n.egress = nil
 	n.egressActive = nil

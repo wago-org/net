@@ -12,6 +12,7 @@ import (
 	"github.com/soypat/lneto/ethernet"
 	"github.com/soypat/lneto/ipv4"
 	lnetoudp "github.com/soypat/lneto/udp"
+	lnetocore "github.com/wago-org/net/internal/backend/lneto/core"
 	nscore "github.com/wago-org/net/internal/namespace/core"
 	dnsns "github.com/wago-org/net/internal/namespace/dns"
 	"github.com/wago-org/net/internal/policy"
@@ -56,9 +57,10 @@ type dnsQuery struct {
 	state     dnsQueryState
 	failure   error
 
-	resource *quota.Allocation
-	queued   *quota.Allocation
-	work     *quota.Allocation
+	portLease *lnetocore.UDPPortLease
+	resource  *quota.Allocation
+	queued    *quota.Allocation
+	work      *quota.Allocation
 }
 
 func (n *Namespace) tryResolve(request dnsns.Request) (nscore.Resource, nscore.Progress, error) {
@@ -82,23 +84,27 @@ func (n *Namespace) tryResolve(request dnsns.Request) (nscore.Resource, nscore.P
 	if len(n.dnsQueries) == int(n.dnsConfig.MaxQueries) {
 		return nil, 0, nscore.Fail(nscore.FailureResourceLimit, lneto.ErrExhausted)
 	}
-	localPort, ok := n.allocateDNSPortLocked()
+	portLease, ok := n.allocateDNSPortLocked()
 	if !ok {
 		return nil, 0, nscore.Fail(nscore.FailureResourceLimit, lneto.ErrExhausted)
 	}
+	localPort := portLease.UDPPort()
 	packet, err := buildDNSQueryPacket(request, n.nextDNSTxID, n.dnsConfig.MaxResponseBytes)
 	if err != nil {
+		portLease.ReleaseLocked()
 		return nil, 0, mapError(err)
 	}
 
 	resourceReservation, err := n.quotas.ReserveResource(quota.ResourceDNS, 1)
 	if err != nil {
+		portLease.ReleaseLocked()
 		return nil, 0, mapError(err)
 	}
 	retainedBytes := dnsRetainedBytes(n.dnsConfig)
 	queuedReservation, err := n.quotas.ReserveQueuedBytes(retainedBytes)
 	if err != nil {
 		resourceReservation.Rollback()
+		portLease.ReleaseLocked()
 		return nil, 0, mapError(err)
 	}
 	workUnits := uint64(1)
@@ -109,29 +115,33 @@ func (n *Namespace) tryResolve(request dnsns.Request) (nscore.Resource, nscore.P
 	if err != nil {
 		queuedReservation.Rollback()
 		resourceReservation.Rollback()
+		portLease.ReleaseLocked()
 		return nil, 0, mapError(err)
 	}
 	resourceAllocation, ok := resourceReservation.Commit()
 	if !ok {
 		workReservation.Rollback()
 		queuedReservation.Rollback()
+		portLease.ReleaseLocked()
 		return nil, 0, nscore.Fail(nscore.FailureClosed, quota.ErrClosed)
 	}
 	queuedAllocation, ok := queuedReservation.Commit()
 	if !ok {
 		workReservation.Rollback()
 		resourceAllocation.Release()
+		portLease.ReleaseLocked()
 		return nil, 0, nscore.Fail(nscore.FailureClosed, quota.ErrClosed)
 	}
 	workAllocation, ok := workReservation.Commit()
 	if !ok {
 		queuedAllocation.Release()
 		resourceAllocation.Release()
+		portLease.ReleaseLocked()
 		return nil, 0, nscore.Fail(nscore.FailureClosed, quota.ErrClosed)
 	}
 
 	query := &dnsQuery{
-		owner: n, request: request, localPort: localPort, txid: n.nextDNSTxID,
+		owner: n, request: request, localPort: localPort, txid: n.nextDNSTxID, portLease: portLease,
 		packet: packet, records: make([]dnsns.Record, 0, n.dnsConfig.MaxRecords),
 		state: dnsQueryPending, resource: resourceAllocation, queued: queuedAllocation, work: workAllocation,
 	}
@@ -230,6 +240,10 @@ func (q *dnsQuery) closeLocked() error {
 	q.records = nil
 	q.request = dnsns.Request{}
 	q.failure = nil
+	if q.portLease != nil {
+		q.portLease.ReleaseLocked()
+		q.portLease = nil
+	}
 	q.releaseQuotaLocked()
 	return nil
 }
@@ -715,26 +729,13 @@ func validDNSConfig(config DNSConfig, mtu int, compiled *policy.Policy, account 
 		config.MaxResponseBytes <= int(^uint16(0)) && config.MaxAttempts > 0 && config.RetryServiceAttempts > 0
 }
 
-func (n *Namespace) allocateDNSPortLocked() (uint16, bool) {
+func (n *Namespace) allocateDNSPortLocked() (*lnetocore.UDPPortLease, bool) {
 	attempts := int(n.dnsConfig.MaxQueries) + len(n.udpOrder) + 1
-	port := n.nextDNSPort
-	if port < firstEphemeralDNSPort {
-		port = firstEphemeralDNSPort
+	lease, next, ok := n.core.TryLeaseUDPPortRangeLocked(n.nextDNSPort, firstEphemeralDNSPort, attempts)
+	if ok {
+		n.nextDNSPort = next
 	}
-	for range attempts {
-		if n.dnsByPort[port] == nil && n.udpByPort[port] == nil {
-			n.nextDNSPort = port + 1
-			if n.nextDNSPort < firstEphemeralDNSPort {
-				n.nextDNSPort = firstEphemeralDNSPort
-			}
-			return port, true
-		}
-		port++
-		if port < firstEphemeralDNSPort {
-			port = firstEphemeralDNSPort
-		}
-	}
-	return 0, false
+	return lease, ok
 }
 
 func removeDNSQuery(owner *Namespace, target *dnsQuery) {
