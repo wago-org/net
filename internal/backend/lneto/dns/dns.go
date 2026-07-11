@@ -1,4 +1,4 @@
-package lnetobackend
+package dns
 
 import (
 	"encoding/binary"
@@ -25,15 +25,69 @@ const firstEphemeralDNSPort uint16 = 53000
 
 var errPolicyDenied = errors.New("net: endpoint policy denied operation")
 
-// DNSConfig fixes resolver authority, response retention, concurrency, and
+const (
+	serviceOrder = 10
+	closeOrder   = 10
+)
+
+// Config fixes resolver authority, response retention, concurrency, and
 // deterministic retransmission work. Zero MaxQueries disables DNS truthfully.
-type DNSConfig struct {
+type Config struct {
 	Server               netip.Addr
 	MaxQueries           uint16
 	MaxRecords           uint16
 	MaxResponseBytes     int
 	MaxAttempts          uint16
 	RetryServiceAttempts uint16
+}
+
+// Adapter owns DNS query state, wire codecs, retries, response retention, and
+// UDP service participation over one shared lneto core.
+type Adapter struct {
+	core                   *lnetocore.Namespace
+	config                 Config
+	ipv4Address            netip.Addr
+	hardwareAddress        [6]byte
+	gatewayHardwareAddress [6]byte
+	policy                 *policy.Policy
+	quotas                 *quota.Account
+	queries                []*dnsQuery
+	byPort                 map[uint16]*dnsQuery
+	cursor                 int
+	nextPort               uint16
+	nextTxID               uint16
+}
+
+// New attaches DNS-local state and its bounded service participant to common.
+func New(common *lnetocore.Namespace, config Config) (*Adapter, error) {
+	if common == nil {
+		return nil, nscore.Fail(nscore.FailureInvalidArgument, lneto.ErrInvalidConfig)
+	}
+	common.Lock()
+	if common.ClosedLocked() || !ValidConfig(config, common.RequiredFrameBytesLocked()-14, common.PolicyLocked(), common.QuotasLocked(), true) {
+		common.Unlock()
+		return nil, nscore.Fail(nscore.FailureInvalidArgument, lneto.ErrInvalidConfig)
+	}
+	n := &Adapter{
+		core: common, config: config,
+		ipv4Address: common.IPv4AddressLocked(), hardwareAddress: common.HardwareAddressLocked(),
+		gatewayHardwareAddress: common.GatewayHardwareAddressLocked(), policy: common.PolicyLocked(), quotas: common.QuotasLocked(),
+		queries: make([]*dnsQuery, 0, config.MaxQueries), byPort: make(map[uint16]*dnsQuery, config.MaxQueries),
+		nextPort: firstEphemeralDNSPort, nextTxID: uint16(common.RandSeedLocked()) | 1,
+	}
+	common.Unlock()
+	if err := common.Install(lnetocore.Participant{
+		IngressOrder: serviceOrder,
+		Ingress:      n.ingressLocked,
+		EgressOrder:  serviceOrder,
+		HasEgress:    n.hasWorkLocked,
+		Egress:       n.egressLocked,
+		CloseOrder:   closeOrder,
+		Close:        n.CloseLocked,
+	}); err != nil {
+		return nil, err
+	}
+	return n, nil
 }
 
 type dnsQueryState uint8
@@ -47,7 +101,7 @@ const (
 )
 
 type dnsQuery struct {
-	owner     *Namespace
+	owner     *Adapter
 	request   dnsns.Request
 	localPort uint16
 	txid      uint16
@@ -65,49 +119,49 @@ type dnsQuery struct {
 	work      *quota.Allocation
 }
 
-func (n *Namespace) tryResolve(request dnsns.Request) (nscore.Resource, nscore.Progress, error) {
+func (n *Adapter) TryResolve(request dnsns.Request) (nscore.Resource, nscore.Progress, error) {
 	if n == nil {
 		return nil, 0, nscore.Fail(nscore.FailureClosed, net.ErrClosed)
 	}
 	n.core.Lock()
 	defer n.core.Unlock()
-	if n.core.ClosedLocked() || n.stack == nil {
+	if n.core.ClosedLocked() {
 		return nil, 0, nscore.Fail(nscore.FailureClosed, net.ErrClosed)
 	}
 	if !request.Valid() {
 		return nil, 0, nscore.Fail(nscore.FailureInvalidArgument, lneto.ErrInvalidAddr)
 	}
-	if n.dnsConfig.MaxQueries == 0 {
+	if n.config.MaxQueries == 0 {
 		return nil, 0, nscore.Fail(nscore.FailureNotSupported, lneto.ErrUnsupported)
 	}
 	if !n.policy.CheckDNS(policy.OperationDNSResolve, request.Name) {
 		return nil, 0, nscore.Fail(nscore.FailureAccessDenied, errPolicyDenied)
 	}
-	if len(n.dnsQueries) == int(n.dnsConfig.MaxQueries) {
+	if len(n.queries) == int(n.config.MaxQueries) {
 		return nil, 0, nscore.Fail(nscore.FailureResourceLimit, lneto.ErrExhausted)
 	}
-	portLease, ok := n.allocateDNSPortLocked()
+	portLease, ok := n.allocatePortLocked()
 	if !ok {
 		return nil, 0, nscore.Fail(nscore.FailureResourceLimit, lneto.ErrExhausted)
 	}
 	localPort := portLease.UDPPort()
-	packet, err := buildDNSQueryPacket(request, n.nextDNSTxID, n.dnsConfig.MaxResponseBytes)
+	packet, err := buildDNSQueryPacket(request, n.nextTxID, n.config.MaxResponseBytes)
 	if err != nil {
 		portLease.ReleaseLocked()
-		return nil, 0, mapError(err)
+		return nil, 0, lnetocore.MapError(err)
 	}
 
 	resourceReservation, err := n.quotas.ReserveResource(quota.ResourceDNS, 1)
 	if err != nil {
 		portLease.ReleaseLocked()
-		return nil, 0, mapError(err)
+		return nil, 0, lnetocore.MapError(err)
 	}
-	retainedBytes := dnsRetainedBytes(n.dnsConfig)
+	retainedBytes := dnsRetainedBytes(n.config)
 	queuedReservation, err := n.quotas.ReserveQueuedBytes(retainedBytes)
 	if err != nil {
 		resourceReservation.Rollback()
 		portLease.ReleaseLocked()
-		return nil, 0, mapError(err)
+		return nil, 0, lnetocore.MapError(err)
 	}
 	workUnits := uint64(1)
 	if request.Types == dnsns.RecordsA|dnsns.RecordsAAAA {
@@ -118,7 +172,7 @@ func (n *Namespace) tryResolve(request dnsns.Request) (nscore.Resource, nscore.P
 		queuedReservation.Rollback()
 		resourceReservation.Rollback()
 		portLease.ReleaseLocked()
-		return nil, 0, mapError(err)
+		return nil, 0, lnetocore.MapError(err)
 	}
 	resourceAllocation, ok := resourceReservation.Commit()
 	if !ok {
@@ -143,16 +197,16 @@ func (n *Namespace) tryResolve(request dnsns.Request) (nscore.Resource, nscore.P
 	}
 
 	query := &dnsQuery{
-		owner: n, request: request, localPort: localPort, txid: n.nextDNSTxID, portLease: portLease,
-		packet: packet, records: make([]dnsns.Record, 0, n.dnsConfig.MaxRecords),
+		owner: n, request: request, localPort: localPort, txid: n.nextTxID, portLease: portLease,
+		packet: packet, records: make([]dnsns.Record, 0, n.config.MaxRecords),
 		state: dnsQueryPending, resource: resourceAllocation, queued: queuedAllocation, work: workAllocation,
 	}
-	n.nextDNSTxID++
-	if n.nextDNSTxID == 0 {
-		n.nextDNSTxID = 1
+	n.nextTxID++
+	if n.nextTxID == 0 {
+		n.nextTxID = 1
 	}
-	n.dnsByPort[localPort] = query
-	n.dnsQueries = append(n.dnsQueries, query)
+	n.byPort[localPort] = query
+	n.queries = append(n.queries, query)
 	return query, nscore.ProgressInProgress, nil
 }
 
@@ -231,8 +285,8 @@ func (q *dnsQuery) closeLocked() error {
 	}
 	q.state = dnsQueryClosed
 	if q.owner != nil {
-		delete(q.owner.dnsByPort, q.localPort)
-		removeDNSQuery(q.owner, q)
+		delete(q.owner.byPort, q.localPort)
+		removeQuery(q.owner, q)
 	}
 	clear(q.packet)
 	q.packet = nil
@@ -288,8 +342,23 @@ func (q *dnsQuery) releaseQuotaLocked() {
 	}
 }
 
-func (n *Namespace) hasDNSWorkLocked() bool {
-	for _, query := range n.dnsQueries {
+// CloseLocked releases every DNS query and retained allocation. The caller
+// must hold the shared core lock.
+func (n *Adapter) CloseLocked() {
+	if n == nil {
+		return
+	}
+	for len(n.queries) > 0 {
+		_ = n.queries[len(n.queries)-1].closeLocked()
+	}
+	clear(n.byPort)
+	n.byPort = nil
+	n.queries = nil
+	n.cursor = 0
+}
+
+func (n *Adapter) hasWorkLocked() bool {
+	for _, query := range n.queries {
 		if query != nil && (query.state == dnsQueryPending || query.state == dnsQueryWaiting) {
 			return true
 		}
@@ -297,31 +366,31 @@ func (n *Namespace) hasDNSWorkLocked() bool {
 	return false
 }
 
-// egressDNSLocked performs one bounded query operation. worked may be true
+// egressLocked performs one bounded query operation. worked may be true
 // with a zero packet when one retry countdown or timeout transition completed.
-func (n *Namespace) egressDNSLocked(dst []byte) (written int, worked bool, err error) {
-	if len(n.dnsQueries) == 0 {
+func (n *Adapter) egressLocked(dst []byte) (written int, worked bool, err error) {
+	if len(n.queries) == 0 {
 		return 0, false, nil
 	}
-	for offset := 0; offset < len(n.dnsQueries); offset++ {
-		index := n.dnsCursor + offset
-		if index >= len(n.dnsQueries) {
-			index -= len(n.dnsQueries)
+	for offset := 0; offset < len(n.queries); offset++ {
+		index := n.cursor + offset
+		if index >= len(n.queries) {
+			index -= len(n.queries)
 		}
-		query := n.dnsQueries[index]
+		query := n.queries[index]
 		if query == nil || (query.state != dnsQueryPending && query.state != dnsQueryWaiting) {
 			continue
 		}
-		n.dnsCursor = index + 1
-		if n.dnsCursor == len(n.dnsQueries) {
-			n.dnsCursor = 0
+		n.cursor = index + 1
+		if n.cursor == len(n.queries) {
+			n.cursor = 0
 		}
 		if query.state == dnsQueryWaiting {
 			if query.retry > 1 {
 				query.retry--
 				return 0, true, nil
 			}
-			if query.attempts >= n.dnsConfig.MaxAttempts {
+			if query.attempts >= n.config.MaxAttempts {
 				query.failLocked(nscore.FailureTimedOut, errors.New("DNS response service-attempt limit reached"))
 				return 0, true, nil
 			}
@@ -346,7 +415,7 @@ func (n *Namespace) egressDNSLocked(dst []byte) (written int, worked bool, err e
 		ipFrame.SetTTL(64)
 		ipFrame.SetProtocol(lneto.IPProtoUDP)
 		*ipFrame.SourceAddr() = n.ipv4Address.As4()
-		*ipFrame.DestinationAddr() = n.dnsConfig.Server.As4()
+		*ipFrame.DestinationAddr() = n.config.Server.As4()
 		ipFrame.SetCRC(0)
 		ipFrame.SetCRC(ipFrame.CalculateHeaderCRC())
 		udpFrame, _ := lnetoudp.NewFrame(frame[14+20:])
@@ -359,14 +428,14 @@ func (n *Namespace) egressDNSLocked(dst []byte) (written int, worked bool, err e
 		ipFrame.CRCWriteUDPPseudo(&checksum, udpFrame.Length())
 		udpFrame.SetCRC(lneto.NeverZeroSum(checksum.PayloadSum16(udpFrame.RawData()[:udpFrame.Length()])))
 		query.attempts++
-		query.retry = n.dnsConfig.RetryServiceAttempts
+		query.retry = n.config.RetryServiceAttempts
 		query.state = dnsQueryWaiting
 		return frameBytes, true, nil
 	}
 	return 0, false, nil
 }
 
-func (n *Namespace) ingressDNSLocked(frame []byte) (bool, error) {
+func (n *Adapter) ingressLocked(frame []byte) (bool, error) {
 	ethernetFrame, err := ethernet.NewFrame(frame)
 	if err != nil || ethernetFrame.EtherTypeOrSize() != ethernet.TypeIPv4 {
 		return false, err
@@ -383,8 +452,8 @@ func (n *Namespace) ingressDNSLocked(frame []byte) (bool, error) {
 	if err != nil {
 		return false, nil
 	}
-	query := n.dnsByPort[udpFrame.DestinationPort()]
-	if query == nil || query.state == dnsQueryClosed || netip.AddrFrom4(*ipFrame.SourceAddr()) != n.dnsConfig.Server || udpFrame.SourcePort() != lnetodns.ServerPort {
+	query := n.byPort[udpFrame.DestinationPort()]
+	if query == nil || query.state == dnsQueryClosed || netip.AddrFrom4(*ipFrame.SourceAddr()) != n.config.Server || udpFrame.SourcePort() != lnetodns.ServerPort {
 		return false, nil
 	}
 	var validator lneto.Validator
@@ -412,11 +481,11 @@ func (n *Namespace) ingressDNSLocked(frame []byte) (bool, error) {
 		}
 	}
 	payload := udpFrame.RawData()[8:udpLength]
-	if len(payload) > n.dnsConfig.MaxResponseBytes {
+	if len(payload) > n.config.MaxResponseBytes {
 		query.failLocked(nscore.FailureMessageTooLarge, lneto.ErrShortBuffer)
 		return true, nil
 	}
-	records, response, failure, err := parseDNSResponse(payload, query.txid, query.request, int(n.dnsConfig.MaxRecords))
+	records, response, failure, err := parseDNSResponse(payload, query.txid, query.request, int(n.config.MaxRecords))
 	if !response {
 		return true, nil
 	}
@@ -715,13 +784,14 @@ func decodeDNSName(message []byte, offset int) (string, int, error) {
 	}
 }
 
-func dnsRetainedBytes(config DNSConfig) uint64 {
+func dnsRetainedBytes(config Config) uint64 {
 	return uint64(config.MaxResponseBytes) + uint64(config.MaxRecords)*(2*254+16) + 2*254
 }
 
-func validDNSConfig(config DNSConfig, mtu int, compiled *policy.Policy, account *quota.Account, requireAuthority bool) bool {
+// ValidConfig validates DNS-local resolver, storage, retry, and authority bounds.
+func ValidConfig(config Config, mtu int, compiled *policy.Policy, account *quota.Account, requireAuthority bool) bool {
 	if config.MaxQueries == 0 {
-		return config == (DNSConfig{})
+		return config == (Config{})
 	}
 	if requireAuthority && (compiled == nil || account == nil) {
 		return false
@@ -731,32 +801,32 @@ func validDNSConfig(config DNSConfig, mtu int, compiled *policy.Policy, account 
 		config.MaxResponseBytes <= int(^uint16(0)) && config.MaxAttempts > 0 && config.RetryServiceAttempts > 0
 }
 
-func (n *Namespace) allocateDNSPortLocked() (*lnetocore.UDPPortLease, bool) {
-	attempts := int(n.dnsConfig.MaxQueries) + n.core.UDPPortLeaseCountLocked() + 1
-	lease, next, ok := n.core.TryLeaseUDPPortRangeLocked(n.nextDNSPort, firstEphemeralDNSPort, attempts)
+func (n *Adapter) allocatePortLocked() (*lnetocore.UDPPortLease, bool) {
+	attempts := int(n.config.MaxQueries) + n.core.UDPPortLeaseCountLocked() + 1
+	lease, next, ok := n.core.TryLeaseUDPPortRangeLocked(n.nextPort, firstEphemeralDNSPort, attempts)
 	if ok {
-		n.nextDNSPort = next
+		n.nextPort = next
 	}
 	return lease, ok
 }
 
-func removeDNSQuery(owner *Namespace, target *dnsQuery) {
+func removeQuery(owner *Adapter, target *dnsQuery) {
 	if owner == nil {
 		return
 	}
-	for i, query := range owner.dnsQueries {
+	for i, query := range owner.queries {
 		if query != target {
 			continue
 		}
-		copy(owner.dnsQueries[i:], owner.dnsQueries[i+1:])
-		owner.dnsQueries[len(owner.dnsQueries)-1] = nil
-		owner.dnsQueries = owner.dnsQueries[:len(owner.dnsQueries)-1]
-		if len(owner.dnsQueries) == 0 {
-			owner.dnsCursor = 0
-		} else if owner.dnsCursor > i {
-			owner.dnsCursor--
-		} else if owner.dnsCursor >= len(owner.dnsQueries) {
-			owner.dnsCursor = 0
+		copy(owner.queries[i:], owner.queries[i+1:])
+		owner.queries[len(owner.queries)-1] = nil
+		owner.queries = owner.queries[:len(owner.queries)-1]
+		if len(owner.queries) == 0 {
+			owner.cursor = 0
+		} else if owner.cursor > i {
+			owner.cursor--
+		} else if owner.cursor >= len(owner.queries) {
+			owner.cursor = 0
 		}
 		return
 	}

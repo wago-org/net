@@ -129,7 +129,7 @@ git diff --exit-code -- go.mod go.sum
 record_check go-mod-tidy pass 'no module-file changes'
 
 log "bounded fuzz corpus smoke ($fuzztime each)"
-go test ./internal/backend/lneto -run '^$' -fuzz '^FuzzDNSWireResponse$' -fuzztime="$fuzztime" | tee "$out/fuzz-dns-wire.txt"
+go test ./internal/backend/lneto/dns -run '^$' -fuzz '^FuzzDNSWireResponse$' -fuzztime="$fuzztime" | tee "$out/fuzz-dns-wire.txt"
 record_check fuzz-dns-wire pass "$fuzztime"
 go test ./internal/abi -run '^$' -fuzz '^FuzzDNSV1Layouts$' -fuzztime="$fuzztime" | tee "$out/fuzz-dns-layout.txt"
 record_check fuzz-dns-layout pass "$fuzztime"

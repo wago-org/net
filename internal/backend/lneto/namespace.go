@@ -9,6 +9,7 @@ import (
 	lneto "github.com/soypat/lneto"
 	"github.com/soypat/lneto/x/xnet"
 	lnetocore "github.com/wago-org/net/internal/backend/lneto/core"
+	dnsbackend "github.com/wago-org/net/internal/backend/lneto/dns"
 	tcpbackend "github.com/wago-org/net/internal/backend/lneto/tcp"
 	udpbackend "github.com/wago-org/net/internal/backend/lneto/udp"
 	nscore "github.com/wago-org/net/internal/namespace/core"
@@ -20,17 +21,16 @@ import (
 
 var _ nscore.Namespace = (*Namespace)(nil)
 
-const (
-	dnsServiceOrder = 10
-	dnsCloseOrder   = 10
-	tcpCloseOrder   = 20
-)
+const tcpCloseOrder = 20
 
 // UDPConfig is the UDP adapter's finite socket and datagram storage contract.
 type UDPConfig = udpbackend.Config
 
 // TCPConfig is the TCP adapter's finite listener/stream storage contract.
 type TCPConfig = tcpbackend.Config
+
+// DNSConfig is the DNS adapter's finite query and retry storage contract.
+type DNSConfig = dnsbackend.Config
 
 // Config fixes all memory, authority, accounting, and identity used by one
 // static IPv4 lneto namespace.
@@ -53,24 +53,12 @@ type Config struct {
 // stack and frame-size aliases are temporary compatibility details for focused
 // same-package tests; ownership remains in core.
 type Namespace struct {
-	core                   *lnetocore.Namespace
-	stack                  *xnet.StackAsync
-	requiredFrameBytes     int
-	ipv4Address            netip.Addr
-	hardwareAddress        [6]byte
-	gatewayHardwareAddress [6]byte
-
-	policy *policy.Policy
-	quotas *quota.Account
-
-	tcp         *tcpbackend.Adapter
-	udp         *udpbackend.Adapter
-	dnsConfig   DNSConfig
-	dnsQueries  []*dnsQuery
-	dnsByPort   map[uint16]*dnsQuery
-	dnsCursor   int
-	nextDNSPort uint16
-	nextDNSTxID uint16
+	core               *lnetocore.Namespace
+	stack              *xnet.StackAsync
+	requiredFrameBytes int
+	tcp                *tcpbackend.Adapter
+	udp                *udpbackend.Adapter
+	dns                *dnsbackend.Adapter
 }
 
 // ValidateConfig reports whether config can construct a static IPv4 namespace
@@ -105,38 +93,19 @@ func New(config Config) (*Namespace, error) {
 		_ = common.Close()
 		return nil, err
 	}
+	dnsAdapter, err := dnsbackend.New(common, config.DNS)
+	if err != nil {
+		_ = common.Close()
+		return nil, err
+	}
 	n := &Namespace{
-		core:                   common,
-		stack:                  stack,
-		requiredFrameBytes:     int(config.MTU) + 14,
-		ipv4Address:            config.IPv4Address,
-		hardwareAddress:        config.HardwareAddress,
-		gatewayHardwareAddress: config.GatewayHardwareAddress,
-		policy:                 config.Policy,
-		quotas:                 config.Quotas,
-		tcp:                    tcpAdapter,
-		udp:                    udpAdapter,
-		dnsConfig:              config.DNS,
-		dnsQueries:             make([]*dnsQuery, 0, config.DNS.MaxQueries),
-		dnsByPort:              make(map[uint16]*dnsQuery, config.DNS.MaxQueries),
-		nextDNSPort:            firstEphemeralDNSPort,
-		nextDNSTxID:            uint16(config.RandSeed) | 1,
+		core: common, stack: stack, requiredFrameBytes: int(config.MTU) + 14,
+		tcp: tcpAdapter, udp: udpAdapter, dns: dnsAdapter,
 	}
-	participants := []lnetocore.Participant{
-		{
-			IngressOrder: dnsServiceOrder,
-			Ingress:      n.ingressDNSLocked,
-			EgressOrder:  dnsServiceOrder,
-			HasEgress:    n.hasDNSWorkLocked,
-			Egress:       n.egressDNSLocked,
-			CloseOrder:   dnsCloseOrder,
-			Close:        n.closeDNSLocked,
-		},
-		{
-			CloseOrder: tcpCloseOrder,
-			Close:      tcpAdapter.CloseLocked,
-		},
-	}
+	participants := []lnetocore.Participant{{
+		CloseOrder: tcpCloseOrder,
+		Close:      tcpAdapter.CloseLocked,
+	}}
 	for _, participant := range participants {
 		if err := common.Install(participant); err != nil {
 			_ = common.Close()
@@ -186,16 +155,6 @@ func (n *Namespace) Close() error {
 	return err
 }
 
-func (n *Namespace) closeDNSLocked() {
-	for len(n.dnsQueries) > 0 {
-		n.dnsQueries[len(n.dnsQueries)-1].closeLocked()
-	}
-	clear(n.dnsByPort)
-	n.dnsByPort = nil
-	n.dnsQueries = nil
-	n.dnsCursor = 0
-}
-
 func (n *Namespace) TryBindUDP(local nscore.Endpoint) (nscore.Resource, nscore.Progress, error) {
 	if n == nil || n.udp == nil {
 		return nil, 0, nscore.Fail(nscore.FailureClosed, net.ErrClosed)
@@ -218,7 +177,10 @@ func (n *Namespace) TryConnectTCP(remote nscore.Endpoint) (nscore.Resource, nsco
 }
 
 func (n *Namespace) TryResolve(request dnsns.Request) (nscore.Resource, nscore.Progress, error) {
-	return n.tryResolve(request)
+	if n == nil || n.dns == nil {
+		return nil, 0, nscore.Fail(nscore.FailureClosed, net.ErrClosed)
+	}
+	return n.dns.TryResolve(request)
 }
 
 func (n *Namespace) TryService(budget nscore.ServiceBudget) (nscore.ServiceReport, nscore.Progress, error) {
@@ -246,7 +208,7 @@ func (n *Namespace) checkEndpoint(endpoint nscore.Endpoint) error {
 func validConfig(config Config, requireAuthority bool) bool {
 	if tcpbackend.ValidConfig(config.TCP, config.Policy, config.Quotas, requireAuthority) == false ||
 		udpbackend.ValidConfig(config.UDP, int(config.MTU), config.Policy, config.Quotas, requireAuthority) == false ||
-		validDNSConfig(config.DNS, int(config.MTU), config.Policy, config.Quotas, requireAuthority) == false {
+		dnsbackend.ValidConfig(config.DNS, int(config.MTU), config.Policy, config.Quotas, requireAuthority) == false {
 		return false
 	}
 	return lnetocore.ValidateConfig(coreConfig(config)) == nil

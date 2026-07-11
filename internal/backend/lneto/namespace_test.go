@@ -319,6 +319,38 @@ func TestUDPConcurrentOperationsAndDeterministicClose(t *testing.T) {
 	}
 }
 
+func TestUDPAndDNSShareExactPortOwnership(t *testing.T) {
+	config := testConfig(29)
+	compiled, err := policy.Compile(policy.Config{Rules: []policy.Rule{
+		{Action: policy.ActionAllow, Transports: []policy.Transport{policy.TransportUDP}, Directions: []policy.Direction{policy.DirectionInbound, policy.DirectionOutbound}, Prefixes: []netip.Prefix{netip.MustParsePrefix("192.0.2.0/24")}},
+		{Action: policy.ActionAllow, Transports: []policy.Transport{policy.TransportDNS}, Directions: []policy.Direction{policy.DirectionOutbound}, DNSSuffixes: []string{"example.com"}},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	config.Policy = compiled
+	config.Quotas = quota.NewAccount(quota.Limits{Resources: 4, UDPResources: 2, DNSResources: 2, QueuedBytes: 16 << 10, DNSWork: 2})
+	config.UDP = UDPConfig{MaxSockets: 2, ReceiveBytes: 32, TransmitBytes: 32, ReceiveDatagrams: 1, TransmitDatagrams: 1, MaxPayloadBytes: 32}
+	config.DNS = DNSConfig{Server: netip.MustParseAddr("192.0.2.53"), MaxQueries: 1, MaxRecords: 2, MaxResponseBytes: 512, MaxAttempts: 1, RetryServiceAttempts: 1}
+	ns := newTestNamespace(t, config)
+	resource, progress, err := ns.TryResolve(namespace.DNSRequest{Name: "example.com", Types: namespace.DNSRecordsA})
+	if err != nil || progress != namespace.ProgressInProgress {
+		t.Fatalf("resolve = %T, %v, %v", resource, progress, err)
+	}
+	query := resource.(namespace.DNSQuery)
+	colliding := namespace.Endpoint{Address: config.IPv4Address, Port: 53000}
+	if _, _, err := ns.TryBindUDP(colliding); requireFailure(t, err) != namespace.FailureAddressInUse {
+		t.Fatalf("DNS/UDP collision error = %v", err)
+	}
+	if err := query.Close(); err != nil {
+		t.Fatal(err)
+	}
+	socket, progress, err := ns.TryBindUDP(colliding)
+	if err != nil || progress != namespace.ProgressDone || socket == nil {
+		t.Fatalf("released DNS port bind = %T, %v, %v", socket, progress, err)
+	}
+}
+
 func TestUDPBindDenialAndUnsupportedFamilies(t *testing.T) {
 	config := udpTestConfig(t, 24)
 	ns := newTestNamespace(t, config)

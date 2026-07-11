@@ -49,6 +49,7 @@ func TestFixtureDependencyBoundaries(t *testing.T) {
 				modulePath + "/internal/namespace/core",
 				modulePath + "/internal/backend/lneto",
 				modulePath + "/internal/backend/lneto/core",
+				modulePath + "/internal/backend/lneto/dns",
 				modulePath + "/internal/backend/lneto/tcp",
 				modulePath + "/internal/backend/lneto/udp",
 			} {
@@ -66,10 +67,9 @@ func TestFixtureDependencyBoundaries(t *testing.T) {
 				if dependencies[dependency.public] || dependencies[dependency.binding] || dependencies[dependency.operation] || dependencies[dependency.abi] {
 					t.Fatalf("unselected %s compiled: public=%v binding=%v operation=%v ABI=%v", protocol, dependencies[dependency.public], dependencies[dependency.binding], dependencies[dependency.operation], dependencies[dependency.abi])
 				}
-				// The TCP and UDP adapters are separate packages, but aggregate root
-				// construction still imports both in every fixture until namespace
-				// contributions move into selective descriptors. TCP contracts remain
-				// structural, while DNS is still adapter-facet coupled.
+				// All adapters are now separate packages, but aggregate root construction
+				// still imports all three in every fixture until namespace contributions
+				// move into selective descriptors. TCP contracts remain structural.
 				if protocol == "tcp" && dependencies[dependency.namespace] {
 					t.Fatalf("unselected TCP namespace facet compiled")
 				}

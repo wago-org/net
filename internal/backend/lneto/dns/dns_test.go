@@ -1,4 +1,4 @@
-package lnetobackend
+package dns
 
 import (
 	"encoding/binary"
@@ -11,6 +11,7 @@ import (
 	"github.com/soypat/lneto/ethernet"
 	"github.com/soypat/lneto/ipv4"
 	lnetoudp "github.com/soypat/lneto/udp"
+	lnetocore "github.com/wago-org/net/internal/backend/lneto/core"
 	"github.com/wago-org/net/internal/namespace"
 	"github.com/wago-org/net/internal/packetlink"
 	"github.com/wago-org/net/internal/policy"
@@ -422,7 +423,83 @@ func TestDNSConcurrentOperationsAndNamespaceClose(t *testing.T) {
 	}
 }
 
-func dnsTestConfig(t testing.TB, id byte) Config {
+type namespaceTestConfig struct {
+	Hostname               string
+	RandSeed               int64
+	HardwareAddress        [6]byte
+	GatewayHardwareAddress [6]byte
+	IPv4Address            netip.Addr
+	MTU                    uint16
+	Link                   packetlink.Config
+	DNS                    Config
+	Policy                 *policy.Policy
+	Quotas                 *quota.Account
+}
+
+type testNamespace struct {
+	core               *lnetocore.Namespace
+	adapter            *Adapter
+	requiredFrameBytes int
+}
+
+func newTestNamespace(t testing.TB, config namespaceTestConfig) *testNamespace {
+	t.Helper()
+	common, err := lnetocore.New(lnetocore.Config{
+		Hostname: config.Hostname, RandSeed: config.RandSeed,
+		HardwareAddress: config.HardwareAddress, GatewayHardwareAddress: config.GatewayHardwareAddress,
+		IPv4Address: config.IPv4Address, MTU: config.MTU, Link: config.Link,
+		Policy: config.Policy, Quotas: config.Quotas,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	adapter, err := New(common, config.DNS)
+	if err != nil {
+		_ = common.Close()
+		t.Fatal(err)
+	}
+	ns := &testNamespace{core: common, adapter: adapter, requiredFrameBytes: int(config.MTU) + 14}
+	t.Cleanup(func() { _ = ns.Close() })
+	return ns
+}
+
+func (n *testNamespace) TryResolve(request namespace.DNSRequest) (namespace.Resource, namespace.Progress, error) {
+	return n.adapter.TryResolve(request)
+}
+
+func (n *testNamespace) TryService(budget namespace.ServiceBudget) (namespace.ServiceReport, namespace.Progress, error) {
+	return n.core.TryService(budget)
+}
+
+func (n *testNamespace) Link() *packetlink.Link { return n.core.Link() }
+func (n *testNamespace) Close() error           { return n.core.Close() }
+
+func setNextIngress(n *testNamespace, next bool) {
+	n.core.Lock()
+	n.core.SetNextIngressLocked(next)
+	n.core.Unlock()
+}
+
+func requireFailure(t testing.TB, err error) namespace.Failure {
+	t.Helper()
+	failure, ok := namespace.FailureOf(err)
+	if !ok {
+		t.Fatalf("missing semantic failure: %v", err)
+	}
+	return failure
+}
+
+func testConfig(id byte) namespaceTestConfig {
+	mtu := uint16(ethernet.MaxMTU)
+	return namespaceTestConfig{
+		Hostname: "dns", RandSeed: int64(id) + 1,
+		HardwareAddress: [6]byte{0x02, 0, 0, 0, 0, id}, GatewayHardwareAddress: [6]byte{0x02, 0, 0, 0, 0, id ^ 3},
+		IPv4Address: netip.AddrFrom4([4]byte{192, 0, 2, id}), MTU: mtu,
+		Link: packetlink.Config{MaxFrameBytes: int(mtu) + 14, IngressFrames: 4, EgressFrames: 4},
+	}
+}
+
+func dnsTestConfig(t testing.TB, id byte) namespaceTestConfig {
 	t.Helper()
 	config := testConfig(id)
 	compiled, err := policy.Compile(policy.Config{Rules: []policy.Rule{
@@ -433,7 +510,7 @@ func dnsTestConfig(t testing.TB, id byte) Config {
 	}
 	config.Policy = compiled
 	config.Quotas = quota.NewAccount(quota.Limits{Resources: 4, DNSResources: 4, QueuedBytes: 16 << 10, DNSWork: 8})
-	config.DNS = DNSConfig{
+	config.DNS = Config{
 		Server: netip.MustParseAddr("192.0.2.53"), MaxQueries: 2, MaxRecords: 4,
 		MaxResponseBytes: 512, MaxAttempts: 2, RetryServiceAttempts: 2,
 	}
@@ -441,7 +518,7 @@ func dnsTestConfig(t testing.TB, id byte) Config {
 	return config
 }
 
-func serviceDNSPacket(t testing.TB, ns *Namespace) []byte {
+func serviceDNSPacket(t testing.TB, ns *testNamespace) []byte {
 	t.Helper()
 	setNextIngress(ns, false)
 	budget := namespace.ServiceBudget{Packets: 1, Bytes: uint32(ns.requiredFrameBytes), Operations: 1}
@@ -457,7 +534,7 @@ func serviceDNSPacket(t testing.TB, ns *Namespace) []byte {
 	return append([]byte(nil), buffer[:result.FrameBytes]...)
 }
 
-func serviceDNSMaintenance(t testing.TB, ns *Namespace) namespace.ServiceReport {
+func serviceDNSMaintenance(t testing.TB, ns *testNamespace) namespace.ServiceReport {
 	t.Helper()
 	setNextIngress(ns, false)
 	budget := namespace.ServiceBudget{Packets: 1, Bytes: uint32(ns.requiredFrameBytes), Operations: 1}
@@ -485,7 +562,7 @@ func dnsPacketIdentity(t testing.TB, packet []byte) (uint16, uint16) {
 	return dnsFrame.TxID(), udpFrame.SourcePort()
 }
 
-func buildDNSResponseFrame(t testing.TB, config Config, txid, destinationPort uint16, question string) []byte {
+func buildDNSResponseFrame(t testing.TB, config namespaceTestConfig, txid, destinationPort uint16, question string) []byte {
 	t.Helper()
 	questionName := lnetodns.MustNewName(question)
 	canonical := lnetodns.MustNewName("canonical.example.com")
