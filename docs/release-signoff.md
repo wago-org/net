@@ -78,9 +78,12 @@ Use the same script rather than maintaining a second command matrix:
 Hosted CI cannot truthfully fetch the current Wago prerequisite yet: the merged
 commit above exists on the local `net/instance-close-hooks` audit branch and must
 first be upstreamed without overwriting either Wago main or the divergent worker
-history. Once that commit is published, CI should check out the exact pinned Wago,
-lneto, and WASI revisions in the required adjacent layout and invoke this script.
-Do not replace the pin with a moving branch.
+history. `scripts/wago-upstream-review.sh` and
+`docs/wago-upstream-review.md` verify and document the exact two-parent topology,
+current remote divergence, and immutable-publication requirement. Once that
+commit is published, CI should check out the exact pinned Wago, lneto, and WASI
+revisions in the required adjacent layout and invoke this script. Do not replace
+the pin with a moving branch.
 
 ## Updating pins
 
