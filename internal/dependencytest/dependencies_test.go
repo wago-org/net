@@ -14,10 +14,11 @@ type protocolDependency struct {
 	public    string
 	binding   string
 	operation string
+	abi       string
 }
 
 var protocolDependencies = map[string]protocolDependency{
-	"tcp": {public: modulePath + "/tcp", binding: modulePath + "/internal/binding/tcp", operation: modulePath + "/internal/instance/tcp"},
+	"tcp": {public: modulePath + "/tcp", binding: modulePath + "/internal/binding/tcp", operation: modulePath + "/internal/instance/tcp", abi: modulePath + "/internal/abi/tcp"},
 	"udp": {public: modulePath + "/udp", binding: modulePath + "/internal/binding/udp", operation: modulePath + "/internal/instance/udp"},
 	"dns": {public: modulePath + "/dns", binding: modulePath + "/internal/binding/dns", operation: modulePath + "/internal/instance/dns"},
 }
@@ -42,6 +43,7 @@ func TestFixtureDependencyBoundaries(t *testing.T) {
 			dependencies := listDependencies(t, "./testdata/"+test.name)
 			for _, required := range []string{
 				modulePath,
+				modulePath + "/internal/abi/core",
 				modulePath + "/internal/instance/core",
 				modulePath + "/internal/backend/lneto",
 			} {
@@ -51,13 +53,13 @@ func TestFixtureDependencyBoundaries(t *testing.T) {
 			}
 			for protocol, dependency := range protocolDependencies {
 				if test.selected[protocol] {
-					if !dependencies[dependency.public] || !dependencies[dependency.binding] || (dependency.operation != "" && !dependencies[dependency.operation]) {
-						t.Fatalf("selected %s dependencies absent: public=%v binding=%v operation=%v", protocol, dependencies[dependency.public], dependencies[dependency.binding], dependencies[dependency.operation])
+					if !dependencies[dependency.public] || !dependencies[dependency.binding] || (dependency.operation != "" && !dependencies[dependency.operation]) || (dependency.abi != "" && !dependencies[dependency.abi]) {
+						t.Fatalf("selected %s dependencies absent: public=%v binding=%v operation=%v ABI=%v", protocol, dependencies[dependency.public], dependencies[dependency.binding], dependencies[dependency.operation], dependencies[dependency.abi])
 					}
 					continue
 				}
-				if dependencies[dependency.public] || dependencies[dependency.binding] || (dependency.operation != "" && dependencies[dependency.operation]) {
-					t.Fatalf("unselected %s compiled: public=%v binding=%v operation=%v", protocol, dependencies[dependency.public], dependencies[dependency.binding], dependencies[dependency.operation])
+				if dependencies[dependency.public] || dependencies[dependency.binding] || (dependency.operation != "" && dependencies[dependency.operation]) || (dependency.abi != "" && dependencies[dependency.abi]) {
+					t.Fatalf("unselected %s compiled: public=%v binding=%v operation=%v ABI=%v", protocol, dependencies[dependency.public], dependencies[dependency.binding], dependencies[dependency.operation], dependencies[dependency.abi])
 				}
 			}
 			for _, aggregate := range []string{modulePath + "/compat", modulePath + "/register"} {
