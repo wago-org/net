@@ -69,13 +69,17 @@ cleanup without allocating retained reservation/allocation tokens. Closing an
 instance first closes resources and then closes its quota account, which clears
 abandoned reservations and makes late token cleanup harmless.
 
-`internal/namespace` defines the backend-neutral endpoint, UDP, TCP, DNS,
-readiness, semantic-error, and bounded manual-service contracts. Operations that
-may await network progress are single `Try` calls with explicit would-block or
-in-progress results. Result validators make partial stream I/O, datagram
-truncation, DNS record ownership, and service-budget bounds explicit. A
-compile-time fake backend exercises the contracts without importing lneto; no
-lneto type is part of this layer.
+`internal/namespace/core` defines the backend-neutral endpoint, progress,
+stream-I/O, readiness, semantic-error, resource, namespace ownership, and bounded
+manual-service contracts. `internal/namespace/tcp`, `/udp`, and `/dns` define
+only their narrow creation/resource facets and protocol-local values. Operations
+that may await network progress remain single `Try` calls with explicit
+would-block or in-progress results. Focused fake backends exercise each contract
+without importing lneto; no lneto type is part of these layers. The exact
+instance manager stores one quota-owned core namespace resource and protocol
+operation packages recover that same concrete object through a neutral carrier
+before asserting only their selected facet. This preserves one namespace handle,
+one lifecycle lock, one readiness/service participant, and one teardown path.
 
 `internal/packetlink` owns fixed ingress and egress frame slots. Enqueue copies
 caller data, dequeue has explicit truncation and byte-budget rollback semantics,

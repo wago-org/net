@@ -65,10 +65,15 @@ TCP, UDP, and DNS layouts live only in `internal/abi/tcp`, `/udp`, and `/dns`.
 One protocol-neutral instance core still owns exact attachment, resource
 identity, readiness, quotas, polling, and teardown, while
 `internal/instance/tcp`, `internal/instance/udp`, and `internal/instance/dns`
-serialize their operations through that core. Full compile isolation is not yet
-claimed because the root configuration still constructs the combined lneto
-backend and the namespace contracts remain combined. Package-local finite
-client defaults also remain migration work.
+serialize their operations through that core. Namespace ownership is likewise
+split: `internal/namespace/core` owns shared endpoint, failure, readiness,
+resource, and bounded-service contracts, while `/tcp`, `/udp`, and `/dns` own
+narrow protocol facets and values. Production graphs no longer reach the former
+aggregate namespace compatibility package. TCP namespace facets are already
+absent from non-TCP fixture graphs; UDP and DNS facets remain pulled through the
+unified lneto adapter, so full compile isolation is not yet claimed. Splitting
+that adapter and root aggregate backend construction is the next migration
+stage. Package-local finite client defaults also remain migration work.
 
 The aggregate advanced compatibility path is now explicit:
 

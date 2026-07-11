@@ -28,12 +28,16 @@ independently selected `internal/instance/{tcp,udp,dns}` packages and run under
 the core lifecycle mutex. ABI ownership is also split: `internal/abi/core` owns
 checked memory, address/endpoint, handle, and poll codecs, while
 `internal/abi/{tcp,udp,dns}` own only their fixed protocol layouts. Dependency
-fixtures reject every omitted protocol ABI package. The combined namespace
-contracts, root lneto construction, lneto adapter, protocol-local finite
-defaults, and granular register packages remain unsplit; full compile-time
-isolation is therefore not yet claimed. Standard, race, vet, TinyGo,
-source-boundary, dependency, and focused ABI fuzz-smoke suites pass after the ABI
-split.
+fixtures reject every omitted protocol ABI package. Namespace ownership is now
+split too: `internal/namespace/core` owns shared endpoint/failure/readiness/
+resource/service contracts, and `internal/namespace/{tcp,udp,dns}` own narrow
+protocol facets and values. Production code no longer imports the former
+aggregate compatibility package, and non-TCP graphs reject the TCP facet. The
+root lneto construction and unified adapter still pull UDP and DNS facets into
+all configured graphs, so full compile-time isolation is not yet claimed.
+Protocol-local finite defaults and granular register packages also remain.
+Standard, race, vet, TinyGo, source-boundary, dependency, and focused ABI
+fuzz-smoke suites pass after the namespace split.
 
 ## Goal
 
@@ -154,7 +158,12 @@ to `compat.Init`. Full compile isolation is still blocked for these reasons:
   `internal/instance/{tcp,udp,dns}` contain independently selected operations;
   all use one core lifecycle lock, resource table, readiness coordinator, quota
   account, and deterministic close path.
-- `internal/namespace` still combines common and protocol-specific declarations.
+- `internal/namespace/core` now contains only shared endpoint, progress, stream
+  I/O, readiness, resource, service, and semantic-failure declarations;
+  `internal/namespace/{tcp,udp,dns}` own narrow protocol facets and values. The
+  old aggregate package is compatibility aliases only and is absent from
+  production fixture graphs. The unified lneto adapter still imports UDP and DNS
+  facets, while TCP is implemented structurally without importing its facet.
 - `internal/abi/core` now contains only checked memory, address/endpoint, handle,
   and poll layouts; protocol codecs are isolated in `internal/abi/tcp`, `/udp`,
   and `/dns` and are gated from omitted fixture graphs.
@@ -198,10 +207,12 @@ and close. Move protocol resource operations into protocol packages that operate
 through narrow common services.
 
 Split protocol-specific namespace interfaces and ABI codecs so importing common
-state does not compile every protocol operation. The ABI half is complete:
-status values and genuinely shared checked-memory, address/endpoint, handle, and
-poll layouts remain in `internal/abi/core`, while each protocol owns its fixed
-codecs. Protocol-specific namespace interfaces remain to be split.
+state does not compile every protocol operation. This stage is complete: status
+values and genuinely shared checked-memory, address/endpoint, handle, poll,
+namespace ownership, readiness, resource, service, and failure contracts remain
+in core packages, while each protocol owns its fixed codecs plus narrow
+namespace facets and values. Exact omitted UDP/DNS namespace-graph rejection
+waits on the unified lneto adapter split rather than on the instance/core layer.
 
 ### Stage 4: split the lneto adapter
 
@@ -240,8 +251,10 @@ require `internal/instance/core` and `internal/abi/core` in every graph, require
 only the selected `internal/instance/{tcp,udp,dns}` operation and
 `internal/abi/{tcp,udp,dns}` codec packages, and continue to assert the unified
 `internal/backend/lneto` package remains present so the next split cannot be
-mistaken for completed isolation. Extend the same gate to protocol-specific
-namespace and lneto-adapter packages as those packages are extracted.
+mistaken for completed isolation. The gate now requires the selected protocol namespace facet, rejects the former
+aggregate namespace package from production graphs, and rejects the TCP facet
+from non-TCP graphs. Extend exact omitted-facet rejection to UDP/DNS together
+with protocol-specific lneto-adapter packages when the unified adapter is split.
 
 Run the complete standard, race, vet, fuzz, benchmark, TinyGo, cross-build,
 worker/lifecycle, source-boundary, and release-signoff matrices before declaring
