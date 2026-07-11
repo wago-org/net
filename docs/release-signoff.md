@@ -198,14 +198,19 @@ publish the raw 64-byte detached signature separately. Verification requires an
 operator-supplied canonical trust policy; no repository file, signature field,
 key ID, URL, environment default, or network service is consulted to discover a
 key. The v1 policy has this exact shape, with a canonical padded base64 32-byte
-Ed25519 public key and an opaque local key label:
+Ed25519 public key, an opaque local key label, and optional exact anti-rollback
+constraints. An external activation system should provision both constraints
+through its trusted channel; omitting them preserves key-only verification for
+review interoperability:
 
 ```json
 {
   "schema": "github.com/wago-org/net/distribution-trust-policy/v1",
   "keyId": "publisher-release-2026",
   "algorithm": "ed25519",
-  "publicKey": "<canonical-base64-public-key>"
+  "publicKey": "<canonical-base64-public-key>",
+  "statementSha256": "<64-lowercase-hex-statement-digest>",
+  "subject": "<40-lowercase-hex-plugin-commit>"
 }
 ```
 
@@ -220,14 +225,17 @@ GOWORK=off go run ./internal/cmd/release-review \
   -trust-policy /operator-config/wago-net-trust-policy.json
 ```
 
-The verifier checks the detached signature over the exact canonical statement
+The verifier checks any supplied policy statement-digest and subject constraints
+before accepting the detached signature over the exact canonical statement
 bytes, validates the archive digest before extraction, performs the full
 standalone provenance/source-pack verification, and requires the statement's
 subject, provenance digest, review subjects, and publication status to match the
-archive. The trust-policy key ID is reported as an operator label only and cannot
-trigger implicit key discovery. Unsigned `verify` and strict hash-pinned
-verification remain available for review workflows that do not assert publisher
-authentication.
+archive. This prevents a still-valid signature made by the same key for another
+or older statement from silently satisfying a pinned activation policy. The
+trust-policy key ID is reported as an operator label only and cannot trigger
+implicit key discovery. Unsigned `verify`, unconstrained key-only signed review,
+and strict hash-pinned verification remain available for workflows that do not
+assert a pinned production selection.
 
 ## Production release-candidate readiness
 

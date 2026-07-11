@@ -34,11 +34,15 @@ type DistributionStatement struct {
 
 // DistributionTrustPolicy is supplied explicitly by the verifier. KeyID is an
 // operator label only; it is never interpreted as a path, URL, or discovery key.
+// Optional exact constraints let the operator pin the intended statement and
+// subject independently of the signing key.
 type DistributionTrustPolicy struct {
-	Schema    string `json:"schema"`
-	KeyID     string `json:"keyId"`
-	Algorithm string `json:"algorithm"`
-	PublicKey string `json:"publicKey"`
+	Schema          string `json:"schema"`
+	KeyID           string `json:"keyId"`
+	Algorithm       string `json:"algorithm"`
+	PublicKey       string `json:"publicKey"`
+	StatementSHA256 string `json:"statementSha256,omitempty"`
+	Subject         string `json:"subject,omitempty"`
 }
 
 // TrustedDistribution binds a valid detached signature to the independently
@@ -113,6 +117,11 @@ func verifySignedDistribution(bundle, statementPath, signaturePath, trustPolicyP
 	if err != nil {
 		return nil, err
 	}
+	statementSum := sha256.Sum256(statementData)
+	statementSHA256 := hex.EncodeToString(statementSum[:])
+	if err := enforceDistributionTrustConstraints(&policy, &statement, statementSHA256); err != nil {
+		return nil, err
+	}
 	signature, err := readBoundedFile(signaturePath, ed25519.SignatureSize, "detached signature")
 	if err != nil {
 		return nil, err
@@ -137,9 +146,8 @@ func verifySignedDistribution(bundle, statementPath, signaturePath, trustPolicyP
 		verified.Manifest.Publication != statement.Publication {
 		return nil, fmt.Errorf("release provenance: signed distribution statement does not match verified archive provenance")
 	}
-	sum := sha256.Sum256(statementData)
 	return &TrustedDistribution{
-		Statement: &statement, Verification: verified, KeyID: policy.KeyID, StatementSHA256: hex.EncodeToString(sum[:]),
+		Statement: &statement, Verification: verified, KeyID: policy.KeyID, StatementSHA256: statementSHA256,
 	}, nil
 }
 
@@ -175,11 +183,27 @@ func validateDistributionTrustPolicy(policy *DistributionTrustPolicy) (ed25519.P
 	}) >= 0 {
 		return nil, fmt.Errorf("release provenance: invalid distribution trust policy key ID")
 	}
+	if policy.StatementSHA256 != "" && !validSHA256(policy.StatementSHA256) {
+		return nil, fmt.Errorf("release provenance: invalid distribution trust policy statement SHA-256")
+	}
+	if policy.Subject != "" && !validObjectID(policy.Subject) {
+		return nil, fmt.Errorf("release provenance: invalid distribution trust policy subject")
+	}
 	decoded, err := base64.StdEncoding.Strict().DecodeString(policy.PublicKey)
 	if err != nil || len(decoded) != ed25519.PublicKeySize || base64.StdEncoding.EncodeToString(decoded) != policy.PublicKey {
 		return nil, fmt.Errorf("release provenance: distribution trust policy public key is not canonical Ed25519 base64")
 	}
 	return ed25519.PublicKey(decoded), nil
+}
+
+func enforceDistributionTrustConstraints(policy *DistributionTrustPolicy, statement *DistributionStatement, statementSHA256 string) error {
+	if policy.StatementSHA256 != "" && policy.StatementSHA256 != statementSHA256 {
+		return fmt.Errorf("release provenance: distribution trust policy statement SHA-256 does not match supplied statement")
+	}
+	if policy.Subject != "" && policy.Subject != statement.Subject {
+		return fmt.Errorf("release provenance: distribution trust policy subject does not match supplied statement")
+	}
+	return nil
 }
 
 func decodeCanonicalJSON(data []byte, dst any, label string) error {

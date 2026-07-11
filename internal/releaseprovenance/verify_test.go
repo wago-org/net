@@ -117,11 +117,29 @@ func TestVerifySignedDistributionRequiresExplicitPolicyAndMatchingSignature(t *t
 		t.Fatalf("verify signed distribution: %v", err)
 	}
 	if trusted.KeyID != fixture.keyID || trusted.Statement.Subject != fixture.opts.ExpectedSubject ||
-		trusted.Verification.BundleSHA256 != fixture.bundleHash {
+		trusted.Verification.BundleSHA256 != fixture.bundleHash || trusted.StatementSHA256 != fixture.statementHash {
 		t.Fatalf("trusted distribution = %+v", trusted)
 	}
 	if _, err := verifySignedDistribution(fixture.bundle, fixture.statement, fixture.signature, "", fixture.opts); err == nil {
 		t.Fatal("implicit trust policy discovery unexpectedly accepted")
+	}
+	policyData, err := os.ReadFile(fixture.policy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var policy DistributionTrustPolicy
+	if err := json.Unmarshal(policyData, &policy); err != nil {
+		t.Fatal(err)
+	}
+	policy.StatementSHA256 = ""
+	policy.Subject = ""
+	policyData, err = json.MarshalIndent(&policy, "", "  ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeTestFile(t, fixture.policy, string(append(policyData, '\n')))
+	if _, err := verifySignedDistribution(fixture.bundle, fixture.statement, fixture.signature, fixture.policy, fixture.opts); err != nil {
+		t.Fatalf("key-only signed review mode: %v", err)
 	}
 
 	signature, err := os.ReadFile(fixture.signature)
@@ -136,11 +154,10 @@ func TestVerifySignedDistributionRequiresExplicitPolicyAndMatchingSignature(t *t
 		t.Fatal("wrong detached signature unexpectedly accepted")
 	}
 
-	policyData, err := os.ReadFile(fixture.policy)
+	policyData, err = os.ReadFile(fixture.policy)
 	if err != nil {
 		t.Fatal(err)
 	}
-	var policy DistributionTrustPolicy
 	if err := json.Unmarshal(policyData, &policy); err != nil {
 		t.Fatal(err)
 	}
@@ -153,6 +170,37 @@ func TestVerifySignedDistributionRequiresExplicitPolicyAndMatchingSignature(t *t
 	writeTestFile(t, fixture.policy, string(policyData))
 	if _, err := verifySignedDistribution(fixture.bundle, fixture.statement, fixture.signature, fixture.policy, fixture.opts); err == nil {
 		t.Fatal("discovery-shaped trust policy key ID unexpectedly accepted")
+	}
+}
+
+func TestVerifySignedDistributionEnforcesAntiRollbackConstraints(t *testing.T) {
+	for _, test := range []struct {
+		name   string
+		mutate func(*DistributionTrustPolicy)
+	}{
+		{name: "statement digest", mutate: func(policy *DistributionTrustPolicy) { policy.StatementSHA256 = strings.Repeat("f", 64) }},
+		{name: "subject", mutate: func(policy *DistributionTrustPolicy) { policy.Subject = strings.Repeat("f", 40) }},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			fixture := newSignedDistributionFixture(t)
+			policyData, err := os.ReadFile(fixture.policy)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var policy DistributionTrustPolicy
+			if err := json.Unmarshal(policyData, &policy); err != nil {
+				t.Fatal(err)
+			}
+			test.mutate(&policy)
+			policyData, err = json.MarshalIndent(&policy, "", "  ")
+			if err != nil {
+				t.Fatal(err)
+			}
+			writeTestFile(t, fixture.policy, string(append(policyData, '\n')))
+			if _, err := verifySignedDistribution(fixture.bundle, fixture.statement, fixture.signature, fixture.policy, fixture.opts); err == nil {
+				t.Fatalf("mismatched %s constraint unexpectedly accepted", test.name)
+			}
+		})
 	}
 }
 
@@ -194,7 +242,7 @@ func TestProductionReadinessProfileReportsExactCurrentBlockers(t *testing.T) {
 type signedDistributionFixture struct {
 	bundle, statement, signature, policy string
 	opts                                 VerifyOptions
-	keyID, bundleHash                    string
+	keyID, bundleHash, statementHash     string
 }
 
 func newSignedDistributionFixture(t *testing.T) signedDistributionFixture {
@@ -216,12 +264,14 @@ func newSignedDistributionFixture(t *testing.T) signedDistributionFixture {
 	if err != nil {
 		t.Fatal(err)
 	}
+	statementSum := sha256.Sum256(statementData)
+	statementHash := hex.EncodeToString(statementSum[:])
 	seed := sha256.Sum256([]byte("wago net detached signature test key"))
 	privateKey := ed25519.NewKeyFromSeed(seed[:])
 	publicKey := privateKey.Public().(ed25519.PublicKey)
 	policy := DistributionTrustPolicy{
 		Schema: DistributionTrustPolicySchemaV1, KeyID: "release-test-2026", Algorithm: "ed25519",
-		PublicKey: base64.StdEncoding.EncodeToString(publicKey),
+		PublicKey: base64.StdEncoding.EncodeToString(publicKey), StatementSHA256: statementHash, Subject: opts.ExpectedSubject,
 	}
 	policyData, err := json.MarshalIndent(&policy, "", "  ")
 	if err != nil {
@@ -236,7 +286,7 @@ func newSignedDistributionFixture(t *testing.T) signedDistributionFixture {
 	}
 	return signedDistributionFixture{
 		bundle: bundle, statement: statementPath, signature: signaturePath, policy: policyPath,
-		opts: opts, keyID: policy.KeyID, bundleHash: bundleHash,
+		opts: opts, keyID: policy.KeyID, bundleHash: bundleHash, statementHash: statementHash,
 	}
 }
 
