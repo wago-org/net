@@ -83,7 +83,25 @@ WAGO_DIR="$wago_dir" "$root/scripts/wago-plugin-plan-compat.sh" | tee "$out/wago
 record_check wago-plugin-plan-compat pass 'reviewed redesign requires migration; networking pin unchanged'
 CURRENT_WAGO_DIR="$current_wago_dir" CURRENT_NET_DIR="$current_net_dir" WORKERS_DIR="$workers_dir" \
   "$root/scripts/current-plugin-topology-audit.sh" | tee "$out/current-plugin-topology.txt"
-record_check current-plugin-topology-audit pass 'moving refs refreshed; review-only publication truth; pooling unsupported'
+record_check current-plugin-topology-audit pass 'moving refs refreshed; explicit publication truth; pooling unsupported'
+if grep -q '^adoption mode: adopted$' "$out/current-plugin-topology.txt"; then
+  current_plugin_publication=adopted
+else
+  current_plugin_publication=review-only
+fi
+if grep -q '^production decision: exact ordered-parent Wago merge is fetchable$' "$out/current-plugin-topology.txt"; then
+  production_wago_publication=published
+else
+  production_wago_publication=unpublished
+fi
+cat >"$out/publication.txt" <<EOF
+current_plugin=$current_plugin_publication
+production_wago_merge=$production_wago_publication
+external_workers=published
+pooling=unsupported
+publisher_authentication=external-required
+hosted_release_automation=disabled
+EOF
 WASI_DIR="$wasi_dir" WAGO_DIR="$wago_dir" WASI_UPSTREAM_AUDIT_OUT="$out/wasi-upstream" \
   "$root/scripts/wasi-upstream-preview1-audit.sh" | tee "$out/wasi-upstream-preview1-audit.txt"
 record_check wasi-upstream-preview1-audit accepted-exception 'reviewed docs/CI-only upstream still reaches the native preview-1 SIGSEGV; pin retained'

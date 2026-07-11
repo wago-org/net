@@ -60,7 +60,10 @@ remain fetchable, and checks the exact current Wago documentation and workers
 source before preserving the statement that pooling is unsupported.
 
 The default `CURRENT_PLUGIN_ADOPTION=review` mode permits bound local review
-objects while reporting that unpublished Wago/net subjects are not adopted.
+objects while reporting that unpublished Wago/net subjects are not adopted. The
+release gate converts this audited result into canonical `publication.txt` and
+schema-v2 provenance fields; publisher authentication remains `external-required`
+and hosted release automation remains `disabled` regardless of local evidence.
 `CURRENT_PLUGIN_ADOPTION=adopted` additionally requires the exact Wago and net
 review commits to appear at upstream refs. `REQUIRE_PUBLISHED_WAGO_MERGE=1`
 independently requires the production two-parent merge to be fetchable. Neither

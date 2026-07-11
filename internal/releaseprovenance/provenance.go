@@ -33,17 +33,18 @@ type Config struct {
 }
 
 type Manifest struct {
-	Schema         string       `json:"schema"`
-	Subject        Repository   `json:"subject"`
-	Inputs         []Repository `json:"inputs"`
-	ReviewSubjects []Repository `json:"reviewSubjects"`
-	Toolchains     Toolchains   `json:"toolchains"`
-	Inspection     Inspection   `json:"inspection"`
-	Targets        Targets      `json:"targets"`
-	Checks         []Check      `json:"checks"`
-	Artifacts      []Artifact   `json:"artifacts"`
-	Exceptions     []Exception  `json:"acceptedExceptions,omitempty"`
-	Limitations    []Limitation `json:"limitations,omitempty"`
+	Schema         string            `json:"schema"`
+	Subject        Repository        `json:"subject"`
+	Inputs         []Repository      `json:"inputs"`
+	ReviewSubjects []Repository      `json:"reviewSubjects"`
+	Publication    PublicationStatus `json:"publication"`
+	Toolchains     Toolchains        `json:"toolchains"`
+	Inspection     Inspection        `json:"inspection"`
+	Targets        Targets           `json:"targets"`
+	Checks         []Check           `json:"checks"`
+	Artifacts      []Artifact        `json:"artifacts"`
+	Exceptions     []Exception       `json:"acceptedExceptions,omitempty"`
+	Limitations    []Limitation      `json:"limitations,omitempty"`
 }
 
 type Repository struct {
@@ -51,6 +52,15 @@ type Repository struct {
 	Revision string   `json:"revision"`
 	Tree     string   `json:"tree"`
 	Parents  []string `json:"parents,omitempty"`
+}
+
+type PublicationStatus struct {
+	CurrentPlugin           string `json:"currentPlugin"`
+	ProductionWagoMerge     string `json:"productionWagoMerge"`
+	ExternalWorkers         string `json:"externalWorkers"`
+	Pooling                 string `json:"pooling"`
+	PublisherAuthentication string `json:"publisherAuthentication"`
+	HostedReleaseAutomation string `json:"hostedReleaseAutomation"`
 }
 
 type Toolchains struct {
@@ -133,6 +143,9 @@ func Generate(cfg Config) (*Manifest, error) {
 		if repository.Revision == "" || repository.Tree == "" {
 			return nil, fmt.Errorf("release provenance: cannot resolve %s repository", repository.Name)
 		}
+	}
+	if err := readPublication(filepath.Join(cfg.OutputDir, "publication.txt"), &manifest.Publication); err != nil {
+		return nil, err
 	}
 	if err := readToolchains(filepath.Join(cfg.OutputDir, "toolchains.txt"), &manifest.Toolchains); err != nil {
 		return nil, err
@@ -252,6 +265,33 @@ func checkStatus(checks []Check, name string) string {
 		}
 	}
 	return "missing"
+}
+
+func readPublication(path string, dst *PublicationStatus) error {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return err
+	}
+	lines := strings.Split(string(data), "\n")
+	if len(lines) != 7 || lines[6] != "" {
+		return fmt.Errorf("release provenance: publication status is not canonical")
+	}
+	values := []*string{
+		&dst.CurrentPlugin, &dst.ProductionWagoMerge, &dst.ExternalWorkers,
+		&dst.Pooling, &dst.PublisherAuthentication, &dst.HostedReleaseAutomation,
+	}
+	keys := []string{
+		"current_plugin", "production_wago_merge", "external_workers",
+		"pooling", "publisher_authentication", "hosted_release_automation",
+	}
+	for i, key := range keys {
+		gotKey, value, ok := strings.Cut(lines[i], "=")
+		if !ok || gotKey != key || value == "" {
+			return fmt.Errorf("release provenance: publication status line %d is not canonical", i+1)
+		}
+		*values[i] = value
+	}
+	return nil
 }
 
 func readToolchains(path string, dst *Toolchains) error {
@@ -404,7 +444,7 @@ func artifactKind(path string) string {
 		return "checks"
 	case strings.HasPrefix(path, "source-objects/"):
 		return "source-object"
-	case path == "toolchains.txt" || path == "revisions.txt" || path == "packages.txt":
+	case path == "toolchains.txt" || path == "revisions.txt" || path == "packages.txt" || path == "publication.txt":
 		return "inventory"
 	default:
 		return "support"

@@ -14,9 +14,9 @@ mkdir -p "$(dirname "$bundle")"
 cd "$root"
 GOWORK=off go run ./internal/cmd/release-review \
   -mode export -source "$source_dir" -out "$bundle" -subject "$subject"
-GOWORK=off go run ./internal/cmd/release-review \
-  -mode verify -bundle "$bundle" -subject "$subject"
-
 bundle_hash=$(sha256sum "$bundle" | awk '{print $1}')
+GOWORK=off go run ./internal/cmd/release-review \
+  -mode verify -bundle "$bundle" -subject "$subject" -bundle-sha256 "$bundle_hash"
+
 printf '%s  %s\n' "$bundle_hash" "$(basename "$bundle")" >"$bundle.sha256"
 echo "release-review-bundle: PASS ($bundle; sha256: $bundle_hash)"

@@ -43,7 +43,9 @@ const (
 )
 
 type VerifyOptions struct {
-	ExpectedSubject string
+	ExpectedSubject      string
+	ExpectedBundleSHA256 string
+	StrictDistribution   bool
 
 	// expectedInputs and expectedReviewSources are test-only policy injection.
 	// External callers always use the immutable release pins below because these
@@ -55,6 +57,7 @@ type VerifyOptions struct {
 type Verification struct {
 	Manifest         *Manifest
 	ProvenanceSHA256 string
+	BundleSHA256     string
 }
 
 // Verify validates either an extracted release-signoff directory or a
@@ -65,8 +68,26 @@ func Verify(bundle string, opts VerifyOptions) (*Verification, error) {
 	if err != nil {
 		return nil, err
 	}
+	if opts.StrictDistribution && (opts.ExpectedSubject == "" || opts.ExpectedBundleSHA256 == "") {
+		return nil, fmt.Errorf("release provenance: strict distribution verification requires expected subject and bundle SHA-256")
+	}
 	if info.IsDir() {
+		if opts.ExpectedBundleSHA256 != "" || opts.StrictDistribution {
+			return nil, fmt.Errorf("release provenance: bundle SHA-256 policy requires a .tar.gz review bundle")
+		}
 		return verifyDirectory(bundle, opts)
+	}
+	bundleHash, err := hashFile(bundle)
+	if err != nil {
+		return nil, err
+	}
+	if opts.ExpectedBundleSHA256 != "" {
+		if !validSHA256(opts.ExpectedBundleSHA256) {
+			return nil, fmt.Errorf("release provenance: expected bundle SHA-256 is not 64-character lowercase hex")
+		}
+		if bundleHash != opts.ExpectedBundleSHA256 {
+			return nil, fmt.Errorf("release provenance: review bundle SHA-256 %s, want %s", bundleHash, opts.ExpectedBundleSHA256)
+		}
 	}
 	tmp, err := os.MkdirTemp("", "wago-net-review-verify-")
 	if err != nil {
@@ -76,13 +97,21 @@ func Verify(bundle string, opts VerifyOptions) (*Verification, error) {
 	if err := extractBundle(bundle, tmp); err != nil {
 		return nil, err
 	}
-	return verifyDirectory(tmp, opts)
+	verified, err := verifyDirectory(tmp, opts)
+	if err != nil {
+		return nil, err
+	}
+	verified.BundleSHA256 = bundleHash
+	return verified, nil
 }
 
 // ExportBundle verifies source and writes a deterministic gzip-compressed tar
 // containing only manifest-listed evidence and the three provenance metadata
 // files. Given byte-identical source evidence, the output is byte-identical.
 func ExportBundle(source, destination string, opts VerifyOptions) (*Verification, string, error) {
+	if opts.ExpectedBundleSHA256 != "" || opts.StrictDistribution {
+		return nil, "", fmt.Errorf("release provenance: strict bundle hash policy applies only when verifying an existing archive")
+	}
 	verified, err := verifyDirectory(source, opts)
 	if err != nil {
 		return nil, "", err
@@ -227,6 +256,13 @@ func verifyDirectory(root string, opts VerifyOptions) (*Verification, error) {
 	if !reflect.DeepEqual(checks, manifest.Checks) {
 		return nil, fmt.Errorf("release provenance: checks.tsv does not match manifest checks")
 	}
+	var publication PublicationStatus
+	if err := readPublication(filepath.Join(root, "publication.txt"), &publication); err != nil {
+		return nil, err
+	}
+	if publication != manifest.Publication {
+		return nil, fmt.Errorf("release provenance: publication.txt does not match manifest publication status")
+	}
 	var toolchains Toolchains
 	if err := readToolchains(filepath.Join(root, "toolchains.txt"), &toolchains); err != nil {
 		return nil, err
@@ -291,6 +327,17 @@ func validateManifest(manifest *Manifest, opts VerifyOptions) error {
 		if !reflect.DeepEqual(got, want) {
 			return fmt.Errorf("release provenance: invalid %s review identity, tree, or ordered parents", want.Name)
 		}
+	}
+	publication := manifest.Publication
+	if publication.CurrentPlugin != "review-only" && publication.CurrentPlugin != "adopted" {
+		return fmt.Errorf("release provenance: invalid current plugin publication status %q", publication.CurrentPlugin)
+	}
+	if publication.ProductionWagoMerge != "unpublished" && publication.ProductionWagoMerge != "published" {
+		return fmt.Errorf("release provenance: invalid production Wago publication status %q", publication.ProductionWagoMerge)
+	}
+	if publication.ExternalWorkers != "published" || publication.Pooling != "unsupported" ||
+		publication.PublisherAuthentication != "external-required" || publication.HostedReleaseAutomation != "disabled" {
+		return fmt.Errorf("release provenance: publication status overclaims distribution, pooling, authentication, or hosted activation")
 	}
 	if manifest.Toolchains.Go == "" || manifest.Toolchains.TinyGo == "" {
 		return fmt.Errorf("release provenance: incomplete toolchains")

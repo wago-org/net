@@ -77,8 +77,24 @@ if git -C "$workers_dir" grep -Eqi '(^|[^[:alpha:]])pool(ing)?([^[:alpha:]]|$)' 
 fi
 pool_repositories=$(python3 - <<'PY'
 import json
+import time
+import urllib.error
 import urllib.parse
 import urllib.request
+
+
+def fetch(request):
+    for attempt in range(3):
+        try:
+            return urllib.request.urlopen(request, timeout=30)
+        except urllib.error.HTTPError as error:
+            if error.code not in {429, 500, 502, 503, 504} or attempt == 2:
+                raise
+        except urllib.error.URLError:
+            if attempt == 2:
+                raise
+        time.sleep(1 << attempt)
+
 
 url = "https://api.github.com/orgs/wago-org/repos?per_page=100&type=public"
 names = []
@@ -87,7 +103,7 @@ while url:
         "Accept": "application/vnd.github+json",
         "User-Agent": "wago-net-current-plugin-topology-audit",
     })
-    with urllib.request.urlopen(request, timeout=30) as response:
+    with fetch(request) as response:
         names.extend(repository["name"] for repository in json.load(response))
         links = {}
         for item in response.headers.get("Link", "").split(","):

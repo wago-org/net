@@ -14,8 +14,12 @@ func main() {
 	bundle := flag.String("bundle", "", "review bundle directory or .tar.gz path")
 	out := flag.String("out", "", "destination .tar.gz path for export")
 	subject := flag.String("subject", "", "optional exact net commit required by policy")
+	bundleSHA256 := flag.String("bundle-sha256", "", "optional exact review bundle SHA-256 required by policy")
+	strictDistribution := flag.Bool("strict-distribution", false, "require separately supplied subject and bundle SHA-256")
 	flag.Parse()
-	opts := releaseprovenance.VerifyOptions{ExpectedSubject: *subject}
+	opts := releaseprovenance.VerifyOptions{
+		ExpectedSubject: *subject, ExpectedBundleSHA256: *bundleSHA256, StrictDistribution: *strictDistribution,
+	}
 	switch *mode {
 	case "verify":
 		if *bundle == "" {
@@ -48,9 +52,14 @@ func main() {
 func printVerification(action, path string, verified *releaseprovenance.Verification, bundleHash string) {
 	manifest := verified.Manifest
 	fmt.Printf("release-review: %s %s\n", action, path)
-	fmt.Printf("schema=%s\nsubject=%s\nprovenance_sha256=%s\nartifacts=%d\naccepted_exceptions=%d\nlimitations=%d\n",
+	fmt.Printf("schema=%s\nsubject=%s\nprovenance_sha256=%s\ncurrent_plugin=%s\nproduction_wago_merge=%s\npublisher_authentication=%s\nhosted_release_automation=%s\nartifacts=%d\naccepted_exceptions=%d\nlimitations=%d\n",
 		manifest.Schema, manifest.Subject.Revision, verified.ProvenanceSHA256,
+		manifest.Publication.CurrentPlugin, manifest.Publication.ProductionWagoMerge,
+		manifest.Publication.PublisherAuthentication, manifest.Publication.HostedReleaseAutomation,
 		len(manifest.Artifacts), len(manifest.Exceptions), len(manifest.Limitations))
+	if verified.BundleSHA256 != "" {
+		fmt.Printf("verified_bundle_sha256=%s\n", verified.BundleSHA256)
+	}
 	if bundleHash != "" {
 		fmt.Printf("bundle_sha256=%s\n", bundleHash)
 	}

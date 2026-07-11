@@ -49,6 +49,29 @@ func TestVerifyAndDeterministicBundleExport(t *testing.T) {
 	if _, err := Verify(first, opts); err != nil {
 		t.Fatalf("Verify archive: %v", err)
 	}
+	strict := opts
+	strict.ExpectedBundleSHA256 = firstHash
+	strict.StrictDistribution = true
+	verifiedStrict, err := Verify(first, strict)
+	if err != nil {
+		t.Fatalf("Verify strict distribution: %v", err)
+	}
+	if verifiedStrict.BundleSHA256 != firstHash {
+		t.Fatalf("verified bundle hash = %q, want %q", verifiedStrict.BundleSHA256, firstHash)
+	}
+	wrongHash := strict
+	wrongHash.ExpectedBundleSHA256 = strings.Repeat("f", 64)
+	if _, err := Verify(first, wrongHash); err == nil {
+		t.Fatal("wrong trusted bundle hash unexpectedly accepted")
+	}
+	missingHash := opts
+	missingHash.StrictDistribution = true
+	if _, err := Verify(first, missingHash); err == nil {
+		t.Fatal("strict distribution without bundle hash unexpectedly accepted")
+	}
+	if _, err := Verify(dir, strict); err == nil {
+		t.Fatal("strict distribution directory unexpectedly accepted")
+	}
 }
 
 func TestExportSourceObjectsIsDeterministic(t *testing.T) {
@@ -135,6 +158,19 @@ func TestVerifyRejectsNoncanonicalOrPolicyDriftedManifest(t *testing.T) {
 	if _, err := Verify(dir, opts); err == nil {
 		t.Fatal("reordered review subject parents unexpectedly accepted")
 	}
+
+	dir, opts = validReviewFixture(t)
+	data, err = os.ReadFile(filepath.Join(dir, "provenance.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(data, &manifest); err != nil {
+		t.Fatal(err)
+	}
+	manifest.Publication.HostedReleaseAutomation = "active"
+	if err := validateManifest(&manifest, opts); err == nil {
+		t.Fatal("hosted release activation overclaim unexpectedly accepted")
+	}
 }
 
 func validReviewFixture(t *testing.T) (string, VerifyOptions) {
@@ -181,6 +217,7 @@ func validReviewFixture(t *testing.T) (string, VerifyOptions) {
 		checkText.WriteByte('\n')
 	}
 	writeTestFile(t, filepath.Join(dir, "checks.tsv"), checkText.String())
+	writeTestFile(t, filepath.Join(dir, "publication.txt"), "current_plugin=review-only\nproduction_wago_merge=unpublished\nexternal_workers=published\npooling=unsupported\npublisher_authentication=external-required\nhosted_release_automation=disabled\n")
 	writeTestFile(t, filepath.Join(dir, "toolchains.txt"), "go: go version go1.24.4 linux/amd64\ntinygo: tinygo version 0.41.1 linux/amd64\n")
 	writeTestFile(t, filepath.Join(dir, "revisions.txt"), "plugin: "+subject+"\nWago: "+repositories.wago.Revision+"\nlneto: "+repositories.lneto.Revision+"\nWASI: "+repositories.wasi.Revision+"\ncurrent net review: "+repositories.currentNet.Revision+"\ncurrent Wago review: "+repositories.currentWago.Revision+"\nworkers: "+repositories.workers.Revision+"\n")
 	writeTestFile(t, filepath.Join(dir, "arm64", "status.txt"), "status=skipped-no-runner\n")
@@ -228,6 +265,10 @@ func validReviewFixture(t *testing.T) (string, VerifyOptions) {
 			repositories.currentNet.Repository,
 			repositories.currentWago.Repository,
 			repositories.workers.Repository,
+		},
+		Publication: PublicationStatus{
+			CurrentPlugin: "review-only", ProductionWagoMerge: "unpublished", ExternalWorkers: "published",
+			Pooling: "unsupported", PublisherAuthentication: "external-required", HostedReleaseAutomation: "disabled",
 		},
 		Toolchains: Toolchains{Go: "go version go1.24.4 linux/amd64", TinyGo: "tinygo version 0.41.1 linux/amd64"},
 		Inspection: inspection,

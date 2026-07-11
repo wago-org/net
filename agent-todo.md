@@ -160,13 +160,18 @@ whose handles, quota, readiness, and attachment state retire before exit.
 
 Release review bundles now include seven deterministic non-thin Git packs and
 canonical inventories: production net/Wago/lneto/WASI plus exact current
-networking, current Wago, and workers review source. The standalone verifier
-rejects extra/missing/tampered objects, re-derives every selected tree and parent
-list, and makes no publisher-authenticity or upstream-publication claim. A
-committed isolated gate reconstructs current net/Wago/workers/lneto solely from
-those packs and repeats standard Go, focused external-worker race, vet, TinyGo,
-and exact inspection proof. A moving-ref topology audit leaves unpublished
-Wago/net subjects review-only and pooling explicitly unsupported.
+networking, current Wago, and workers review source. Schema-v2 provenance declares
+all three review subjects and exact publication status directly. The standalone
+verifier rejects extra/missing/tampered objects, re-derives every selected tree
+and parent list, and makes no publisher-authenticity or upstream-publication
+claim. A committed isolated gate reconstructs current net/Wago/workers/lneto plus
+Wago's local WASI module solely from those packs, begins with an empty
+network-disabled module cache, requires exact module/checksum inventories, and
+repeats standard Go, focused external-worker race, vet, TinyGo, and exact
+inspection proof. Optional strict distribution verification additionally
+requires separately supplied subject and bundle hashes. A moving-ref topology
+audit leaves unpublished Wago/net subjects review-only, hosted activation
+disabled, and pooling explicitly unsupported.
 
 ## Completed work
 
@@ -335,22 +340,34 @@ Wago/net subjects review-only and pooling explicitly unsupported.
   packs and gates standard Go, focused worker race, vet, TinyGo, and exact
   four-capability/24-import inspection; worker callback-validation tests retain
   their compiled source module until asynchronous spawn validation completes.
-- `HEAD` (`net: audit publication and pool topology`) — refreshes moving refs,
-  enforces review-only versus adopted publication policy, keeps the production
-  merge parent order immutable, and preserves truthful unsupported pool status.
+- `4f0b555` — refreshes moving refs, enforces review-only versus adopted
+  publication policy, keeps the production merge parent order immutable, and
+  preserves truthful unsupported pool status.
+- `6a862e2` — upgrades deterministic provenance to schema v2 and declares exact
+  current networking, Wago, and workers revisions, trees, and ordered parents as
+  first-class review subjects verified against their source packs.
+- `3500c6b` — reconstructs every current review module from bound local source,
+  starts with an empty network-disabled module cache, pins exact module/checksum
+  inventories, and rejects any downloaded module payload.
+- `HEAD` (`net: bind trusted distribution requirements`) — records explicit
+  review/production publication truth without signature or hosted-activation
+  claims and adds strict archive verification requiring independently supplied
+  plugin-subject and bundle SHA-256 values; the moving organization inventory
+  uses bounded retries for transient HTTP failures without hiding final errors.
 
 ## Active work
 
-Recursion 18 is complete with exactly three bounded atomic commits in the
-production networking repository. Review bundles now bind exact current
-Wago/networking/workers objects; an isolated pack-only workspace repeats strict
-inspection, linked-child cleanup, standard Go/race/vet, and TinyGo checks; and a
-moving-ref audit distinguishes review evidence from immutable upstream adoption.
-The exact workers subject remains published, but current Wago/networking reviews
-and the production ordered-parent Wago merge remain unpublished. Pooling remains
-unsupported because current Wago documents only a future plugin and no separately
-reviewable implementation exists. Production pins remain unchanged; native arm64
-execution and WASI preview-1 remain truthful runtime blockers.
+Recursion 19 is complete with exactly three bounded atomic commits in the
+production networking repository. Schema-v2 provenance now carries current review
+subjects and publication status directly; pack-only current adoption proof is
+cold-cache and network-disabled with exact local module/checksum policy; and an
+optional strict distribution verifier binds a separately obtained plugin subject
+and review-bundle hash before extraction. The exact workers subject remains
+published, but current Wago/networking reviews and the production ordered-parent
+Wago merge remain unpublished. Pooling remains unsupported, publisher
+authentication remains external, and hosted automation remains disabled.
+Production pins remain unchanged; native arm64 execution and WASI preview-1
+remain truthful runtime blockers.
 
 ## Ordered backlog
 
@@ -375,8 +392,14 @@ execution and WASI preview-1 remain truthful runtime blockers.
   Deterministic packs and isolated reconstruction remove moving-ref dependence
   for review, but neither current Wago nor current networking review is fetchable
   from origin, so `CURRENT_PLUGIN_ADOPTION=adopted` correctly fails. Workers
-  `1e913975` is fetchable. The production merge still preserves ordered parents
-  `54499ba` and `ffd5ef4` and remains unpublished.
+  `1e913975` is fetchable. Schema-v2 provenance binds all three review subjects;
+  cold-cache reconstruction uses only packed local modules with exact committed
+  module/checksum inventories. The production merge still preserves ordered
+  parents `54499ba` and `ffd5ef4` and remains unpublished.
+- Strict distribution verification can now require a separately supplied plugin
+  subject and review-bundle SHA-256 before extraction. This closes accidental or
+  wrong-channel hash acceptance but is deliberately not a publisher signature;
+  trusted hash distribution remains an external release responsibility.
 - No fetchable external pool implementation is present. Exact Wago documentation
   reserves pooling for a future plugin, reviewed workers contains no pool source,
   and the refreshed public `wago-org` repository inventory has no pool-named
@@ -518,6 +541,34 @@ pre-ledger-amend release gate passed at net subject
   `d9fe77b9cd2735222245b1873ad5edf2617e26ce915a8b99e3965f60f476d3bb`.
   Standalone directory/archive verification and all seven exact source-pack
   policies pass. `.audit` remains limited to the three production repositories.
+- Recursion-19 targeted verification passes: release-provenance deterministic
+  export/verification tests cover first-class review subjects, publication
+  overclaim rejection, correct/wrong strict bundle hashes, missing strict inputs,
+  and directory rejection. The complete pack-only current review gate passes with
+  `GOPROXY=off`, an initially empty `GOMODCACHE`, no acquired module payload,
+  exact module/checksum inventory, standard Go, five linked-child race runs, vet,
+  workers Go/race/vet, TinyGo, and byte-identical four-capability/24-import
+  inspection. The production custom CLI and complete standard-Go suite also pass.
+- The complete recursion-19 pre-ledger-amend release gate passed at net subject
+  `59a5035024560c1290ff8d620f79ba4f293a59f6`. Its first topology attempt exposed
+  a transient GitHub organization API HTTP 502; the final subject adds three
+  bounded retries for transient 429/5xx/network failures and the rerun passed
+  without weakening final failure handling. Three-second fuzz runs completed
+  129,646 DNS-wire, 954,267 DNS-layout, 114,152 guest-DNS-memory, and 1,106,528
+  shared-layout executions. Benchmarks measured 122.2 ns/op guest UDP poll,
+  121.1 ns/op guest TCP poll, and 20.63 ns/op UDP queue, all at 0 B/op and
+  0 allocs/op. Arm64 execution remained `skipped-no-runner`.
+- Schema-v2 provenance contains 57 artifacts, first-class current review subjects,
+  `current_plugin=review-only`, `production_wago_merge=unpublished`,
+  `publisher_authentication=external-required`, and
+  `hosted_release_automation=disabled`. It has two accepted WASI exceptions, one
+  arm64 limitation, provenance SHA-256
+  `437d3597d2b9aa5edbd6b812a114bdaf2cecbba5e99d5c5253c5339545c914ec`, and
+  bundle SHA-256
+  `15d3b15360f0426a7c239cc92e3f1157117aa73ea07c3300f6a6317cff7e3ce7`.
+  Standalone archive verification checks the supplied bundle hash before
+  extraction; all seven exact source-pack policies and the cold-cache review gate
+  pass. Root and all production/current/older review repositories remain clean.
 
 ## Performance baselines
 
@@ -528,10 +579,10 @@ Focused resource-table baselines on linux/amd64, Ryzen 7 8845HS, Go 1.24.4:
 - close 64 live resources: 3.289 us/op;
 - close 1024 live resources: 45.556 us/op.
 
-The fixed UDP queue round trip remains allocation-free and measured 20.16 ns/op
-in the recursion-18 release run. The complete pointer-backed guest poll paths,
+The fixed UDP queue round trip remains allocation-free and measured 20.63 ns/op
+in the recursion-19 release run. The complete pointer-backed guest poll paths,
 including checked memory, scoped service quota, coordinator scan, and event/result
-encoding, measured 119.8 ns/op for UDP and 119.1 ns/op for TCP,
+encoding, measured 122.2 ns/op for UDP and 121.1 ns/op for TCP,
 both at 0 B/op and 0 allocs/op. The old two heap-backed quota
 tokens are gone; the benchmark also avoids value-to-interface boxing that was not
 intrinsic to a pointer-backed runtime host module. Timing remains load-sensitive
@@ -575,27 +626,28 @@ unsupported DNS-over-TCP fallback; and obtaining a real arm64/QEMU runner plus
 hosted release automation after immutable Wago publication. The
 release gate documents, machine-records, and narrowly checks the unchanged WASI
 native preview-1 exception rather than hiding it. The review bundle now carries
-complete selected source trees and proves pack/object/tree/policy consistency,
-but it is still not a publisher signature; subject and bundle hashes still need
-a trusted release channel.
+complete selected source trees and proves pack/object/tree/policy consistency;
+strict mode can bind trusted subject and archive hashes, but publisher identity
+or a signed trusted channel remains external.
 
 ## Next recursion
 
-1. `net: declare current review subjects in provenance`
-   - Scope: evolve the deterministic manifest/verifier so current Wago,
-     networking, and workers revisions, trees, and parent lists are explicit
-     machine-readable review subjects rather than only hard-coded pack policy.
-     Preserve production inputs and publisher-authenticity disclaimers.
-2. `net: make current review reconstruction cold-cache`
-   - Scope: inventory all non-workspace module dependencies and add deterministic
-     local module evidence so the pack-only current review gate can run with an
-     empty `GOMODCACHE` and no network, while keeping exact Go checksum policy.
-3. `net: bind trusted distribution requirements`
-   - Scope: add an optional strict verification path that requires separately
-     supplied expected plugin subject and review-bundle SHA-256 values, records
-     publication status without claiming a signature, and remains blocked from
-     hosted activation until the production Wago merge is fetchable.
+1. `net: emit canonical distribution statements`
+   - Scope: derive a minimal deterministic statement containing the exact plugin
+     subject, provenance hash, review-bundle hash, review subjects, and recorded
+     publication status, suitable for detached signing without embedding a
+     signature or claiming publisher identity.
+2. `net: verify externally signed distribution statements`
+   - Scope: add an optional verifier using an explicitly supplied trust policy
+     and detached signature, keeping unsigned review verification available and
+     rejecting any implicit key discovery or hosted-activation claim.
+3. `net: gate production release candidate readiness`
+   - Scope: add a strict policy profile that requires a valid trusted statement,
+     published production/current subjects, executed arm64 evidence, and removal
+     of accepted WASI exceptions before activation; prove the current state fails
+     for the exact documented external blockers.
 
 After those exactly three commits, refresh every moving ref, run the complete
 committed release gate, update this ledger, and recurse again if the long-term
-completion criteria remain unmet.
+completion criteria remain unmet. Re-plan rather than inventing signatures if
+repository inspection shows no supportable trust mechanism.

@@ -103,6 +103,9 @@ A passing gate writes `provenance.json` using schema
   including Wago's ordered merge parents;
 - first-class current networking, current Wago, and external workers review
   subjects with exact revisions, trees, and ordered parent lists;
+- explicit current-review and production-Wago publication states, while fixing
+  external workers as published, pooling as unsupported, publisher authentication
+  as externally required, and hosted release automation as disabled;
 - exact Go and TinyGo version strings;
 - every named test, race, vet, tidy, fuzz, benchmark, source-boundary, TinyGo,
   cross-build, arm64-execution, inspection, audit-repository, and clean-tree
@@ -150,7 +153,26 @@ GOWORK=off go run ./internal/cmd/release-review \
 ```
 
 To require a separately obtained expected plugin commit, add
-`-subject <40-hex-commit>`. Verification rejects a different schema; changed or
+`-subject <40-hex-commit>`. To bind both values from a trusted distribution
+channel, use strict mode with an independently obtained archive digest:
+
+```sh
+GOWORK=off go run ./internal/cmd/release-review \
+  -mode verify \
+  -bundle /path/to/release-signoff.review.tar.gz \
+  -strict-distribution \
+  -subject <40-hex-commit> \
+  -bundle-sha256 <64-hex-sha256>
+```
+
+Strict mode rejects extracted directories and requires both values; the bundle
+hash is checked before extraction and the subject is checked against canonical
+provenance. Successful output also reports the recorded current-plugin and
+production-Wago publication states, `publisher_authentication=external-required`,
+and `hosted_release_automation=disabled`. This is hash pinning, not a signature
+scheme or a hosted release activation claim.
+
+Verification rejects a different schema; changed or
 unordered evidence; unknown or noncanonical manifest fields; unsafe archive
 paths; wrong exact production or first-class current-review subjects, trees, or
 parent order; inconsistent checks, exceptions, limitations, targets, revisions,
@@ -163,8 +185,10 @@ ordered Wago parents are then re-derived from the packed objects. Verification
 also requires the complete four-capability, 24-import surface and distinguishes
 cross-build from executed or skipped arm64. Pack and bundle checksums establish
 integrity and source availability, not publisher authenticity: obtain the
-expected subject and archive checksum through a trusted release channel. It does
-not claim hosted CI publication or that the local Wago merge has an upstream ref.
+expected subject and archive checksum through a trusted release channel and use
+strict mode when both are mandatory. The manifest records publisher
+authentication as an external requirement and does not claim hosted CI
+publication or that the local Wago merge has an upstream ref.
 
 To export the source packs independently before provenance generation:
 
