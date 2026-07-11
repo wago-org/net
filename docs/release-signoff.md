@@ -229,6 +229,36 @@ trigger implicit key discovery. Unsigned `verify` and strict hash-pinned
 verification remain available for review workflows that do not assert publisher
 authentication.
 
+## Production release-candidate readiness
+
+`scripts/release-candidate-readiness.sh` is the strict activation profile. It
+first requires the valid explicitly trusted statement above, then requires:
+
+- `currentPlugin=adopted` for exact fetchable current Wago/networking/workers
+  subjects;
+- `productionWagoMerge=published` while preserving both ordered parents;
+- an `executed-*` linux/arm64 smoke result, not only a cross-build; and
+- zero accepted exceptions, including both current WASI preview-1 exceptions.
+
+Invoke it only with separately provisioned trust inputs:
+
+```sh
+REVIEW_BUNDLE=/path/to/release-signoff.review.tar.gz \
+DISTRIBUTION_STATEMENT=/path/to/release.distribution.json \
+DISTRIBUTION_SIGNATURE=/trusted-channel/release.distribution.sig \
+DISTRIBUTION_TRUST_POLICY=/operator-config/wago-net-trust-policy.json \
+  scripts/release-candidate-readiness.sh
+```
+
+The command emits a deterministic
+`github.com/wago-org/net/production-readiness/v1` JSON decision and exits nonzero
+when any blocker remains. The currently recorded review state is deliberately
+not production-ready even with a cryptographically valid test signature: its
+exact blockers are `current-plugin-not-adopted`,
+`production-wago-merge-unpublished`, `linux-arm64-not-executed`, and the two
+accepted WASI exception IDs. The profile does not activate hosted automation;
+it is a prerequisite that must pass before an external publisher may enable it.
+
 Verification rejects a different schema; changed or
 unordered evidence; unknown or noncanonical manifest fields; unsafe archive
 paths; wrong exact production or first-class current-review subjects, trees, or
@@ -272,7 +302,9 @@ Use the same script rather than maintaining a second command matrix:
 - **Nightly:** `RUN_WASI=1 FUZZTIME=30s scripts/release-signoff.sh`, retaining the
   `.wago/release-signoff` logs as artifacts.
 - **Release candidate:** the default gate, plus repeated benchmarks on an idle
-  pinned runner and the release tag/commit recorded beside `revisions.txt`.
+  pinned runner, the release tag/commit recorded beside `revisions.txt`, an
+  externally signed canonical statement, and a passing
+  `scripts/release-candidate-readiness.sh` decision.
 - **Cross-platform:** native race/TinyGo remain required on `linux/amd64`; the
   gate also cross-builds standard Go for `linux/arm64`. An arm64 tier must set
   `ARM64_EXECUTION=required` and retain `arm64/status.txt`, `runner.txt`, the

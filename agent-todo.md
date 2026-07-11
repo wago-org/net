@@ -173,6 +173,17 @@ requires separately supplied subject and bundle hashes. A moving-ref topology
 audit leaves unpublished Wago/net subjects review-only, hosted activation
 disabled, and pooling explicitly unsupported.
 
+The review-bundle exporter now emits a separate canonical distribution statement
+binding the exact plugin subject, provenance hash, archive hash, review subjects,
+and recorded publication truth without embedding a signature or publisher
+identity. An optional verifier accepts only a raw detached Ed25519 signature and
+an explicitly supplied canonical single-key trust policy; key IDs are opaque and
+cannot trigger file, URL, environment, or network discovery. A separate strict
+production-candidate profile first requires that trusted statement, then requires
+adopted current subjects, the published ordered-parent production Wago merge,
+executed linux/arm64 evidence, and zero accepted exceptions before external
+hosted activation may proceed.
+
 ## Completed work
 
 - `dd82ec9a8963463e6516bf803bec58b3a89b89b3` — added deterministic Wago
@@ -349,25 +360,34 @@ disabled, and pooling explicitly unsupported.
 - `3500c6b` — reconstructs every current review module from bound local source,
   starts with an empty network-disabled module cache, pins exact module/checksum
   inventories, and rejects any downloaded module payload.
-- `HEAD` (`net: bind trusted distribution requirements`) — records explicit
+- `822508e` (`net: bind trusted distribution requirements`) — records explicit
   review/production publication truth without signature or hosted-activation
   claims and adds strict archive verification requiring independently supplied
   plugin-subject and bundle SHA-256 values; the moving organization inventory
   uses bounded retries for transient HTTP failures without hiding final errors.
+- `196edd4` — emits a minimal canonical unsigned distribution statement outside
+  the archive, binding the exact subject, provenance/archive hashes, review
+  subjects, and publication status for detached signing without a digest cycle.
+- `ad05d52` — verifies raw detached Ed25519 statements only against an explicitly
+  supplied canonical trust policy, rejects implicit key discovery, and binds the
+  signed fields back to full standalone archive/source-pack verification.
+- `HEAD` (`net: gate production release candidate readiness`) — adds the strict
+  trusted-statement activation profile and deterministic blocker report requiring
+  published exact subjects, executed arm64 evidence, and zero accepted exceptions.
 
 ## Active work
 
-Recursion 19 is complete with exactly three bounded atomic commits in the
-production networking repository. Schema-v2 provenance now carries current review
-subjects and publication status directly; pack-only current adoption proof is
-cold-cache and network-disabled with exact local module/checksum policy; and an
-optional strict distribution verifier binds a separately obtained plugin subject
-and review-bundle hash before extraction. The exact workers subject remains
-published, but current Wago/networking reviews and the production ordered-parent
-Wago merge remain unpublished. Pooling remains unsupported, publisher
-authentication remains external, and hosted automation remains disabled.
-Production pins remain unchanged; native arm64 execution and WASI preview-1
-remain truthful runtime blockers.
+Recursion 20 is complete with exactly three bounded atomic commits in the
+production networking repository. Review export now produces a deterministic
+unsigned statement suitable for an external detached signature; optional Ed25519
+verification is explicit-policy-only and performs no key discovery; and the
+strict production-candidate profile reports the exact current publication,
+arm64, and accepted-exception blockers even when the statement signature itself
+is valid. No private key, publisher identity, signed release, or hosted automation
+claim was added. The exact workers subject remains published, while current
+Wago/networking reviews and the production ordered-parent Wago merge remain
+unpublished. Pooling remains unsupported, native arm64 execution is unavailable,
+and both WASI preview-1 exceptions remain active.
 
 ## Ordered backlog
 
@@ -396,10 +416,13 @@ remain truthful runtime blockers.
   cold-cache reconstruction uses only packed local modules with exact committed
   module/checksum inventories. The production merge still preserves ordered
   parents `54499ba` and `ffd5ef4` and remains unpublished.
-- Strict distribution verification can now require a separately supplied plugin
-  subject and review-bundle SHA-256 before extraction. This closes accidental or
-  wrong-channel hash acceptance but is deliberately not a publisher signature;
-  trusted hash distribution remains an external release responsibility.
+- Strict hash verification can require a separately supplied plugin subject and
+  review-bundle SHA-256 before extraction. A canonical statement and optional
+  explicit-policy Ed25519 verifier now support external publisher authentication,
+  but this repository still supplies no private key or publisher identity. The
+  current production-readiness profile remains denied after valid test signing by
+  exact blockers for unpublished current/production subjects, skipped arm64
+  execution, and both accepted WASI exceptions.
 - No fetchable external pool implementation is present. Exact Wago documentation
   reserves pooling for a future plugin, reviewed workers contains no pool source,
   and the refreshed public `wago-org` repository inventory has no pool-named
@@ -549,6 +572,15 @@ pre-ledger-amend release gate passed at net subject
   exact module/checksum inventory, standard Go, five linked-child race runs, vet,
   workers Go/race/vet, TinyGo, and byte-identical four-capability/24-import
   inspection. The production custom CLI and complete standard-Go suite also pass.
+- Recursion-20 targeted release-provenance tests pass under standard Go and
+  TinyGo: canonical statements are byte-identical, contain no signature or
+  publisher-identity field, reject directory generation, require explicit
+  canonical Ed25519 policy, reject wrong signatures and discovery-shaped key IDs,
+  and bind signed fields back to the archive. The readiness profile reports the
+  exact five current blocker IDs and becomes ready only after adopted/published
+  subjects, executed arm64, and zero exceptions are supplied. The actual CLI was
+  exercised against the recursion-19 archive with a local test-only key and
+  emitted the same deterministic denial; no test key is tracked or trusted.
 - The complete recursion-19 pre-ledger-amend release gate passed at net subject
   `59a5035024560c1290ff8d620f79ba4f293a59f6`. Its first topology attempt exposed
   a transient GitHub organization API HTTP 502; the final subject adds three
@@ -627,27 +659,27 @@ hosted release automation after immutable Wago publication. The
 release gate documents, machine-records, and narrowly checks the unchanged WASI
 native preview-1 exception rather than hiding it. The review bundle now carries
 complete selected source trees and proves pack/object/tree/policy consistency;
-strict mode can bind trusted subject and archive hashes, but publisher identity
-or a signed trusted channel remains external.
+strict mode can bind trusted subject and archive hashes. Canonical detached
+statement verification can now authenticate a key selected by an external trust
+policy, but publisher identity, private-key custody, signature publication,
+anti-rollback policy, and the signed trusted channel remain external.
 
 ## Next recursion
 
-1. `net: emit canonical distribution statements`
-   - Scope: derive a minimal deterministic statement containing the exact plugin
-     subject, provenance hash, review-bundle hash, review subjects, and recorded
-     publication status, suitable for detached signing without embedding a
-     signature or claiming publisher identity.
-2. `net: verify externally signed distribution statements`
-   - Scope: add an optional verifier using an explicitly supplied trust policy
-     and detached signature, keeping unsigned review verification available and
-     rejecting any implicit key discovery or hosted-activation claim.
-3. `net: gate production release candidate readiness`
-   - Scope: add a strict policy profile that requires a valid trusted statement,
-     published production/current subjects, executed arm64 evidence, and removal
-     of accepted WASI exceptions before activation; prove the current state fails
-     for the exact documented external blockers.
+1. `net: bind explicit anti-rollback trust constraints`
+   - Scope: allow the operator-supplied trust policy to require an exact statement
+     digest and/or plugin subject, so a valid signature from the same key cannot
+     silently select an older release; preserve no-discovery and unsigned review modes.
+2. `net: publish detached-signature interoperability vectors`
+   - Scope: add deterministic public-key/statement/signature verification vectors
+     and negative cases for external signer implementations without tracking a
+     private release key or claiming publisher identity.
+3. `net: retain canonical production readiness receipts`
+   - Scope: make the strict activation command atomically emit a checksummed
+     machine-readable decision for external automation, while current blockers
+     remain a nonzero result and hosted release automation remains disabled.
 
 After those exactly three commits, refresh every moving ref, run the complete
 committed release gate, update this ledger, and recurse again if the long-term
-completion criteria remain unmet. Re-plan rather than inventing signatures if
-repository inspection shows no supportable trust mechanism.
+completion criteria remain unmet. Re-plan if repository or external publisher
+requirements do not support these bounded trust-integration steps.

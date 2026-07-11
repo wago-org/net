@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"flag"
 	"fmt"
 	"os"
@@ -9,7 +10,7 @@ import (
 )
 
 func main() {
-	mode := flag.String("mode", "verify", "operation: verify, export, statement, or verify-signed")
+	mode := flag.String("mode", "verify", "operation: verify, export, statement, verify-signed, or verify-production-candidate")
 	source := flag.String("source", "", "extracted release-signoff evidence directory")
 	bundle := flag.String("bundle", "", "review bundle directory or .tar.gz path")
 	out := flag.String("out", "", "destination .tar.gz path for export")
@@ -71,6 +72,25 @@ func main() {
 		}
 		printVerification("verified signed distribution", *bundle, trusted.Verification, "")
 		fmt.Printf("trusted_key_id=%s\nstatement_sha256=%s\n", trusted.KeyID, trusted.StatementSHA256)
+	case "verify-production-candidate":
+		if *bundle == "" || *statementPath == "" || *signaturePath == "" || *trustPolicyPath == "" {
+			fmt.Fprintln(os.Stderr, "release-review: -bundle, -statement, -signature, and -trust-policy are required for verify-production-candidate")
+			os.Exit(2)
+		}
+		report, err := releaseprovenance.VerifyProductionReleaseCandidate(*bundle, *statementPath, *signaturePath, *trustPolicyPath)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+		data, err := json.MarshalIndent(report, "", "  ")
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+		fmt.Println(string(data))
+		if !report.Ready {
+			os.Exit(1)
+		}
 	default:
 		fmt.Fprintf(os.Stderr, "release-review: unsupported mode %q\n", *mode)
 		os.Exit(2)

@@ -71,7 +71,9 @@ network-disabled module cache; records publication status without claiming
 publisher authentication or hosted activation; emits an unsigned canonical
 statement binding the exact subject, provenance, bundle, and review subjects for
 external detached signing; optionally verifies a raw Ed25519 signature only
-against an explicitly supplied no-discovery trust policy; audits unsupported pool topology; runs bounded fuzz smoke, benchmarks, TinyGo,
+against an explicitly supplied no-discovery trust policy; keeps production
+activation behind published exact subjects, executed arm64 evidence, and zero
+accepted exceptions; audits unsupported pool topology; runs bounded fuzz smoke, benchmarks, TinyGo,
 cross-build, package/custom CLI inspection, and final clean-tree checks; and
 records disposable artifacts under `.wago/release-signoff`:
 

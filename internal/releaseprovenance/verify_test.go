@@ -111,6 +111,94 @@ func TestVerifyAndDeterministicBundleExport(t *testing.T) {
 }
 
 func TestVerifySignedDistributionRequiresExplicitPolicyAndMatchingSignature(t *testing.T) {
+	fixture := newSignedDistributionFixture(t)
+	trusted, err := verifySignedDistribution(fixture.bundle, fixture.statement, fixture.signature, fixture.policy, fixture.opts)
+	if err != nil {
+		t.Fatalf("verify signed distribution: %v", err)
+	}
+	if trusted.KeyID != fixture.keyID || trusted.Statement.Subject != fixture.opts.ExpectedSubject ||
+		trusted.Verification.BundleSHA256 != fixture.bundleHash {
+		t.Fatalf("trusted distribution = %+v", trusted)
+	}
+	if _, err := verifySignedDistribution(fixture.bundle, fixture.statement, fixture.signature, "", fixture.opts); err == nil {
+		t.Fatal("implicit trust policy discovery unexpectedly accepted")
+	}
+
+	signature, err := os.ReadFile(fixture.signature)
+	if err != nil {
+		t.Fatal(err)
+	}
+	signature[0] ^= 0xff
+	if err := os.WriteFile(fixture.signature, signature, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := verifySignedDistribution(fixture.bundle, fixture.statement, fixture.signature, fixture.policy, fixture.opts); err == nil {
+		t.Fatal("wrong detached signature unexpectedly accepted")
+	}
+
+	policyData, err := os.ReadFile(fixture.policy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var policy DistributionTrustPolicy
+	if err := json.Unmarshal(policyData, &policy); err != nil {
+		t.Fatal(err)
+	}
+	policy.KeyID = "https://implicit.example/key"
+	policyData, err = json.MarshalIndent(&policy, "", "  ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	policyData = append(policyData, '\n')
+	writeTestFile(t, fixture.policy, string(policyData))
+	if _, err := verifySignedDistribution(fixture.bundle, fixture.statement, fixture.signature, fixture.policy, fixture.opts); err == nil {
+		t.Fatal("discovery-shaped trust policy key ID unexpectedly accepted")
+	}
+}
+
+func TestProductionReadinessProfileReportsExactCurrentBlockers(t *testing.T) {
+	fixture := newSignedDistributionFixture(t)
+	trusted, err := verifySignedDistribution(fixture.bundle, fixture.statement, fixture.signature, fixture.policy, fixture.opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	report := assessProductionReadiness(trusted)
+	var got []string
+	for _, blocker := range report.Blockers {
+		got = append(got, blocker.ID)
+	}
+	want := []string{
+		"current-plugin-not-adopted",
+		"production-wago-merge-unpublished",
+		"linux-arm64-not-executed",
+		"accepted-exception:wasi-upstream-preview1-audit",
+		"accepted-exception:wasi-preview1-native-sigsegv",
+	}
+	if report.Ready || report.Schema != ProductionReadinessSchemaV1 || report.TrustedKeyID != fixture.keyID ||
+		!reflect.DeepEqual(got, want) {
+		t.Fatalf("production readiness = %+v, blocker IDs %v", report, got)
+	}
+
+	trusted.Verification.Manifest.Publication.CurrentPlugin = "adopted"
+	trusted.Verification.Manifest.Publication.ProductionWagoMerge = "published"
+	trusted.Verification.Manifest.Targets.Arm64Execution.Status = "executed-qemu"
+	trusted.Verification.Manifest.Targets.Arm64Execution.Runner = "qemu-aarch64"
+	trusted.Verification.Manifest.Exceptions = nil
+	trusted.Verification.Manifest.Limitations = nil
+	ready := assessProductionReadiness(trusted)
+	if !ready.Ready || len(ready.Blockers) != 0 {
+		t.Fatalf("ready production profile = %+v", ready)
+	}
+}
+
+type signedDistributionFixture struct {
+	bundle, statement, signature, policy string
+	opts                                 VerifyOptions
+	keyID, bundleHash                    string
+}
+
+func newSignedDistributionFixture(t *testing.T) signedDistributionFixture {
+	t.Helper()
 	dir, opts := validReviewFixture(t)
 	bundle := filepath.Join(t.TempDir(), "review.tar.gz")
 	_, bundleHash, err := ExportBundle(dir, bundle, opts)
@@ -146,39 +234,9 @@ func TestVerifySignedDistributionRequiresExplicitPolicyAndMatchingSignature(t *t
 	if err := os.WriteFile(signaturePath, ed25519.Sign(privateKey, statementData), 0o600); err != nil {
 		t.Fatal(err)
 	}
-
-	trusted, err := verifySignedDistribution(bundle, statementPath, signaturePath, policyPath, opts)
-	if err != nil {
-		t.Fatalf("verify signed distribution: %v", err)
-	}
-	if trusted.KeyID != policy.KeyID || trusted.Statement.Subject != opts.ExpectedSubject || trusted.Verification.BundleSHA256 != bundleHash {
-		t.Fatalf("trusted distribution = %+v", trusted)
-	}
-	if _, err := verifySignedDistribution(bundle, statementPath, signaturePath, "", opts); err == nil {
-		t.Fatal("implicit trust policy discovery unexpectedly accepted")
-	}
-
-	signature, err := os.ReadFile(signaturePath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	signature[0] ^= 0xff
-	if err := os.WriteFile(signaturePath, signature, 0o600); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := verifySignedDistribution(bundle, statementPath, signaturePath, policyPath, opts); err == nil {
-		t.Fatal("wrong detached signature unexpectedly accepted")
-	}
-
-	policy.KeyID = "https://implicit.example/key"
-	policyData, err = json.MarshalIndent(&policy, "", "  ")
-	if err != nil {
-		t.Fatal(err)
-	}
-	policyData = append(policyData, '\n')
-	writeTestFile(t, policyPath, string(policyData))
-	if _, err := verifySignedDistribution(bundle, statementPath, signaturePath, policyPath, opts); err == nil {
-		t.Fatal("discovery-shaped trust policy key ID unexpectedly accepted")
+	return signedDistributionFixture{
+		bundle: bundle, statement: statementPath, signature: signaturePath, policy: policyPath,
+		opts: opts, keyID: policy.KeyID, bundleHash: bundleHash,
 	}
 }
 
