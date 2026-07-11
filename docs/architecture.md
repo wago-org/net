@@ -42,8 +42,8 @@ bind/send/receive/close operations. The low-level `Imports` bundle remains core-
 only because protocol resources require Runtime lifecycle identity. Registration
 and implementation share binding tables so inspection metadata and actual
 bindings do not drift. `internal/abi` provides allocation-free checked ranges,
-fixed-width endpoint/receive layouts, disjoint multi-output validation, and
-bounded poll codecs without exposing lneto types.
+fixed-width endpoint, UDP receive, reserved TCP stream/I/O layouts, disjoint
+multi-output validation, and bounded poll codecs without exposing lneto types.
 `internal/resource` provides O(1) opaque-handle lookup with exact kind checks,
 never-reused table identities, per-slot generations, rollover retirement, and
 reverse-creation O(live) cleanup. The table exists independently of protocol
@@ -89,7 +89,12 @@ wrappers back off, while its exported immediate mux cannot represent an empty
 payload. The adapter preserves empty and truncated datagrams, validates checksums
 and fragmentation, enforces policy on bind and every send, reserves exact finite
 resource/retained-storage quota, rotates egress deterministically, and clears all
-queue bytes on close. TCP and DNS constructors remain truthfully unsupported.
+queue bytes on close. TCP uses only immediate `tcp.Handler` buffer/state
+primitives under the namespace lifecycle lock; it never calls `tcp.Conn`'s
+backoff-based `Read`, `Write`, or `Flush` wrappers. Fixed listener pools and
+outbound streams have bounded receive/transmit storage, partial I/O, connect and
+accept progress, half-close, level readiness, endpoint policy, quota ownership,
+port reuse, and deterministic abort cleanup. DNS remains truthfully unsupported.
 
 `internal/readiness` attaches a finite coordinator to each instance resource
 table. Registrations retain opaque handle plus exact kind, level-triggered polls
@@ -106,9 +111,12 @@ coordinator, immutable policy, and finite quota ledger to the exact
 `*wago.Instance`. Optional static
 IPv4 configuration transactionally reserves namespace quota, constructs the
 backend, inserts a generation-safe handle, and registers bounded readiness before
-the state is published. UDP creation repeats that transaction for its socket
-handle and poll registration; every failed stage closes the backend resource and
-releases accounting. Host imports recover exact identity through the additive
+the state is published. UDP and internal TCP creation repeat that transaction for their exact socket,
+listener, or stream handle and poll registration; every failed stage closes the
+backend resource and releases accounting. TCP guest bindings remain absent even
+though the backend-neutral v1 stream and partial-I/O layouts are now fixed; the
+suite does not advertise a capability before all checked bindings exist. Host
+imports recover exact identity through the additive
 `wago.InstanceHostModule` interface, and `BeforeClose` removes the attachment
 before polling shutdown, reverse-creation resource cleanup, and quota shutdown.
 Failed later setup and `ResetReinstantiate` replacement use the same close path.

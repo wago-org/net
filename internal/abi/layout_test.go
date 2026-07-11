@@ -12,8 +12,8 @@ import (
 )
 
 func TestV1LayoutConstants(t *testing.T) {
-	if AddressV1Size != 32 || HandleV1Size != 8 || UDPReceiveResultV1Size != 48 || PollBudgetV1Size != 24 || PollEventV1Size != 16 || PollResultV1Size != 24 {
-		t.Fatalf("layout sizes = address %d handle %d receive %d budget %d event %d result %d", AddressV1Size, HandleV1Size, UDPReceiveResultV1Size, PollBudgetV1Size, PollEventV1Size, PollResultV1Size)
+	if AddressV1Size != 32 || HandleV1Size != 8 || UDPReceiveResultV1Size != 48 || TCPStreamV1Size != 72 || TCPIOResultV1Size != 8 || PollBudgetV1Size != 24 || PollEventV1Size != 16 || PollResultV1Size != 24 {
+		t.Fatalf("layout sizes = address %d handle %d UDP receive %d TCP stream %d TCP IO %d budget %d event %d result %d", AddressV1Size, HandleV1Size, UDPReceiveResultV1Size, TCPStreamV1Size, TCPIOResultV1Size, PollBudgetV1Size, PollEventV1Size, PollResultV1Size)
 	}
 	if UDPReceiveFlagTruncated != 1 || !ValidUDPReceiveFlagsV1(0) || !ValidUDPReceiveFlagsV1(UDPReceiveFlagTruncated) || ValidUDPReceiveFlagsV1(2) {
 		t.Fatal("UDP receive flag values changed")
@@ -93,6 +93,45 @@ func TestUDPReceiveResultV1AtomicEncoding(t *testing.T) {
 	}
 }
 
+func TestTCPV1CheckedRangesAndAtomicCodecs(t *testing.T) {
+	memory := bytes.Repeat([]byte{0x5a}, 160)
+	if !CheckTCPCreateV1(memory, 0, 32) || CheckTCPCreateV1(memory, 16, 32) || CheckTCPCreateV1(memory, 0, 100) {
+		t.Fatal("TCP create range validation mismatch")
+	}
+	if !CheckTCPIOV1(memory, 0, 16, 16) || CheckTCPIOV1(memory, 4, 16, 12) || CheckTCPIOV1(memory, 160, 1, 0) {
+		t.Fatal("TCP IO range validation mismatch")
+	}
+	local := namespace.Endpoint{Address: netip.MustParseAddr("192.0.2.1"), Port: 49152}
+	remote := namespace.Endpoint{Address: netip.MustParseAddr("192.0.2.2"), Port: 443}
+	handle := resource.Handle(0x0102030405060708)
+	if !EncodeTCPStreamV1(memory, 32, handle, local, remote) {
+		t.Fatal("EncodeTCPStreamV1 failed")
+	}
+	if got := binary.LittleEndian.Uint64(memory[32:40]); got != uint64(handle) {
+		t.Fatalf("TCP stream handle = %#x", got)
+	}
+	if got, ok := DecodeEndpointV1(memory, 40); !ok || got != local {
+		t.Fatalf("TCP local endpoint = %+v, %v", got, ok)
+	}
+	if got, ok := DecodeEndpointV1(memory, 72); !ok || got != remote {
+		t.Fatalf("TCP remote endpoint = %+v, %v", got, ok)
+	}
+	if !EncodeTCPIOResultV1(memory, 120, namespace.IOResult{Bytes: 3, State: namespace.IOReady}, 8) {
+		t.Fatal("EncodeTCPIOResultV1 failed")
+	}
+	if got := binary.LittleEndian.Uint32(memory[120:124]); got != 3 || binary.LittleEndian.Uint32(memory[124:128]) != 0 {
+		t.Fatalf("TCP IO result = %d/%#x", got, binary.LittleEndian.Uint32(memory[124:128]))
+	}
+
+	before := append([]byte(nil), memory...)
+	if EncodeTCPStreamV1(memory, 100, handle, local, remote) || EncodeTCPIOResultV1(memory, 120, namespace.IOResult{State: namespace.IOWouldBlock}, 8) {
+		t.Fatal("invalid TCP result encoded")
+	}
+	if !bytes.Equal(memory, before) {
+		t.Fatal("rejected TCP codec mutated memory")
+	}
+}
+
 func TestPollV1Codecs(t *testing.T) {
 	memory := make([]byte, 128)
 	binary.LittleEndian.PutUint32(memory[0:4], 4)
@@ -165,5 +204,9 @@ func FuzzV1Layouts(f *testing.F) {
 		}
 		_, _ = DecodeEndpointV1(memory, ptr)
 		_, _ = DecodePollBudgetV1(memory, ptr)
+		_ = CheckTCPCreateV1(memory, ptr, count)
+		_ = CheckTCPIOV1(memory, ptr, count, size)
+		_ = EncodeTCPStreamV1(memory, ptr, resource.Handle(1), namespace.Endpoint{}, namespace.Endpoint{})
+		_ = EncodeTCPIOResultV1(memory, ptr, namespace.IOResult{Bytes: int(count), State: namespace.IOReady}, int(size))
 	})
 }

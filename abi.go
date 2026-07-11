@@ -8,6 +8,8 @@ const (
 	AddressV1Size          = abi.AddressV1Size
 	HandleV1Size           = abi.HandleV1Size
 	UDPReceiveResultV1Size = abi.UDPReceiveResultV1Size
+	TCPStreamV1Size        = abi.TCPStreamV1Size
+	TCPIOResultV1Size      = abi.TCPIOResultV1Size
 	PollBudgetV1Size       = abi.PollBudgetV1Size
 	PollEventV1Size        = abi.PollEventV1Size
 	PollResultV1Size       = abi.PollResultV1Size

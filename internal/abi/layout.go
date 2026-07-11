@@ -19,6 +19,11 @@ const (
 	UDPReceiveFlagTruncated uint32 = 1
 	udpReceiveFlagMaskV1           = UDPReceiveFlagTruncated
 
+	// TCPStreamV1Size is the encoded size of wago_net_tcp_stream_v1.
+	TCPStreamV1Size uint32 = 72
+	// TCPIOResultV1Size is the encoded size of wago_net_tcp_io_result_v1.
+	TCPIOResultV1Size uint32 = 8
+
 	// PollBudgetV1Size is the encoded size of wago_net_poll_budget_v1.
 	PollBudgetV1Size uint32 = 24
 	// PollEventV1Size is the encoded size of wago_net_poll_event_v1.
@@ -135,6 +140,61 @@ func EncodeUDPReceiveResultV1(memory []byte, ptr uint32, result namespace.Datagr
 		binary.LittleEndian.PutUint32(encoded[40:44], UDPReceiveFlagTruncated)
 	}
 	copy(b, encoded[:])
+	return true
+}
+
+// CheckTCPCreateV1 validates a complete endpoint input and stream-result output
+// before a listen/connect implementation changes backend state. Nonempty input
+// and output ranges must be disjoint.
+func CheckTCPCreateV1(memory []byte, endpointPtr, streamPtr uint32) bool {
+	return CheckRanges(memory, true,
+		Range{Ptr: endpointPtr, Length: AddressV1Size},
+		Range{Ptr: streamPtr, Length: TCPStreamV1Size},
+	)
+}
+
+// CheckTCPIOV1 validates the complete payload and result ranges before a read
+// consumes bytes or a write accepts bytes. Nonempty ranges must be disjoint.
+func CheckTCPIOV1(memory []byte, payloadPtr, payloadLength, resultPtr uint32) bool {
+	return CheckRanges(memory, true,
+		Range{Ptr: payloadPtr, Length: payloadLength},
+		Range{Ptr: resultPtr, Length: TCPIOResultV1Size},
+	)
+}
+
+// EncodeTCPStreamV1 atomically writes an opaque handle plus local and remote
+// endpoints after validating the entire fixed-width output.
+func EncodeTCPStreamV1(memory []byte, ptr uint32, handle resource.Handle, local, remote namespace.Endpoint) bool {
+	if handle == 0 || !local.Valid() || !remote.Valid() {
+		return false
+	}
+	output, ok := Slice(memory, ptr, TCPStreamV1Size)
+	if !ok {
+		return false
+	}
+	var encoded [TCPStreamV1Size]byte
+	binary.LittleEndian.PutUint64(encoded[0:8], uint64(handle))
+	if !EncodeEndpointV1(encoded[:], 8, local) || !EncodeEndpointV1(encoded[:], 40, remote) {
+		return false
+	}
+	copy(output, encoded[:])
+	return true
+}
+
+// EncodeTCPIOResultV1 writes partial read/write progress only for an IOReady
+// result. Would-block and EOF are represented by the host status and leave the
+// output unchanged.
+func EncodeTCPIOResultV1(memory []byte, ptr uint32, result namespace.IOResult, bufferSize int) bool {
+	if !result.Valid(bufferSize) || result.State != namespace.IOReady || uint64(result.Bytes) > uint64(^uint32(0)) {
+		return false
+	}
+	output, ok := Slice(memory, ptr, TCPIOResultV1Size)
+	if !ok {
+		return false
+	}
+	var encoded [TCPIOResultV1Size]byte
+	binary.LittleEndian.PutUint32(encoded[0:4], uint32(result.Bytes))
+	copy(output, encoded[:])
 	return true
 }
 

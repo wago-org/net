@@ -14,8 +14,12 @@ fixed UDP queues and immediate frame codecs, preserving empty and truncated
 datagrams without blocking or backoff. Guest polling is level-triggered and
 bounded independently by scans, event outputs, namespace service attempts, and
 per-attempt packet/byte/operation budgets; each call transactionally reserves and
-releases finite per-instance service-work quota. TCP, DNS, and privileged packet
-access remain absent and truthfully unsupported.
+releases finite per-instance service-work quota. Immediate lneto TCP listeners,
+connect/accept, partial stream I/O, half-close, policy/quota ownership, readiness,
+and deterministic teardown are implemented internally, and the checked v1 TCP
+layouts are fixed; `wago_net_tcp` remains deliberately absent until every guest
+binding is hardened. DNS and privileged packet access remain absent and
+truthfully unsupported.
 
 ```go
 rt := wago.NewRuntime()
@@ -24,7 +28,7 @@ if err := rt.Use(wagonet.Init(wagonet.Config{})); err != nil {
 }
 
 // A configured deployment can instead provide immutable policy, finite quota,
-// readiness, packet-link, static IPv4, and UDP queue settings. Each Runtime
+// readiness, packet-link, static IPv4, UDP queue, and internal TCP settings. Each Runtime
 // instance then receives its own isolated namespace and generation-safe handles.
 ```
 

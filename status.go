@@ -58,6 +58,24 @@ func statusFromProgress(progress namespace.Progress) Status {
 	}
 }
 
+// statusFromIOResult maps one validated nonblocking stream result. Output bytes
+// are written only for StatusOK; AGAIN and EOF leave guest outputs unchanged.
+func statusFromIOResult(result namespace.IOResult, bufferSize int) Status {
+	if !result.Valid(bufferSize) {
+		return StatusOther
+	}
+	switch result.State {
+	case namespace.IOReady:
+		return StatusOK
+	case namespace.IOWouldBlock:
+		return StatusAgain
+	case namespace.IOEOF:
+		return StatusEOF
+	default:
+		return StatusOther
+	}
+}
+
 // statusFromError maps backend-neutral failures and ownership/accounting errors
 // to stable guest values. Error text and backend-specific causes never cross the
 // ABI. Access denial is mapped explicitly without changing existing numbers.

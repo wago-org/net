@@ -101,6 +101,72 @@ payload size. Truncation consumes and discards the unread suffix. Empty datagram
 are represented by `OK`, zero lengths, and a valid source endpoint; they are not
 confused with `AGAIN`.
 
+## Reserved TCP module and signatures
+
+The backend-neutral TCP ABI is fixed for a future independently gated
+`wago_net_tcp` module, but **no TCP import or `net.tcp` capability is currently
+registered**. Advertising waits until every host binding and its guest-memory
+rollback path is complete. The reserved signatures all return one `i32` status:
+
+```text
+namespace_default(out_handle_ptr: i32) -> i32
+listen(namespace: i64, local_addr_ptr: i32, out_listener_ptr: i32) -> i32
+connect(namespace: i64, remote_addr_ptr: i32, out_stream_ptr: i32) -> i32
+accept(listener: i64, out_stream_ptr: i32) -> i32
+finish_connect(stream: i64) -> i32
+read(stream: i64, payload_ptr: i32, payload_len: i32, out_result_ptr: i32) -> i32
+write(stream: i64, payload_ptr: i32, payload_len: i32, out_result_ptr: i32) -> i32
+shutdown_write(stream: i64) -> i32
+close_listener(listener: i64) -> i32
+close_stream(stream: i64) -> i32
+poll(events_ptr: i32, event_capacity: i32, budget_ptr: i32, out_result_ptr: i32) -> i32
+```
+
+`listen` writes an opaque listener handle only on `OK`. `connect` writes a stream
+structure on both `OK` and `IN_PROGRESS`; the latter is completed by bounded
+service plus `finish_connect`. `accept` returns only fully established streams.
+`read` and `write` report one immediate partial operation: `OK` writes result
+metadata, `AGAIN` accepts or consumes no bytes and leaves output unchanged, and
+`EOF` applies only to reads after buffered input is drained. A zero-length read
+or write may return `OK` with zero bytes. `shutdown_write` initiates a local FIN
+without waiting for acknowledgement. Listener and stream close are separate so
+wrong-kind handles always fail closed.
+
+Before any state change, create operations validate their complete endpoint and
+stream-output ranges and require nonempty input/output ranges to be disjoint.
+Read and write likewise validate the complete payload and result ranges before
+consuming or accepting stream bytes. A checked range failure returns
+`INVALID_ARGUMENT` without backend work or output mutation. No guest-memory
+slice may be retained beyond the host call.
+
+`wago_net_tcp_stream_v1` is 72 bytes:
+
+```c
+struct wago_net_tcp_stream_v1 {
+    uint64_t handle;                    // offset 0
+    struct wago_net_addr_v1 local;      // offset 8
+    struct wago_net_addr_v1 remote;     // offset 40
+};
+```
+
+The structure is encoded atomically after validating the nonzero handle and both
+endpoints. It is used by `connect` and `accept`; exposing the selected ephemeral
+local port prevents backend-specific endpoint discovery APIs.
+
+`wago_net_tcp_io_result_v1` is 8 bytes:
+
+```c
+struct wago_net_tcp_io_result_v1 {
+    uint32_t bytes;                     // offset 0
+    uint32_t reserved;                  // offset 4, written zero
+};
+```
+
+`bytes` is the immediate prefix copied or accepted and may be less than the
+supplied buffer length. The structure is written only on `OK`. Would-block and
+EOF are represented by status values and leave it unchanged, avoiding ambiguous
+zero-byte progress.
+
 ## Bounded poll layouts
 
 `wago_net_poll_budget_v1` is 24 bytes, containing six consecutive `uint32_t`

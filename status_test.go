@@ -26,6 +26,25 @@ func TestStatusFromProgress(t *testing.T) {
 	}
 }
 
+func TestStatusFromIOResult(t *testing.T) {
+	tests := []struct {
+		result namespace.IOResult
+		size   int
+		want   Status
+	}{
+		{namespace.IOResult{Bytes: 3, State: namespace.IOReady}, 3, StatusOK},
+		{namespace.IOResult{State: namespace.IOReady}, 0, StatusOK},
+		{namespace.IOResult{State: namespace.IOWouldBlock}, 8, StatusAgain},
+		{namespace.IOResult{State: namespace.IOEOF}, 8, StatusEOF},
+		{namespace.IOResult{Bytes: 1, State: namespace.IOEOF}, 8, StatusOther},
+	}
+	for _, test := range tests {
+		if got := statusFromIOResult(test.result, test.size); got != test.want {
+			t.Fatalf("statusFromIOResult(%+v, %d) = %v, want %v", test.result, test.size, got, test.want)
+		}
+	}
+}
+
 func TestStatusFromError(t *testing.T) {
 	failures := []struct {
 		failure namespace.Failure
