@@ -80,6 +80,30 @@ type Config struct {
 	AllowPrivilegedBind bool
 }
 
+// Merge returns one independently owned policy configuration. Rules retain
+// their original order, special-class grants compose monotonically, and deny
+// precedence remains a property of the compiled policy rather than merge order.
+func Merge(configs ...Config) Config {
+	var merged Config
+	for _, config := range configs {
+		for _, input := range config.Rules {
+			rule := input
+			rule.Transports = append([]Transport(nil), input.Transports...)
+			rule.Directions = append([]Direction(nil), input.Directions...)
+			rule.Prefixes = append([]netip.Prefix(nil), input.Prefixes...)
+			rule.Ports = append([]PortRange(nil), input.Ports...)
+			rule.DNSSuffixes = append([]string(nil), input.DNSSuffixes...)
+			merged.Rules = append(merged.Rules, rule)
+		}
+		merged.AllowWildcardBind = merged.AllowWildcardBind || config.AllowWildcardBind
+		merged.AllowLoopback = merged.AllowLoopback || config.AllowLoopback
+		merged.AllowMulticast = merged.AllowMulticast || config.AllowMulticast
+		merged.AllowBroadcast = merged.AllowBroadcast || config.AllowBroadcast
+		merged.AllowPrivilegedBind = merged.AllowPrivilegedBind || config.AllowPrivilegedBind
+	}
+	return merged
+}
+
 // Policy is an immutable, concurrently safe compiled policy.
 type Policy struct {
 	rules []compiledRule

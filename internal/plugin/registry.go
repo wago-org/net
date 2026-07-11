@@ -7,6 +7,7 @@ import (
 	"sync"
 
 	nscore "github.com/wago-org/net/internal/namespace/core"
+	"github.com/wago-org/net/internal/policy"
 	wago "github.com/wago-org/wago"
 )
 
@@ -34,6 +35,8 @@ var (
 	// ErrIncompatibleBackend reports a contribution for a different backend
 	// family than the shared namespace selected by the root network.
 	ErrIncompatibleBackend = errors.New("wagonet: incompatible protocol backend contribution")
+	// ErrInvalidAuthority reports an unusable protocol authority contribution.
+	ErrInvalidAuthority = errors.New("wagonet: invalid protocol authority contribution")
 )
 
 // BackendFamily identifies one shared backend assembly contract. Protocol
@@ -63,13 +66,28 @@ func NewBackend(family BackendFamily, configure func(any) error, install func(an
 
 func (b Backend) valid() bool { return b.family != "" && b.install != nil }
 
+// Authority is an immutable protocol-local policy grant contribution. The
+// shared root composes every selected contribution with caller policy before
+// compiling the one exact-instance policy. Ordinary deny rules therefore keep
+// precedence over grants from any protocol or registration order.
+type Authority struct {
+	enabled bool
+	config  policy.Config
+}
+
+// NewAuthority deep-copies one trusted protocol-local authority contribution.
+func NewAuthority(config policy.Config) Authority {
+	return Authority{enabled: true, config: policy.Merge(config)}
+}
+
 // Module is an opaque, trusted protocol registration descriptor. Public
 // protocol packages construct descriptors inside this module; ordinary users
 // select them through tcp.Register, udp.Register, or dns.Register.
 type Module struct {
-	key     ModuleKey
-	install func(*wago.Registry, Host)
-	backend Backend
+	key       ModuleKey
+	install   func(*wago.Registry, Host)
+	backend   Backend
+	authority Authority
 }
 
 // NewModule constructs one protocol descriptor. It is intentionally available
@@ -82,6 +100,26 @@ func NewModule(key ModuleKey, install func(*wago.Registry, Host), backend ...Bac
 		module.backend = Backend{enabled: true, family: BackendFamily("invalid")}
 	}
 	return module
+}
+
+// WithAuthority returns a descriptor carrying one protocol-local grant set.
+// It is used by trusted binding/public protocol packages before registration.
+func (m Module) WithAuthority(authority Authority) Module {
+	m.authority = authority
+	return m
+}
+
+// ConfigureAuthority composes this module's grants into the shared immutable
+// policy input. Modules without authority are ignored.
+func (m Module) ConfigureAuthority(target *policy.Config) error {
+	if !m.authority.enabled {
+		return nil
+	}
+	if target == nil {
+		return ErrInvalidAuthority
+	}
+	*target = policy.Merge(*target, m.authority.config)
+	return nil
 }
 
 // Install contributes this module's capability and imports to a Wago registry

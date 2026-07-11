@@ -8,6 +8,33 @@ import (
 func mustPrefix(value string) netip.Prefix { return netip.MustParsePrefix(value) }
 func mustAddr(value string) netip.Addr     { return netip.MustParseAddr(value) }
 
+func TestMergeCopiesRulesAndPreservesDenyPrecedence(t *testing.T) {
+	allow := Config{Rules: []Rule{{
+		Action: ActionAllow, Transports: []Transport{TransportTCP}, Directions: []Direction{DirectionOutbound},
+	}}, AllowLoopback: true}
+	denyPrefix := netip.MustParsePrefix("192.0.2.0/24")
+	deny := Config{Rules: []Rule{{
+		Action: ActionDeny, Transports: []Transport{TransportTCP}, Directions: []Direction{DirectionOutbound}, Prefixes: []netip.Prefix{denyPrefix},
+	}}}
+	merged := Merge(deny, allow)
+	allow.Rules[0].Transports[0] = TransportUDP
+	deny.Rules[0].Prefixes[0] = netip.MustParsePrefix("198.51.100.0/24")
+
+	compiled, err := Compile(merged)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if compiled.CheckEndpoint(OperationTCPConnect, netip.MustParseAddr("192.0.2.10"), 443) {
+		t.Fatal("caller deny lost to composed allow")
+	}
+	if !compiled.CheckEndpoint(OperationTCPConnect, netip.MustParseAddr("203.0.113.10"), 443) {
+		t.Fatal("composed allow missing")
+	}
+	if !compiled.CheckEndpoint(OperationTCPConnect, netip.MustParseAddr("127.0.0.1"), 443) {
+		t.Fatal("special-class grant did not compose")
+	}
+}
+
 func TestPolicyDenyPrecedenceIsOrderIndependent(t *testing.T) {
 	allow := Rule{
 		Action:     ActionAllow,

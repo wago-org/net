@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	nscore "github.com/wago-org/net/internal/namespace/core"
+	"github.com/wago-org/net/internal/policy"
 	wago "github.com/wago-org/wago"
 )
 
@@ -71,6 +72,27 @@ func TestBackendContributionConfigurationAndInstallation(t *testing.T) {
 	}
 	if service, installed, err := stateless.InstallBackend(BackendLnetoV1, base); err != nil || installed || service != (nscore.Service{}) {
 		t.Fatalf("stateless install = %+v %v %v", service, installed, err)
+	}
+}
+
+func TestAuthorityContributionCopiesAndComposes(t *testing.T) {
+	input := policy.Config{Rules: []policy.Rule{{
+		Action: policy.ActionAllow, Transports: []policy.Transport{policy.TransportTCP},
+		Directions: []policy.Direction{policy.DirectionOutbound},
+	}}, AllowLoopback: true}
+	module := NewModule(ModuleTCP, func(*wago.Registry, Host) {}).WithAuthority(NewAuthority(input))
+	input.Rules[0].Transports[0] = policy.TransportUDP
+	input.AllowLoopback = false
+
+	target := policy.Config{Rules: []policy.Rule{{Action: policy.ActionDeny, Transports: []policy.Transport{policy.TransportTCP}}}}
+	if err := module.ConfigureAuthority(&target); err != nil {
+		t.Fatal(err)
+	}
+	if len(target.Rules) != 2 || target.Rules[1].Transports[0] != policy.TransportTCP || !target.AllowLoopback {
+		t.Fatalf("composed authority = %+v", target)
+	}
+	if err := module.ConfigureAuthority(nil); !errors.Is(err, ErrInvalidAuthority) {
+		t.Fatalf("nil authority target = %v", err)
 	}
 }
 

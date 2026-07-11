@@ -218,7 +218,12 @@ func (e *Extension) initialize(modules []plugin.Module) (*instancestate.Manager,
 
 func (e *Extension) buildManager(modules []plugin.Module) (*instancestate.Manager, error) {
 	managerConfig := instancestate.DefaultConfig()
-	managerConfig.Policy = e.config.Policy
+	managerConfig.Policy = policy.Merge(e.config.Policy)
+	for _, module := range modules {
+		if err := module.ConfigureAuthority(&managerConfig.Policy); err != nil {
+			return nil, err
+		}
+	}
 	if e.config.Limits != nil {
 		managerConfig.Limits = *e.config.Limits
 	}
