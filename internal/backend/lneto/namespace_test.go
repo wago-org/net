@@ -275,6 +275,48 @@ func TestUDPPolicyQuotaCloseAndRegistrationReuse(t *testing.T) {
 	}
 }
 
+func TestUDPConcurrentOperationsAndDeterministicClose(t *testing.T) {
+	config := udpTestConfig(t, 25)
+	ns := newTestNamespace(t, config)
+	local := namespace.Endpoint{Address: config.IPv4Address, Port: 4125}
+	remote := namespace.Endpoint{Address: netip.MustParseAddr("192.0.2.26"), Port: 4126}
+	socket := bindUDP(t, ns, local)
+	var wait sync.WaitGroup
+	for range 8 {
+		wait.Add(1)
+		go func() {
+			defer wait.Done()
+			buffer := make([]byte, 8)
+			for range 200 {
+				_, sendErr := socket.TrySend([]byte("packet"), remote)
+				if sendErr != nil && requireConcurrentFailure(sendErr) != namespace.FailureClosed {
+					t.Errorf("concurrent send error = %v", sendErr)
+					return
+				}
+				_, receiveErr := socket.TryReceive(buffer)
+				if receiveErr != nil && requireConcurrentFailure(receiveErr) != namespace.FailureClosed {
+					t.Errorf("concurrent receive error = %v", receiveErr)
+					return
+				}
+				if !socket.Readiness().Valid() {
+					t.Error("invalid concurrent UDP readiness")
+					return
+				}
+			}
+		}()
+	}
+	if err := ns.Close(); err != nil {
+		t.Fatal(err)
+	}
+	wait.Wait()
+	if got := socket.Readiness(); got != namespace.ReadyClosed {
+		t.Fatalf("closed concurrent readiness = %v", got)
+	}
+	if usage, _ := config.Quotas.Snapshot(); usage != (quota.Usage{}) {
+		t.Fatalf("concurrent close retained quota = %+v", usage)
+	}
+}
+
 func TestUDPBindDenialAndUnsupportedFamilies(t *testing.T) {
 	config := udpTestConfig(t, 24)
 	ns := newTestNamespace(t, config)
@@ -396,6 +438,84 @@ func TestNewRejectsInvalidOrUndersizedConfigurations(t *testing.T) {
 	}
 }
 
+func FuzzUDPIngress(f *testing.F) {
+	f.Add([]byte(nil))
+	f.Add([]byte{0, 1, 2, 3})
+	f.Add(make([]byte, 14+20+8))
+	f.Fuzz(func(t *testing.T, frame []byte) {
+		if len(frame) > 1514 {
+			frame = frame[:1514]
+		}
+		config := udpTestConfig(t, 27)
+		ns := newTestNamespace(t, config)
+		defer ns.Close()
+		bindUDP(t, ns, namespace.Endpoint{Address: config.IPv4Address, Port: 4127})
+		ns.mu.Lock()
+		handled, err := ns.ingressUDPLocked(frame)
+		ns.mu.Unlock()
+		if err != nil {
+			if failure := requireFailure(t, mapError(err)); !failure.Valid() {
+				t.Fatalf("invalid mapped ingress failure = %v", failure)
+			}
+		}
+		_ = handled
+	})
+}
+
+func FuzzUDPOperationSequence(f *testing.F) {
+	f.Add([]byte{0, 1, 2, 3, 4})
+	f.Add([]byte{2, 2, 0, 1, 3})
+	f.Fuzz(func(t *testing.T, operations []byte) {
+		if len(operations) > 64 {
+			operations = operations[:64]
+		}
+		config := udpTestConfig(t, 28)
+		ns := newTestNamespace(t, config)
+		defer ns.Close()
+		local := namespace.Endpoint{Address: config.IPv4Address, Port: 4128}
+		remote := namespace.Endpoint{Address: netip.MustParseAddr("192.0.2.29"), Port: 4129}
+		socket := bindUDP(t, ns, local)
+		buffer := make([]byte, 8)
+		for _, operation := range operations {
+			switch operation % 5 {
+			case 0:
+				payload := make([]byte, int(operation)%33)
+				_, _ = socket.TrySend(payload, remote)
+			case 1:
+				_, _ = socket.TryReceive(buffer)
+			case 2:
+				_ = socket.Readiness()
+			case 3:
+				_ = socket.Close()
+			case 4:
+				if socket.Readiness() == namespace.ReadyClosed {
+					candidate, progress, err := ns.TryBindUDP(local)
+					if err == nil && progress == namespace.ProgressDone {
+						socket = candidate
+					}
+				}
+			}
+		}
+	})
+}
+
+func BenchmarkUDPDatagramQueueRoundTrip(b *testing.B) {
+	queue := newDatagramQueue(8, 64, 512)
+	endpoint := namespace.Endpoint{Address: netip.MustParseAddr("192.0.2.1"), Port: 53}
+	payload := make([]byte, 64)
+	buffer := make([]byte, 64)
+	b.ReportAllocs()
+	for b.Loop() {
+		if !queue.push(payload, endpoint) {
+			b.Fatal("queue push blocked")
+		}
+		result, ok := queue.pop(buffer)
+		if !ok || !result.Ready || result.Copied != len(payload) {
+			b.Fatalf("queue pop = %+v, %v", result, ok)
+		}
+	}
+}
+
 func transferOne(t testing.TB, from, to *packetlink.Link) int {
 	t.Helper()
 	buffer := make([]byte, from.MaxFrameBytes())
@@ -483,6 +603,11 @@ func newTestNamespace(t testing.TB, config Config) *Namespace {
 		t.Fatal(err)
 	}
 	return ns
+}
+
+func requireConcurrentFailure(err error) namespace.Failure {
+	failure, _ := namespace.FailureOf(err)
+	return failure
 }
 
 func requireFailure(t testing.TB, err error) namespace.Failure {

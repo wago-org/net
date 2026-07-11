@@ -8,17 +8,23 @@ the experimental `wago_net.abi_version` import and the stable numeric status
 taxonomy. Internal foundations now include checked memory, instance-scoped
 handles and cleanup, immutable endpoint policy, finite per-instance quotas,
 backend-neutral nonblocking namespace contracts, a deterministic bounded packet
-link, one manually serviced lneto stack per concrete namespace, and bounded
-instance-scoped readiness coordination. TCP, UDP, DNS, polling imports, and
-privileged packet access are not yet guest-visible and are not advertised as
-available; the concrete backend truthfully rejects protocol constructors until
-their nonblocking adapters are hardened.
+link, one manually serviced lneto stack per concrete namespace, bounded
+instance-scoped readiness coordination, transactional instance-owned namespace
+creation, and hardened internal IPv4 UDP resources. UDP bind/send authority,
+resource and retained-byte quotas, empty/truncated datagrams, fixed queues,
+readiness, and deterministic cleanup are implemented internally. TCP, UDP, DNS,
+polling imports, and privileged packet access are still not guest-visible or
+advertised; TCP and DNS constructors remain truthfully unsupported.
 
 ```go
 rt := wago.NewRuntime()
 if err := rt.Use(wagonet.Init(wagonet.Config{})); err != nil {
     return err
 }
+
+// A configured deployment can instead provide immutable policy, finite quota,
+// readiness, packet-link, static IPv4, and UDP queue settings. Each Runtime
+// instance then receives its own isolated namespace and generation-safe handles.
 ```
 
 Networking extensions currently require ordinary Runtime instances or classes

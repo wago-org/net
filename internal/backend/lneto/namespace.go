@@ -74,7 +74,7 @@ type Namespace struct {
 // ValidateConfig reports whether config can construct a static IPv4 namespace
 // without allocating backend state.
 func ValidateConfig(config Config) error {
-	if !validConfig(config) {
+	if !validConfig(config, false) {
 		return namespace.Fail(namespace.FailureInvalidArgument, packetlink.ErrInvalidConfig)
 	}
 	return nil
@@ -83,8 +83,8 @@ func ValidateConfig(config Config) error {
 // New creates one static IPv4 namespace. Link frame storage must accommodate a
 // complete Ethernet frame for the configured MTU.
 func New(config Config) (*Namespace, error) {
-	if err := ValidateConfig(config); err != nil {
-		return nil, err
+	if !validConfig(config, true) {
+		return nil, namespace.Fail(namespace.FailureInvalidArgument, packetlink.ErrInvalidConfig)
 	}
 	link, err := packetlink.New(config.Link)
 	if err != nil {
@@ -346,7 +346,7 @@ func (n *Namespace) checkEndpoint(endpoint namespace.Endpoint) error {
 	return nil
 }
 
-func validConfig(config Config) bool {
+func validConfig(config Config, requireAuthority bool) bool {
 	if config.Hostname == "" || config.RandSeed == 0 || !config.IPv4Address.Is4() || config.IPv4Address.Is4In6() || config.IPv4Address.Zone() != "" {
 		return false
 	}
@@ -357,14 +357,14 @@ func validConfig(config Config) bool {
 	if config.Link.MaxFrameBytes < requiredFrameBytes || config.Link.IngressFrames <= 0 || config.Link.EgressFrames <= 0 {
 		return false
 	}
-	return validUDPConfig(config.UDP, int(config.MTU), config.Policy, config.Quotas)
+	return validUDPConfig(config.UDP, int(config.MTU), config.Policy, config.Quotas, requireAuthority)
 }
 
-func validUDPConfig(config UDPConfig, mtu int, compiled *policy.Policy, account *quota.Account) bool {
+func validUDPConfig(config UDPConfig, mtu int, compiled *policy.Policy, account *quota.Account, requireAuthority bool) bool {
 	if config.MaxSockets == 0 {
 		return config == (UDPConfig{})
 	}
-	if compiled == nil || account == nil || config.ReceiveDatagrams <= 0 || config.TransmitDatagrams <= 0 ||
+	if (requireAuthority && (compiled == nil || account == nil)) || config.ReceiveDatagrams <= 0 || config.TransmitDatagrams <= 0 ||
 		config.MaxPayloadBytes < 0 || config.MaxPayloadBytes > mtu-28 || config.MaxPayloadBytes > int(^uint16(0)) {
 		return false
 	}

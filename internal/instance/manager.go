@@ -15,9 +15,10 @@ import (
 )
 
 var (
-	ErrInvalidInstance = errors.New("net: invalid Wago instance")
-	ErrAlreadyAttached = errors.New("net: instance state already attached")
-	ErrInvalidConfig   = errors.New("net: invalid instance manager config")
+	ErrInvalidInstance      = errors.New("net: invalid Wago instance")
+	ErrAlreadyAttached      = errors.New("net: instance state already attached")
+	ErrInvalidConfig        = errors.New("net: invalid instance manager config")
+	ErrInvalidBackendResult = errors.New("net: invalid backend result")
 )
 
 // NamespaceFactory constructs one backend namespace for one exact instance.
@@ -43,11 +44,14 @@ func DefaultConfig() Config {
 
 // State is the networking ownership root for one exact Wago instance.
 type State struct {
+	mu sync.Mutex
+
 	resources *resource.Table
 	readiness *readiness.Coordinator
 	quotas    *quota.Account
 	policy    *policy.Policy
 	namespace resource.Handle
+	closed    bool
 }
 
 // Resources returns the instance's generation-safe resource table.
@@ -88,6 +92,8 @@ func (s *State) NamespaceHandle() resource.Handle {
 	if s == nil {
 		return 0
 	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	return s.namespace
 }
 
@@ -98,6 +104,12 @@ func (s *State) Close() error {
 	if s == nil {
 		return nil
 	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed {
+		return nil
+	}
+	s.closed = true
 	var errs []error
 	if s.readiness != nil {
 		errs = append(errs, s.readiness.Close())
@@ -246,6 +258,77 @@ func (s *State) createNamespace(factory NamespaceFactory) (resource.Handle, erro
 	}
 	s.namespace = handle
 	return handle, nil
+}
+
+// BindUDP transactionally creates, owns, and poll-registers one backend UDP
+// socket under namespaceHandle. Failed backend, table, and registration stages
+// synchronously close the socket so its quota allocations are released.
+func (s *State) BindUDP(namespaceHandle resource.Handle, local namespace.Endpoint) (resource.Handle, namespace.Progress, error) {
+	if s == nil {
+		return 0, 0, ErrInvalidConfig
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed || s.resources == nil || s.readiness == nil {
+		return 0, 0, namespace.Fail(namespace.FailureClosed, resource.ErrClosed)
+	}
+	value, err := s.resources.Lookup(namespaceHandle, resource.KindNamespace)
+	if err != nil {
+		return 0, 0, err
+	}
+	backend, ok := value.(namespace.Namespace)
+	if !ok {
+		return 0, 0, namespace.Fail(namespace.FailureIO, ErrInvalidBackendResult)
+	}
+	socket, progress, err := backend.TryBindUDP(local)
+	if err != nil {
+		return 0, progress, err
+	}
+	if progress == namespace.ProgressWouldBlock {
+		if socket != nil {
+			_ = socket.Close()
+			return 0, 0, namespace.Fail(namespace.FailureIO, ErrInvalidBackendResult)
+		}
+		return 0, progress, nil
+	}
+	if progress != namespace.ProgressDone || socket == nil {
+		if socket != nil {
+			_ = socket.Close()
+		}
+		return 0, 0, namespace.Fail(namespace.FailureIO, ErrInvalidBackendResult)
+	}
+	handle, err := s.resources.Add(resource.KindUDPSocket, socket)
+	if err != nil {
+		_ = socket.Close()
+		return 0, 0, err
+	}
+	if err := s.readiness.Register(handle, resource.KindUDPSocket); err != nil {
+		_ = s.resources.CloseHandle(handle, resource.KindUDPSocket)
+		return 0, 0, err
+	}
+	return handle, namespace.ProgressDone, nil
+}
+
+// CloseHandle removes readiness before closing one exact kind-checked resource.
+// A wrong-kind request cannot unregister a valid handle.
+func (s *State) CloseHandle(handle resource.Handle, kind resource.Kind) error {
+	if s == nil {
+		return ErrInvalidConfig
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed || s.resources == nil || s.readiness == nil {
+		return resource.ErrClosed
+	}
+	if _, err := s.resources.Lookup(handle, kind); err != nil {
+		return err
+	}
+	s.readiness.Unregister(handle)
+	err := s.resources.CloseHandle(handle, kind)
+	if err == nil && kind == resource.KindNamespace && handle == s.namespace {
+		s.namespace = 0
+	}
+	return err
 }
 
 type ownedNamespace struct {

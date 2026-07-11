@@ -78,9 +78,14 @@ retained bytes synchronously.
 namespace. Only immediate Ethernet ingress and egress calls enter bounded manual
 service; no lneto blocking, deadline, goroutine, or backoff wrapper is used.
 Service alternates directions under independent packet, byte, and operation
-bounds, maps backend errors to semantic namespace failures, and leaves UDP, TCP,
-and DNS constructors truthfully unsupported. Tests drive deterministic ARP
-exchange between isolated namespaces and prove exact budget and close behavior.
+bounds and maps backend errors to semantic namespace failures. IPv4 UDP is now
+implemented with adapter-owned fixed datagram queues and lneto's immediate
+Ethernet/IPv4/UDP frame codecs. This design is deliberate: lneto's high-level UDP
+wrappers back off, while its exported immediate mux cannot represent an empty
+payload. The adapter preserves empty and truncated datagrams, validates checksums
+and fragmentation, enforces policy on bind and every send, reserves exact finite
+resource/retained-storage quota, rotates egress deterministically, and clears all
+queue bytes on close. TCP and DNS constructors remain truthfully unsupported.
 
 `internal/readiness` attaches a finite coordinator to each instance resource
 table. Registrations retain opaque handle plus exact kind, level-triggered polls
@@ -89,15 +94,19 @@ bounded namespace service attempts. Stale generation handles are removed during
 the bounded scan; polling never sleeps and exposes no guest import yet.
 
 Each `Extension` now owns a private instance-state manager. Runtime
-instantiation attaches one resource table, readiness coordinator, and finite
-quota ledger to the exact `*wago.Instance`; host imports recover that identity
-through the additive `wago.InstanceHostModule` interface, and `BeforeClose`
-removes the attachment before polling shutdown, reverse-creation resource
-cleanup, and quota shutdown. Failed later setup and `ResetReinstantiate`
-replacement use the same close path. No process-global instance map is used. The
-low-level `Imports` bundle remains suitable only for stateless core imports such
-as `abi_version`;
-resource-owning protocol extensions require the Runtime lifecycle path.
+instantiation attaches one resource table, readiness coordinator, immutable
+policy, and finite quota ledger to the exact `*wago.Instance`. Optional static
+IPv4 configuration transactionally reserves namespace quota, constructs the
+backend, inserts a generation-safe handle, and registers bounded readiness before
+the state is published. UDP creation repeats that transaction for its socket
+handle and poll registration; every failed stage closes the backend resource and
+releases accounting. Host imports recover exact identity through the additive
+`wago.InstanceHostModule` interface, and `BeforeClose` removes the attachment
+before polling shutdown, reverse-creation resource cleanup, and quota shutdown.
+Failed later setup and `ResetReinstantiate` replacement use the same close path.
+No process-global instance map is used. The low-level `Imports` bundle remains
+suitable only for stateless core imports such as `abi_version`; resource-owning
+protocol extensions require the Runtime lifecycle path.
 
 The companion Wago branch `net/instance-close-hooks` contains the prerequisites:
 commit `dd82ec9a8963463e6516bf803bec58b3a89b89b3` adds deterministic close hooks,

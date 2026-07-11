@@ -3,11 +3,14 @@ package net
 import (
 	"context"
 	"errors"
+	"net/netip"
 	"sync"
 	"sync/atomic"
 	"testing"
 
+	"github.com/wago-org/net/internal/namespace"
 	"github.com/wago-org/net/internal/quota"
+	"github.com/wago-org/net/internal/readiness"
 	"github.com/wago-org/net/internal/resource"
 	wago "github.com/wago-org/wago"
 	"github.com/wago-org/wago/testutil/wasmtest"
@@ -150,6 +153,115 @@ func TestInstanceStateIsolationHostIdentityAndCrossTableHandles(t *testing.T) {
 	}
 	if len(observed) != 2 || observed[1] != second || observedState != secondState {
 		t.Fatalf("second host identity/state = %v/%p, want %p/%p", observed, observedState, second, secondState)
+	}
+}
+
+func TestConfiguredNamespaceUDPHandlesReadinessAndCleanup(t *testing.T) {
+	prefix := netip.MustParsePrefix("192.0.2.0/24")
+	limits := QuotaLimits{Resources: 2, UDPResources: 1, QueuedBytes: 64}
+	readinessConfig := ReadinessConfig{MaxRegistrations: 2}
+	extension := Init(Config{
+		Policy: PolicyConfig{Rules: []PolicyRule{{
+			Action:     PolicyAllow,
+			Transports: []PolicyTransport{PolicyTransportUDP},
+			Directions: []PolicyDirection{PolicyInbound, PolicyOutbound},
+			Prefixes:   []netip.Prefix{prefix},
+		}}},
+		Limits:    &limits,
+		Readiness: &readinessConfig,
+		StaticIPv4: &StaticIPv4Config{
+			Hostname:               "instance1",
+			RandSeed:               1,
+			HardwareAddress:        [6]byte{2, 0, 0, 0, 0, 1},
+			GatewayHardwareAddress: [6]byte{2, 0, 0, 0, 0, 2},
+			IPv4Address:            netip.MustParseAddr("192.0.2.1"),
+			MTU:                    1500,
+			Link:                   PacketLinkConfig{MaxFrameBytes: 1514, IngressFrames: 2, EgressFrames: 2},
+			UDP: UDPConfig{
+				MaxSockets:        1,
+				ReceiveBytes:      32,
+				TransmitBytes:     32,
+				ReceiveDatagrams:  1,
+				TransmitDatagrams: 1,
+				MaxPayloadBytes:   32,
+			},
+		},
+	})
+	runtime := wago.NewRuntime()
+	if err := runtime.Use(extension); err != nil {
+		t.Fatalf("Use: %v", err)
+	}
+	firstInstance, err := runtime.Instantiate(context.Background(), emptyModule(t, runtime))
+	if err != nil {
+		t.Fatalf("Instantiate first: %v", err)
+	}
+	secondInstance, err := runtime.Instantiate(context.Background(), emptyModule(t, runtime))
+	if err != nil {
+		t.Fatalf("Instantiate second: %v", err)
+	}
+	defer secondInstance.Close()
+	first, _ := extension.instanceManager().ForInstance(firstInstance)
+	second, _ := extension.instanceManager().ForInstance(secondInstance)
+	local := namespace.Endpoint{Address: netip.MustParseAddr("192.0.2.1"), Port: 4100}
+	firstUDP, progress, err := first.BindUDP(first.NamespaceHandle(), local)
+	if err != nil || progress != namespace.ProgressDone || firstUDP == 0 {
+		t.Fatalf("first BindUDP = %v, %v, %v", firstUDP, progress, err)
+	}
+	secondUDP, progress, err := second.BindUDP(second.NamespaceHandle(), local)
+	if err != nil || progress != namespace.ProgressDone || secondUDP == 0 {
+		t.Fatalf("second BindUDP = %v, %v, %v", secondUDP, progress, err)
+	}
+	if _, err := second.Resources().Lookup(firstUDP, resource.KindUDPSocket); !errors.Is(err, resource.ErrBadHandle) {
+		t.Fatalf("cross-instance UDP lookup = %v", err)
+	}
+	if snapshot := first.Readiness().Snapshot(); snapshot.Registrations != 2 || snapshot.Capacity != 2 {
+		t.Fatalf("UDP readiness registration = %+v", snapshot)
+	}
+	events := make([]readiness.Event, 2)
+	budget := readiness.Budget{Scans: 2, Events: 2}
+	report, pollProgress, err := first.Readiness().TryPoll(events, budget)
+	if err != nil || pollProgress != namespace.ProgressDone || report.Events != 2 {
+		t.Fatalf("UDP poll = %+v, %v, %v, events=%+v", report, pollProgress, err, events)
+	}
+	seenUDP := false
+	for _, event := range events {
+		if event.Handle == firstUDP && event.Readiness == namespace.ReadyWritable {
+			seenUDP = true
+		}
+	}
+	if !seenUDP {
+		t.Fatalf("UDP writable event missing: %+v", events)
+	}
+	if err := first.CloseHandle(firstUDP, resource.KindTCPStream); !errors.Is(err, resource.ErrBadHandle) {
+		t.Fatalf("wrong-kind close = %v", err)
+	}
+	if snapshot := first.Readiness().Snapshot(); snapshot.Registrations != 2 {
+		t.Fatalf("wrong-kind close changed readiness = %+v", snapshot)
+	}
+	if err := first.CloseHandle(firstUDP, resource.KindUDPSocket); err != nil {
+		t.Fatalf("CloseHandle UDP: %v", err)
+	}
+	if _, err := first.Resources().Lookup(firstUDP, resource.KindUDPSocket); !errors.Is(err, resource.ErrBadHandle) {
+		t.Fatalf("stale UDP handle lookup = %v", err)
+	}
+	if usage, closed := first.Quotas().Snapshot(); closed || usage.Resources != 1 || usage.UDPResources != 0 || usage.QueuedBytes != 0 {
+		t.Fatalf("UDP cleanup quota = %+v, closed=%v", usage, closed)
+	}
+	rebound, progress, err := first.BindUDP(first.NamespaceHandle(), local)
+	if err != nil || progress != namespace.ProgressDone || rebound == 0 || rebound == firstUDP {
+		t.Fatalf("UDP rebound = %v, %v, %v", rebound, progress, err)
+	}
+	if err := firstInstance.Close(); err != nil {
+		t.Fatalf("Close first: %v", err)
+	}
+	if usage, closed := first.Quotas().Snapshot(); !closed || usage != (quota.Usage{}) {
+		t.Fatalf("first teardown quota = %+v, closed=%v", usage, closed)
+	}
+	if snapshot := first.Readiness().Snapshot(); !snapshot.Closed || snapshot.Registrations != 0 {
+		t.Fatalf("first teardown readiness = %+v", snapshot)
+	}
+	if _, err := first.Resources().Lookup(rebound, resource.KindUDPSocket); !errors.Is(err, resource.ErrClosed) {
+		t.Fatalf("teardown stale UDP lookup = %v", err)
 	}
 }
 

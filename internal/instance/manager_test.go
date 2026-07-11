@@ -16,6 +16,7 @@ import (
 
 type fakeNamespace struct {
 	closed atomic.Int32
+	socket namespace.UDPSocket
 }
 
 func (n *fakeNamespace) Close() error {
@@ -25,6 +26,9 @@ func (n *fakeNamespace) Close() error {
 
 func (n *fakeNamespace) Readiness() namespace.Readiness { return namespace.ReadyWritable }
 func (n *fakeNamespace) TryBindUDP(namespace.Endpoint) (namespace.UDPSocket, namespace.Progress, error) {
+	if n.socket != nil {
+		return n.socket, namespace.ProgressDone, nil
+	}
 	return nil, 0, namespace.Fail(namespace.FailureNotSupported, nil)
 }
 func (n *fakeNamespace) TryListenTCP(namespace.Endpoint) (namespace.TCPListener, namespace.Progress, error) {
@@ -38,6 +42,24 @@ func (n *fakeNamespace) TryResolve(namespace.DNSRequest) (namespace.DNSQuery, na
 }
 func (n *fakeNamespace) TryService(namespace.ServiceBudget) (namespace.ServiceReport, namespace.Progress, error) {
 	return namespace.ServiceReport{}, namespace.ProgressWouldBlock, nil
+}
+
+type fakeUDPSocket struct {
+	closed atomic.Int32
+	local  namespace.Endpoint
+}
+
+func (s *fakeUDPSocket) Close() error {
+	s.closed.Add(1)
+	return nil
+}
+func (s *fakeUDPSocket) Readiness() namespace.Readiness    { return namespace.ReadyWritable }
+func (s *fakeUDPSocket) LocalEndpoint() namespace.Endpoint { return s.local }
+func (s *fakeUDPSocket) TryReceive([]byte) (namespace.DatagramResult, error) {
+	return namespace.DatagramResult{}, nil
+}
+func (s *fakeUDPSocket) TrySend([]byte, namespace.Endpoint) (namespace.Progress, error) {
+	return namespace.ProgressDone, nil
 }
 
 type fakePollable struct{}
@@ -133,6 +155,50 @@ func TestConfiguredNamespacesAreQuotaOwnedIsolatedAndGenerationSafe(t *testing.T
 	}
 	if created[1].closed.Load() != 1 {
 		t.Fatalf("second backend close count = %d", created[1].closed.Load())
+	}
+}
+
+func TestBindUDPRegistrationRollbackAndKindCheckedClose(t *testing.T) {
+	table, err := resource.NewTable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	poller, err := readiness.New(table, readiness.Config{MaxRegistrations: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	account := quota.NewAccount(quota.Limits{Resources: 2, UDPResources: 1, QueuedBytes: 64})
+	compiled, err := policy.Compile(policy.Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	socket := &fakeUDPSocket{local: namespace.Endpoint{Address: netip.MustParseAddr("192.0.2.1"), Port: 4200}}
+	backend := &fakeNamespace{socket: socket}
+	handle, err := table.Add(resource.KindNamespace, backend)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := poller.Register(handle, resource.KindNamespace); err != nil {
+		t.Fatal(err)
+	}
+	state := &State{resources: table, readiness: poller, quotas: account, policy: compiled, namespace: handle}
+	if udpHandle, progress, err := state.BindUDP(handle, socket.local); udpHandle != 0 || progress != 0 || !errors.Is(err, readiness.ErrLimit) {
+		t.Fatalf("BindUDP registration rollback = %v, %v, %v", udpHandle, progress, err)
+	}
+	if socket.closed.Load() != 1 || table.Len() != 1 || poller.Snapshot().Registrations != 1 {
+		t.Fatalf("failed bind retained socket: closes=%d resources=%d readiness=%+v", socket.closed.Load(), table.Len(), poller.Snapshot())
+	}
+	if err := state.CloseHandle(handle, resource.KindUDPSocket); !errors.Is(err, resource.ErrBadHandle) {
+		t.Fatalf("wrong-kind namespace close = %v", err)
+	}
+	if poller.Snapshot().Registrations != 1 {
+		t.Fatal("wrong-kind close unregistered namespace")
+	}
+	if err := state.CloseHandle(handle, resource.KindNamespace); err != nil {
+		t.Fatal(err)
+	}
+	if backend.closed.Load() != 1 || state.NamespaceHandle() != 0 || poller.Snapshot().Registrations != 0 {
+		t.Fatalf("namespace close state: closes=%d handle=%v readiness=%+v", backend.closed.Load(), state.NamespaceHandle(), poller.Snapshot())
 	}
 }
 

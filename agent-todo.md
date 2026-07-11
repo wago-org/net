@@ -39,10 +39,12 @@ ranges and the fixed 32-byte IPv4/IPv6 address codec.
 with never-reused table identities, safe slot retirement before generation wrap,
 reverse-creation O(live) cleanup, fuzz coverage, and focused benchmarks. Each core
 `Extension` owns an `internal/instance.Manager` that attaches one resource table,
-one bounded readiness coordinator, and one finite quota account to each exact
-Runtime-created `*wago.Instance`, resolves host callers through optional
-`wago.InstanceHostModule`, and removes state in `BeforeClose`. The map is
-extension-local, not process-global.
+one bounded readiness coordinator, one immutable compiled policy, and one finite
+quota account to each exact Runtime-created `*wago.Instance`. Optional static IPv4
+configuration transactionally creates a namespace handle and readiness entry;
+UDP handles use the same rollback-safe path. Host callers resolve through optional
+`wago.InstanceHostModule`, and `BeforeClose` removes state before poller, resource,
+and quota teardown. The map is extension-local, not process-global.
 
 `internal/policy` compiles immutable allow/deny rules for transport, direction,
 IP prefixes, port ranges, and normalized DNS suffixes. Deny always wins, unmatched
@@ -75,14 +77,21 @@ and failed-fill paths retain no caller data; close clears all frame bytes.
 manual service path uses only immediate Ethernet ingress/egress, alternates work
 under strict packet, byte, and operation-attempt budgets, maps lneto errors to
 namespace failures, and performs deterministic two-namespace ARP exchange.
-UDP/TCP/DNS constructors remain truthfully not-supported, so no blocking lneto
-socket API enters a host-facing path.
+IPv4 UDP now uses adapter-owned fixed datagram queues plus lneto's immediate
+Ethernet/IPv4/UDP codecs because the high-level wrappers back off and the exported
+immediate mux cannot represent empty payloads. Bind and every send enforce policy;
+resource and retained-storage quotas are exact; empty/truncated datagrams,
+checksums, non-fragmented validation, deterministic egress rotation, and close
+clearing are covered. TCP and DNS remain truthfully not-supported.
 
 `internal/readiness` provides a finite coordinator per instance resource table.
 Registrations preserve exact handle kind, polls are level-triggered and bounded
 by scans, event outputs, and namespace service attempts, and stale handles are
-removed within the scan budget. No poll call sleeps or performs an unbounded
-registration scan. No guest protocol or poll imports exist yet.
+removed within the scan budget. Configured namespace and UDP creation now add
+handles and registrations transactionally; wrong-kind close cannot unregister a
+valid handle, and explicit close removes readiness before generation retirement.
+No poll call sleeps or performs an unbounded registration scan. No guest protocol
+or poll imports exist yet.
 
 The companion Wago branch adds `HookRegistry.BeforeClose`, reverse-order
 exactly-once invocation, cleanup on failed post-instantiation setup, class
@@ -122,24 +131,30 @@ host-call instance identity without expanding `HostModule` or changing `HostFunc
 - `a0ab41a` — added the pinned lneto dependency and one bounded `StackAsync`
   namespace service with deterministic exchange, semantic error mapping, exact
   budget tests, cleanup/race coverage, and unsupported protocol constructors.
-- `HEAD` (`net: add bounded readiness coordination`) — added finite
-  instance-scoped poll registration, level-triggered bounded scans/events/service,
-  stale-handle removal, and lifecycle cleanup integration.
+- `8d34171` — added finite instance-scoped poll registration, level-triggered
+  bounded scans/events/service, stale-handle removal, and lifecycle cleanup.
+- `013fa4d` — added immutable configured instance state and transactional static
+  namespace quota, handle, readiness, rollback, isolation, and lifecycle ownership.
+- `af7b021` — added policy/quota-backed nonblocking IPv4 UDP resources with fixed
+  queues, empty/truncated datagrams, lneto frame codecs, and deterministic close.
+- `HEAD` (`net: harden UDP readiness and cleanup`) — adds transactional UDP
+  handle/readiness ownership, kind-safe close, lifecycle/race/fuzz/benchmark
+  coverage, and truthful architecture documentation.
 
 ## Active work
 
-Recursion 4 is complete with exactly three bounded commits. The next recursion
-should connect namespace creation to instance policy/quota/resource ownership,
-then implement and harden the first nonblocking UDP resource without exposing a
-guest import until its cleanup and readiness semantics are proven.
+Recursion 5 is complete with exactly three bounded commits. Instance-owned static
+namespaces and hardened nonblocking IPv4 UDP resources are now integrated with
+policy, quota, generation-safe handles, readiness, and deterministic cleanup.
+The next recursion should design the checked guest UDP ABI and imports without
+weakening the completed internal ownership model.
 
 ## Ordered backlog
 
 1. Reconcile and upstream the Wago close-hook/identity changes against PR #232.
-2. Add policy/quota-backed instance-owned namespace creation and handle wiring.
-3. Implement and harden nonblocking UDP before TCP and DNS.
-4. Add guest protocol imports only after policy, quota, memory, readiness, and
-   backend semantics are proven together.
+2. Design and implement the checked backend-neutral guest UDP ABI and capability.
+3. Add bounded guest poll integration and end-to-end malformed-memory/status tests.
+4. Harden nonblocking TCP, then DNS, before advertising either protocol.
 
 ## Blockers and discovered prerequisites
 
@@ -154,11 +169,13 @@ guest import until its cleanup and readiness semantics are proven.
   Wago still lacks an extension reset hook or eligibility control that can engine-
   enforce this restriction.
 - lneto's high-level TCP/UDP `Read`, `Write`, `ReadFrom`, and `WriteTo` use backoff
-  loops and may block. The concrete namespace imports none of them. Exported UDP
-  `MuxHandlerSIMO` queue methods and lower `Handler` methods are immediate and are
-  the leading UDP adapter candidates; registration invalidation still needs
-  deterministic close tests. TCP still needs focused nonblocking read/write APIs
-  or adapter-safe lower access beyond `Listener.TryAccept`.
+  loops and may block. The concrete namespace imports none of them. Inspection
+  proved `MuxHandlerSIMO` cannot queue empty payloads because its ring rejects a
+  zero-length write, while `RegisterUDP4` wraps child nodes after the UDP header.
+  UDP therefore uses adapter-owned bounded queues and lneto frame codecs instead
+  of pretending those APIs satisfy the neutral contract. TCP still needs focused
+  nonblocking read/write APIs or adapter-safe lower access beyond
+  `Listener.TryAccept`.
 - lneto `StackAsync` serializes operations under its own mutex. The adapter now
   bounds every ingress/egress attempt, but a short egress byte budget below the
   configured maximum frame cannot safely probe a potentially smaller packet
@@ -169,14 +186,20 @@ guest import until its cleanup and readiness semantics are proven.
 
 ## Verification
 
-Latest outcomes after recursion 4:
+Latest outcomes after recursion 5:
 
 - Plugin `go test ./... -count=1` — pass.
 - Plugin `GOWORK=off go test ./... -count=1` — pass against the pinned fetched
   lneto pseudo-version and sibling Wago checkout.
-- Plugin `go test -race ./... -count=1` — pass, including packet-link, backend,
-  readiness, quota, handle, and Wago lifecycle concurrency coverage.
+- Plugin `go test -race ./... -count=1` — pass, including configured namespace,
+  UDP operations/close, readiness, quota, handle, and Wago lifecycle races.
 - Plugin `go vet ./...` — pass.
+- `FuzzUDPIngress` for 3 seconds — pass, 53,839 executions and three new cached
+  interesting inputs.
+- `FuzzUDPOperationSequence` for 3 seconds — pass, 229,758 executions and 59 new
+  cached interesting inputs.
+- `BenchmarkUDPDatagramQueueRoundTrip` — 21.53–47.70 ns/op, 0 B/op, 0 allocs/op
+  across three runs on the recorded Ryzen 7 8845HS host.
 - `FuzzSlice` for 3 seconds — pass, 1,223,812 executions.
 - `FuzzDecodeAddressV1` for 3 seconds — pass, 1,313,491 executions and one new
   cached interesting input.
@@ -210,9 +233,10 @@ Focused resource-table baselines on linux/amd64, Ryzen 7 8845HS, Go 1.24.4:
 - close 64 live resources: 3.289 us/op;
 - close 1024 live resources: 45.556 us/op.
 
-A concrete manual packet-service path now exists but is not guest-visible.
-Focused packet-link, service, and readiness benchmarks should be added when UDP
-begins invoking policy, quota, and polling on each datagram attempt.
+A concrete manual packet-service and internal UDP path now exists but is not
+guest-visible. The fixed UDP queue round trip is allocation-free at 21.53–47.70
+ns/op in the latest three-run sample. End-to-end service/poll and guest-memory
+benchmarks remain for the guest UDP ABI slice.
 
 ## Security review
 
@@ -225,41 +249,43 @@ instance close. Backend contracts prohibit retry/backoff loops inside Try method
 return no backend-owned DNS slices, validate service reports against every budget
 dimension, and categorize errors without making backend text guest ABI.
 
-Packet-link storage is fixed and cleared on close; failed fills and insufficient
-budgets do not partially commit frames. The concrete backend performs no hidden
-retry and cannot exceed a service operation attempt budget. Readiness stores only
-generation-checked handles, bounds scans/events/service calls independently, and
-removes stale registrations without exposing raw pointers.
+Packet-link and UDP datagram storage are fixed and cleared on close; failed fills,
+full queues, and insufficient budgets do not partially commit frames or payloads.
+The concrete backend performs no hidden retry and cannot exceed a service
+operation attempt budget. UDP rejects fragmented or bad-checksum traffic, enforces
+bind/send authority separately, and retains no caller slices. Readiness stores
+only generation-checked handles, bounds scans/events/service calls independently,
+removes stale registrations without exposing raw pointers, and is unregistered
+before explicit handle retirement.
 
 Remaining risks are engine enforcement of the `ResetMemorySnapshot` prohibition,
-correctly reconciling Wago PR #232, proving lneto UDP/TCP registration invalidation
-and close behavior, ensuring future protocol adapters call policy at every endpoint
-change and pair every quota reservation, and designing guest poll cancellation and
-memory writes without weakening the bounded coordinator.
+correctly reconciling Wago PR #232, selecting safe immediate TCP integration,
+ensuring future protocol and guest adapters call policy at every endpoint change
+and pair every quota reservation, and designing guest poll cancellation and
+checked memory writes without weakening the bounded coordinator.
 
 ## Next recursion
 
-1. `net: add instance-owned namespace creation`
-   - Scope: extend extension/manager configuration with immutable policy, finite
-     quota, static backend, and packet-link settings; transactionally reserve a
-     namespace resource, add its generation-safe handle, and register it with the
-     instance readiness coordinator. Roll every stage back on failure and close in
-     poller-before-resource-before-quota order.
-   - Tests: two-instance isolation, denied/invalid configuration, exact quota,
-     failed registration rollback, stale/cross-instance handles, and lifecycle race.
-2. `net: add nonblocking lneto UDP resources`
-   - Scope: adapt only immediate exported UDP queue/handler APIs, enforce bind and
-     per-datagram send policy, reserve finite resource and retained-byte quotas,
-     preserve empty/truncated datagrams, and invalidate lneto registration on close.
-     Do not call `Read`, `Write`, `ReadFrom`, or `WriteTo` wrappers that back off.
-   - Tests: deterministic two-namespace unicast exchange, queue full/would-block,
-     empty/truncated datagrams, policy denial, exact quotas, and semantic errors.
-3. `net: harden UDP readiness and cleanup`
-   - Scope: integrate UDP pollables with the bounded coordinator, prove level
-     transitions and stale removal, fuzz malformed packets and operation sequences,
-     add race/benchmark coverage, and document whether semantics are sufficient for
-     a later guest UDP module. Keep guest imports absent unless every advertised
-     operation is complete and truthful.
+1. `net: define the guest UDP ABI`
+   - Scope: specify stable v1 numeric layouts and statuses for namespace discovery,
+     UDP bind/send/receive/close, endpoint addresses, truncation, and poll events.
+     Keep the ABI backend-neutral and make every output write atomic.
+   - Tests: layout constants, checked-memory overflow/OOB, malformed endpoints,
+     status mapping including access denial, and TinyGo-compatible signatures.
+2. `net: add capability-gated UDP imports`
+   - Scope: add a separately owned `wago_net_udp` module and narrow capability,
+     resolve exact instance state, call generation/kind-checked state operations,
+     and expose only the internally complete UDP operations. Preserve truthful
+     inspection and keep TCP/DNS absent.
+   - Tests: custom Wago binary inspection, two-instance/cross-handle isolation,
+     denied policy, exact quota, empty/truncated guest datagrams, stale close, and
+     failed guest-memory write rollback.
+3. `net: add bounded guest polling for UDP`
+   - Scope: expose bounded poll over checked guest buffers, reserve service work,
+     map level-triggered UDP/namespace readiness, and prove cancellation/cleanup
+     without sleeping or unbounded scans.
+   - Tests: output/scanning/service bounds, stale generation removal, malformed
+     memory fuzzing, lifecycle/race/bench, package build, and docs/signoff updates.
 
 After those exactly three commits, run combined verification, update this ledger,
 and recurse again if the long-term completion criteria remain unmet.
