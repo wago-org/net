@@ -56,7 +56,7 @@ allocation-reporting benchmarks, linux/arm64 cross-build, and pack-only external
 reconstruction pass for this stage. The arm64 smoke binary cross-compiles but
 cannot execute on this host because no native or QEMU runner is installed. The
 Wago moving-ref compatibility replay and selective networking reconstruction now
-pass on exact upstream `18615546584ec09e607856a0da99851656f5be80`. The strict
+pass on exact upstream `2fbb34a50e89faad0f2ea4d47a219218d0cd2871`. The strict
 heavyweight local release matrix now passes through an exact clean production
 Wago worktree while leaving the user-owned dirty audit checkout untouched.
 Production activation remains blocked by unpublished exact subjects, missing
@@ -64,11 +64,11 @@ arm64 execution, and accepted WASI preview-1 exceptions. Those exceptions are
 now bound to an exact four-pass/four-fault corpus matrix. A minimized trigger
 identifies Wago's synchronous-host register-ABI `call_indirect` path. Exact
 production-derived fix review `5c7f76db` passes the complete production-line
-WASI suite. The patch-equivalent current-Wago port `90018dad` plus managed-wrapper
-compatibility child `540c453d` pass current WASI `cbdb9b32`, full current Wago,
-and pack-only networking/worker reconstruction. Wago main then advanced to
-CLI-only child `2fbb34a5`, so moving-ref acceptance correctly waits for a fresh
-replay. Production removal still waits for publication and adoption of an exact
+WASI suite. The patch-equivalent current-Wago port `2a9bf214` plus managed-wrapper
+compatibility child `da4db3c9` pass current WASI `cbdb9b32`, full current Wago,
+and pack-only networking/worker reconstruction. They follow lifecycle replay
+`cf2409d3` on the CLI-only upstream child, so moving-ref acceptance is bound to
+the current exact base and remains fail-closed on later movement. Production removal still waits for publication and adoption of an exact
 fixed production input.
 
 ## Goal

@@ -5,7 +5,7 @@ checkout with an exact clean production-Wago worktree, clean lneto/WASI inputs,
 current Wago/networking review worktrees, and the external workers checkout. It
 writes disposable logs under `.wago/release-signoff/`. The default production
 Wago worktree is `.wago/wago-production-97e6f91`; the default current-review
-worktrees are `.wago/wago-current-plugin-lifecycle-18615546` and
+worktrees are `.wago/wago-current-plugin-lifecycle-2fbb34a5` and
 `.wago/net-current-plugin-registration-18615546`.
 
 ## Pinned inputs
@@ -19,13 +19,13 @@ The script refuses revision drift before doing work:
 | Wago worker parent | `ffd5ef4b122cbd019897eeea3503789ab5860e4a` |
 | lneto | `ab1a0c735a8b534a1d6322a3e245bc11a09431e7` |
 | WASI audit | `3df6c766ad00e83b314da799dbf9a77b409ad19d` |
-| Current Wago integrated preview-1 fix review | `540c453de318a8385d63ee335e4fd881a628aafc` |
+| Current Wago integrated preview-1 fix review | `da4db3c97c643b5385cbca02ec125822afd82abd` |
 | Current networking registration review | `173b38a4d5a0db0e6058544576942a46b9d543df` |
 | External workers | `1e9139756d8a3c631c59c00b028038c83bfa8341` |
 
 By default the production inputs are `.wago/wago-production-97e6f91`,
 `.audit/lneto`, and `.audit/wasi`; current review inputs are
-`.wago/wago-current-plugin-lifecycle-18615546`,
+`.wago/wago-current-plugin-lifecycle-2fbb34a5`,
 `.wago/net-current-plugin-registration-18615546`, and
 `.wago/workers-plugin`. Prepare or verify the production Wago worktree with:
 
@@ -107,9 +107,9 @@ kept its aggregate-only compatibility mode. Arm64 execution was truthfully
 `skipped-no-runner`.
 
 The moving-ref compatibility blocker is resolved locally. Current Wago review
-`540c453de318a8385d63ee335e4fd881a628aafc` preserves exact lineage through
-preview-1 fix port `90018dad`, lifecycle replay `8131d967`, and upstream
-`18615546584ec09e607856a0da99851656f5be80`. The integration directly invokes
+`da4db3c97c643b5385cbca02ec125822afd82abd` preserves exact lineage through
+preview-1 fix port `2a9bf214`, lifecycle replay `cf2409d3`, and upstream
+`2fbb34a50e89faad0f2ea4d47a219218d0cd2871`. The integration directly invokes
 local wrapper table entries, preserving external managed-worker callbacks while
 the wrapper-descriptor WASI correction remains active. Selective networking
 review `173b38a4d5a0db0e6058544576942a46b9d543df` passes standard Go, focused race,
@@ -155,19 +155,29 @@ distribution-statement SHA-256
 Publication truth and `skipped-no-runner` remained unchanged.
 
 A post-integration strict rerun at plugin subject `2021be6cebcb65e17cb10e7839e151db92747d1d`
-correctly stopped in the moving-ref topology gate after fetching new Wago main
+correctly stopped in the moving-ref topology gate after fetching Wago main
 `2fbb34a50e89faad0f2ea4d47a219218d0cd2871` (tree
 `42ddd8148a73d0a0bd2faccb03c834cfa06e2df3`, parent `18615546`). That upstream
-commit changes only `cli/wagocli/plugin_build.go`, but the exact current review
-must still be replayed and re-reviewed before the strict gate can pass. The
-failure occurred before any production selection or exception status changed.
+commit changes only `cli/wagocli/plugin_build.go`. The current review has since
+been replayed and re-reviewed on that exact base; production selection and
+exception status remain unchanged.
+
+The refreshed pre-ledger-amend strict `RUN_WASI=1 FUZZTIME=1s` run at plugin
+subject `09ac5c6ca8abc26f5da18e28eb583aaf1d04b7ba` passed the complete gate on
+current Wago `da4db3c9`. It retained production Wago `97e6f91`, the exact two
+WASI exceptions, and truthful `skipped-no-runner` arm64 status. Provenance
+SHA-256 was `2ba169276160007b58d7d03e06218a51bf91b87e22062520857c2358ea75b4eb`,
+review bundle SHA-256 was
+`1c3ba2be1df84966e66ed5a7aceca02253cdd9e91f60bd2963da7c1ca8922116`, and
+distribution-statement SHA-256 was
+`9d1566adf2fb3c415fe56ca69940adf66b9c956706b9fd925fccbad46491120e`.
 
 Production-derived Wago fix review
 `5c7f76dba0aa82ca94a1dd644318ed062b03f7cc` (tree
 `442d6a7506260565bccb01e32e016f6dccc25d6c`, direct parent production merge
 `97e6f91`) keeps synchronous-host funcrefs on the wrapper ABI. Current-Wago port
-`90018dad` has the same stable patch ID, and integration child `540c453d` (tree
-`94168ab93497a9288029d47bdf37cc9f6b6e4049`) preserves managed table callbacks
+`2a9bf214` has the same stable patch ID, and integration child `da4db3c9` (tree
+`5a538aee28e7a8ff85003dfc35f0f8fc6147fed3`) preserves managed table callbacks
 without weakening the wrapper correction. `scripts/wasi-preview1-fix-review.sh`
 re-fetches publication refs, verifies both exact lineages, runs full current Wago,
 focused race, TinyGo, production WASI `1a7eeb2`, and current capability-based

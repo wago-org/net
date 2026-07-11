@@ -3,7 +3,7 @@ set -euo pipefail
 
 root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 production_wago_repo=$(realpath "${WAGO_WASI_FIX_DIR:-$root/.wago/wago-wasi-preview1-regabi-fix-97e6f91}")
-current_wago_repo=$(realpath "${CURRENT_WAGO_WASI_FIX_DIR:-$root/.wago/wago-current-plugin-lifecycle-18615546}")
+current_wago_repo=$(realpath "${CURRENT_WAGO_WASI_FIX_DIR:-$root/.wago/wago-current-plugin-lifecycle-2fbb34a5}")
 wasi_repo=$(realpath "${WASI_DIR:-$root/.audit/wasi}")
 out=$(realpath -m "${WASI_FIX_REVIEW_OUT:-$root/.wago/wasi-preview1-fix-review}")
 
@@ -13,14 +13,14 @@ readonly production_merge=97e6f91e6c822491577faa86f3c30aa5a8fff1e8
 readonly production_tree=adbba31c51996f1c1d6d3c2069de8ddf0afd94ee
 readonly production_parent1=54499ba5135f69a062e23a7255f4a408d6cecf8c
 readonly production_parent2=ffd5ef4b122cbd019897eeea3503789ab5860e4a
-readonly current_integration=540c453de318a8385d63ee335e4fd881a628aafc
-readonly current_integration_tree=94168ab93497a9288029d47bdf37cc9f6b6e4049
-readonly current_fix=90018dadbc70c8620984bab71f1eace347c29fa8
-readonly current_fix_tree=dedf99c3e614eb6e1e7acc8c75760578d4eea364
-readonly current_lifecycle=8131d967211871936793a4f129164ec0cd928ea9
-readonly current_lifecycle_tree=10d95a09e436f5644ec80736e686a4d33cf454fb
-readonly current_main=18615546584ec09e607856a0da99851656f5be80
-readonly current_main_tree=2b4fc4694dd1eeb56e9f7f788a73a1d6965a365f
+readonly current_integration=da4db3c97c643b5385cbca02ec125822afd82abd
+readonly current_integration_tree=5a538aee28e7a8ff85003dfc35f0f8fc6147fed3
+readonly current_fix=2a9bf214957f47137287f7138cbdcaa634f2715b
+readonly current_fix_tree=4a567a5970be9692b2e01f0e506fde2616838cee
+readonly current_lifecycle=cf2409d32d7bac858a30422b329984e65cca8fd7
+readonly current_lifecycle_tree=797cd2941227ba2894b17b2d9865c631ceb5f493
+readonly current_main=2fbb34a50e89faad0f2ea4d47a219218d0cd2871
+readonly current_main_tree=42ddd8148a73d0a0bd2faccb03c834cfa06e2df3
 readonly production_wasi=1a7eeb215229e05bcb0f09d5cb3280d231739def
 readonly production_wasi_tree=9108df32daccfe5a8458e6623d996bcb51f38756
 readonly production_wasi_parent=ab7d597a8517283b0399e09d967b7f02ded1772f

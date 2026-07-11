@@ -7,7 +7,7 @@ silently replacing that production prerequisite:
 
 | Review source | Exact revision | Exact tree |
 |---|---|---|
-| Wago integrated lifecycle + preview-1 fix review | `540c453de318a8385d63ee335e4fd881a628aafc` | `94168ab93497a9288029d47bdf37cc9f6b6e4049` |
+| Wago integrated lifecycle + preview-1 fix review | `da4db3c97c643b5385cbca02ec125822afd82abd` | `5a538aee28e7a8ff85003dfc35f0f8fc6147fed3` |
 | Selective networking registration and workers composition | `173b38a4d5a0db0e6058544576942a46b9d543df` | `ca7534943e653a6c04c63ec458fc00feb6350799` |
 | External workers | `1e9139756d8a3c631c59c00b028038c83bfa8341` | `ca79d1fb02f19ae15d7b166ffc179c01f9a7c212` |
 
@@ -17,10 +17,11 @@ schema-v2 provenance manifest declares them as first-class `reviewSubjects`, and
 the standalone verifier requires their revisions, trees, and ordered commit
 parents before deriving the same identities from the packs. These declarations
 and packs establish source availability and integrity; they are not publisher
-signatures and do not make an unpublished object an upstream release. After this
-review was bound, Wago `origin/main` advanced to CLI-only child `2fbb34a5`
-(tree `42ddd8148a73d0a0bd2faccb03c834cfa06e2df3`). The moving-ref topology gate
-therefore fails closed until this integration chain is replayed and re-reviewed.
+signatures and do not make an unpublished object an upstream release. The review
+chain is replayed onto exact Wago `origin/main` `2fbb34a5` (tree
+`42ddd8148a73d0a0bd2faccb03c834cfa06e2df3`), whose sole delta from the prior
+base is `cli/wagocli/plugin_build.go`; the moving-ref topology gate now binds
+that exact base and fails closed on any later movement.
 
 ## Isolated adoption proof
 
@@ -38,9 +39,9 @@ checking out source, then creates an isolated Go workspace and runs:
   `net-udp`, and `net-dns`, requiring each exact capability/import surface.
 
 The refreshed Wago review preserves the exact lineage
-`540c453d -> 90018dad -> 8131d967 -> 18615546`. `8131d967` replays lifecycle and
-caller hardening, `90018dad` is patch-equivalent to production-derived preview-1
-fix `5c7f76db`, and `540c453d` directly invokes local wrapper table entries so the
+`da4db3c9 -> 2a9bf214 -> cf2409d3 -> 2fbb34a5`. `cf2409d3` replays lifecycle and
+caller hardening, `2a9bf214` is patch-equivalent to production-derived preview-1
+fix `5c7f76db`, and `da4db3c9` directly invokes local wrapper table entries so the
 managed-worker dispatcher remains safe. Complete standard Go, focused race,
 TinyGo, both matching WASI suites, and the external linked-child test pass. The
 selective networking review is a direct child of
