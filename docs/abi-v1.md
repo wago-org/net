@@ -10,7 +10,11 @@ recorded in the durable ledger and release notes.
 and minor version 0.
 
 Except for `abi_version`, networking imports return one `i32` status and write
-additional values through checked guest-memory output pointers.
+additional values through checked guest-memory output pointers. The ongoing
+`internal/backend/lneto/core` and protocol-adapter package split changes only Go
+implementation ownership: import names, signatures, numeric statuses, fixed
+sizes/offsets, checked-range rules, output atomicity, and handle semantics in this
+document remain unchanged.
 
 ## Scalar conventions
 

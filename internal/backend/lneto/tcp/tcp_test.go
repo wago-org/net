@@ -59,7 +59,7 @@ func TestAcceptedCloseRetainsSlotUntilChargedMaintenance(t *testing.T) {
 		t.Fatalf("maintenance = %+v, %v, %v", report, progress, err)
 	}
 	if listener.pool.slots[0].inUse || listener.pool.slots[0].stream != nil || listener.pool.slots[0].resource != nil {
-		t.Fatalf("maintenance retained slot: %+v", listener.pool.slots[0])
+		t.Fatalf("maintenance retained slot: in_use=%v stream=%p resource=%p", listener.pool.slots[0].inUse, listener.pool.slots[0].stream, listener.pool.slots[0].resource)
 	}
 }
 

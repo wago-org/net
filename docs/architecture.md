@@ -87,20 +87,29 @@ and backend fills commit atomically only after successful immediate production.
 Queue-full and oversized failures retain no caller slices, and close clears all
 retained bytes synchronously.
 
-`internal/backend/lneto` owns one `xnet.StackAsync` and one packet link per
-namespace. Only immediate Ethernet ingress and egress calls enter bounded manual
-service; no lneto blocking, deadline, goroutine, or backoff wrapper is used.
-Service alternates directions under independent packet, byte, and operation
-bounds and maps backend errors to semantic namespace failures. IPv4 UDP is now
-implemented with adapter-owned fixed datagram queues and lneto's immediate
+`internal/backend/lneto/core` owns one lifecycle lock, `xnet.StackAsync`, packet
+link, IPv4 identity, frame scratch buffer, and bounded service scheduler per
+namespace. Protocol-neutral participants contribute ordered ingress, egress,
+maintenance, and close callbacks; the core preserves DNS-before-UDP ingress,
+rotating DNS/UDP/stack egress priority, charged zero-frame TCP maintenance, and
+DNS/TCP/UDP teardown order without importing a protocol adapter. Only immediate
+Ethernet ingress and egress calls enter bounded manual service; no lneto
+blocking, deadline, goroutine, or backoff wrapper is used. Service alternates
+directions under independent packet, byte, and operation bounds and maps backend
+errors to semantic namespace failures. The temporary aggregate
+`internal/backend/lneto` assembler still installs all configured participants.
+IPv4 UDP remains inline there with adapter-owned fixed datagram queues and
+lneto's immediate
 Ethernet/IPv4/UDP frame codecs. This design is deliberate: lneto's high-level UDP
 wrappers back off, while its exported immediate mux cannot represent an empty
 payload. The adapter preserves empty and truncated datagrams, validates checksums
 and fragmentation, enforces policy on bind and every send, reserves exact finite
 resource/retained-storage quota, rotates egress deterministically, and clears all
-queue bytes on close. TCP uses only immediate `tcp.Handler` buffer/state
-primitives under the namespace lifecycle lock; it never calls `tcp.Conn`'s
-backoff-based `Read`, `Write`, or `Flush` wrappers. Fixed listener pools and
+queue bytes on close. `internal/backend/lneto/tcp` now independently owns TCP
+listener/stream pools, ports, and fixed buffers over the same core lock and stack.
+It uses only immediate `tcp.Handler` buffer/state primitives and never calls
+`tcp.Conn`'s backoff-based `Read`, `Write`, or `Flush` wrappers. Fixed listener
+pools and
 outbound streams have bounded receive/transmit storage, partial I/O, connect and
 accept progress, half-close, level readiness, endpoint policy, quota ownership,
 port reuse, and deterministic abort cleanup. Closing an accepted stream releases
@@ -118,7 +127,11 @@ from the requested name and requested A/AAAA records at its terminal name are
 emitted; irrelevant and duplicate answers are ignored, while conflicts and loops
 fail closed. Compressed names and resource framing have direct fuzz coverage.
 Truncated UDP responses map to temporary failure because DNS-over-TCP fallback is
-not implemented.
+not implemented. Root namespace construction still imports the aggregate
+assembler, so the extracted TCP adapter and inline UDP/DNS code remain in every
+fixture dependency graph until selective protocol descriptors contribute their
+own adapters. The package split is structural progress, not yet compile-isolation
+signoff.
 
 `internal/readiness` attaches a finite coordinator to each instance resource
 table. Registrations retain opaque handle plus exact kind, level-triggered polls

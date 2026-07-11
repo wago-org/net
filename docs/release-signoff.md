@@ -73,6 +73,15 @@ The gate performs, in order:
 16. standalone semantic verification and deterministic export of a compressed
     downstream review bundle.
 
+Protocol-submodule release acceptance also includes
+`internal/dependencytest`'s root/single/pair/all `go list -deps` matrix. During
+the partial lneto Stage 4 split, those fixtures deliberately require the shared
+`internal/backend/lneto/core`, the extracted TCP adapter, and the aggregate
+assembler in every graph. This is evidence of the remaining root construction
+edge, not compile-isolation signoff. Before release completion, the gate must be
+changed to reject every omitted TCP/UDP/DNS adapter and namespace facet after
+selective backend contributions replace the aggregate assembler.
+
 `scripts/arm64-execution-signoff.sh` always cross-compiles a `CGO_ENABLED=0`
 arm64 test binary before runner selection. `ARM64_EXECUTION=auto` (the release default)
 records `executed-native`, `executed-qemu`, or a truthful `skipped-no-runner`
