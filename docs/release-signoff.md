@@ -78,8 +78,11 @@ Protocol-submodule release acceptance also includes
 fixture requires the shared instance, ABI, namespace, and lneto cores. Each
 selected protocol must contribute its public facade, checked binding,
 instance-operation package, fixed ABI, namespace facet, and exact lneto adapter;
-every omitted protocol unit is rejected. All selective production graphs also
-reject the temporary aggregate namespace package and aggregate lneto assembler.
+every omitted protocol unit is rejected. Granular `tcp/register`, `udp/register`,
+and `dns/register` graphs are checked separately and must contain only their
+selected protocol, while root `register` must contain all three without reaching
+`compat`. All selective production graphs also reject the temporary aggregate
+namespace package and aggregate lneto assembler.
 
 `scripts/arm64-execution-signoff.sh` always cross-compiles a `CGO_ENABLED=0`
 arm64 test binary before runner selection. `ARM64_EXECUTION=auto` (the release default)

@@ -43,10 +43,17 @@ construction, and each exact instance transactionally creates one core, installs
 only selected adapters, and publishes an immutable neutral service composition.
 Root construction imports no aggregate or protocol adapter package. Dependency
 fixtures require selected adapters/facets and reject every omitted adapter/facet
-plus the aggregate assembler. Protocol-local finite defaults and granular
-register packages remain. Standard workspace and `GOWORK=off` tests, race, vet, TinyGo,
-source-boundary, exact dependency fixtures, repeated focused core/adapter tests,
-and practical aggregate UDP-ingress/DNS-wire fuzz smokes pass for this stage.
+plus the aggregate assembler. Protocol-local finite TCP/UDP/DNS defaults compose
+through one copied immutable policy input with caller denies retaining
+precedence. Listener/server and special-address grants, raw policy additions,
+default suppression, exact storage overrides, and conspicuous `AllowAll` remain
+explicit. Granular `tcp/register`, `udp/register`, and `dns/register` packages
+compile only their protocol, while root `register` is the explicit all-protocol
+bundle. Standard workspace and `GOWORK=off` tests, race, vet, TinyGo,
+source-boundary, exact direct/register dependency fixtures, and repeated focused
+policy/default/core tests pass for this stage. Practical fuzz, benchmarks,
+cross-build/arm64 execution, external reconstruction, and the final heavyweight
+release matrix remain.
 
 ## Goal
 
@@ -194,9 +201,9 @@ assembler, or protocol lneto adapter package. Aggregate callers move to
   and `/dns` and are gated from omitted fixture graphs.
 - `register/register.go` intentionally constructs the aggregate extension.
 
-Exact runtime registration and protocol implementation compile isolation are
-implemented. Finite defaults, granular register packages, and complete release
-signoff remain.
+Exact runtime registration, protocol implementation compile isolation, finite
+client defaults, policy composition, and granular register packages are
+implemented. Complete heavyweight release signoff remains.
 
 ## Migration sequence
 
@@ -256,17 +263,20 @@ adapters waits on removal of the aggregate root assembler.
 
 ### Stage 5: defaults and policy composition
 
-Add package-local finite defaults and ergonomic policy options. Compose module
-policy grants into one immutable policy before the first instance is created.
+Implemented. Package-local finite defaults and ergonomic policy options compose
+module grants into one immutable policy before the first instance is created.
 Deny rules continue to win. Special endpoint classes and server/listener
-operations remain explicit. Add tests proving defaults permit their documented
-client flows and deny privileged or broader authority.
+operations remain explicit. Client-flow tests cover TCP outbound, UDP ephemeral
+unicast/replies, and resolver-backed DNS while denying caller-blocked and broader
+authority by default.
 
 ### Stage 6: granular packaging and compatibility
 
-Add `tcp/register`, `udp/register`, and `dns/register`. Convert root `register`
-into an explicit aggregate bundle. Update the manifest/build inspection paths so
-selected package builds report exact imports and capabilities.
+Implemented. `tcp/register`, `udp/register`, and `dns/register` self-register
+only their protocol. Root `register` explicitly composes all three protocols in
+one shared extension. Dependency fixtures reject omitted protocol units from
+each granular graph, while the runtime matrix reports exact imports and
+capabilities for every direct selective combination.
 
 Update README examples to lead with submodule registration and retain an
 advanced compatibility section for raw configuration.

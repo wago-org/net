@@ -4,12 +4,24 @@ package register
 
 import (
 	wagonet "github.com/wago-org/net"
-	"github.com/wago-org/net/compat"
+	"github.com/wago-org/net/dns"
+	"github.com/wago-org/net/tcp"
+	"github.com/wago-org/net/udp"
 	wago "github.com/wago-org/wago"
 )
 
 func init() {
 	wago.RegisterExtension("net", func() wago.Extension {
-		return compat.Init(wagonet.Config{})
+		network := wagonet.New()
+		mustRegister(tcp.Register(network))
+		mustRegister(udp.Register(network))
+		mustRegister(dns.Register(network))
+		return network
 	})
+}
+
+func mustRegister(err error) {
+	if err != nil {
+		panic("wagonet/register: " + err.Error())
+	}
 }

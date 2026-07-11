@@ -59,7 +59,17 @@ invalid and unmatched requests fail closed, and separate zero-default gates are
 required for wildcard binds, loopback, multicast, limited broadcast, and local
 bind/listen ports below 1024. IPv4-mapped IPv6 values are rejected rather than
 normalized across policy families. Authority-changing operations have explicit
-UDP bind/send, TCP listen/connect, and DNS resolve checks.
+UDP bind/send, TCP listen/connect, and DNS resolve checks. Selected protocol
+modules contribute deep-copied grant sets through an opaque shared contract after
+registration freezes and before manager construction. Caller policy is copied
+first, grants compose monotonically, and one compile step preserves deny-wins
+semantics independent of module order. TCP contributes finite outbound-client
+authority only; UDP contributes only ephemeral wildcard client bind plus ordinary
+outbound unicast/replies; DNS contributes valid-name query authority and becomes
+usable only with an explicit finite resolver configuration. Listener/server,
+privileged bind, loopback, multicast, broadcast, raw additions, suppression of
+default authority, and conspicuous `AllowAll` grants remain protocol-local
+options. None of these options creates a second policy or quota domain.
 
 `internal/quota` provides finite per-instance total/protocol resource, queued-byte,
 DNS-work, and service-work counters. Tentative reservations must be committed or
@@ -141,6 +151,10 @@ records into core. Root namespace construction imports only the shared lneto
 core. Root, single-protocol, pair, and all-protocol dependency fixtures require
 exactly the selected adapters/facets and reject every omitted one plus the
 aggregate assembler, completing the Stage 4 compile-isolation boundary.
+Granular `tcp/register`, `udp/register`, and `dns/register` packages now own only
+their selected public facade and exact implementation graph. The root `register`
+package explicitly composes all three protocols in one extension rather than
+using the aggregate compatibility constructor.
 
 `internal/readiness` attaches a finite coordinator to each instance resource
 table. Registrations retain opaque handle plus exact kind, level-triggered polls

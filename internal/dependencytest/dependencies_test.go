@@ -12,6 +12,7 @@ const modulePath = "github.com/wago-org/net"
 
 type protocolDependency struct {
 	public    string
+	register  string
 	binding   string
 	operation string
 	abi       string
@@ -20,9 +21,9 @@ type protocolDependency struct {
 }
 
 var protocolDependencies = map[string]protocolDependency{
-	"tcp": {public: modulePath + "/tcp", binding: modulePath + "/internal/binding/tcp", operation: modulePath + "/internal/instance/tcp", abi: modulePath + "/internal/abi/tcp", namespace: modulePath + "/internal/namespace/tcp", adapter: modulePath + "/internal/backend/lneto/tcp"},
-	"udp": {public: modulePath + "/udp", binding: modulePath + "/internal/binding/udp", operation: modulePath + "/internal/instance/udp", abi: modulePath + "/internal/abi/udp", namespace: modulePath + "/internal/namespace/udp", adapter: modulePath + "/internal/backend/lneto/udp"},
-	"dns": {public: modulePath + "/dns", binding: modulePath + "/internal/binding/dns", operation: modulePath + "/internal/instance/dns", abi: modulePath + "/internal/abi/dns", namespace: modulePath + "/internal/namespace/dns", adapter: modulePath + "/internal/backend/lneto/dns"},
+	"tcp": {public: modulePath + "/tcp", register: modulePath + "/tcp/register", binding: modulePath + "/internal/binding/tcp", operation: modulePath + "/internal/instance/tcp", abi: modulePath + "/internal/abi/tcp", namespace: modulePath + "/internal/namespace/tcp", adapter: modulePath + "/internal/backend/lneto/tcp"},
+	"udp": {public: modulePath + "/udp", register: modulePath + "/udp/register", binding: modulePath + "/internal/binding/udp", operation: modulePath + "/internal/instance/udp", abi: modulePath + "/internal/abi/udp", namespace: modulePath + "/internal/namespace/udp", adapter: modulePath + "/internal/backend/lneto/udp"},
+	"dns": {public: modulePath + "/dns", register: modulePath + "/dns/register", binding: modulePath + "/internal/binding/dns", operation: modulePath + "/internal/instance/dns", abi: modulePath + "/internal/abi/dns", namespace: modulePath + "/internal/namespace/dns", adapter: modulePath + "/internal/backend/lneto/dns"},
 }
 
 func TestFixtureDependencyBoundaries(t *testing.T) {
@@ -75,6 +76,44 @@ func TestFixtureDependencyBoundaries(t *testing.T) {
 				if dependencies[aggregate] {
 					t.Fatalf("selective fixture unexpectedly depends on aggregate package %q", aggregate)
 				}
+			}
+		})
+	}
+}
+
+func TestSelfRegisterPackageDependencyBoundaries(t *testing.T) {
+	tests := []struct {
+		name     string
+		fixture  string
+		selected map[string]bool
+	}{
+		{name: "tcp", fixture: "../../tcp/register", selected: map[string]bool{"tcp": true}},
+		{name: "udp", fixture: "../../udp/register", selected: map[string]bool{"udp": true}},
+		{name: "dns", fixture: "../../dns/register", selected: map[string]bool{"dns": true}},
+		{name: "all", fixture: "../../register", selected: map[string]bool{"tcp": true, "udp": true, "dns": true}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			dependencies := listDependencies(t, test.fixture)
+			for protocol, dependency := range protocolDependencies {
+				if test.selected[protocol] {
+					if !dependencies[dependency.public] || !dependencies[dependency.binding] || !dependencies[dependency.operation] || !dependencies[dependency.abi] || !dependencies[dependency.namespace] || !dependencies[dependency.adapter] {
+						t.Fatalf("selected %s self-register graph is incomplete", protocol)
+					}
+					if test.name != "all" && !dependencies[dependency.register] {
+						t.Fatalf("selected %s granular register package absent", protocol)
+					}
+					continue
+				}
+				if dependencies[dependency.public] || dependencies[dependency.register] || dependencies[dependency.binding] || dependencies[dependency.operation] || dependencies[dependency.abi] || dependencies[dependency.namespace] || dependencies[dependency.adapter] {
+					t.Fatalf("unselected %s compiled by %s self-register graph", protocol, test.name)
+				}
+			}
+			if dependencies[modulePath+"/compat"] || dependencies[modulePath+"/internal/namespace"] || dependencies[modulePath+"/internal/backend/lneto"] {
+				t.Fatalf("%s self-register graph reached an aggregate compatibility implementation", test.name)
+			}
+			if test.name == "all" && !dependencies[modulePath+"/register"] {
+				t.Fatal("all-protocol register bundle absent")
 			}
 		})
 	}

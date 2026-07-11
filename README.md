@@ -30,23 +30,43 @@ unsupported.
 The primary composition API selects only the protocols a runtime should expose:
 
 ```go
-network := wagonet.New()
+network := wagonet.New(
+    wagonet.WithConfig(wagonet.Config{StaticIPv4: deploymentNetwork}),
+)
 if err := tcp.Register(network); err != nil {
     return err
 }
-// Compose other protocols only when the guest needs them.
+return wago.NewRuntime().Use(network)
+```
+
+Protocols compose explicitly when a guest needs more than one:
+
+```go
+network := wagonet.New(
+    wagonet.WithConfig(wagonet.Config{StaticIPv4: deploymentNetwork}),
+)
 if err := udp.Register(network); err != nil {
     return err
 }
-if err := dns.Register(network); err != nil {
+if err := tcp.Register(network); err != nil {
     return err
 }
-
-rt := wago.NewRuntime()
-if err := rt.Use(network); err != nil {
+if err := dns.Register(network, dns.Resolver("192.0.2.53")); err != nil {
     return err
 }
+return wago.NewRuntime().Use(network)
 ```
+
+TCP defaults provide eight finite outbound streams and no listeners. UDP defaults
+provide eight finite sockets, ephemeral wildcard client binds, outbound ordinary
+unicast, and replies; server ports, privileged binds, loopback, multicast, and
+broadcast remain explicit options. DNS installs finite A/AAAA query, response,
+record, and retry bounds when `dns.Resolver` supplies an explicit IPv4 resolver.
+Caller deny rules always win over composed defaults. `WithConfig` supplies exact
+protocol storage, `WithPolicy` adds advanced raw authority, and
+`WithoutDefaultAuthority` supports fully caller-authored compatibility policy.
+Listener/server grants and the conspicuous `tcp.AllowAll()`, `udp.AllowAll()`,
+and `dns.AllowAll()` options never remove finite storage or quota bounds.
 
 Registering only TCP exposes `net.info` and `net.tcp`, with
 `wago_net.abi_version` and the eleven `wago_net_tcp` imports. Registering only
@@ -86,9 +106,10 @@ transactionally before publishing the namespace, and exposes them through an
 immutable protocol-neutral service composition. Failed assembly closes the core
 and every installed participant before any instance state is published. The root
 imports no aggregate or protocol adapter package, and TCP-only, UDP-only, and
-DNS-only fixtures now compile only their selected public, binding, operation,
-namespace-facet, ABI, and adapter packages. Package-local finite client defaults
-remain migration work.
+DNS-only fixtures compile only their selected public, binding, operation,
+namespace-facet, ABI, and adapter packages. Protocol authority contributions are
+deep-copied and composed once before manager construction; one immutable policy
+and quota domain remain shared per exact instance, with deny-wins behavior.
 
 The aggregate advanced compatibility path is now explicit:
 
@@ -118,12 +139,25 @@ Wago therefore downgrades `ResetMemorySnapshot` and other in-place class reset
 requests to `ResetReinstantiate`; UDP/TCP/DNS handles, queues, policy state, and
 quota accounts cannot cross leases even when callers request snapshot reuse.
 
-Custom Wago binaries can include the explicit all-protocol bundle through its
-self-registering package:
+Custom Wago binaries can self-register exactly one protocol without compiling
+the others:
 
 ```go
-import _ "github.com/wago-org/net/register"
+import _ "github.com/wago-org/net/tcp/register" // extension key: net-tcp
+// or github.com/wago-org/net/udp/register       // extension key: net-udp
+// or github.com/wago-org/net/dns/register       // extension key: net-dns
 ```
+
+The root package remains the explicit all-protocol bundle:
+
+```go
+import _ "github.com/wago-org/net/register" // extension key: net
+```
+
+The granular packages install protocol defaults but do not invent deployment
+IPv4 identity/link configuration; DNS resolver storage also remains disabled in
+the zero-configuration self-registering form. Applications needing those values
+should use explicit `wagonet.New` composition.
 
 The guest ABI is custom to Wago. It may follow WASI socket semantics where useful,
 but it is not binary-compatible with WASI Component Model resources.

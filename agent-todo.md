@@ -592,42 +592,50 @@ no signature, key, trust root, production decision, or hosted-activation claim.
 - `d7b9654` — makes public TCP/UDP/DNS descriptors install only their exact lneto
   adapter over one shared core, removes the root aggregate assembler edge, and
   preserves explicit legacy config mapping in `compat`.
+- `2c6fbf4` — composes deep-copied protocol authority contributions with caller
+  policy once before manager construction while preserving deny precedence.
+- `6409e8e` — adds finite TCP outbound-client storage and authority defaults plus
+  explicit listener, special-class, raw-policy, compatibility, and `AllowAll`
+  options with actual default-flow denial tests.
+- `9da92a8` — adds finite UDP ephemeral-unicast and explicit-resolver DNS client
+  defaults, bounded ephemeral UDP port allocation, explicit advanced grants, and
+  actual client-flow/default-denial tests while preserving `compat` policy.
 
 ## Active work
 
 The current protocol-submodule slice is complete with exactly four bounded
-atomic commits. `internal/namespace/core` now provides an immutable keyed service
-composition over one protocol-neutral base namespace. Exact TCP, UDP, and DNS
-operation packages resolve only their selected service while retaining one
-namespace handle, lifecycle mutex, resource table, readiness coordinator, quota
-account, bounded service owner, and deterministic close path.
+atomic commits. Opaque modules now carry deep-copied protocol authority grants in
+addition to exact backend contributions. Registration freeze precedes one
+composition of caller policy plus selected grants and one manager construction;
+deny rules retain precedence independent of module order, and every exact
+instance still owns one policy, quota account, namespace, resource table,
+readiness coordinator, lifecycle lock, and deterministic teardown path.
 
-Opaque protocol descriptors now carry backend-family contributions. Registration
-freezes before manager construction; each exact instance transactionally creates
-one `internal/backend/lneto/core`, installs only selected adapters, and publishes
-no partial namespace. TCP owns its close participant directly, failed assembly
-closes the common core and installed participants, and shared UDP/DNS port leases,
-service ordering, maintenance charging, policy, quota, and cleanup semantics are
-preserved. `compat.Init` explicitly maps legacy aggregate protocol config into
-all three package-local advanced config options.
+TCP registration defaults to eight bounded outbound streams and no listeners.
+UDP defaults to eight bounded sockets, ephemeral wildcard client binds, ordinary
+outbound unicast, and replies; the adapter now allocates port-zero requests from
+the shared bounded UDP/DNS lease domain. DNS gains an explicit `Resolver` option
+that installs finite A/AAAA query, response, record, retry, and work storage.
+Caller-denied destinations/names remain denied. Listener/server, privileged bind,
+loopback, multicast, broadcast, exact storage, raw policy additions, suppression
+of defaults, and conspicuous protocol-local `AllowAll` grants are explicit.
+`compat.Init` suppresses all new default grants and continues to use the legacy
+aggregate raw policy and exact protocol configs deterministically.
 
-The root package imports no aggregate lneto assembler or TCP/UDP/DNS adapter.
-Root, single, pair, and all-protocol dependency fixtures require exactly selected
-public, binding, operation, ABI, namespace-facet, and adapter packages and reject
-every omitted unit plus both aggregate compatibility implementation packages.
-Runtime capability/import and unresolved-import behavior remains exact. Standard
-workspace and `GOWORK=off` tests, race, vet, TinyGo, source-boundary, exact
-dependency fixtures, repeated core/composition/adapter tests, and one-second
-aggregate UDP-ingress plus DNS-wire fuzz smokes pass. Package-local finite
-client-oriented allow defaults, conspicuous advanced grants, granular
-`tcp/register`, `udp/register`, and `dns/register`, and the complete
-heavyweight release matrix remain. The next slice should implement finite
-protocol defaults and policy/quota composition without reintroducing root edges,
-then add granular self-registration packages and docs/tests. The exact workers
-subject remains published, while current Wago/networking reviews and the
-production ordered-parent Wago merge remain unpublished. Pooling remains
-unsupported, native arm64 execution is unavailable, and both WASI preview-1
-exceptions remain active.
+Granular `tcp/register`, `udp/register`, and `dns/register` packages now
+self-register only their protocol; root `register` explicitly composes all three
+without reaching `compat`. Dependency gates cover those four self-registration
+graphs in addition to the existing root/single/pair/all direct API fixtures.
+README and architecture documentation now lead with selective finite defaults and
+retain the advanced compatibility path. Workspace and `GOWORK=off` tests, race,
+vet, TinyGo, source-boundary, exact dependency/register fixtures, and twentyfold
+focused policy/default/lifecycle repetitions pass after this slice. Practical
+fuzz, benchmarks, cross-build/arm64 execution, external reconstruction, and the
+complete heavyweight release signoff still need to be rerun. The exact workers
+subject remains published, while current Wago/
+networking reviews and the production ordered-parent Wago merge remain
+unpublished. Pooling remains unsupported, native arm64 execution is unavailable,
+and both WASI preview-1 exceptions remain active.
 
 ## Ordered backlog
 
@@ -640,11 +648,11 @@ exceptions remain active.
 3. Activate hosted release automation only after the production Wago ref is
    fetchable, require executed linux/arm64 smoke on an arm64/QEMU tier, and remove
    the WASI exception only after reviewing and pinning an upstream fix.
-4. Continue the approved protocol-submodule refactor: add useful finite
-   client-oriented allow defaults plus explicit advanced policy/quota/server and
-   `AllowAll` customization; provide granular `tcp/register`, `udp/register`,
-   and `dns/register` packages; preserve `compat.Init` as the advanced aggregate
-   path; and complete the full release matrix.
+4. Complete protocol-submodule release validation: rerun race, vet, TinyGo,
+   source-boundary, dependency/register, repeated lifecycle/default, fuzz,
+   benchmark, cross-build/arm64, external reconstruction, and full release-signoff
+   gates; fix any regressions without weakening exact runtime or compile-time
+   isolation, finite defaults, compatibility policy, or deterministic cleanup.
 
 ## Blockers and discovered prerequisites
 
