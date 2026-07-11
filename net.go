@@ -278,10 +278,7 @@ func (e *Extension) registerAllProtocols() error {
 }
 
 func (e *Extension) registerUDPModule() error {
-	return e.RegisterModule(plugin.NewModule(plugin.ModuleUDP, func(reg *wago.Registry, _ plugin.Host) {
-		reg.Capability(CapUDP, wago.CapabilityDocs("use checked nonblocking UDP networking for the exact calling instance"))
-		registerBindings(reg.ImportModule(UDPModule), e.udpBindings())
-	}))
+	return e.RegisterModule(udpCompatibilityDescriptor())
 }
 
 func (e *Extension) registerTCPModule() error {
