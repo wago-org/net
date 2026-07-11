@@ -5,8 +5,8 @@ root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 wago_dir=$(realpath "${WAGO_DIR:-$root/.audit/wago}")
 lneto_dir=$(realpath "${LNETO_DIR:-$root/.audit/lneto}")
 wasi_dir=$(realpath "${WASI_DIR:-$root/.audit/wasi}")
-current_net_dir=$(realpath "${CURRENT_NET_DIR:-$root/.wago/net-current-plugin-registration}")
-current_wago_dir=$(realpath "${CURRENT_WAGO_DIR:-$root/.wago/wago-current-plugin-lifecycle}")
+current_net_dir=$(realpath "${CURRENT_NET_DIR:-$root/.wago/net-current-plugin-registration-18615546}")
+current_wago_dir=$(realpath "${CURRENT_WAGO_DIR:-$root/.wago/wago-current-plugin-lifecycle-18615546}")
 workers_dir=$(realpath "${WORKERS_DIR:-$root/.wago/workers-plugin}")
 fuzztime=${FUZZTIME:-3s}
 run_wasi=${RUN_WASI:-1}
@@ -18,8 +18,8 @@ readonly expected_wago_parent_main=54499ba5135f69a062e23a7255f4a408d6cecf8c
 readonly expected_wago_parent_workers=ffd5ef4b122cbd019897eeea3503789ab5860e4a
 readonly expected_lneto=ab1a0c735a8b534a1d6322a3e245bc11a09431e7
 readonly expected_wasi=3df6c766ad00e83b314da799dbf9a77b409ad19d
-readonly expected_current_net=5b444e9dfbbf1b64e7b1f923f1dc3579a4aaf87e
-readonly expected_current_wago=e44b1baa6eabfba07967a4458fdb56983cb054ae
+readonly expected_current_net=173b38a4d5a0db0e6058544576942a46b9d543df
+readonly expected_current_wago=8131d967211871936793a4f129164ec0cd928ea9
 readonly expected_workers=1e9139756d8a3c631c59c00b028038c83bfa8341
 
 log() { printf '\n==> %s\n' "$*"; }
@@ -261,7 +261,7 @@ record_check source-object-packs pass 'production pins plus exact current Wago/n
 log "isolated current plugin adoption gate"
 CURRENT_REVIEW_SOURCE_DIR="$out/source-objects" CURRENT_REVIEW_OUT="$out/current-plugin-review" \
   "$root/scripts/current-plugin-review-signoff.sh"
-record_check current-plugin-review-signoff pass 'immutable reconstruction; initially empty GOMODCACHE; network disabled; exact module and go.sum inventory; 4 capabilities; 24 imports; linked-child cleanup; TinyGo'
+record_check current-plugin-review-signoff pass 'immutable reconstruction; initially empty GOMODCACHE; network disabled; exact module and go.sum inventory; granular plus aggregate inspection; linked-child cleanup; TinyGo'
 
 log "deterministic release provenance"
 GOWORK=off go run ./internal/cmd/release-provenance \

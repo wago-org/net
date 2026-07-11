@@ -2,20 +2,20 @@
 set -euo pipefail
 
 root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
-wago_dir=$(realpath "${CURRENT_WAGO_DIR:-$root/.wago/wago-current-plugin-lifecycle}")
+wago_dir=$(realpath "${CURRENT_WAGO_DIR:-$root/.wago/wago-current-plugin-lifecycle-18615546}")
 workers_dir=$(realpath "${WORKERS_DIR:-$root/.wago/workers-plugin}")
-net_dir=$(realpath "${CURRENT_NET_DIR:-$root/.wago/net-current-plugin-registration}")
+net_dir=$(realpath "${CURRENT_NET_DIR:-$root/.wago/net-current-plugin-registration-18615546}")
 adoption=${CURRENT_PLUGIN_ADOPTION:-review}
 require_production=${REQUIRE_PUBLISHED_WAGO_MERGE:-0}
 
-readonly wago_main=7fbc00a57624b26ba8d528d97b419b670e85f64b
-readonly wago_review=e44b1baa6eabfba07967a4458fdb56983cb054ae
-readonly wago_review_parent=7fbc00a57624b26ba8d528d97b419b670e85f64b
+readonly wago_main=18615546584ec09e607856a0da99851656f5be80
+readonly wago_review=8131d967211871936793a4f129164ec0cd928ea9
+readonly wago_review_parent=18615546584ec09e607856a0da99851656f5be80
 readonly production_merge=97e6f91e6c822491577faa86f3c30aa5a8fff1e8
 readonly production_parent1=54499ba5135f69a062e23a7255f4a408d6cecf8c
 readonly production_parent2=ffd5ef4b122cbd019897eeea3503789ab5860e4a
-readonly net_review=5b444e9dfbbf1b64e7b1f923f1dc3579a4aaf87e
-readonly net_review_parent=29d59163a500e96f9567f14beeb4f3bb04e6351e
+readonly net_review=173b38a4d5a0db0e6058544576942a46b9d543df
+readonly net_review_parent=164ee79e98d7e51bf3553fb18b46fd2044b223aa
 readonly workers_review=1e9139756d8a3c631c59c00b028038c83bfa8341
 readonly workers_parent1=5cb4efff83f0a519311fcf03b63496433f2901f0
 readonly workers_parent2=08466d04599d7c0da88d4c5cda73a62c775a8dfc
