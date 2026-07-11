@@ -55,18 +55,18 @@ UDP analogously exposes `net.info`, `net.udp`, the shared ABI import, and the si
 shared ABI import, and the six `wago_net_dns` imports. Unregistered protocol
 imports are absent and fail normal WebAssembly import resolution. The public
 TCP, UDP, and DNS facades each construct an opaque descriptor, and all three
-checked host tables live in protocol-specific internal binding packages. An
-external public-API matrix covers no protocol, every single protocol, every
-pair, and all three. Full compile isolation is not yet claimed: the aggregate
-root compatibility path still imports all three binding packages, and the shared
-instance operations plus lneto adapter remain unified. Package-local finite
-client defaults also remain migration work.
+checked host tables live in protocol-specific internal binding packages. The
+root package no longer imports those public or binding packages. Dependency and
+runtime-inspection fixtures cover no protocol, every single protocol, every
+pair, and all three; omitted public and binding packages are rejected from each
+fixture's Go dependency graph. Full compile isolation is not yet claimed because
+the shared instance operations and lneto adapter remain unified. Package-local
+finite client defaults also remain migration work.
 
-The aggregate advanced compatibility path remains available while protocol
-configuration is split into its public packages:
+The aggregate advanced compatibility path is now explicit:
 
 ```go
-network := wagonet.Init(wagonet.Config{
+network := compat.Init(wagonet.Config{
     // Immutable policy, finite quota/readiness, packet-link, static IPv4,
     // UDP queue, TCP pool, and bounded DNS resolver settings.
 })
@@ -75,17 +75,21 @@ if err := wago.NewRuntime().Use(network); err != nil {
 }
 ```
 
-Each configured Runtime instance receives its own isolated namespace and
-handles. `Init` explicitly selects UDP, TCP, and DNS; new selective callers
-should prefer `New` plus `tcp.Register`, `udp.Register`, and `dns.Register` as
-needed.
+Import `github.com/wago-org/net/compat` for that constructor. The former root
+`wagonet.Init` symbol was removed because retaining it forced every root and
+selective client to compile all protocol bindings. `compat.Init` preserves the
+aggregate `Config` behavior and explicitly selects UDP, TCP, and DNS. Each
+configured Runtime instance still receives its own isolated namespace and
+handles. New callers should prefer `wagonet.New` plus only the protocol-local
+registration functions they need.
 
 The extension declares that networking state requires physical reinstantiation.
 Wago therefore downgrades `ResetMemorySnapshot` and other in-place class reset
 requests to `ResetReinstantiate`; UDP/TCP/DNS handles, queues, policy state, and
 quota accounts cannot cross leases even when callers request snapshot reuse.
 
-Custom Wago binaries can include the plugin through its self-registering package:
+Custom Wago binaries can include the explicit all-protocol bundle through its
+self-registering package:
 
 ```go
 import _ "github.com/wago-org/net/register"

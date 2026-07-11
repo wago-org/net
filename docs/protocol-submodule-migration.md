@@ -15,12 +15,18 @@ helpers. Protocol-local tests prove each single registration's exact
 capability/import surface, unresolved imports for both omitted protocols,
 duplicate/freeze behavior, and direct host calls against the root-owned exact
 instance. An external public-API matrix covers none, each single protocol, every
-pair, and all three. `Init(Config)` remains the aggregate compatibility path and
-currently retains thin root TCP, UDP, and DNS shims, so the root still imports
-all three binding packages. Unified instance operations and the lneto adapter,
-protocol-local finite defaults, and granular register packages remain unsplit;
-compile-time isolation is therefore not yet claimed. Standard, race, vet, and
-TinyGo suites pass after the DNS extraction and public matrix.
+pair, and all three. Aggregate construction now lives in explicit
+`compat.Init(Config)`, and the root production package no longer imports any
+public protocol or protocol binding package. The former root `Init` symbol was
+removed because source compatibility could not override that dependency
+boundary; same-package regression tests use test-only aggregate helpers. Runtime
+and Go dependency fixtures cover none, every single protocol, every pair, and
+all three, rejecting omitted public and binding packages while recording the
+still-unified instance and lneto backend as blockers. Unified instance
+operations and the lneto adapter, protocol-local finite defaults, and granular
+register packages remain unsplit; full compile-time isolation is therefore not
+yet claimed. Standard, race, vet, and TinyGo suites pass after the compatibility
+extraction and dependency gates.
 
 ## Goal
 
@@ -97,7 +103,8 @@ is either idempotent or returns a stable configuration error.
 ## Target package graph
 
 ```text
-net                                  public shared builder and compatibility API
+net                                  public shared builder and lifecycle API
+compat                               explicit aggregate Config compatibility
 internal/plugin                     shared module composition and freeze state
 internal/instance/core              attachment map and common ownership state
 internal/namespace/core             endpoint, progress, service and base namespace
@@ -128,11 +135,10 @@ layouts; they must not import protocol implementations.
 
 ## Current coupling inventory
 
-The current root cannot provide compile isolation for these reasons:
+The root binding edge is now removed: production `net` imports no public
+protocol or `internal/binding/{tcp,udp,dns}` package, and aggregate callers move
+to `compat.Init`. Full compile isolation is still blocked for these reasons:
 
-- Thin root `udp.go`, `tcp.go`, and `dns.go` compatibility shims import their
-  extracted binding packages; thus importing the root still compiles every
-  protocol binding.
 - `net.go` imports `internal/backend/lneto`, whose single package contains
   `namespace.go`, `udp.go`, `tcp.go`, and `dns.go`.
 - `internal/backend/lneto.Namespace` stores all protocol configuration and live
@@ -166,10 +172,12 @@ host functions, protocol ABI constants, configuration, options, defaults, and
 registration facades out of package `net`. Keep aliases or forwarding helpers
 only where required for a bounded compatibility period.
 
-The root `Config` compatibility path should translate explicitly into selected
-modules; it must not force new selective clients to import all protocol packages.
-If preserving source compatibility would violate root dependency isolation,
-move legacy aggregate construction into a documented compatibility package.
+The root `Config` compatibility path must not force new selective clients to
+import all protocol packages. This boundary now uses documented
+`compat.Init(Config)`, which explicitly composes all three public registrations;
+the root `Init` symbol was removed rather than preserving a production dependency
+edge. Root same-package regression tests retain test-only aggregate helpers while
+the underlying operation packages are split.
 
 ### Stage 3: split instance and neutral contracts
 
@@ -211,10 +219,14 @@ advanced compatibility section for raw configuration.
 
 ### Stage 7: dependency-boundary and release gates
 
-Add small TCP-only, UDP-only, DNS-only, and aggregate fixture programs. The gate
-must inspect `go list -deps` or equivalent package metadata and reject forbidden
-protocol dependencies. Runtime inspection must check exact capability/import
-sets for the same fixtures under standard Go and TinyGo.
+Small root, TCP-only, UDP-only, DNS-only, pair, and aggregate fixtures now gate
+exact runtime capability/import sets under standard Go and TinyGo. Their
+standard-Go `go list -deps` gate rejects every omitted public protocol and
+binding package plus accidental aggregate-package dependencies. The fixtures
+currently assert the unified `internal/instance` and `internal/backend/lneto`
+packages remain present so the next split cannot be mistaken for completed
+isolation. Extend the same gate to protocol-specific instance-operation and
+lneto-adapter packages as those packages are extracted.
 
 Run the complete standard, race, vet, fuzz, benchmark, TinyGo, cross-build,
 worker/lifecycle, source-boundary, and release-signoff matrices before declaring

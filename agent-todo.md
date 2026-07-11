@@ -533,37 +533,48 @@ no signature, key, trust root, production decision, or hosted-activation claim.
   and ordinary unresolved TCP/UDP import tests.
 - `281a6cc` — covers none, every single protocol, every pair, and all three
   through the public selective registration APIs.
+- `1df0e4c` — records the selective DNS migration and its remaining compile
+  isolation and finite-default blockers.
+- `6f0339d` — adds explicit `compat.Init(Config)` aggregate construction and
+  switches root `register` to that all-protocol bundle.
+- `bd03baf` — removes production root aggregate registration and binding shims,
+  retaining the historical same-package regression surface only in test code.
+- `1f97b2b` — gates root, single, pair, and all-protocol fixtures with exact
+  runtime inspection plus omitted public/binding dependency rejection.
 
 ## Active work
 
 The current protocol-submodule slice is complete with exactly four bounded
-atomic commits. The six DNS guest bindings now live in `internal/binding/dns`,
-reuse the protocol-neutral exact-host bridge plus shared status/poll helpers,
-and preserve the checked query rollback, output non-mutation, cancellation,
-polling, and exact-instance behavior covered by the existing root suite. Public
-`dns.Register(network, ...Option)` now selects only `net.dns`,
-`wago_net.abi_version`, and the six DNS imports at runtime; external DNS-only
-tests prove exact inspection, ordinary unresolved TCP/UDP imports, duplicate and
-freeze behavior, nil handling, and an exact-instance host call. A separate
-external public-API matrix now covers no protocol, all three singles, every pair,
-and all three through `tcp.Register`, `udp.Register`, and `dns.Register`, with
-exact capability/import counts and ordinary failure for every omitted protocol
-import. Standard tests, race tests, vet, and `GOWORK=off tinygo test ./...` pass.
+atomic commits. Explicit `compat.Init(Config)` now composes one root network with
+public UDP, TCP, and DNS registration, and the root `register` package uses that
+all-protocol bundle. The production root no longer contains `Init`, aggregate
+registration methods, or TCP/UDP/DNS binding shims and imports no public protocol
+or `internal/binding` package; the historical aggregate host-function regression
+surface remains only in `aggregate_compat_test.go`. Root `Imports(Config)` still
+returns only the stateless `wago_net.abi_version` table without selecting any
+protocol.
 
-Compile isolation is still incomplete. `go list -deps` for each public protocol
-still reaches all three `internal/binding` packages because the imported root
-retains thin aggregate compatibility shims. Each graph also reaches unified
-`internal/instance` and `internal/backend/lneto`, which compile all protocol
-operations. Package-local finite client defaults, granular register packages,
-dependency fixtures, and full release gates remain. The next slice should move
-the aggregate `Init(Config)` compatibility implementation out of the lightweight
-root before beginning the instance/core split: removing the root binding shims
-first gives every selective facade an honest protocol-only binding edge and
-makes subsequent dependency fixtures diagnose the deeper instance/backend
-coupling precisely. The exact workers subject remains published, while current
-Wago/networking reviews and the production ordered-parent Wago merge remain
-unpublished. Pooling remains unsupported, native arm64 execution is unavailable,
-and both WASI preview-1 exceptions remain active.
+Root, single-protocol, pair, and all-protocol fixtures now prove exact runtime
+capabilities/import counts under standard Go and TinyGo. A standard-Go
+`go list -deps` gate rejects every omitted public protocol and binding package
+and rejects accidental `compat` or root `register` edges. The gate deliberately
+asserts that unified `internal/instance` and `internal/backend/lneto` remain in
+each graph, making the next blockers explicit rather than claiming complete
+isolation. Standard tests, race tests, vet, and `GOWORK=off tinygo test ./...`
+pass after the extraction.
+
+Compile isolation is still incomplete because root `Config`/`newExtension`, the
+unified instance manager, namespace contracts, ABI package, and lneto adapter
+compile all protocol operations together. Package-local finite client defaults,
+granular `tcp/register`, `udp/register`, and `dns/register`, and the complete
+release matrix also remain. The next slice should begin splitting
+`internal/instance` into a protocol-neutral lifecycle/attachment core plus
+protocol operation packages while preserving one resource table, readiness
+coordinator, quota account, exact-instance map, and teardown order. The exact
+workers subject remains published, while current Wago/networking reviews and the
+production ordered-parent Wago merge remain unpublished. Pooling remains
+unsupported, native arm64 execution is unavailable, and both WASI preview-1
+exceptions remain active.
 
 ## Ordered backlog
 
@@ -576,12 +587,12 @@ and both WASI preview-1 exceptions remain active.
 3. Activate hosted release automation only after the production Wago ref is
    fetchable, require executed linux/arm64 smoke on an arm64/QEMU tier, and remove
    the WASI exception only after reviewing and pinning an upstream fix.
-4. Continue the approved protocol-submodule refactor: extract DNS into its public
-   and binding packages, split the lneto backend and instance protocol operations
-   into separate compilation units, remove protocol binding imports from the root,
-   add useful finite allow defaults plus explicit customization, provide granular
-   self-registration packages, preserve the advanced compatibility path, and gate
-   every protocol combination with exact runtime and dependency-graph tests.
+4. Continue the approved protocol-submodule refactor: split the instance,
+   namespace/ABI, and lneto protocol operations into separate compilation units;
+   add useful finite allow defaults plus explicit customization; provide granular
+   self-registration packages; preserve `compat.Init` as the advanced aggregate
+   path; and extend dependency gates to reject omitted instance-operation and
+   lneto-adapter packages.
 
 ## Blockers and discovered prerequisites
 
