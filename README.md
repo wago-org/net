@@ -74,9 +74,10 @@ external detached signing; optionally verifies a raw Ed25519 signature only
 against an explicitly supplied no-discovery trust policy that can pin the exact
 statement digest and plugin subject against rollback; publishes public positive
 and negative detached-signature interoperability vectors without a private key
-or publisher claim; optionally retains a checksummed canonical intermediary
-receipt binding the exact signature, statement, trust policy, provenance,
-archive, subject, and opaque key label without claiming publisher identity;
+or publisher claim; optionally retains and independently verifies a checksummed
+canonical intermediary receipt binding the exact signature, statement, trust
+policy, provenance, archive, subject, and opaque key label without claiming
+publisher identity or production readiness;
 keeps production activation behind published exact subjects, executed arm64
 evidence, and zero accepted exceptions; atomically retains and independently
 verifies checksummed canonical readiness receipts that bind the exact canonical

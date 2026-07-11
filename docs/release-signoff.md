@@ -255,6 +255,28 @@ real-world publisher identity or production-readiness decision. Unsigned
 verification remain available for workflows that do not assert a pinned
 production selection.
 
+A retained trusted-distribution receipt can be checked later without the review
+archive, statement, signature bytes, trust policy, or public key when the
+verifier independently receives the exact subject plus statement, signature,
+and canonical trust-policy digests selected by its trusted channel:
+
+```sh
+GOWORK=off go run ./internal/cmd/release-review \
+  -mode verify-trusted-receipt \
+  -receipt /automation/release.trusted-distribution.json \
+  -subject <40-lowercase-hex-plugin-commit> \
+  -statement-sha256 <64-lowercase-hex-statement-digest> \
+  -signature-sha256 <64-lowercase-hex-signature-digest> \
+  -trust-policy-sha256 <64-lowercase-hex-policy-digest>
+```
+
+Standalone verification requires canonical JSON, the exact adjacent `.sha256`
+sidecar, complete receipt semantics, and all four external constraints. It
+preserves evidence that the original command verified the exact cryptographic
+and archive inputs; it does not repeat Ed25519 verification, establish publisher
+identity, or make a production-readiness decision. Activation must still use the
+strict readiness profile below against the original trusted inputs.
+
 ## Production release-candidate readiness
 
 `scripts/release-candidate-readiness.sh` is the strict activation profile. It

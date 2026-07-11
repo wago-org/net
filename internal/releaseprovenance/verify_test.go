@@ -209,6 +209,93 @@ func TestVerifySignedDistributionRequiresExplicitPolicyAndMatchingSignature(t *t
 	}
 }
 
+func TestVerifyTrustedDistributionReceiptIndependently(t *testing.T) {
+	fixture := newSignedDistributionFixture(t)
+	trusted, err := verifySignedDistribution(fixture.bundle, fixture.statement, fixture.signature, fixture.policy, fixture.opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	receiptPath := filepath.Join(t.TempDir(), "trusted-distribution.json")
+	receiptHash, err := WriteTrustedDistributionReceipt(receiptPath, trusted)
+	if err != nil {
+		t.Fatal(err)
+	}
+	verifyOpts := TrustedDistributionReceiptVerifyOptions{
+		ExpectedSubject: fixture.opts.ExpectedSubject, ExpectedStatementSHA256: fixture.statementHash,
+		ExpectedSignatureSHA256: fixture.signatureHash, ExpectedTrustPolicySHA256: fixture.policyHash,
+	}
+	verified, verifiedHash, err := VerifyTrustedDistributionReceipt(receiptPath, verifyOpts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if verifiedHash != receiptHash || verified.Subject != fixture.opts.ExpectedSubject ||
+		verified.StatementSHA256 != fixture.statementHash || verified.SignatureSHA256 != fixture.signatureHash ||
+		verified.TrustPolicySHA256 != fixture.policyHash || verified.ProvenanceSHA256 != trusted.Verification.ProvenanceSHA256 ||
+		verified.ReviewBundleSHA256 != fixture.bundleHash {
+		t.Fatalf("verified trusted distribution receipt = %+v, %s", verified, verifiedHash)
+	}
+	for _, test := range []struct {
+		name   string
+		mutate func(*TrustedDistributionReceiptVerifyOptions)
+	}{
+		{name: "subject", mutate: func(opts *TrustedDistributionReceiptVerifyOptions) { opts.ExpectedSubject = strings.Repeat("f", 40) }},
+		{name: "statement", mutate: func(opts *TrustedDistributionReceiptVerifyOptions) {
+			opts.ExpectedStatementSHA256 = strings.Repeat("f", 64)
+		}},
+		{name: "signature", mutate: func(opts *TrustedDistributionReceiptVerifyOptions) {
+			opts.ExpectedSignatureSHA256 = strings.Repeat("f", 64)
+		}},
+		{name: "trust policy", mutate: func(opts *TrustedDistributionReceiptVerifyOptions) {
+			opts.ExpectedTrustPolicySHA256 = strings.Repeat("f", 64)
+		}},
+	} {
+		t.Run("trusted receipt constraint "+test.name, func(t *testing.T) {
+			wrong := verifyOpts
+			test.mutate(&wrong)
+			if _, _, err := VerifyTrustedDistributionReceipt(receiptPath, wrong); err == nil {
+				t.Fatalf("wrong %s constraint unexpectedly accepted", test.name)
+			}
+		})
+	}
+
+	receiptData, err := os.ReadFile(receiptPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tamperedPath := filepath.Join(t.TempDir(), "trusted-distribution.json")
+	tamperedData := bytes.Replace(receiptData, []byte(fixture.keyID), []byte("release-test-2027"), 1)
+	if reflect.DeepEqual(tamperedData, receiptData) {
+		t.Fatal("trusted distribution tamper did not change receipt")
+	}
+	if err := os.WriteFile(tamperedPath, tamperedData, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(tamperedPath+".sha256", []byte(receiptHash+"  "+filepath.Base(tamperedPath)+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := VerifyTrustedDistributionReceipt(tamperedPath, verifyOpts); err == nil {
+		t.Fatal("tampered trusted distribution receipt unexpectedly accepted")
+	}
+
+	noncanonicalPath := filepath.Join(t.TempDir(), "trusted-distribution.json")
+	noncanonicalData, err := json.Marshal(verified)
+	if err != nil {
+		t.Fatal(err)
+	}
+	noncanonicalData = append(noncanonicalData, '\n')
+	noncanonicalSum := sha256.Sum256(noncanonicalData)
+	noncanonicalHash := hex.EncodeToString(noncanonicalSum[:])
+	if err := os.WriteFile(noncanonicalPath, noncanonicalData, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(noncanonicalPath+".sha256", []byte(noncanonicalHash+"  "+filepath.Base(noncanonicalPath)+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := VerifyTrustedDistributionReceipt(noncanonicalPath, verifyOpts); err == nil {
+		t.Fatal("noncanonical trusted distribution receipt unexpectedly accepted")
+	}
+}
+
 func TestVerifySignedDistributionEnforcesAntiRollbackConstraints(t *testing.T) {
 	for _, test := range []struct {
 		name   string

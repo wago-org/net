@@ -27,6 +27,16 @@ type TrustedDistributionReceipt struct {
 	ReviewBundleSHA256 string `json:"reviewBundleSha256"`
 }
 
+// TrustedDistributionReceiptVerifyOptions are independently provisioned
+// constraints for retained cryptographic verification evidence. All fields are
+// required.
+type TrustedDistributionReceiptVerifyOptions struct {
+	ExpectedSubject           string
+	ExpectedStatementSHA256   string
+	ExpectedSignatureSHA256   string
+	ExpectedTrustPolicySHA256 string
+}
+
 // WriteTrustedDistributionReceipt atomically replaces a canonical trusted
 // distribution receipt and then its adjacent SHA-256 sidecar. A failed sidecar
 // write leaves no stale checksum that could be mistaken for the new receipt.
@@ -66,6 +76,51 @@ func WriteTrustedDistributionReceipt(destination string, trusted *TrustedDistrib
 		return "", err
 	}
 	return digest, nil
+}
+
+// VerifyTrustedDistributionReceipt independently verifies canonical receipt
+// bytes, the exact adjacent checksum sidecar, and externally supplied selection
+// constraints. It verifies retained evidence integrity; it does not repeat the
+// original signature or archive verification and is not a readiness decision.
+func VerifyTrustedDistributionReceipt(path string, opts TrustedDistributionReceiptVerifyOptions) (*TrustedDistributionReceipt, string, error) {
+	if !validObjectID(opts.ExpectedSubject) || !validSHA256(opts.ExpectedStatementSHA256) ||
+		!validSHA256(opts.ExpectedSignatureSHA256) || !validSHA256(opts.ExpectedTrustPolicySHA256) {
+		return nil, "", fmt.Errorf("release provenance: explicit trusted distribution subject, statement, signature, and trust policy constraints are required")
+	}
+	receiptData, err := readBoundedFile(path, 1<<20, "trusted distribution receipt")
+	if err != nil {
+		return nil, "", err
+	}
+	receiptSum := sha256.Sum256(receiptData)
+	digest := hex.EncodeToString(receiptSum[:])
+	checksumData, err := readBoundedFile(path+".sha256", 256, "trusted distribution checksum")
+	if err != nil {
+		return nil, "", err
+	}
+	wantChecksum := digest + "  " + filepath.Base(path) + "\n"
+	if string(checksumData) != wantChecksum {
+		return nil, "", fmt.Errorf("release provenance: trusted distribution checksum does not match receipt")
+	}
+	var receipt TrustedDistributionReceipt
+	if err := decodeCanonicalJSON(receiptData, &receipt, "trusted distribution receipt"); err != nil {
+		return nil, "", err
+	}
+	if err := validateTrustedDistributionReceipt(&receipt); err != nil {
+		return nil, "", err
+	}
+	if receipt.Subject != opts.ExpectedSubject {
+		return nil, "", fmt.Errorf("release provenance: trusted distribution subject does not match expected subject")
+	}
+	if receipt.StatementSHA256 != opts.ExpectedStatementSHA256 {
+		return nil, "", fmt.Errorf("release provenance: trusted distribution statement SHA-256 does not match expected statement")
+	}
+	if receipt.SignatureSHA256 != opts.ExpectedSignatureSHA256 {
+		return nil, "", fmt.Errorf("release provenance: trusted distribution signature SHA-256 does not match expected signature")
+	}
+	if receipt.TrustPolicySHA256 != opts.ExpectedTrustPolicySHA256 {
+		return nil, "", fmt.Errorf("release provenance: trusted distribution trust policy SHA-256 does not match expected trust policy")
+	}
+	return &receipt, digest, nil
 }
 
 func validateTrustedDistributionReceipt(receipt *TrustedDistributionReceipt) error {

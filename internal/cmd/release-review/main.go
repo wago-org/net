@@ -10,7 +10,7 @@ import (
 )
 
 func main() {
-	mode := flag.String("mode", "verify", "operation: verify, export, statement, verify-signed, verify-production-candidate, or verify-readiness-receipt")
+	mode := flag.String("mode", "verify", "operation: verify, export, statement, verify-signed, verify-trusted-receipt, verify-production-candidate, or verify-readiness-receipt")
 	source := flag.String("source", "", "extracted release-signoff evidence directory")
 	bundle := flag.String("bundle", "", "review bundle directory or .tar.gz path")
 	out := flag.String("out", "", "mode-specific destination path")
@@ -20,8 +20,9 @@ func main() {
 	statementPath := flag.String("statement", "", "canonical distribution statement path")
 	signaturePath := flag.String("signature", "", "raw detached Ed25519 signature path")
 	trustPolicyPath := flag.String("trust-policy", "", "explicit canonical distribution trust policy path")
-	receiptPath := flag.String("receipt", "", "canonical production readiness receipt path")
+	receiptPath := flag.String("receipt", "", "canonical retained receipt path")
 	statementSHA256 := flag.String("statement-sha256", "", "exact statement SHA-256 required by receipt policy")
+	signatureSHA256 := flag.String("signature-sha256", "", "exact signature SHA-256 required by receipt policy")
 	trustPolicySHA256 := flag.String("trust-policy-sha256", "", "exact trust-policy SHA-256 required by receipt policy")
 	flag.Parse()
 	opts := releaseprovenance.VerifyOptions{
@@ -84,6 +85,23 @@ func main() {
 			}
 			fmt.Printf("release-review: wrote trusted distribution receipt %s\ntrusted_distribution_sha256=%s\n", *out, receiptHash)
 		}
+	case "verify-trusted-receipt":
+		if *receiptPath == "" || *subject == "" || *statementSHA256 == "" || *signatureSHA256 == "" || *trustPolicySHA256 == "" {
+			fmt.Fprintln(os.Stderr, "release-review: -receipt, -subject, -statement-sha256, -signature-sha256, and -trust-policy-sha256 are required for verify-trusted-receipt")
+			os.Exit(2)
+		}
+		receipt, receiptHash, err := releaseprovenance.VerifyTrustedDistributionReceipt(*receiptPath, releaseprovenance.TrustedDistributionReceiptVerifyOptions{
+			ExpectedSubject: *subject, ExpectedStatementSHA256: *statementSHA256,
+			ExpectedSignatureSHA256: *signatureSHA256, ExpectedTrustPolicySHA256: *trustPolicySHA256,
+		})
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+		fmt.Printf("release-review: verified trusted distribution receipt %s\n", *receiptPath)
+		fmt.Printf("trusted_distribution_sha256=%s\nsubject=%s\nstatement_sha256=%s\nsignature_sha256=%s\ntrust_policy_sha256=%s\nprovenance_sha256=%s\nbundle_sha256=%s\n",
+			receiptHash, receipt.Subject, receipt.StatementSHA256, receipt.SignatureSHA256,
+			receipt.TrustPolicySHA256, receipt.ProvenanceSHA256, receipt.ReviewBundleSHA256)
 	case "verify-production-candidate":
 		if *bundle == "" || *statementPath == "" || *signaturePath == "" || *trustPolicyPath == "" {
 			fmt.Fprintln(os.Stderr, "release-review: -bundle, -statement, -signature, and -trust-policy are required for verify-production-candidate")
