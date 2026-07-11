@@ -593,7 +593,7 @@ func BenchmarkGuestTCPPoll(b *testing.B) {
 	b.ReportAllocs()
 	b.ResetTimer()
 	for range b.N {
-		poll(host, params, results)
+		poll(&host, params, results)
 		status := Status(wago.AsI32(results[0]))
 		if status != StatusOK {
 			b.Fatalf("TCP poll status = %v", status)

@@ -242,24 +242,21 @@ func (e *Extension) poll(module wago.HostModule, params, results []uint64) {
 		setStatus(results, status)
 		return
 	}
-	reservation, err := state.Quotas().ReserveService(pollWorkUnits(budget))
+	var progress namespace.Progress
+	var pollErr error
+	err := state.Quotas().WithService(pollWorkUnits(budget), func() {
+		_, progress, pollErr = state.Poll(budget, func(events []readiness.Event, report readiness.Report, _ namespace.Progress) error {
+			if !abi.EncodePollEventsV1(memory, eventsPtr, events) || !abi.EncodePollResultV1(memory, resultPtr, report, budget) {
+				return errGuestPollEncoding
+			}
+			return nil
+		})
+	})
 	if err != nil {
 		setStatus(results, statusFromError(err))
 		return
 	}
-	allocation, committed := reservation.Commit()
-	if !committed {
-		setStatus(results, StatusInvalidState)
-		return
-	}
-	defer allocation.Release()
-
-	_, progress, err := state.Poll(budget, func(events []readiness.Event, report readiness.Report, _ namespace.Progress) error {
-		if !abi.EncodePollEventsV1(memory, eventsPtr, events) || !abi.EncodePollResultV1(memory, resultPtr, report, budget) {
-			return errGuestPollEncoding
-		}
-		return nil
-	})
+	err = pollErr
 	if err != nil {
 		if errors.Is(err, errGuestPollEncoding) {
 			setStatus(results, StatusIO)

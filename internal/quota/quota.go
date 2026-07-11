@@ -118,14 +118,39 @@ func (a *Account) ReserveService(units uint64) (*Reservation, error) {
 	return a.reserve(Usage{ServiceUnits: units})
 }
 
+// WithService accounts bounded service/poll work only for the duration of work.
+// The charge is released before return and during panic unwinding. Unlike a
+// retained Reservation, this scoped path does not allocate a quota token.
+func (a *Account) WithService(units uint64, work func()) error {
+	if units == 0 || work == nil {
+		return ErrInvalidUnits
+	}
+	amount := Usage{ServiceUnits: units}
+	if err := a.acquire(amount); err != nil {
+		return err
+	}
+	defer a.release(amount)
+	work()
+	return nil
+}
+
 func (a *Account) reserve(amount Usage) (*Reservation, error) {
+	if err := a.acquire(amount); err != nil {
+		return nil, err
+	}
+	reservation := &Reservation{account: a, amount: amount}
+	reservation.state.Store(reservationPending)
+	return reservation, nil
+}
+
+func (a *Account) acquire(amount Usage) error {
 	if a == nil {
-		return nil, ErrClosed
+		return ErrClosed
 	}
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	if a.closed {
-		return nil, ErrClosed
+		return ErrClosed
 	}
 	if !fits(a.used.Resources, amount.Resources, a.limits.Resources) ||
 		!fits(a.used.UDPResources, amount.UDPResources, a.limits.UDPResources) ||
@@ -134,12 +159,10 @@ func (a *Account) reserve(amount Usage) (*Reservation, error) {
 		!fits(a.used.QueuedBytes, amount.QueuedBytes, a.limits.QueuedBytes) ||
 		!fits(a.used.DNSWork, amount.DNSWork, a.limits.DNSWork) ||
 		!fits(a.used.ServiceUnits, amount.ServiceUnits, a.limits.ServiceUnits) {
-		return nil, ErrLimit
+		return ErrLimit
 	}
 	a.used.add(amount)
-	reservation := &Reservation{account: a, amount: amount}
-	reservation.state.Store(reservationPending)
-	return reservation, nil
+	return nil
 }
 
 // Snapshot returns current usage and whether the account has been closed.

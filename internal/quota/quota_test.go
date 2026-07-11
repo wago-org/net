@@ -86,6 +86,52 @@ func TestReservationRollbackAndFailureDoNotLeak(t *testing.T) {
 	}
 }
 
+func TestWithServiceScopesChargeWithoutAllocatingTokens(t *testing.T) {
+	account := NewAccount(Limits{ServiceUnits: 2})
+	called := false
+	if err := account.WithService(2, func() {
+		called = true
+		usage, closed := account.Snapshot()
+		if closed || usage.ServiceUnits != 2 {
+			t.Fatalf("scoped service usage = %+v, closed=%v", usage, closed)
+		}
+		if _, err := account.ReserveService(1); !errors.Is(err, ErrLimit) {
+			t.Fatalf("scoped service limit error = %v", err)
+		}
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if !called {
+		t.Fatal("scoped service callback was not called")
+	}
+	if usage, _ := account.Snapshot(); usage != (Usage{}) {
+		t.Fatalf("scoped service leaked usage: %+v", usage)
+	}
+
+	func() {
+		defer func() {
+			if recover() == nil {
+				t.Fatal("scoped service panic was not propagated")
+			}
+		}()
+		_ = account.WithService(1, func() { panic("test panic") })
+	}()
+	if usage, _ := account.Snapshot(); usage != (Usage{}) {
+		t.Fatalf("panic cleanup leaked usage: %+v", usage)
+	}
+
+	var callErr error
+	allocs := testing.AllocsPerRun(1000, func() {
+		callErr = account.WithService(1, func() {})
+	})
+	if callErr != nil {
+		t.Fatal(callErr)
+	}
+	if allocs != 0 {
+		t.Fatalf("scoped service allocations = %v, want 0", allocs)
+	}
+}
+
 func TestAccountRejectsInvalidZeroAndOverflowingUnits(t *testing.T) {
 	account := NewAccount(Limits{Resources: ^uint64(0), UDPResources: ^uint64(0), QueuedBytes: ^uint64(0)})
 	invalid := []func() error{
@@ -94,6 +140,8 @@ func TestAccountRejectsInvalidZeroAndOverflowingUnits(t *testing.T) {
 		func() error { _, err := account.ReserveQueuedBytes(0); return err },
 		func() error { _, err := account.ReserveDNSWork(0); return err },
 		func() error { _, err := account.ReserveService(0); return err },
+		func() error { return account.WithService(0, func() {}) },
+		func() error { return account.WithService(1, nil) },
 	}
 	for i, call := range invalid {
 		if err := call(); !errors.Is(err, ErrInvalidUnits) {

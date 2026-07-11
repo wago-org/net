@@ -179,7 +179,7 @@ func BenchmarkGuestUDPPoll(b *testing.B) {
 	b.ReportAllocs()
 	b.ResetTimer()
 	for range b.N {
-		poll(host, params, results)
+		poll(&host, params, results)
 		if status := Status(wago.AsI32(results[0])); status != StatusOK {
 			b.Fatalf("poll status = %v", status)
 		}

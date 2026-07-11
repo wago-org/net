@@ -63,9 +63,11 @@ UDP bind/send, TCP listen/connect, and DNS resolve checks.
 
 `internal/quota` provides finite per-instance total/protocol resource, queued-byte,
 DNS-work, and service-work counters. Tentative reservations must be committed or
-rolled back; committed allocations release exactly once. Closing an instance
-first closes resources and then closes its quota account, which clears abandoned
-reservations and makes late token cleanup harmless.
+rolled back; committed allocations release exactly once. Guest poll uses a
+scoped service charge that preserves the same finite concurrent limit and panic
+cleanup without allocating retained reservation/allocation tokens. Closing an
+instance first closes resources and then closes its quota account, which clears
+abandoned reservations and makes late token cleanup harmless.
 
 `internal/namespace` defines the backend-neutral endpoint, UDP, TCP, DNS,
 readiness, semantic-error, and bounded manual-service contracts. Operations that
@@ -121,7 +123,10 @@ bounded namespace service attempts. Stale generation handles are removed during
 the bounded scan; polling never sleeps. The guest `poll` import validates the
 complete event capacity and result range before work, uses per-instance scratch
 storage, and transactionally accounts `scans + events + service_attempts` against
-finite service-work quota for the duration of each call.
+finite service-work quota for the duration of each call. The scoped accounting
+path eliminates quota-token allocations; pointer-backed host-module benchmarks
+now measure the complete UDP and TCP guest poll calls at zero allocations rather
+than including a value-to-interface boxing artifact.
 
 Each `Extension` owns one private instance-state manager shared by its core, UDP,
 TCP, and DNS module bindings. Runtime instantiation attaches one resource table,
