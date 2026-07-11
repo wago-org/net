@@ -716,10 +716,10 @@ func (n *invalidDescriptorNamespace) Readiness() namespace.Readiness { return na
 func (n *invalidDescriptorNamespace) TryBindUDP(namespace.Endpoint) (namespace.UDPSocket, namespace.Progress, error) {
 	return nil, 0, namespace.Fail(namespace.FailureNotSupported, errors.ErrUnsupported)
 }
-func (n *invalidDescriptorNamespace) TryListenTCP(namespace.Endpoint) (namespace.TCPListener, namespace.Progress, error) {
+func (n *invalidDescriptorNamespace) TryListenTCP(namespace.Endpoint) (nscore.Resource, namespace.Progress, error) {
 	return nil, 0, namespace.Fail(namespace.FailureNotSupported, errors.ErrUnsupported)
 }
-func (n *invalidDescriptorNamespace) TryConnectTCP(namespace.Endpoint) (namespace.TCPStream, namespace.Progress, error) {
+func (n *invalidDescriptorNamespace) TryConnectTCP(namespace.Endpoint) (nscore.Resource, namespace.Progress, error) {
 	return n.stream, namespace.ProgressInProgress, nil
 }
 func (n *invalidDescriptorNamespace) TryResolve(namespace.DNSRequest) (namespace.DNSQuery, namespace.Progress, error) {
@@ -736,7 +736,7 @@ type fixedTCPListener struct {
 func (l *fixedTCPListener) Close() error                      { return nil }
 func (l *fixedTCPListener) Readiness() namespace.Readiness    { return namespace.ReadyAccept }
 func (l *fixedTCPListener) LocalEndpoint() namespace.Endpoint { return endpointFor(41, 4641) }
-func (l *fixedTCPListener) TryAccept() (namespace.TCPStream, namespace.Progress, error) {
+func (l *fixedTCPListener) TryAccept() (nscore.Resource, namespace.Progress, error) {
 	stream := l.stream
 	l.stream = nil
 	if stream == nil {

@@ -8,8 +8,8 @@ import (
 	"testing"
 
 	core "github.com/wago-org/net/internal/instance/core"
-	"github.com/wago-org/net/internal/namespace"
 	nscore "github.com/wago-org/net/internal/namespace/core"
+	tcpns "github.com/wago-org/net/internal/namespace/tcp"
 	"github.com/wago-org/net/internal/policy"
 	"github.com/wago-org/net/internal/quota"
 	"github.com/wago-org/net/internal/readiness"
@@ -18,79 +18,73 @@ import (
 )
 
 type fakeNamespace struct {
-	listener namespace.TCPListener
-	stream   namespace.TCPStream
+	listener tcpns.Listener
+	stream   tcpns.Stream
 }
 
-func (*fakeNamespace) Close() error                   { return nil }
-func (*fakeNamespace) Readiness() namespace.Readiness { return namespace.ReadyWritable }
-func (*fakeNamespace) TryBindUDP(namespace.Endpoint) (namespace.UDPSocket, namespace.Progress, error) {
-	return nil, 0, namespace.Fail(namespace.FailureNotSupported, nil)
+func (*fakeNamespace) Close() error                { return nil }
+func (*fakeNamespace) Readiness() nscore.Readiness { return nscore.ReadyWritable }
+func (n *fakeNamespace) TryListenTCP(nscore.Endpoint) (nscore.Resource, nscore.Progress, error) {
+	return n.listener, nscore.ProgressDone, nil
 }
-func (n *fakeNamespace) TryListenTCP(namespace.Endpoint) (namespace.TCPListener, namespace.Progress, error) {
-	return n.listener, namespace.ProgressDone, nil
+func (n *fakeNamespace) TryConnectTCP(nscore.Endpoint) (nscore.Resource, nscore.Progress, error) {
+	return n.stream, nscore.ProgressInProgress, nil
 }
-func (n *fakeNamespace) TryConnectTCP(namespace.Endpoint) (namespace.TCPStream, namespace.Progress, error) {
-	return n.stream, namespace.ProgressInProgress, nil
-}
-func (*fakeNamespace) TryResolve(namespace.DNSRequest) (namespace.DNSQuery, namespace.Progress, error) {
-	return nil, 0, namespace.Fail(namespace.FailureNotSupported, nil)
-}
-func (*fakeNamespace) TryService(namespace.ServiceBudget) (namespace.ServiceReport, namespace.Progress, error) {
-	return namespace.ServiceReport{}, namespace.ProgressWouldBlock, nil
+func (*fakeNamespace) TryService(nscore.ServiceBudget) (nscore.ServiceReport, nscore.Progress, error) {
+	return nscore.ServiceReport{}, nscore.ProgressWouldBlock, nil
 }
 
 type fakeListener struct {
 	closed   atomic.Int32
-	local    namespace.Endpoint
-	accepted namespace.TCPStream
+	local    nscore.Endpoint
+	accepted tcpns.Stream
 }
 
-func (l *fakeListener) Close() error                      { l.closed.Add(1); return nil }
-func (*fakeListener) Readiness() namespace.Readiness      { return namespace.ReadyAccept }
-func (l *fakeListener) LocalEndpoint() namespace.Endpoint { return l.local }
-func (l *fakeListener) TryAccept() (namespace.TCPStream, namespace.Progress, error) {
+func (l *fakeListener) Close() error                   { l.closed.Add(1); return nil }
+func (*fakeListener) Readiness() nscore.Readiness      { return nscore.ReadyAccept }
+func (l *fakeListener) LocalEndpoint() nscore.Endpoint { return l.local }
+func (l *fakeListener) TryAccept() (nscore.Resource, nscore.Progress, error) {
 	if l.accepted == nil {
-		return nil, namespace.ProgressWouldBlock, nil
+		return nil, nscore.ProgressWouldBlock, nil
 	}
 	stream := l.accepted
 	l.accepted = nil
-	return stream, namespace.ProgressDone, nil
+	return stream, nscore.ProgressDone, nil
 }
 
 type fakeStream struct {
 	closed  atomic.Int32
-	local   namespace.Endpoint
-	remote  namespace.Endpoint
+	local   nscore.Endpoint
+	remote  nscore.Endpoint
 	input   []byte
 	written []byte
 }
 
 func (s *fakeStream) Close() error { s.closed.Add(1); return nil }
-func (*fakeStream) Readiness() namespace.Readiness {
-	return namespace.ReadyConnected | namespace.ReadyReadable | namespace.ReadyWritable
+func (*fakeStream) Readiness() nscore.Readiness {
+	return nscore.ReadyConnected | nscore.ReadyReadable | nscore.ReadyWritable
 }
-func (s *fakeStream) LocalEndpoint() namespace.Endpoint           { return s.local }
-func (s *fakeStream) RemoteEndpoint() namespace.Endpoint          { return s.remote }
-func (*fakeStream) TryFinishConnect() (namespace.Progress, error) { return namespace.ProgressDone, nil }
-func (s *fakeStream) TryRead(dst []byte) (namespace.IOResult, error) {
+func (s *fakeStream) LocalEndpoint() nscore.Endpoint           { return s.local }
+func (s *fakeStream) RemoteEndpoint() nscore.Endpoint          { return s.remote }
+func (*fakeStream) TryFinishConnect() (nscore.Progress, error) { return nscore.ProgressDone, nil }
+func (s *fakeStream) TryRead(dst []byte) (nscore.IOResult, error) {
 	if len(s.input) == 0 {
-		return namespace.IOResult{State: namespace.IOWouldBlock}, nil
+		return nscore.IOResult{State: nscore.IOWouldBlock}, nil
 	}
 	n := copy(dst, s.input)
 	s.input = s.input[n:]
-	return namespace.IOResult{Bytes: n, State: namespace.IOReady}, nil
+	return nscore.IOResult{Bytes: n, State: nscore.IOReady}, nil
 }
-func (s *fakeStream) TryWrite(src []byte) (namespace.IOResult, error) {
+func (s *fakeStream) TryWrite(src []byte) (nscore.IOResult, error) {
 	n := min(3, len(src))
 	s.written = append(s.written, src[:n]...)
-	return namespace.IOResult{Bytes: n, State: namespace.IOReady}, nil
+	return nscore.IOResult{Bytes: n, State: nscore.IOReady}, nil
 }
-func (*fakeStream) TryShutdownWrite() (namespace.Progress, error) { return namespace.ProgressDone, nil }
+func (*fakeStream) TryShutdownWrite() (nscore.Progress, error) { return nscore.ProgressDone, nil }
 
 func TestOperationsPreserveReadinessPartialIOAndKindSafety(t *testing.T) {
-	local := namespace.Endpoint{Address: netip.MustParseAddr("192.0.2.1"), Port: 4300}
-	remote := namespace.Endpoint{Address: netip.MustParseAddr("192.0.2.2"), Port: 4301}
+	local := nscore.Endpoint{Address: netip.MustParseAddr("192.0.2.1"), Port: 4300}
+	remote := nscore.Endpoint{Address: netip.MustParseAddr("192.0.2.2"), Port: 4301}
 	outbound := &fakeStream{local: local, remote: remote, input: []byte("reply")}
 	accepted := &fakeStream{local: local, remote: remote, input: []byte("hello")}
 	listener := &fakeListener{local: local, accepted: accepted}
@@ -98,18 +92,18 @@ func TestOperationsPreserveReadinessPartialIOAndKindSafety(t *testing.T) {
 	defer manager.Detach(instance)
 
 	listenerHandle, progress, err := Listen(state, state.NamespaceHandle(), local)
-	if err != nil || progress != namespace.ProgressDone || listenerHandle == 0 {
+	if err != nil || progress != nscore.ProgressDone || listenerHandle == 0 {
 		t.Fatalf("Listen = %v, %v, %v", listenerHandle, progress, err)
 	}
 	streamHandle, progress, err := Connect(state, state.NamespaceHandle(), remote)
-	if err != nil || progress != namespace.ProgressInProgress || streamHandle == 0 {
+	if err != nil || progress != nscore.ProgressInProgress || streamHandle == 0 {
 		t.Fatalf("Connect = %v, %v, %v", streamHandle, progress, err)
 	}
-	if progress, err := FinishConnect(state, streamHandle); err != nil || progress != namespace.ProgressDone {
+	if progress, err := FinishConnect(state, streamHandle); err != nil || progress != nscore.ProgressDone {
 		t.Fatalf("FinishConnect = %v, %v", progress, err)
 	}
 	acceptedHandle, progress, err := Accept(state, listenerHandle)
-	if err != nil || progress != namespace.ProgressDone || acceptedHandle == 0 {
+	if err != nil || progress != nscore.ProgressDone || acceptedHandle == 0 {
 		t.Fatalf("Accept = %v, %v, %v", acceptedHandle, progress, err)
 	}
 	buffer := make([]byte, 3)
@@ -119,7 +113,7 @@ func TestOperationsPreserveReadinessPartialIOAndKindSafety(t *testing.T) {
 	if result, err := Write(state, streamHandle, []byte("abcdef")); err != nil || result.Bytes != 3 || string(outbound.written) != "abc" {
 		t.Fatalf("Write = %+v %q, %v", result, outbound.written, err)
 	}
-	if progress, err := ShutdownWrite(state, streamHandle); err != nil || progress != namespace.ProgressDone {
+	if progress, err := ShutdownWrite(state, streamHandle); err != nil || progress != nscore.ProgressDone {
 		t.Fatalf("ShutdownWrite = %v, %v", progress, err)
 	}
 	if _, _, err := Accept(state, streamHandle); !errors.Is(err, resource.ErrBadHandle) {
@@ -134,7 +128,7 @@ func TestOperationsPreserveReadinessPartialIOAndKindSafety(t *testing.T) {
 }
 
 func TestRegistrationRollbackAndCloseRace(t *testing.T) {
-	local := namespace.Endpoint{Address: netip.MustParseAddr("192.0.2.1"), Port: 4302}
+	local := nscore.Endpoint{Address: netip.MustParseAddr("192.0.2.1"), Port: 4302}
 	listener := &fakeListener{local: local}
 	state, manager, instance := attachState(t, &fakeNamespace{listener: listener}, 1)
 	if handle, progress, err := Listen(state, state.NamespaceHandle(), local); handle != 0 || progress != 0 || !errors.Is(err, readiness.ErrLimit) {
@@ -160,7 +154,7 @@ func TestRegistrationRollbackAndCloseRace(t *testing.T) {
 	wait.Wait()
 }
 
-func attachState(t testing.TB, backend namespace.Namespace, maxRegistrations int) (*core.State, *core.Manager, *wago.Instance) {
+func attachState(t testing.TB, backend nscore.Namespace, maxRegistrations int) (*core.State, *core.Manager, *wago.Instance) {
 	t.Helper()
 	config := core.DefaultConfig()
 	config.Limits = quota.DefaultLimits()

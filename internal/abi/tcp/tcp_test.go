@@ -7,7 +7,7 @@ import (
 	"testing"
 
 	abicore "github.com/wago-org/net/internal/abi/core"
-	"github.com/wago-org/net/internal/namespace"
+	nscore "github.com/wago-org/net/internal/namespace/core"
 	"github.com/wago-org/net/internal/resource"
 )
 
@@ -25,8 +25,8 @@ func TestV1CheckedRangesAndAtomicCodecs(t *testing.T) {
 	if !CheckIOV1(memory, 0, 16, 16) || CheckIOV1(memory, 4, 16, 12) || CheckIOV1(memory, 160, 1, 0) {
 		t.Fatal("TCP IO range validation mismatch")
 	}
-	local := namespace.Endpoint{Address: netip.MustParseAddr("192.0.2.1"), Port: 49152}
-	remote := namespace.Endpoint{Address: netip.MustParseAddr("192.0.2.2"), Port: 443}
+	local := nscore.Endpoint{Address: netip.MustParseAddr("192.0.2.1"), Port: 49152}
+	remote := nscore.Endpoint{Address: netip.MustParseAddr("192.0.2.2"), Port: 443}
 	handle := resource.Handle(0x0102030405060708)
 	if !EncodeStreamV1(memory, 32, handle, local, remote) {
 		t.Fatal("EncodeStreamV1 failed")
@@ -40,7 +40,7 @@ func TestV1CheckedRangesAndAtomicCodecs(t *testing.T) {
 	if got, ok := abicore.DecodeEndpointV1(memory, 72); !ok || got != remote {
 		t.Fatalf("TCP remote endpoint = %+v, %v", got, ok)
 	}
-	if !EncodeIOResultV1(memory, 120, namespace.IOResult{Bytes: 3, State: namespace.IOReady}, 8) {
+	if !EncodeIOResultV1(memory, 120, nscore.IOResult{Bytes: 3, State: nscore.IOReady}, 8) {
 		t.Fatal("EncodeIOResultV1 failed")
 	}
 	if got := binary.LittleEndian.Uint32(memory[120:124]); got != 3 || binary.LittleEndian.Uint32(memory[124:128]) != 0 {
@@ -48,7 +48,7 @@ func TestV1CheckedRangesAndAtomicCodecs(t *testing.T) {
 	}
 
 	before := append([]byte(nil), memory...)
-	if EncodeStreamV1(memory, 100, handle, local, remote) || EncodeIOResultV1(memory, 120, namespace.IOResult{State: namespace.IOWouldBlock}, 8) {
+	if EncodeStreamV1(memory, 100, handle, local, remote) || EncodeIOResultV1(memory, 120, nscore.IOResult{State: nscore.IOWouldBlock}, 8) {
 		t.Fatal("invalid TCP result encoded")
 	}
 	if !bytes.Equal(memory, before) {
@@ -63,7 +63,7 @@ func FuzzV1Layouts(f *testing.F) {
 		_ = CheckListenV1(memory, ptr, count)
 		_ = CheckCreateV1(memory, ptr, count)
 		_ = CheckIOV1(memory, ptr, count, size)
-		_ = EncodeStreamV1(memory, ptr, resource.Handle(1), namespace.Endpoint{}, namespace.Endpoint{})
-		_ = EncodeIOResultV1(memory, ptr, namespace.IOResult{Bytes: int(count), State: namespace.IOReady}, int(size))
+		_ = EncodeStreamV1(memory, ptr, resource.Handle(1), nscore.Endpoint{}, nscore.Endpoint{})
+		_ = EncodeIOResultV1(memory, ptr, nscore.IOResult{Bytes: int(count), State: nscore.IOReady}, int(size))
 	})
 }

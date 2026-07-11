@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	nscore "github.com/wago-org/net/internal/namespace/core"
+	tcpns "github.com/wago-org/net/internal/namespace/tcp"
 )
 
 type Endpoint = nscore.Endpoint
@@ -50,8 +51,6 @@ type ServiceReport = nscore.ServiceReport
 type Namespace interface {
 	nscore.Namespace
 	TryBindUDP(local Endpoint) (UDPSocket, Progress, error)
-	TryListenTCP(local Endpoint) (TCPListener, Progress, error)
-	TryConnectTCP(remote Endpoint) (TCPStream, Progress, error)
 	TryResolve(request DNSRequest) (DNSQuery, Progress, error)
 }
 
@@ -87,23 +86,8 @@ func (r DatagramResult) Valid(size int) bool {
 	return r.Source.Valid() && r.Truncated == (r.Copied < r.DatagramBytes)
 }
 
-// TCPListener accepts only fully established streams.
-type TCPListener interface {
-	Resource
-	LocalEndpoint() Endpoint
-	TryAccept() (TCPStream, Progress, error)
-}
-
-// TCPStream exposes nonblocking connection completion and byte-stream I/O.
-type TCPStream interface {
-	Resource
-	LocalEndpoint() Endpoint
-	RemoteEndpoint() Endpoint
-	TryFinishConnect() (Progress, error)
-	TryRead(dst []byte) (IOResult, error)
-	TryWrite(src []byte) (IOResult, error)
-	TryShutdownWrite() (Progress, error)
-}
+type TCPListener = tcpns.Listener
+type TCPStream = tcpns.Stream
 
 // DNSRecordType is independent of any backend DNS package.
 type DNSRecordType uint8

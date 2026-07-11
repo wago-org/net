@@ -108,7 +108,7 @@ type fakeListener struct {
 }
 
 func (l *fakeListener) LocalEndpoint() Endpoint { return l.local }
-func (l *fakeListener) TryAccept() (TCPStream, Progress, error) {
+func (l *fakeListener) TryAccept() (Resource, Progress, error) {
 	if len(l.accepted) == 0 {
 		return nil, ProgressWouldBlock, nil
 	}

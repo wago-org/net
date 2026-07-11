@@ -5,7 +5,7 @@ import (
 	"encoding/binary"
 
 	abicore "github.com/wago-org/net/internal/abi/core"
-	"github.com/wago-org/net/internal/namespace"
+	nscore "github.com/wago-org/net/internal/namespace/core"
 	"github.com/wago-org/net/internal/resource"
 )
 
@@ -47,7 +47,7 @@ func CheckIOV1(memory []byte, payloadPtr, payloadLength, resultPtr uint32) bool 
 
 // EncodeStreamV1 atomically writes an opaque handle plus local and remote
 // endpoints after validating the entire fixed-width output.
-func EncodeStreamV1(memory []byte, ptr uint32, handle resource.Handle, local, remote namespace.Endpoint) bool {
+func EncodeStreamV1(memory []byte, ptr uint32, handle resource.Handle, local, remote nscore.Endpoint) bool {
 	if handle == 0 || !local.Valid() || !remote.Valid() {
 		return false
 	}
@@ -67,8 +67,8 @@ func EncodeStreamV1(memory []byte, ptr uint32, handle resource.Handle, local, re
 // EncodeIOResultV1 writes partial read/write progress only for an IOReady
 // result. Would-block and EOF are represented by the host status and leave the
 // output unchanged.
-func EncodeIOResultV1(memory []byte, ptr uint32, result namespace.IOResult, bufferSize int) bool {
-	if !result.Valid(bufferSize) || result.State != namespace.IOReady || uint64(result.Bytes) > uint64(^uint32(0)) {
+func EncodeIOResultV1(memory []byte, ptr uint32, result nscore.IOResult, bufferSize int) bool {
+	if !result.Valid(bufferSize) || result.State != nscore.IOReady || uint64(result.Bytes) > uint64(^uint32(0)) {
 		return false
 	}
 	output, ok := abicore.Slice(memory, ptr, IOResultV1Size)

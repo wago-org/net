@@ -9,14 +9,9 @@ import (
 
 	lneto "github.com/soypat/lneto"
 	lnetotcp "github.com/soypat/lneto/tcp"
-	"github.com/wago-org/net/internal/namespace"
+	nscore "github.com/wago-org/net/internal/namespace/core"
 	"github.com/wago-org/net/internal/policy"
 	"github.com/wago-org/net/internal/quota"
-)
-
-var (
-	_ namespace.TCPListener = (*tcpListener)(nil)
-	_ namespace.TCPStream   = (*tcpStream)(nil)
 )
 
 const firstEphemeralTCPPort uint16 = 49152
@@ -36,7 +31,7 @@ type TCPConfig struct {
 
 type tcpListener struct {
 	owner    *Namespace
-	local    namespace.Endpoint
+	local    nscore.Endpoint
 	listener lnetotcp.Listener
 	pool     tcpPool
 
@@ -48,8 +43,8 @@ type tcpListener struct {
 type tcpStream struct {
 	owner  *Namespace
 	conn   *lnetotcp.Conn
-	local  namespace.Endpoint
-	remote namespace.Endpoint
+	local  nscore.Endpoint
+	remote nscore.Endpoint
 	slot   *tcpPoolSlot
 
 	resource  *quota.Allocation
@@ -176,32 +171,32 @@ func (p *tcpPool) closeLocked() {
 	p.owner = nil
 }
 
-func (n *Namespace) tryListenTCP(local namespace.Endpoint) (namespace.TCPListener, namespace.Progress, error) {
+func (n *Namespace) tryListenTCP(local nscore.Endpoint) (nscore.Resource, nscore.Progress, error) {
 	if n == nil {
-		return nil, 0, namespace.Fail(namespace.FailureClosed, net.ErrClosed)
+		return nil, 0, nscore.Fail(nscore.FailureClosed, net.ErrClosed)
 	}
 	n.mu.Lock()
 	defer n.mu.Unlock()
 	if n.closed || n.stack == nil {
-		return nil, 0, namespace.Fail(namespace.FailureClosed, net.ErrClosed)
+		return nil, 0, nscore.Fail(nscore.FailureClosed, net.ErrClosed)
 	}
 	if !local.Valid() || !local.Address.Is4() || local.Port == 0 {
-		return nil, 0, namespace.Fail(namespace.FailureInvalidArgument, lneto.ErrInvalidAddr)
+		return nil, 0, nscore.Fail(nscore.FailureInvalidArgument, lneto.ErrInvalidAddr)
 	}
 	if n.tcpConfig.MaxListeners == 0 {
-		return nil, 0, namespace.Fail(namespace.FailureNotSupported, lneto.ErrUnsupported)
+		return nil, 0, nscore.Fail(nscore.FailureNotSupported, lneto.ErrUnsupported)
 	}
 	if !local.Address.IsUnspecified() && local.Address != n.ipv4Address {
-		return nil, 0, namespace.Fail(namespace.FailureAddressUnavailable, lneto.ErrInvalidAddr)
+		return nil, 0, nscore.Fail(nscore.FailureAddressUnavailable, lneto.ErrInvalidAddr)
 	}
 	if !n.policy.CheckEndpoint(policy.OperationTCPListen, local.Address, local.Port) {
-		return nil, 0, namespace.Fail(namespace.FailureAccessDenied, errPolicyDenied)
+		return nil, 0, nscore.Fail(nscore.FailureAccessDenied, errPolicyDenied)
 	}
 	if len(n.tcpListeners) == int(n.tcpConfig.MaxListeners) {
-		return nil, 0, namespace.Fail(namespace.FailureResourceLimit, lneto.ErrExhausted)
+		return nil, 0, nscore.Fail(nscore.FailureResourceLimit, lneto.ErrExhausted)
 	}
 	if _, exists := n.tcpPorts[local.Port]; exists {
-		return nil, 0, namespace.Fail(namespace.FailureAddressInUse, lneto.ErrAlreadyRegistered)
+		return nil, 0, nscore.Fail(nscore.FailureAddressInUse, lneto.ErrAlreadyRegistered)
 	}
 
 	resourceReservation, err := n.quotas.ReserveResource(quota.ResourceTCP, 1)
@@ -239,46 +234,46 @@ func (n *Namespace) tryListenTCP(local namespace.Endpoint) (namespace.TCPListene
 		_ = listener.listener.Close()
 		listener.pool.closeLocked()
 		queuedReservation.Rollback()
-		return nil, 0, namespace.Fail(namespace.FailureClosed, quota.ErrClosed)
+		return nil, 0, nscore.Fail(nscore.FailureClosed, quota.ErrClosed)
 	}
 	queuedAllocation, ok := queuedReservation.Commit()
 	if !ok {
 		_ = listener.listener.Close()
 		listener.pool.closeLocked()
 		resourceAllocation.Release()
-		return nil, 0, namespace.Fail(namespace.FailureClosed, quota.ErrClosed)
+		return nil, 0, nscore.Fail(nscore.FailureClosed, quota.ErrClosed)
 	}
 	listener.resource = resourceAllocation
 	listener.queued = queuedAllocation
 	n.tcpPorts[local.Port] = struct{}{}
 	n.tcpListeners = append(n.tcpListeners, listener)
-	return listener, namespace.ProgressDone, nil
+	return listener, nscore.ProgressDone, nil
 }
 
-func (n *Namespace) tryConnectTCP(remote namespace.Endpoint) (namespace.TCPStream, namespace.Progress, error) {
+func (n *Namespace) tryConnectTCP(remote nscore.Endpoint) (nscore.Resource, nscore.Progress, error) {
 	if n == nil {
-		return nil, 0, namespace.Fail(namespace.FailureClosed, net.ErrClosed)
+		return nil, 0, nscore.Fail(nscore.FailureClosed, net.ErrClosed)
 	}
 	n.mu.Lock()
 	defer n.mu.Unlock()
 	if n.closed || n.stack == nil {
-		return nil, 0, namespace.Fail(namespace.FailureClosed, net.ErrClosed)
+		return nil, 0, nscore.Fail(nscore.FailureClosed, net.ErrClosed)
 	}
 	if !remote.Valid() || !remote.Address.Is4() || remote.Address.IsUnspecified() || remote.Port == 0 {
-		return nil, 0, namespace.Fail(namespace.FailureInvalidArgument, lneto.ErrInvalidAddr)
+		return nil, 0, nscore.Fail(nscore.FailureInvalidArgument, lneto.ErrInvalidAddr)
 	}
 	if n.tcpConfig.MaxOutboundStreams == 0 {
-		return nil, 0, namespace.Fail(namespace.FailureNotSupported, lneto.ErrUnsupported)
+		return nil, 0, nscore.Fail(nscore.FailureNotSupported, lneto.ErrUnsupported)
 	}
 	if !n.policy.CheckEndpoint(policy.OperationTCPConnect, remote.Address, remote.Port) {
-		return nil, 0, namespace.Fail(namespace.FailureAccessDenied, errPolicyDenied)
+		return nil, 0, nscore.Fail(nscore.FailureAccessDenied, errPolicyDenied)
 	}
 	if n.outboundTCPStreamsLocked() == int(n.tcpConfig.MaxOutboundStreams) {
-		return nil, 0, namespace.Fail(namespace.FailureResourceLimit, lneto.ErrExhausted)
+		return nil, 0, nscore.Fail(nscore.FailureResourceLimit, lneto.ErrExhausted)
 	}
 	localPort, ok := n.allocateTCPPortLocked()
 	if !ok {
-		return nil, 0, namespace.Fail(namespace.FailureResourceLimit, lneto.ErrExhausted)
+		return nil, 0, nscore.Fail(nscore.FailureResourceLimit, lneto.ErrExhausted)
 	}
 	resourceReservation, err := n.quotas.ReserveResource(quota.ResourceTCP, 1)
 	if err != nil {
@@ -312,59 +307,59 @@ func (n *Namespace) tryConnectTCP(remote namespace.Endpoint) (namespace.TCPStrea
 	if !ok {
 		conn.Abort()
 		queuedReservation.Rollback()
-		return nil, 0, namespace.Fail(namespace.FailureClosed, quota.ErrClosed)
+		return nil, 0, nscore.Fail(nscore.FailureClosed, quota.ErrClosed)
 	}
 	queuedAllocation, ok := queuedReservation.Commit()
 	if !ok {
 		conn.Abort()
 		resourceAllocation.Release()
-		return nil, 0, namespace.Fail(namespace.FailureClosed, quota.ErrClosed)
+		return nil, 0, nscore.Fail(nscore.FailureClosed, quota.ErrClosed)
 	}
 	stream := &tcpStream{
 		owner: n, conn: conn,
-		local:  namespace.Endpoint{Address: n.ipv4Address, Port: localPort},
+		local:  nscore.Endpoint{Address: n.ipv4Address, Port: localPort},
 		remote: remote, resource: resourceAllocation, queued: queuedAllocation,
 		outbound: true,
 	}
 	n.tcpPorts[localPort] = struct{}{}
 	n.tcpStreams = append(n.tcpStreams, stream)
-	return stream, namespace.ProgressInProgress, nil
+	return stream, nscore.ProgressInProgress, nil
 }
 
-func (l *tcpListener) LocalEndpoint() namespace.Endpoint {
+func (l *tcpListener) LocalEndpoint() nscore.Endpoint {
 	if l == nil {
-		return namespace.Endpoint{}
+		return nscore.Endpoint{}
 	}
 	return l.local
 }
 
-func (l *tcpListener) Readiness() namespace.Readiness {
+func (l *tcpListener) Readiness() nscore.Readiness {
 	if l == nil || l.owner == nil {
-		return namespace.ReadyClosed
+		return nscore.ReadyClosed
 	}
 	l.owner.mu.Lock()
 	defer l.owner.mu.Unlock()
 	if l.closed || l.owner.closed {
-		return namespace.ReadyClosed
+		return nscore.ReadyClosed
 	}
 	if l.listener.NumberOfReadyToAccept() > 0 {
-		return namespace.ReadyAccept
+		return nscore.ReadyAccept
 	}
 	return 0
 }
 
-func (l *tcpListener) TryAccept() (namespace.TCPStream, namespace.Progress, error) {
+func (l *tcpListener) TryAccept() (nscore.Resource, nscore.Progress, error) {
 	if l == nil || l.owner == nil {
-		return nil, 0, namespace.Fail(namespace.FailureClosed, net.ErrClosed)
+		return nil, 0, nscore.Fail(nscore.FailureClosed, net.ErrClosed)
 	}
 	l.owner.mu.Lock()
 	defer l.owner.mu.Unlock()
 	if l.closed || l.owner.closed {
-		return nil, 0, namespace.Fail(namespace.FailureClosed, net.ErrClosed)
+		return nil, 0, nscore.Fail(nscore.FailureClosed, net.ErrClosed)
 	}
 	conn, userData, err := l.listener.TryAccept()
 	if errors.Is(err, lneto.ErrExhausted) {
-		return nil, namespace.ProgressWouldBlock, nil
+		return nil, nscore.ProgressWouldBlock, nil
 	}
 	if err != nil {
 		return nil, 0, mapError(err)
@@ -374,23 +369,23 @@ func (l *tcpListener) TryAccept() (namespace.TCPStream, namespace.Progress, erro
 		if conn != nil {
 			conn.Abort()
 		}
-		return nil, 0, namespace.Fail(namespace.FailureIO, lneto.ErrBadState)
+		return nil, 0, nscore.Fail(nscore.FailureIO, lneto.ErrBadState)
 	}
 	remoteAddress := conn.RemoteAddr()
 	if len(remoteAddress) != 4 || conn.RemotePort() == 0 {
 		conn.Abort()
-		return nil, 0, namespace.Fail(namespace.FailureIO, lneto.ErrInvalidAddr)
+		return nil, 0, nscore.Fail(nscore.FailureIO, lneto.ErrInvalidAddr)
 	}
 	stream := &tcpStream{
 		owner: l.owner, conn: conn, slot: slot,
 		local:     l.local,
-		remote:    namespace.Endpoint{Address: netip.AddrFrom4([4]byte(remoteAddress)), Port: conn.RemotePort()},
+		remote:    nscore.Endpoint{Address: netip.AddrFrom4([4]byte(remoteAddress)), Port: conn.RemotePort()},
 		resource:  slot.resource,
 		connected: true,
 	}
 	slot.stream = stream
 	l.owner.tcpStreams = append(l.owner.tcpStreams, stream)
-	return stream, namespace.ProgressDone, nil
+	return stream, nscore.ProgressDone, nil
 }
 
 func (l *tcpListener) Close() error {
@@ -424,170 +419,170 @@ func (l *tcpListener) closeLocked() error {
 	return nil
 }
 
-func (s *tcpStream) LocalEndpoint() namespace.Endpoint {
+func (s *tcpStream) LocalEndpoint() nscore.Endpoint {
 	if s == nil {
-		return namespace.Endpoint{}
+		return nscore.Endpoint{}
 	}
 	return s.local
 }
 
-func (s *tcpStream) RemoteEndpoint() namespace.Endpoint {
+func (s *tcpStream) RemoteEndpoint() nscore.Endpoint {
 	if s == nil {
-		return namespace.Endpoint{}
+		return nscore.Endpoint{}
 	}
 	return s.remote
 }
 
-func (s *tcpStream) Readiness() namespace.Readiness {
+func (s *tcpStream) Readiness() nscore.Readiness {
 	if s == nil || s.owner == nil {
-		return namespace.ReadyClosed
+		return nscore.ReadyClosed
 	}
 	s.owner.mu.Lock()
 	defer s.owner.mu.Unlock()
 	if s.closed || s.owner.closed || s.terminal || s.conn == nil {
-		return namespace.ReadyClosed
+		return nscore.ReadyClosed
 	}
 	h := s.conn.InternalHandler()
 	state := h.State()
-	var ready namespace.Readiness
+	var ready nscore.Readiness
 	if state == lnetotcp.StateEstablished || state == lnetotcp.StateCloseWait {
 		s.connected = true
-		ready |= namespace.ReadyConnected
+		ready |= nscore.ReadyConnected
 	}
 	if h.BufferedInput() > 0 {
-		ready |= namespace.ReadyReadable
+		ready |= nscore.ReadyReadable
 	} else if !state.RxDataOpen() {
-		ready |= namespace.ReadyClosed
+		ready |= nscore.ReadyClosed
 	}
 	if !s.shutdown && state.TxDataOpen() && h.FreeOutput() > 0 {
-		ready |= namespace.ReadyWritable
+		ready |= nscore.ReadyWritable
 	}
 	if state.IsClosed() && !s.connected {
-		ready |= namespace.ReadyError | namespace.ReadyClosed
+		ready |= nscore.ReadyError | nscore.ReadyClosed
 	}
 	return ready
 }
 
-func (s *tcpStream) TryFinishConnect() (namespace.Progress, error) {
+func (s *tcpStream) TryFinishConnect() (nscore.Progress, error) {
 	if s == nil || s.owner == nil {
-		return 0, namespace.Fail(namespace.FailureClosed, net.ErrClosed)
+		return 0, nscore.Fail(nscore.FailureClosed, net.ErrClosed)
 	}
 	s.owner.mu.Lock()
 	defer s.owner.mu.Unlock()
 	if s.closed || s.owner.closed {
-		return 0, namespace.Fail(namespace.FailureClosed, net.ErrClosed)
+		return 0, nscore.Fail(nscore.FailureClosed, net.ErrClosed)
 	}
 	if s.terminal || s.conn == nil {
-		return 0, namespace.Fail(namespace.FailureConnectionRefused, net.ErrClosed)
+		return 0, nscore.Fail(nscore.FailureConnectionRefused, net.ErrClosed)
 	}
 	state := s.conn.InternalHandler().State()
 	if state == lnetotcp.StateEstablished || state == lnetotcp.StateCloseWait {
 		s.connected = true
-		return namespace.ProgressDone, nil
+		return nscore.ProgressDone, nil
 	}
 	if state.IsClosed() && !s.conn.InternalHandler().AwaitingSynSend() {
-		return 0, namespace.Fail(namespace.FailureConnectionRefused, net.ErrClosed)
+		return 0, nscore.Fail(nscore.FailureConnectionRefused, net.ErrClosed)
 	}
 	if state.IsPreestablished() || s.conn.InternalHandler().AwaitingSynSend() {
-		return namespace.ProgressInProgress, nil
+		return nscore.ProgressInProgress, nil
 	}
-	return 0, namespace.Fail(namespace.FailureConnectionAborted, lneto.ErrBadState)
+	return 0, nscore.Fail(nscore.FailureConnectionAborted, lneto.ErrBadState)
 }
 
-func (s *tcpStream) TryRead(dst []byte) (namespace.IOResult, error) {
+func (s *tcpStream) TryRead(dst []byte) (nscore.IOResult, error) {
 	if s == nil || s.owner == nil {
-		return namespace.IOResult{}, namespace.Fail(namespace.FailureClosed, net.ErrClosed)
+		return nscore.IOResult{}, nscore.Fail(nscore.FailureClosed, net.ErrClosed)
 	}
 	s.owner.mu.Lock()
 	defer s.owner.mu.Unlock()
 	if s.closed || s.owner.closed {
-		return namespace.IOResult{}, namespace.Fail(namespace.FailureClosed, net.ErrClosed)
+		return nscore.IOResult{}, nscore.Fail(nscore.FailureClosed, net.ErrClosed)
 	}
 	if len(dst) == 0 {
-		return namespace.IOResult{State: namespace.IOReady}, nil
+		return nscore.IOResult{State: nscore.IOReady}, nil
 	}
 	if s.terminal || s.conn == nil {
-		return namespace.IOResult{State: namespace.IOEOF}, nil
+		return nscore.IOResult{State: nscore.IOEOF}, nil
 	}
 	h := s.conn.InternalHandler()
 	if h.BufferedInput() > 0 {
 		n, err := h.Read(dst)
 		if err != nil && !errors.Is(err, io.EOF) {
-			return namespace.IOResult{}, mapError(err)
+			return nscore.IOResult{}, mapError(err)
 		}
-		result := namespace.IOResult{Bytes: n, State: namespace.IOReady}
+		result := nscore.IOResult{Bytes: n, State: nscore.IOReady}
 		if !result.Valid(len(dst)) {
-			return namespace.IOResult{}, namespace.Fail(namespace.FailureIO, lneto.ErrBadState)
+			return nscore.IOResult{}, nscore.Fail(nscore.FailureIO, lneto.ErrBadState)
 		}
 		return result, nil
 	}
 	state := h.State()
 	if !state.RxDataOpen() {
-		return namespace.IOResult{State: namespace.IOEOF}, nil
+		return nscore.IOResult{State: nscore.IOEOF}, nil
 	}
-	return namespace.IOResult{State: namespace.IOWouldBlock}, nil
+	return nscore.IOResult{State: nscore.IOWouldBlock}, nil
 }
 
-func (s *tcpStream) TryWrite(src []byte) (namespace.IOResult, error) {
+func (s *tcpStream) TryWrite(src []byte) (nscore.IOResult, error) {
 	if s == nil || s.owner == nil {
-		return namespace.IOResult{}, namespace.Fail(namespace.FailureClosed, net.ErrClosed)
+		return nscore.IOResult{}, nscore.Fail(nscore.FailureClosed, net.ErrClosed)
 	}
 	s.owner.mu.Lock()
 	defer s.owner.mu.Unlock()
 	if s.closed || s.owner.closed {
-		return namespace.IOResult{}, namespace.Fail(namespace.FailureClosed, net.ErrClosed)
+		return nscore.IOResult{}, nscore.Fail(nscore.FailureClosed, net.ErrClosed)
 	}
 	if s.terminal || s.conn == nil {
-		return namespace.IOResult{}, namespace.Fail(namespace.FailureConnectionBroken, net.ErrClosed)
+		return nscore.IOResult{}, nscore.Fail(nscore.FailureConnectionBroken, net.ErrClosed)
 	}
 	if s.shutdown {
-		return namespace.IOResult{}, namespace.Fail(namespace.FailureInvalidState, lneto.ErrBadState)
+		return nscore.IOResult{}, nscore.Fail(nscore.FailureInvalidState, lneto.ErrBadState)
 	}
 	if len(src) == 0 {
-		return namespace.IOResult{State: namespace.IOReady}, nil
+		return nscore.IOResult{State: nscore.IOReady}, nil
 	}
 	h := s.conn.InternalHandler()
 	if !h.State().TxDataOpen() {
 		if h.State().IsPreestablished() || h.AwaitingSynSend() {
-			return namespace.IOResult{State: namespace.IOWouldBlock}, nil
+			return nscore.IOResult{State: nscore.IOWouldBlock}, nil
 		}
-		return namespace.IOResult{}, namespace.Fail(namespace.FailureConnectionBroken, net.ErrClosed)
+		return nscore.IOResult{}, nscore.Fail(nscore.FailureConnectionBroken, net.ErrClosed)
 	}
 	count := min(len(src), h.FreeOutput())
 	if count == 0 {
-		return namespace.IOResult{State: namespace.IOWouldBlock}, nil
+		return nscore.IOResult{State: nscore.IOWouldBlock}, nil
 	}
 	n, err := h.Write(src[:count])
 	if err != nil {
-		return namespace.IOResult{}, mapError(err)
+		return nscore.IOResult{}, mapError(err)
 	}
-	result := namespace.IOResult{Bytes: n, State: namespace.IOReady}
+	result := nscore.IOResult{Bytes: n, State: nscore.IOReady}
 	if !result.Valid(len(src)) {
-		return namespace.IOResult{}, namespace.Fail(namespace.FailureIO, lneto.ErrBadState)
+		return nscore.IOResult{}, nscore.Fail(nscore.FailureIO, lneto.ErrBadState)
 	}
 	return result, nil
 }
 
-func (s *tcpStream) TryShutdownWrite() (namespace.Progress, error) {
+func (s *tcpStream) TryShutdownWrite() (nscore.Progress, error) {
 	if s == nil || s.owner == nil {
-		return 0, namespace.Fail(namespace.FailureClosed, net.ErrClosed)
+		return 0, nscore.Fail(nscore.FailureClosed, net.ErrClosed)
 	}
 	s.owner.mu.Lock()
 	defer s.owner.mu.Unlock()
 	if s.closed || s.owner.closed {
-		return 0, namespace.Fail(namespace.FailureClosed, net.ErrClosed)
+		return 0, nscore.Fail(nscore.FailureClosed, net.ErrClosed)
 	}
 	if s.terminal || s.conn == nil {
-		return 0, namespace.Fail(namespace.FailureConnectionBroken, net.ErrClosed)
+		return 0, nscore.Fail(nscore.FailureConnectionBroken, net.ErrClosed)
 	}
 	if s.shutdown {
-		return namespace.ProgressDone, nil
+		return nscore.ProgressDone, nil
 	}
 	if err := s.conn.InternalHandler().Close(); err != nil {
 		return 0, mapError(err)
 	}
 	s.shutdown = true
-	return namespace.ProgressDone, nil
+	return nscore.ProgressDone, nil
 }
 
 func (s *tcpStream) Close() error {

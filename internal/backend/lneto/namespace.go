@@ -16,6 +16,7 @@ import (
 	lnetotcp "github.com/soypat/lneto/tcp"
 	"github.com/soypat/lneto/x/xnet"
 	"github.com/wago-org/net/internal/namespace"
+	nscore "github.com/wago-org/net/internal/namespace/core"
 	"github.com/wago-org/net/internal/packetlink"
 	"github.com/wago-org/net/internal/policy"
 	"github.com/wago-org/net/internal/quota"
@@ -237,11 +238,11 @@ func (n *Namespace) TryBindUDP(local namespace.Endpoint) (namespace.UDPSocket, n
 	return n.tryBindUDP(local)
 }
 
-func (n *Namespace) TryListenTCP(local namespace.Endpoint) (namespace.TCPListener, namespace.Progress, error) {
+func (n *Namespace) TryListenTCP(local nscore.Endpoint) (nscore.Resource, nscore.Progress, error) {
 	return n.tryListenTCP(local)
 }
 
-func (n *Namespace) TryConnectTCP(remote namespace.Endpoint) (namespace.TCPStream, namespace.Progress, error) {
+func (n *Namespace) TryConnectTCP(remote nscore.Endpoint) (nscore.Resource, nscore.Progress, error) {
 	return n.tryConnectTCP(remote)
 }
 
