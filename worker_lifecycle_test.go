@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"net/netip"
+	goruntime "runtime"
 	"strings"
 	"sync"
 	"testing"
@@ -427,7 +428,8 @@ func TestFailedWorkerCallbackValidationRetiresNetworkingAndReleasesWorkerQuota(t
 	if err := runtime.Use(worker); err != nil {
 		t.Fatalf("Use workers: %v", err)
 	}
-	invalid, err := runtime.Instantiate(context.Background(), workerNetworkingModule(t, runtime, false))
+	invalidModule := workerNetworkingModule(t, runtime, false)
+	invalid, err := runtime.Instantiate(context.Background(), invalidModule)
 	if err != nil {
 		t.Fatalf("Instantiate invalid-callback parent: %v", err)
 	}
@@ -454,8 +456,10 @@ func TestFailedWorkerCallbackValidationRetiresNetworkingAndReleasesWorkerQuota(t
 	if err := invalid.Close(); err != nil {
 		t.Fatalf("Close invalid parent: %v", err)
 	}
+	goruntime.KeepAlive(invalidModule)
 
-	valid, err := runtime.Instantiate(context.Background(), workerNetworkingModule(t, runtime, true))
+	validModule := workerNetworkingModule(t, runtime, true)
+	valid, err := runtime.Instantiate(context.Background(), validModule)
 	if err != nil {
 		t.Fatalf("Instantiate valid parent: %v", err)
 	}
@@ -473,6 +477,7 @@ func TestFailedWorkerCallbackValidationRetiresNetworkingAndReleasesWorkerQuota(t
 		t.Fatalf("valid worker exit = %+v", exit)
 	}
 	assertWorkerNetworkingClosed(t, live)
+	goruntime.KeepAlive(validModule)
 	assertNoWorkerHookError(t, worker)
 	if got := network.instanceManager().Len(); got != 0 {
 		t.Fatalf("states after validation cleanup = %d, want 0", got)

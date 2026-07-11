@@ -5,6 +5,9 @@ root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 wago_dir=$(realpath "${WAGO_DIR:-$root/.audit/wago}")
 lneto_dir=$(realpath "${LNETO_DIR:-$root/.audit/lneto}")
 wasi_dir=$(realpath "${WASI_DIR:-$root/.audit/wasi}")
+current_net_dir=$(realpath "${CURRENT_NET_DIR:-$root/.wago/net-current-plugin-registration}")
+current_wago_dir=$(realpath "${CURRENT_WAGO_DIR:-$root/.wago/wago-current-plugin-lifecycle}")
+workers_dir=$(realpath "${WORKERS_DIR:-$root/.wago/workers-plugin}")
 fuzztime=${FUZZTIME:-3s}
 run_wasi=${RUN_WASI:-1}
 allow_dirty=${ALLOW_DIRTY:-0}
@@ -15,6 +18,9 @@ readonly expected_wago_parent_main=54499ba5135f69a062e23a7255f4a408d6cecf8c
 readonly expected_wago_parent_workers=ffd5ef4b122cbd019897eeea3503789ab5860e4a
 readonly expected_lneto=ab1a0c735a8b534a1d6322a3e245bc11a09431e7
 readonly expected_wasi=3df6c766ad00e83b314da799dbf9a77b409ad19d
+readonly expected_current_net=5b444e9dfbbf1b64e7b1f923f1dc3579a4aaf87e
+readonly expected_current_wago=e44b1baa6eabfba07967a4458fdb56983cb054ae
+readonly expected_workers=1e9139756d8a3c631c59c00b028038c83bfa8341
 
 log() { printf '\n==> %s\n' "$*"; }
 fail() { echo "release-signoff: $*" >&2; exit 1; }
@@ -43,7 +49,7 @@ assert_clean() {
 for command in git go tinygo grep cmp sed sha256sum; do
   command -v "$command" >/dev/null || fail "missing required command: $command"
 done
-for dir in "$root" "$wago_dir" "$lneto_dir" "$wasi_dir"; do
+for dir in "$root" "$wago_dir" "$lneto_dir" "$wasi_dir" "$current_net_dir" "$current_wago_dir" "$workers_dir"; do
   [[ -d "$dir" ]] || fail "missing repository directory: $dir"
 done
 
@@ -51,6 +57,9 @@ log "verify pinned audit repositories"
 assert_head "$wago_dir" "$expected_wago" Wago
 assert_head "$lneto_dir" "$expected_lneto" lneto
 assert_head "$wasi_dir" "$expected_wasi" WASI
+assert_head "$current_net_dir" "$expected_current_net" 'current networking review'
+assert_head "$current_wago_dir" "$expected_current_wago" 'current Wago review'
+assert_head "$workers_dir" "$expected_workers" 'external workers'
 [[ $(git -C "$wago_dir" rev-parse HEAD^1) == "$expected_wago_parent_main" ]] || fail "Wago lifecycle parent drifted"
 [[ $(git -C "$wago_dir" rev-parse HEAD^2) == "$expected_wago_parent_workers" ]] || fail "Wago worker parent drifted"
 if [[ $allow_dirty != 1 ]]; then
@@ -58,6 +67,9 @@ if [[ $allow_dirty != 1 ]]; then
   assert_clean "$wago_dir" Wago
   assert_clean "$lneto_dir" lneto
   assert_clean "$wasi_dir" WASI
+  assert_clean "$current_net_dir" 'current networking review'
+  assert_clean "$current_wago_dir" 'current Wago review'
+  assert_clean "$workers_dir" 'external workers'
 fi
 [[ $(realpath "$root/../wago") == $(realpath "$wago_dir") ]] || fail "../wago does not resolve to the pinned Wago audit checkout"
 
@@ -66,7 +78,7 @@ mkdir -p "$out"
 checks="$out/checks.tsv"
 : >"$checks"
 record_check pinned-revisions pass 'exact audit revisions and ordered Wago parents'
-record_check initial-clean-trees pass 'plugin, Wago, lneto, and WASI'
+record_check initial-clean-trees pass 'plugin, production inputs, current plugin reviews, and external workers'
 WAGO_DIR="$wago_dir" "$root/scripts/wago-plugin-plan-compat.sh" | tee "$out/wago-plugin-plan-compat.txt"
 record_check wago-plugin-plan-compat pass 'reviewed redesign requires migration; networking pin unchanged'
 WASI_DIR="$wasi_dir" WAGO_DIR="$wago_dir" WASI_UPSTREAM_AUDIT_OUT="$out/wasi-upstream" \
@@ -200,7 +212,10 @@ if [[ $allow_dirty != 1 ]]; then
   assert_clean "$wago_dir" Wago
   assert_clean "$lneto_dir" lneto
   assert_clean "$wasi_dir" WASI
-  record_check final-clean-trees pass 'plugin, Wago, lneto, and WASI'
+  assert_clean "$current_net_dir" 'current networking review'
+  assert_clean "$current_wago_dir" 'current Wago review'
+  assert_clean "$workers_dir" 'external workers'
+  record_check final-clean-trees pass 'plugin, production inputs, current plugin reviews, and external workers'
 else
   echo "release-signoff: final clean-tree check skipped by ALLOW_DIRTY=1"
   record_check final-clean-trees skipped 'ALLOW_DIRTY=1'
@@ -208,9 +223,15 @@ fi
 
 log "immutable source-object review packs"
 WAGO_DIR="$wago_dir" LNETO_DIR="$lneto_dir" WASI_DIR="$wasi_dir" \
+  CURRENT_NET_DIR="$current_net_dir" CURRENT_WAGO_DIR="$current_wago_dir" WORKERS_DIR="$workers_dir" \
   SOURCE_OBJECT_DIR="$out/source-objects" SOURCE_OBJECT_SUBJECT="$(repo_head "$root")" \
   "$root/scripts/release-source-objects.sh"
-record_check source-object-packs pass 'exact subject and pinned source trees, including ordered Wago merge parents'
+record_check source-object-packs pass 'production pins plus exact current Wago/net/workers review source trees'
+
+log "isolated current plugin adoption gate"
+CURRENT_REVIEW_SOURCE_DIR="$out/source-objects" CURRENT_REVIEW_OUT="$out/current-plugin-review" \
+  "$root/scripts/current-plugin-review-signoff.sh"
+record_check current-plugin-review-signoff pass 'immutable reconstruction; 4 capabilities; 24 imports; linked-child cleanup; TinyGo'
 
 log "deterministic release provenance"
 GOWORK=off go run ./internal/cmd/release-provenance \

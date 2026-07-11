@@ -154,6 +154,7 @@ func validReviewFixture(t *testing.T) (string, VerifyOptions) {
 		{Name: "wasi-preview1-native-sigsegv", Status: "accepted-exception", Detail: "documented native preview-1 crash"},
 		{Name: "final-clean-trees", Status: "pass"},
 		{Name: "source-object-packs", Status: "pass"},
+		{Name: "current-plugin-review-signoff", Status: "pass"},
 	}
 	var checkText strings.Builder
 	for _, check := range checks {

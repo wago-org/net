@@ -367,7 +367,7 @@ func validateChecks(checks []Check, arm64Status string) error {
 		"fuzz-dns-wire", "fuzz-dns-layout", "fuzz-dns-guest", "fuzz-shared-layout",
 		"benchmark-guest-poll", "benchmark-udp-queue", "tinygo-test", "cross-build",
 		"source-boundaries", "custom-cli-inspection", "wago-lifecycle-worker-tests", "lneto-test", "final-clean-trees",
-		"source-object-packs",
+		"source-object-packs", "current-plugin-review-signoff",
 	}
 	seen := map[string]Check{}
 	for _, check := range checks {
