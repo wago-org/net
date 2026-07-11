@@ -41,11 +41,11 @@ func TestFixtureDependencyBoundaries(t *testing.T) {
 			dependencies := listDependencies(t, "./testdata/"+test.name)
 			for _, required := range []string{
 				modulePath,
-				modulePath + "/internal/instance",
+				modulePath + "/internal/instance/core",
 				modulePath + "/internal/backend/lneto",
 			} {
 				if !dependencies[required] {
-					t.Fatalf("dependency %q absent; unified instance/backend blocker changed without updating the boundary gate", required)
+					t.Fatalf("dependency %q absent; shared instance-core/backend boundary changed without updating the gate", required)
 				}
 			}
 			for protocol, dependency := range protocolDependencies {

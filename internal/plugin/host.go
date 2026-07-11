@@ -1,7 +1,7 @@
 package plugin
 
 import (
-	"github.com/wago-org/net/internal/instance"
+	instance "github.com/wago-org/net/internal/instance/core"
 	wago "github.com/wago-org/wago"
 )
 

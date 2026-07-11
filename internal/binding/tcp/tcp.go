@@ -4,7 +4,7 @@ package tcp
 import (
 	"github.com/wago-org/net/internal/abi"
 	"github.com/wago-org/net/internal/guest"
-	"github.com/wago-org/net/internal/instance"
+	instance "github.com/wago-org/net/internal/instance/core"
 	"github.com/wago-org/net/internal/plugin"
 	"github.com/wago-org/net/internal/resource"
 	wago "github.com/wago-org/wago"

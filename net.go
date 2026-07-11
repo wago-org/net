@@ -13,7 +13,7 @@ import (
 	"sync"
 
 	lnetobackend "github.com/wago-org/net/internal/backend/lneto"
-	instancestate "github.com/wago-org/net/internal/instance"
+	instancestate "github.com/wago-org/net/internal/instance/core"
 	"github.com/wago-org/net/internal/namespace"
 	"github.com/wago-org/net/internal/packetlink"
 	"github.com/wago-org/net/internal/plugin"

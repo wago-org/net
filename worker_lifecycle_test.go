@@ -13,7 +13,7 @@ import (
 	"testing"
 	"time"
 
-	instancestate "github.com/wago-org/net/internal/instance"
+	instancestate "github.com/wago-org/net/internal/instance/core"
 	"github.com/wago-org/net/internal/namespace"
 	"github.com/wago-org/net/internal/quota"
 	"github.com/wago-org/net/internal/resource"

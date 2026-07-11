@@ -1,5 +1,5 @@
 // Package instance owns networking state attached to exact Wago instances.
-package instance
+package core
 
 import (
 	"errors"

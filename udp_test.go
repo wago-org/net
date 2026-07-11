@@ -9,7 +9,7 @@ import (
 	"testing"
 
 	"github.com/wago-org/net/internal/abi"
-	"github.com/wago-org/net/internal/instance"
+	instance "github.com/wago-org/net/internal/instance/core"
 	"github.com/wago-org/net/internal/namespace"
 	"github.com/wago-org/net/internal/packetlink"
 	"github.com/wago-org/net/internal/resource"
