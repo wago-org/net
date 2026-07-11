@@ -74,8 +74,16 @@ func main() {
 			os.Exit(1)
 		}
 		printVerification("verified signed distribution", *bundle, trusted.Verification, "")
-		fmt.Printf("trusted_key_id=%s\nstatement_sha256=%s\ntrust_policy_sha256=%s\n",
-			trusted.KeyID, trusted.StatementSHA256, trusted.TrustPolicySHA256)
+		fmt.Printf("trusted_key_id=%s\nstatement_sha256=%s\nsignature_sha256=%s\ntrust_policy_sha256=%s\n",
+			trusted.KeyID, trusted.StatementSHA256, trusted.SignatureSHA256, trusted.TrustPolicySHA256)
+		if *out != "" {
+			receiptHash, err := releaseprovenance.WriteTrustedDistributionReceipt(*out, trusted)
+			if err != nil {
+				fmt.Fprintln(os.Stderr, err)
+				os.Exit(1)
+			}
+			fmt.Printf("release-review: wrote trusted distribution receipt %s\ntrusted_distribution_sha256=%s\n", *out, receiptHash)
+		}
 	case "verify-production-candidate":
 		if *bundle == "" || *statementPath == "" || *signaturePath == "" || *trustPolicyPath == "" {
 			fmt.Fprintln(os.Stderr, "release-review: -bundle, -statement, -signature, and -trust-policy are required for verify-production-candidate")

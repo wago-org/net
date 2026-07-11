@@ -74,13 +74,15 @@ external detached signing; optionally verifies a raw Ed25519 signature only
 against an explicitly supplied no-discovery trust policy that can pin the exact
 statement digest and plugin subject against rollback; publishes public positive
 and negative detached-signature interoperability vectors without a private key
-or publisher claim; keeps production
-activation behind published exact subjects, executed arm64 evidence, and zero
-accepted exceptions; atomically retains and independently verifies checksummed
-canonical readiness receipts that bind the exact canonical trust-policy digest,
-with public ready/blocked/tamper/constraint interoperability vectors for external
-automation; audits
-unsupported pool topology; runs bounded fuzz smoke, benchmarks, TinyGo,
+or publisher claim; optionally retains a checksummed canonical intermediary
+receipt binding the exact signature, statement, trust policy, provenance,
+archive, subject, and opaque key label without claiming publisher identity;
+keeps production activation behind published exact subjects, executed arm64
+evidence, and zero accepted exceptions; atomically retains and independently
+verifies checksummed canonical readiness receipts that bind the exact canonical
+trust-policy digest, with public ready/blocked/tamper/constraint interoperability
+vectors for external automation; audits unsupported pool topology; runs bounded
+fuzz smoke, benchmarks, TinyGo,
 cross-build, package/custom CLI inspection, and final clean-tree checks; and
 records disposable artifacts under `.wago/release-signoff`:
 

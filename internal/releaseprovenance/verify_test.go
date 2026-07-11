@@ -119,8 +119,42 @@ func TestVerifySignedDistributionRequiresExplicitPolicyAndMatchingSignature(t *t
 	}
 	if trusted.KeyID != fixture.keyID || trusted.Statement.Subject != fixture.opts.ExpectedSubject ||
 		trusted.Verification.BundleSHA256 != fixture.bundleHash || trusted.StatementSHA256 != fixture.statementHash ||
-		trusted.TrustPolicySHA256 != fixture.policyHash {
+		trusted.SignatureSHA256 != fixture.signatureHash || trusted.TrustPolicySHA256 != fixture.policyHash {
 		t.Fatalf("trusted distribution = %+v", trusted)
+	}
+	receiptPath := filepath.Join(t.TempDir(), "trusted-distribution.json")
+	receiptHash, err := WriteTrustedDistributionReceipt(receiptPath, trusted)
+	if err != nil {
+		t.Fatal(err)
+	}
+	receiptData, err := os.ReadFile(receiptPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var receipt TrustedDistributionReceipt
+	if err := decodeCanonicalJSON(receiptData, &receipt, "trusted distribution receipt"); err != nil {
+		t.Fatal(err)
+	}
+	if receipt.Schema != TrustedDistributionReceiptSchemaV1 || receipt.Algorithm != "ed25519" ||
+		receipt.TrustedKeyID != fixture.keyID || receipt.Subject != fixture.opts.ExpectedSubject ||
+		receipt.StatementSHA256 != fixture.statementHash || receipt.SignatureSHA256 != fixture.signatureHash ||
+		receipt.TrustPolicySHA256 != fixture.policyHash || receipt.ProvenanceSHA256 != trusted.Verification.ProvenanceSHA256 ||
+		receipt.ReviewBundleSHA256 != fixture.bundleHash {
+		t.Fatalf("trusted distribution receipt = %+v", receipt)
+	}
+	receiptSum := sha256.Sum256(receiptData)
+	if got := hex.EncodeToString(receiptSum[:]); got != receiptHash {
+		t.Fatalf("trusted distribution receipt SHA-256 = %s, want %s", got, receiptHash)
+	}
+	checksumData, err := os.ReadFile(receiptPath + ".sha256")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := receiptHash + "  " + filepath.Base(receiptPath) + "\n"; string(checksumData) != want {
+		t.Fatalf("trusted distribution checksum = %q, want %q", checksumData, want)
+	}
+	if secondHash, err := WriteTrustedDistributionReceipt(receiptPath, trusted); err != nil || secondHash != receiptHash {
+		t.Fatalf("deterministic trusted distribution receipt rewrite = %q, %v", secondHash, err)
 	}
 	if _, err := verifySignedDistribution(fixture.bundle, fixture.statement, fixture.signature, "", fixture.opts); err == nil {
 		t.Fatal("implicit trust policy discovery unexpectedly accepted")
@@ -530,9 +564,9 @@ func TestProductionReadinessProfileReportsExactCurrentBlockers(t *testing.T) {
 }
 
 type signedDistributionFixture struct {
-	bundle, statement, signature, policy         string
-	opts                                         VerifyOptions
-	keyID, bundleHash, statementHash, policyHash string
+	bundle, statement, signature, policy                        string
+	opts                                                        VerifyOptions
+	keyID, bundleHash, statementHash, signatureHash, policyHash string
 }
 
 func newSignedDistributionFixture(t *testing.T) signedDistributionFixture {
@@ -572,13 +606,17 @@ func newSignedDistributionFixture(t *testing.T) signedDistributionFixture {
 	policyHash := hex.EncodeToString(policySum[:])
 	policyPath := filepath.Join(t.TempDir(), "trust-policy.json")
 	writeTestFile(t, policyPath, string(policyData))
+	signature := ed25519.Sign(privateKey, statementData)
+	signatureSum := sha256.Sum256(signature)
+	signatureHash := hex.EncodeToString(signatureSum[:])
 	signaturePath := filepath.Join(t.TempDir(), "distribution.sig")
-	if err := os.WriteFile(signaturePath, ed25519.Sign(privateKey, statementData), 0o600); err != nil {
+	if err := os.WriteFile(signaturePath, signature, 0o600); err != nil {
 		t.Fatal(err)
 	}
 	return signedDistributionFixture{
 		bundle: bundle, statement: statementPath, signature: signaturePath, policy: policyPath,
-		opts: opts, keyID: policy.KeyID, bundleHash: bundleHash, statementHash: statementHash, policyHash: policyHash,
+		opts: opts, keyID: policy.KeyID, bundleHash: bundleHash, statementHash: statementHash,
+		signatureHash: signatureHash, policyHash: policyHash,
 	}
 }
 

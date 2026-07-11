@@ -52,6 +52,7 @@ type TrustedDistribution struct {
 	Verification      *Verification
 	KeyID             string
 	StatementSHA256   string
+	SignatureSHA256   string
 	TrustPolicySHA256 string
 }
 
@@ -132,6 +133,8 @@ func verifySignedDistribution(bundle, statementPath, signaturePath, trustPolicyP
 	if len(signature) != ed25519.SignatureSize {
 		return nil, fmt.Errorf("release provenance: detached signature size %d, want %d", len(signature), ed25519.SignatureSize)
 	}
+	signatureSum := sha256.Sum256(signature)
+	signatureSHA256 := hex.EncodeToString(signatureSum[:])
 	if !ed25519.Verify(publicKey, statementData, signature) {
 		return nil, fmt.Errorf("release provenance: detached signature verification failed for trust policy key %q", policy.KeyID)
 	}
@@ -151,7 +154,8 @@ func verifySignedDistribution(bundle, statementPath, signaturePath, trustPolicyP
 	}
 	return &TrustedDistribution{
 		Statement: &statement, Verification: verified, KeyID: policy.KeyID,
-		StatementSHA256: statementSHA256, TrustPolicySHA256: trustPolicySHA256,
+		StatementSHA256: statementSHA256, SignatureSHA256: signatureSHA256,
+		TrustPolicySHA256: trustPolicySHA256,
 	}, nil
 }
 
@@ -182,9 +186,7 @@ func validateDistributionTrustPolicy(policy *DistributionTrustPolicy) (ed25519.P
 	if policy.Schema != DistributionTrustPolicySchemaV1 || policy.Algorithm != "ed25519" {
 		return nil, fmt.Errorf("release provenance: unsupported distribution trust policy schema or algorithm")
 	}
-	if policy.KeyID == "" || len(policy.KeyID) > 128 || strings.IndexFunc(policy.KeyID, func(r rune) bool {
-		return !(r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' || strings.ContainsRune("._:-", r))
-	}) >= 0 {
+	if !validDistributionKeyID(policy.KeyID) {
 		return nil, fmt.Errorf("release provenance: invalid distribution trust policy key ID")
 	}
 	if policy.StatementSHA256 != "" && !validSHA256(policy.StatementSHA256) {
@@ -198,6 +200,12 @@ func validateDistributionTrustPolicy(policy *DistributionTrustPolicy) (ed25519.P
 		return nil, fmt.Errorf("release provenance: distribution trust policy public key is not canonical Ed25519 base64")
 	}
 	return ed25519.PublicKey(decoded), nil
+}
+
+func validDistributionKeyID(keyID string) bool {
+	return keyID != "" && len(keyID) <= 128 && strings.IndexFunc(keyID, func(r rune) bool {
+		return !(r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' || strings.ContainsRune("._:-", r))
+	}) < 0
 }
 
 func enforceDistributionTrustConstraints(policy *DistributionTrustPolicy, statement *DistributionStatement, statementSHA256 string) error {

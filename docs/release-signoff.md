@@ -230,7 +230,8 @@ GOWORK=off go run ./internal/cmd/release-review \
   -bundle /path/to/release-signoff.review.tar.gz \
   -statement /path/to/release.distribution.json \
   -signature /trusted-channel/release.distribution.sig \
-  -trust-policy /operator-config/wago-net-trust-policy.json
+  -trust-policy /operator-config/wago-net-trust-policy.json \
+  -out /automation/release.trusted-distribution.json
 ```
 
 The verifier checks any supplied policy statement-digest and subject constraints
@@ -242,10 +243,17 @@ archive. This prevents a still-valid signature made by the same key for another
 or older statement from silently satisfying a pinned activation policy. The
 trust-policy key ID is reported as an operator label only and cannot trigger
 implicit key discovery. Successful signed verification also reports the SHA-256
-of the exact canonical trust-policy bytes, so policy rotation remains visible
-even if an operator reuses an opaque key label. Unsigned `verify`, unconstrained
-key-only signed review, and strict hash-pinned verification remain available for
-workflows that do not assert a pinned production selection.
+values of the exact raw signature and canonical trust-policy bytes, so signature
+replacement or policy rotation remains visible even if an operator reuses an
+opaque key label. When `-out` is supplied, it atomically retains a canonical
+`github.com/wago-org/net/trusted-distribution/v1` receipt plus adjacent `.sha256`
+sidecar. That intermediary evidence binds the Ed25519 algorithm, opaque key
+label, subject, statement, signature, trust-policy, provenance, and archive
+digests. It records successful cryptographic and archive verification, not a
+real-world publisher identity or production-readiness decision. Unsigned
+`verify`, unconstrained key-only signed review, and strict hash-pinned
+verification remain available for workflows that do not assert a pinned
+production selection.
 
 ## Production release-candidate readiness
 
