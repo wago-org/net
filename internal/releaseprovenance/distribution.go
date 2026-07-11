@@ -48,10 +48,11 @@ type DistributionTrustPolicy struct {
 // TrustedDistribution binds a valid detached signature to the independently
 // verified review archive and canonical provenance it names.
 type TrustedDistribution struct {
-	Statement       *DistributionStatement
-	Verification    *Verification
-	KeyID           string
-	StatementSHA256 string
+	Statement         *DistributionStatement
+	Verification      *Verification
+	KeyID             string
+	StatementSHA256   string
+	TrustPolicySHA256 string
 }
 
 // WriteDistributionStatement verifies an existing review archive and writes a
@@ -117,6 +118,8 @@ func verifySignedDistribution(bundle, statementPath, signaturePath, trustPolicyP
 	if err != nil {
 		return nil, err
 	}
+	policySum := sha256.Sum256(policyData)
+	trustPolicySHA256 := hex.EncodeToString(policySum[:])
 	statementSum := sha256.Sum256(statementData)
 	statementSHA256 := hex.EncodeToString(statementSum[:])
 	if err := enforceDistributionTrustConstraints(&policy, &statement, statementSHA256); err != nil {
@@ -147,7 +150,8 @@ func verifySignedDistribution(bundle, statementPath, signaturePath, trustPolicyP
 		return nil, fmt.Errorf("release provenance: signed distribution statement does not match verified archive provenance")
 	}
 	return &TrustedDistribution{
-		Statement: &statement, Verification: verified, KeyID: policy.KeyID, StatementSHA256: statementSHA256,
+		Statement: &statement, Verification: verified, KeyID: policy.KeyID,
+		StatementSHA256: statementSHA256, TrustPolicySHA256: trustPolicySHA256,
 	}, nil
 }
 

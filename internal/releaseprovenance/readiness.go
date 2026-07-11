@@ -18,6 +18,7 @@ type ProductionReadiness struct {
 	Schema             string             `json:"schema"`
 	Ready              bool               `json:"ready"`
 	TrustedKeyID       string             `json:"trustedKeyId"`
+	TrustPolicySHA256  string             `json:"trustPolicySha256"`
 	Subject            string             `json:"subject"`
 	StatementSHA256    string             `json:"statementSha256"`
 	ProvenanceSHA256   string             `json:"provenanceSha256"`
@@ -44,8 +45,9 @@ func VerifyProductionReleaseCandidate(bundle, statementPath, signaturePath, trus
 func assessProductionReadiness(trusted *TrustedDistribution) *ProductionReadiness {
 	manifest := trusted.Verification.Manifest
 	report := &ProductionReadiness{
-		Schema: ProductionReadinessSchemaV1, TrustedKeyID: trusted.KeyID, Subject: manifest.Subject.Revision,
-		StatementSHA256: trusted.StatementSHA256, ProvenanceSHA256: trusted.Verification.ProvenanceSHA256,
+		Schema: ProductionReadinessSchemaV1, TrustedKeyID: trusted.KeyID, TrustPolicySHA256: trusted.TrustPolicySHA256,
+		Subject: manifest.Subject.Revision, StatementSHA256: trusted.StatementSHA256,
+		ProvenanceSHA256:   trusted.Verification.ProvenanceSHA256,
 		ReviewBundleSHA256: trusted.Verification.BundleSHA256, Blockers: make([]ReadinessBlocker, 0),
 	}
 	if manifest.Publication.CurrentPlugin != "adopted" {
@@ -77,8 +79,8 @@ func assessProductionReadiness(trusted *TrustedDistribution) *ProductionReadines
 // no stale checksum that external automation could mistake for the new receipt.
 func WriteProductionReadinessReceipt(destination string, report *ProductionReadiness) (string, error) {
 	if destination == "" || report == nil || report.Schema != ProductionReadinessSchemaV1 || report.TrustedKeyID == "" ||
-		!validObjectID(report.Subject) || !validSHA256(report.StatementSHA256) || !validSHA256(report.ProvenanceSHA256) ||
-		!validSHA256(report.ReviewBundleSHA256) || report.Ready != (len(report.Blockers) == 0) {
+		!validSHA256(report.TrustPolicySHA256) || !validObjectID(report.Subject) || !validSHA256(report.StatementSHA256) ||
+		!validSHA256(report.ProvenanceSHA256) || !validSHA256(report.ReviewBundleSHA256) || report.Ready != (len(report.Blockers) == 0) {
 		return "", fmt.Errorf("release provenance: invalid production readiness receipt")
 	}
 	for _, blocker := range report.Blockers {

@@ -117,7 +117,8 @@ func TestVerifySignedDistributionRequiresExplicitPolicyAndMatchingSignature(t *t
 		t.Fatalf("verify signed distribution: %v", err)
 	}
 	if trusted.KeyID != fixture.keyID || trusted.Statement.Subject != fixture.opts.ExpectedSubject ||
-		trusted.Verification.BundleSHA256 != fixture.bundleHash || trusted.StatementSHA256 != fixture.statementHash {
+		trusted.Verification.BundleSHA256 != fixture.bundleHash || trusted.StatementSHA256 != fixture.statementHash ||
+		trusted.TrustPolicySHA256 != fixture.policyHash {
 		t.Fatalf("trusted distribution = %+v", trusted)
 	}
 	if _, err := verifySignedDistribution(fixture.bundle, fixture.statement, fixture.signature, "", fixture.opts); err == nil {
@@ -318,7 +319,8 @@ func TestProductionReadinessProfileReportsExactCurrentBlockers(t *testing.T) {
 		"accepted-exception:wasi-preview1-native-sigsegv",
 	}
 	if report.Ready || report.Schema != ProductionReadinessSchemaV1 || report.TrustedKeyID != fixture.keyID ||
-		report.StatementSHA256 != fixture.statementHash || report.ProvenanceSHA256 != trusted.Verification.ProvenanceSHA256 ||
+		report.TrustPolicySHA256 != fixture.policyHash || report.StatementSHA256 != fixture.statementHash ||
+		report.ProvenanceSHA256 != trusted.Verification.ProvenanceSHA256 ||
 		report.ReviewBundleSHA256 != fixture.bundleHash || !reflect.DeepEqual(got, want) {
 		t.Fatalf("production readiness = %+v, blocker IDs %v", report, got)
 	}
@@ -368,9 +370,9 @@ func TestProductionReadinessProfileReportsExactCurrentBlockers(t *testing.T) {
 }
 
 type signedDistributionFixture struct {
-	bundle, statement, signature, policy string
-	opts                                 VerifyOptions
-	keyID, bundleHash, statementHash     string
+	bundle, statement, signature, policy         string
+	opts                                         VerifyOptions
+	keyID, bundleHash, statementHash, policyHash string
 }
 
 func newSignedDistributionFixture(t *testing.T) signedDistributionFixture {
@@ -406,6 +408,8 @@ func newSignedDistributionFixture(t *testing.T) signedDistributionFixture {
 		t.Fatal(err)
 	}
 	policyData = append(policyData, '\n')
+	policySum := sha256.Sum256(policyData)
+	policyHash := hex.EncodeToString(policySum[:])
 	policyPath := filepath.Join(t.TempDir(), "trust-policy.json")
 	writeTestFile(t, policyPath, string(policyData))
 	signaturePath := filepath.Join(t.TempDir(), "distribution.sig")
@@ -414,7 +418,7 @@ func newSignedDistributionFixture(t *testing.T) signedDistributionFixture {
 	}
 	return signedDistributionFixture{
 		bundle: bundle, statement: statementPath, signature: signaturePath, policy: policyPath,
-		opts: opts, keyID: policy.KeyID, bundleHash: bundleHash, statementHash: statementHash,
+		opts: opts, keyID: policy.KeyID, bundleHash: bundleHash, statementHash: statementHash, policyHash: policyHash,
 	}
 }
 

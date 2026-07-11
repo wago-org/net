@@ -241,9 +241,11 @@ subject, provenance digest, review subjects, and publication status to match the
 archive. This prevents a still-valid signature made by the same key for another
 or older statement from silently satisfying a pinned activation policy. The
 trust-policy key ID is reported as an operator label only and cannot trigger
-implicit key discovery. Unsigned `verify`, unconstrained key-only signed review,
-and strict hash-pinned verification remain available for workflows that do not
-assert a pinned production selection.
+implicit key discovery. Successful signed verification also reports the SHA-256
+of the exact canonical trust-policy bytes, so policy rotation remains visible
+even if an operator reuses an opaque key label. Unsigned `verify`, unconstrained
+key-only signed review, and strict hash-pinned verification remain available for
+workflows that do not assert a pinned production selection.
 
 ## Production release-candidate readiness
 
@@ -270,9 +272,10 @@ PRODUCTION_READINESS_RECEIPT=/automation/release.production-readiness.json \
 The command atomically replaces the deterministic
 `github.com/wago-org/net/production-readiness/v1` JSON decision and its adjacent
 `.sha256` sidecar before exiting nonzero when any blocker remains. The receipt
-binds the trusted key label, exact plugin subject, statement SHA-256, provenance
-SHA-256, review-bundle SHA-256, readiness boolean, and ordered blockers. A
-verification error emits no new decision; a valid but blocked candidate retains
+binds the trusted key label, exact canonical trust-policy SHA-256, exact plugin
+subject, statement SHA-256, provenance SHA-256, review-bundle SHA-256, readiness
+boolean, and ordered blockers. A verification error emits no new decision; a valid
+but blocked candidate retains
 a checksummed denial for external automation rather than losing the reason in a
 nonzero process result. The currently recorded review state is deliberately not
 production-ready even with a cryptographically valid test signature: its exact
