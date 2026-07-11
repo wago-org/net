@@ -81,6 +81,7 @@ type Namespace struct {
 	scratch                []byte
 	requiredFrameBytes     int
 	nextIngress            bool
+	randSeed               int64
 	nextIPv4ID             uint16
 	ipv4Address            netip.Addr
 	hardwareAddress        [6]byte
@@ -134,6 +135,7 @@ func New(config Config) (*Namespace, error) {
 		scratch:                make([]byte, config.Link.MaxFrameBytes),
 		requiredFrameBytes:     int(config.MTU) + 14,
 		nextIngress:            true,
+		randSeed:               config.RandSeed,
 		nextIPv4ID:             uint16(config.RandSeed),
 		ipv4Address:            config.IPv4Address,
 		hardwareAddress:        config.HardwareAddress,
@@ -203,6 +205,7 @@ func (n *Namespace) StackLocked() *xnet.StackAsync         { return n.stack }
 func (n *Namespace) PolicyLocked() *policy.Policy          { return n.policy }
 func (n *Namespace) QuotasLocked() *quota.Account          { return n.quotas }
 func (n *Namespace) IPv4AddressLocked() netip.Addr         { return n.ipv4Address }
+func (n *Namespace) RandSeedLocked() int64                 { return n.randSeed }
 func (n *Namespace) HardwareAddressLocked() [6]byte        { return n.hardwareAddress }
 func (n *Namespace) GatewayHardwareAddressLocked() [6]byte { return n.gatewayHardwareAddress }
 func (n *Namespace) RequiredFrameBytesLocked() int         { return n.requiredFrameBytes }

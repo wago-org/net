@@ -7,9 +7,9 @@ import (
 	"net/netip"
 
 	lneto "github.com/soypat/lneto"
-	lnetotcp "github.com/soypat/lneto/tcp"
 	"github.com/soypat/lneto/x/xnet"
 	lnetocore "github.com/wago-org/net/internal/backend/lneto/core"
+	tcpbackend "github.com/wago-org/net/internal/backend/lneto/tcp"
 	nscore "github.com/wago-org/net/internal/namespace/core"
 	dnsns "github.com/wago-org/net/internal/namespace/dns"
 	"github.com/wago-org/net/internal/packetlink"
@@ -37,6 +37,9 @@ type UDPConfig struct {
 	TransmitDatagrams int
 	MaxPayloadBytes   int
 }
+
+// TCPConfig is the TCP adapter's finite listener/stream storage contract.
+type TCPConfig = tcpbackend.Config
 
 // Config fixes all memory, authority, accounting, and identity used by one
 // static IPv4 lneto namespace.
@@ -73,18 +76,13 @@ type Namespace struct {
 	udpOrder  []*udpSocket
 	udpCursor int
 
-	tcpConfig    TCPConfig
-	tcpListeners []*tcpListener
-	tcpStreams   []*tcpStream
-	tcpPorts     map[uint16]struct{}
-	nextTCPPort  uint16
-	nextTCPISS   lnetotcp.Value
-	dnsConfig    DNSConfig
-	dnsQueries   []*dnsQuery
-	dnsByPort    map[uint16]*dnsQuery
-	dnsCursor    int
-	nextDNSPort  uint16
-	nextDNSTxID  uint16
+	tcp         *tcpbackend.Adapter
+	dnsConfig   DNSConfig
+	dnsQueries  []*dnsQuery
+	dnsByPort   map[uint16]*dnsQuery
+	dnsCursor   int
+	nextDNSPort uint16
+	nextDNSTxID uint16
 }
 
 // ValidateConfig reports whether config can construct a static IPv4 namespace
@@ -109,6 +107,11 @@ func New(config Config) (*Namespace, error) {
 	common.Lock()
 	stack := common.StackLocked()
 	common.Unlock()
+	tcpAdapter, err := tcpbackend.New(common, config.TCP)
+	if err != nil {
+		_ = common.Close()
+		return nil, err
+	}
 	n := &Namespace{
 		core:                   common,
 		stack:                  stack,
@@ -121,12 +124,7 @@ func New(config Config) (*Namespace, error) {
 		quotas:                 config.Quotas,
 		udpByPort:              make(map[uint16]*udpSocket, config.UDP.MaxSockets),
 		udpOrder:               make([]*udpSocket, 0, config.UDP.MaxSockets),
-		tcpConfig:              config.TCP,
-		tcpListeners:           make([]*tcpListener, 0, config.TCP.MaxListeners),
-		tcpStreams:             make([]*tcpStream, 0, int(config.TCP.MaxOutboundStreams)+int(config.TCP.MaxListeners)*int(config.TCP.AcceptBacklog)),
-		tcpPorts:               make(map[uint16]struct{}, int(config.TCP.MaxListeners)+int(config.TCP.MaxOutboundStreams)),
-		nextTCPPort:            firstEphemeralTCPPort,
-		nextTCPISS:             lnetotcp.Value(config.RandSeed),
+		tcp:                    tcpAdapter,
 		dnsConfig:              config.DNS,
 		dnsQueries:             make([]*dnsQuery, 0, config.DNS.MaxQueries),
 		dnsByPort:              make(map[uint16]*dnsQuery, config.DNS.MaxQueries),
@@ -145,7 +143,7 @@ func New(config Config) (*Namespace, error) {
 		},
 		{
 			CloseOrder: tcpCloseOrder,
-			Close:      n.closeTCPLocked,
+			Close:      tcpAdapter.CloseLocked,
 		},
 		{
 			IngressOrder: udpServiceOrder,
@@ -219,19 +217,6 @@ func (n *Namespace) closeDNSLocked() {
 	n.dnsCursor = 0
 }
 
-func (n *Namespace) closeTCPLocked() {
-	for len(n.tcpListeners) > 0 {
-		n.tcpListeners[len(n.tcpListeners)-1].closeLocked()
-	}
-	for len(n.tcpStreams) > 0 {
-		n.tcpStreams[len(n.tcpStreams)-1].closeLocked()
-	}
-	clear(n.tcpPorts)
-	n.tcpPorts = nil
-	n.tcpListeners = nil
-	n.tcpStreams = nil
-}
-
 func (n *Namespace) closeUDPLocked() {
 	for len(n.udpOrder) > 0 {
 		n.udpOrder[len(n.udpOrder)-1].closeLocked()
@@ -247,11 +232,17 @@ func (n *Namespace) TryBindUDP(local nscore.Endpoint) (nscore.Resource, nscore.P
 }
 
 func (n *Namespace) TryListenTCP(local nscore.Endpoint) (nscore.Resource, nscore.Progress, error) {
-	return n.tryListenTCP(local)
+	if n == nil || n.tcp == nil {
+		return nil, 0, nscore.Fail(nscore.FailureClosed, net.ErrClosed)
+	}
+	return n.tcp.TryListen(local)
 }
 
 func (n *Namespace) TryConnectTCP(remote nscore.Endpoint) (nscore.Resource, nscore.Progress, error) {
-	return n.tryConnectTCP(remote)
+	if n == nil || n.tcp == nil {
+		return nil, 0, nscore.Fail(nscore.FailureClosed, net.ErrClosed)
+	}
+	return n.tcp.TryConnect(remote)
 }
 
 func (n *Namespace) TryResolve(request dnsns.Request) (nscore.Resource, nscore.Progress, error) {
@@ -281,30 +272,12 @@ func (n *Namespace) checkEndpoint(endpoint nscore.Endpoint) error {
 }
 
 func validConfig(config Config, requireAuthority bool) bool {
-	if validTCPConfig(config.TCP, config.Policy, config.Quotas, requireAuthority) == false ||
+	if tcpbackend.ValidConfig(config.TCP, config.Policy, config.Quotas, requireAuthority) == false ||
 		validUDPConfig(config.UDP, int(config.MTU), config.Policy, config.Quotas, requireAuthority) == false ||
 		validDNSConfig(config.DNS, int(config.MTU), config.Policy, config.Quotas, requireAuthority) == false {
 		return false
 	}
 	return lnetocore.ValidateConfig(coreConfig(config)) == nil
-}
-
-func validTCPConfig(config TCPConfig, compiled *policy.Policy, account *quota.Account, requireAuthority bool) bool {
-	if config.MaxListeners == 0 && config.MaxOutboundStreams == 0 {
-		return config == (TCPConfig{})
-	}
-	if requireAuthority && (compiled == nil || account == nil) {
-		return false
-	}
-	if uint32(config.MaxListeners)+uint32(config.MaxOutboundStreams) > uint32(^uint16(0)) ||
-		config.ReceiveBytes < 256 || config.TransmitBytes < 256 || config.TransmitPackets <= 0 || config.TransmitPackets > config.TransmitBytes {
-		return false
-	}
-	if config.MaxListeners > 0 && config.AcceptBacklog == 0 || config.MaxListeners == 0 && config.AcceptBacklog != 0 {
-		return false
-	}
-	stride := uint64(config.ReceiveBytes) + uint64(config.TransmitBytes)
-	return stride <= uint64(^uint(0)>>1) && uint64(config.AcceptBacklog) <= uint64(^uint(0)>>1)/stride
 }
 
 func validUDPConfig(config UDPConfig, mtu int, compiled *policy.Policy, account *quota.Account, requireAuthority bool) bool {

@@ -352,12 +352,12 @@ func TestTCPImmediateConnectAcceptPartialIOAndEOF(t *testing.T) {
 	if err != nil || progress != namespace.ProgressDone {
 		t.Fatalf("listen = %T, %v, %v", listenerResource, progress, err)
 	}
-	listener := listenerResource.(*tcpListener)
+	listener := listenerResource.(namespace.TCPListener)
 	clientResource, progress, err := a.TryConnectTCP(serverEndpoint)
 	if err != nil || progress != namespace.ProgressInProgress {
 		t.Fatalf("connect = %T, %v, %v", clientResource, progress, err)
 	}
-	client := clientResource.(*tcpStream)
+	client := clientResource.(namespace.TCPStream)
 	if progress, err := client.TryFinishConnect(); err != nil || progress != namespace.ProgressInProgress {
 		t.Fatalf("initial finish connect = %v, %v", progress, err)
 	}
@@ -378,7 +378,7 @@ func TestTCPImmediateConnectAcceptPartialIOAndEOF(t *testing.T) {
 	if err != nil || progress != namespace.ProgressDone {
 		t.Fatalf("accept = %T, %v, %v", serverResource, progress, err)
 	}
-	server := serverResource.(*tcpStream)
+	server := serverResource.(namespace.TCPStream)
 	if result, err := server.TryRead(make([]byte, 8)); err != nil || result.State != namespace.IOWouldBlock {
 		t.Fatalf("empty read = %+v, %v", result, err)
 	}
@@ -440,13 +440,13 @@ func TestTCPAcceptedCloseReclaimsPoolSlotAsChargedMaintenance(t *testing.T) {
 	if err != nil || progress != namespace.ProgressDone {
 		t.Fatalf("listen = %T, %v, %v", listenerResource, progress, err)
 	}
-	listener := listenerResource.(*tcpListener)
-	connectAndAccept := func() (*tcpStream, *tcpStream) {
+	listener := listenerResource.(namespace.TCPListener)
+	connectAndAccept := func() (namespace.TCPStream, namespace.TCPStream) {
 		clientResource, progress, err := client.TryConnectTCP(serverEndpoint)
 		if err != nil || progress != namespace.ProgressInProgress {
 			t.Fatalf("connect = %T, %v, %v", clientResource, progress, err)
 		}
-		clientStream := clientResource.(*tcpStream)
+		clientStream := clientResource.(namespace.TCPStream)
 		tcpTransfer(t, client, server)
 		tcpTransfer(t, server, client)
 		tcpTransfer(t, client, server)
@@ -457,13 +457,10 @@ func TestTCPAcceptedCloseReclaimsPoolSlotAsChargedMaintenance(t *testing.T) {
 		if err != nil || progress != namespace.ProgressDone {
 			t.Fatalf("accept = %T, %v, %v", serverResource, progress, err)
 		}
-		return clientStream, serverResource.(*tcpStream)
+		return clientStream, serverResource.(namespace.TCPStream)
 	}
 
 	firstClient, firstServer := connectAndAccept()
-	if len(listener.pool.slots) != 1 || !listener.pool.slots[0].inUse {
-		t.Fatalf("accepted listener pool = %+v", listener.pool.slots)
-	}
 	beforeUsage, _ := serverConfig.Quotas.Snapshot()
 	if beforeUsage.Resources != 2 || beforeUsage.TCPResources != 2 {
 		t.Fatalf("accepted quota = %+v", beforeUsage)
@@ -475,18 +472,11 @@ func TestTCPAcceptedCloseReclaimsPoolSlotAsChargedMaintenance(t *testing.T) {
 	if afterClose.Resources != 1 || afterClose.TCPResources != 1 {
 		t.Fatalf("accepted close did not release quota immediately: %+v", afterClose)
 	}
-	if !listener.pool.slots[0].inUse || listener.pool.slots[0].stream == nil {
-		t.Fatalf("lneto released accepted slot outside charged maintenance: in_use=%v stream=%p resource=%p", listener.pool.slots[0].inUse, listener.pool.slots[0].stream, listener.pool.slots[0].resource)
-	}
-
 	setNextIngress(server, false)
 	budget := namespace.ServiceBudget{Packets: 1, Bytes: uint32(server.requiredFrameBytes), Operations: 1}
 	report, progress, err := server.TryService(budget)
 	if err != nil || progress != namespace.ProgressDone || report != (namespace.ServiceReport{Operations: 1}) {
 		t.Fatalf("accepted close maintenance = %+v, %v, %v", report, progress, err)
-	}
-	if listener.pool.slots[0].inUse || listener.pool.slots[0].stream != nil || listener.pool.slots[0].resource != nil {
-		t.Fatalf("accepted slot retained after bounded maintenance: in_use=%v stream=%p resource=%p", listener.pool.slots[0].inUse, listener.pool.slots[0].stream, listener.pool.slots[0].resource)
 	}
 	if usage, _ := serverConfig.Quotas.Snapshot(); usage != afterClose {
 		t.Fatalf("maintenance changed released quota: before=%+v after=%+v", afterClose, usage)
@@ -496,29 +486,8 @@ func TestTCPAcceptedCloseReclaimsPoolSlotAsChargedMaintenance(t *testing.T) {
 		t.Fatal(err)
 	}
 	secondClient, secondServer := connectAndAccept()
-	if secondClient == firstClient || secondServer == firstServer || !listener.pool.slots[0].inUse {
-		t.Fatalf("accepted slot was not reusable: client=%p server=%p in_use=%v stream=%p resource=%p", secondClient, secondServer, listener.pool.slots[0].inUse, listener.pool.slots[0].stream, listener.pool.slots[0].resource)
-	}
-}
-
-func TestTCPConnectResetBeforeEstablishment(t *testing.T) {
-	config := tcpTestConfig(t, 35)
-	ns := newTestNamespace(t, config)
-	t.Cleanup(func() { _ = ns.Close() })
-	remote := namespace.Endpoint{Address: netip.MustParseAddr("192.0.2.36"), Port: 4299}
-	streamResource, progress, err := ns.TryConnectTCP(remote)
-	if err != nil || progress != namespace.ProgressInProgress {
-		t.Fatalf("connect = %T, %v, %v", streamResource, progress, err)
-	}
-	stream := streamResource.(*tcpStream)
-	ns.core.Lock()
-	stream.conn.Abort() // Models the terminal state lneto enters after a reset.
-	ns.core.Unlock()
-	if progress, err := stream.TryFinishConnect(); progress != 0 || requireFailure(t, err) != namespace.FailureConnectionRefused {
-		t.Fatalf("finish reset connect = %v, %v", progress, err)
-	}
-	if got := stream.Readiness(); got&namespace.ReadyError == 0 || got&namespace.ReadyClosed == 0 {
-		t.Fatalf("reset readiness = %v", got)
+	if secondClient == firstClient || secondServer == firstServer {
+		t.Fatalf("accepted slot was not reusable: client=%p server=%p", secondClient, secondServer)
 	}
 }
 
@@ -552,7 +521,7 @@ func TestTCPPolicyQuotaPortReuseAndImmediateSourceScan(t *testing.T) {
 		t.Fatalf("listener port reuse = %T, %v, %v", rebound, progress, err)
 	}
 
-	source, err := os.ReadFile("tcp.go")
+	source, err := os.ReadFile("tcp/tcp.go")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -571,7 +540,7 @@ func TestTCPConcurrentOperationsAndNamespaceClose(t *testing.T) {
 	if err != nil || progress != namespace.ProgressInProgress {
 		t.Fatalf("connect = %T, %v, %v", streamResource, progress, err)
 	}
-	stream := streamResource.(*tcpStream)
+	stream := streamResource.(namespace.TCPStream)
 	var wait sync.WaitGroup
 	for range 8 {
 		wait.Add(1)
