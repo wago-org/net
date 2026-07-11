@@ -11,12 +11,13 @@ import (
 const modulePath = "github.com/wago-org/net"
 
 type protocolDependency struct {
-	public  string
-	binding string
+	public    string
+	binding   string
+	operation string
 }
 
 var protocolDependencies = map[string]protocolDependency{
-	"tcp": {public: modulePath + "/tcp", binding: modulePath + "/internal/binding/tcp"},
+	"tcp": {public: modulePath + "/tcp", binding: modulePath + "/internal/binding/tcp", operation: modulePath + "/internal/instance/tcp"},
 	"udp": {public: modulePath + "/udp", binding: modulePath + "/internal/binding/udp"},
 	"dns": {public: modulePath + "/dns", binding: modulePath + "/internal/binding/dns"},
 }
@@ -50,13 +51,13 @@ func TestFixtureDependencyBoundaries(t *testing.T) {
 			}
 			for protocol, dependency := range protocolDependencies {
 				if test.selected[protocol] {
-					if !dependencies[dependency.public] || !dependencies[dependency.binding] {
-						t.Fatalf("selected %s dependencies absent: public=%v binding=%v", protocol, dependencies[dependency.public], dependencies[dependency.binding])
+					if !dependencies[dependency.public] || !dependencies[dependency.binding] || (dependency.operation != "" && !dependencies[dependency.operation]) {
+						t.Fatalf("selected %s dependencies absent: public=%v binding=%v operation=%v", protocol, dependencies[dependency.public], dependencies[dependency.binding], dependencies[dependency.operation])
 					}
 					continue
 				}
-				if dependencies[dependency.public] || dependencies[dependency.binding] {
-					t.Fatalf("unselected %s compiled: public=%v binding=%v", protocol, dependencies[dependency.public], dependencies[dependency.binding])
+				if dependencies[dependency.public] || dependencies[dependency.binding] || (dependency.operation != "" && dependencies[dependency.operation]) {
+					t.Fatalf("unselected %s compiled: public=%v binding=%v operation=%v", protocol, dependencies[dependency.public], dependencies[dependency.binding], dependencies[dependency.operation])
 				}
 			}
 			for _, aggregate := range []string{modulePath + "/compat", modulePath + "/register"} {

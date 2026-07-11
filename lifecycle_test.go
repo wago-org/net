@@ -8,6 +8,7 @@ import (
 	"sync/atomic"
 	"testing"
 
+	tcpinstance "github.com/wago-org/net/internal/instance/tcp"
 	"github.com/wago-org/net/internal/namespace"
 	"github.com/wago-org/net/internal/quota"
 	"github.com/wago-org/net/internal/readiness"
@@ -435,7 +436,7 @@ func TestNetworkingRequirementReinstantiatesSnapshotClass(t *testing.T) {
 		t.Fatalf("BindUDP = %v, %v, %v", udpHandle, progress, err)
 	}
 	localTCP := namespace.Endpoint{Address: netip.MustParseAddr("192.0.2.71"), Port: 4200}
-	tcpHandle, progress, err := oldState.ListenTCP(oldState.NamespaceHandle(), localTCP)
+	tcpHandle, progress, err := tcpinstance.Listen(oldState, oldState.NamespaceHandle(), localTCP)
 	if err != nil || progress != namespace.ProgressDone {
 		t.Fatalf("ListenTCP = %v, %v, %v", tcpHandle, progress, err)
 	}
@@ -476,7 +477,7 @@ func TestNetworkingRequirementReinstantiatesSnapshotClass(t *testing.T) {
 	if rebound, progress, err := freshState.BindUDP(freshState.NamespaceHandle(), localUDP); err != nil || progress != namespace.ProgressDone || rebound == 0 {
 		t.Fatalf("fresh BindUDP = %v, %v, %v", rebound, progress, err)
 	}
-	if relistened, progress, err := freshState.ListenTCP(freshState.NamespaceHandle(), localTCP); err != nil || progress != namespace.ProgressDone || relistened == 0 {
+	if relistened, progress, err := tcpinstance.Listen(freshState, freshState.NamespaceHandle(), localTCP); err != nil || progress != namespace.ProgressDone || relistened == 0 {
 		t.Fatalf("fresh ListenTCP = %v, %v, %v", relistened, progress, err)
 	}
 	if err := freshLease.Release(); err != nil {

@@ -5,6 +5,7 @@ import (
 	"github.com/wago-org/net/internal/abi"
 	"github.com/wago-org/net/internal/guest"
 	instance "github.com/wago-org/net/internal/instance/core"
+	tcpinstance "github.com/wago-org/net/internal/instance/tcp"
 	"github.com/wago-org/net/internal/plugin"
 	"github.com/wago-org/net/internal/resource"
 	wago "github.com/wago-org/wago"
@@ -98,7 +99,7 @@ func listen(host plugin.Host, module wago.HostModule, params, results []uint64) 
 		guest.SetStatus(results, status)
 		return
 	}
-	handle, progress, err := state.ListenTCP(resource.Handle(params[0]), local)
+	handle, progress, err := tcpinstance.Listen(state, resource.Handle(params[0]), local)
 	if err != nil {
 		guest.SetStatus(results, guest.FromError(err))
 		return
@@ -137,7 +138,7 @@ func connect(host plugin.Host, module wago.HostModule, params, results []uint64)
 		guest.SetStatus(results, status)
 		return
 	}
-	handle, progress, err := state.ConnectTCP(resource.Handle(params[0]), remote)
+	handle, progress, err := tcpinstance.Connect(state, resource.Handle(params[0]), remote)
 	if err != nil {
 		guest.SetStatus(results, guest.FromError(err))
 		return
@@ -148,7 +149,7 @@ func connect(host plugin.Host, module wago.HostModule, params, results []uint64)
 		guest.SetStatus(results, guest.StatusOther)
 		return
 	}
-	local, actualRemote, err := state.TCPStreamEndpoints(handle)
+	local, actualRemote, err := tcpinstance.Endpoints(state, handle)
 	if err != nil || !abi.EncodeTCPStreamV1(memory, out, handle, local, actualRemote) {
 		_ = state.CloseHandle(handle, resource.KindTCPStream)
 		if err != nil {
@@ -171,7 +172,7 @@ func finishConnect(host plugin.Host, module wago.HostModule, params, results []u
 		guest.SetStatus(results, status)
 		return
 	}
-	progress, err := state.FinishTCPConnect(resource.Handle(params[0]))
+	progress, err := tcpinstance.FinishConnect(state, resource.Handle(params[0]))
 	if err != nil {
 		guest.SetStatus(results, guest.FromError(err))
 		return
@@ -195,7 +196,7 @@ func accept(host plugin.Host, module wago.HostModule, params, results []uint64) 
 		guest.SetStatus(results, status)
 		return
 	}
-	handle, progress, err := state.AcceptTCP(resource.Handle(params[0]))
+	handle, progress, err := tcpinstance.Accept(state, resource.Handle(params[0]))
 	if err != nil {
 		guest.SetStatus(results, guest.FromError(err))
 		return
@@ -212,7 +213,7 @@ func accept(host plugin.Host, module wago.HostModule, params, results []uint64) 
 		guest.SetStatus(results, guest.StatusOther)
 		return
 	}
-	local, remote, err := state.TCPStreamEndpoints(handle)
+	local, remote, err := tcpinstance.Endpoints(state, handle)
 	if err != nil || !abi.EncodeTCPStreamV1(memory, out, handle, local, remote) {
 		_ = state.CloseHandle(handle, resource.KindTCPStream)
 		if err != nil {
@@ -242,7 +243,7 @@ func read(host plugin.Host, module wago.HostModule, params, results []uint64) {
 		guest.SetStatus(results, status)
 		return
 	}
-	result, err := state.ReadTCP(resource.Handle(params[0]), payload)
+	result, err := tcpinstance.Read(state, resource.Handle(params[0]), payload)
 	if err != nil {
 		guest.SetStatus(results, guest.FromError(err))
 		return
@@ -276,7 +277,7 @@ func write(host plugin.Host, module wago.HostModule, params, results []uint64) {
 		guest.SetStatus(results, status)
 		return
 	}
-	result, err := state.WriteTCP(resource.Handle(params[0]), payload)
+	result, err := tcpinstance.Write(state, resource.Handle(params[0]), payload)
 	if err != nil {
 		guest.SetStatus(results, guest.FromError(err))
 		return
@@ -303,7 +304,7 @@ func shutdownWrite(host plugin.Host, module wago.HostModule, params, results []u
 		guest.SetStatus(results, status)
 		return
 	}
-	progress, err := state.ShutdownTCPWrite(resource.Handle(params[0]))
+	progress, err := tcpinstance.ShutdownWrite(state, resource.Handle(params[0]))
 	if err != nil {
 		guest.SetStatus(results, guest.FromError(err))
 		return

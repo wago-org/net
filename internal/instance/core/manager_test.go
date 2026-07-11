@@ -245,17 +245,6 @@ func TestConfiguredNamespacesAreQuotaOwnedIsolatedAndGenerationSafe(t *testing.T
 	if _, err := second.Resources().Lookup(first.NamespaceHandle(), resource.KindNamespace); !errors.Is(err, resource.ErrBadHandle) {
 		t.Fatalf("cross-instance namespace lookup = %v", err)
 	}
-	crossStream := &fakeTCPStream{}
-	crossHandle, err := first.Resources().Add(resource.KindTCPStream, crossStream)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := second.ReadTCP(crossHandle, nil); !errors.Is(err, resource.ErrBadHandle) {
-		t.Fatalf("cross-instance TCP read = %v", err)
-	}
-	if err := first.Resources().CloseHandle(crossHandle, resource.KindTCPStream); err != nil {
-		t.Fatal(err)
-	}
 	crossDNS := new(fakeDNSQuery)
 	crossDNSHandle, err := first.Resources().Add(resource.KindDNSQuery, crossDNS)
 	if err != nil {
@@ -332,91 +321,6 @@ func TestBindUDPRegistrationRollbackAndKindCheckedClose(t *testing.T) {
 	}
 	if backend.closed.Load() != 1 || state.NamespaceHandle() != 0 || poller.Snapshot().Registrations != 0 {
 		t.Fatalf("namespace close state: closes=%d handle=%v readiness=%+v", backend.closed.Load(), state.NamespaceHandle(), poller.Snapshot())
-	}
-}
-
-func TestTCPHandlesReadinessPartialIOAndKindSafety(t *testing.T) {
-	table, err := resource.NewTable()
-	if err != nil {
-		t.Fatal(err)
-	}
-	poller, err := readiness.New(table, readiness.Config{MaxRegistrations: 4})
-	if err != nil {
-		t.Fatal(err)
-	}
-	compiled, err := policy.Compile(policy.Config{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	local := namespace.Endpoint{Address: netip.MustParseAddr("192.0.2.1"), Port: 4300}
-	remote := namespace.Endpoint{Address: netip.MustParseAddr("192.0.2.2"), Port: 4301}
-	outbound := &fakeTCPStream{local: local, remote: remote, input: []byte("reply")}
-	accepted := &fakeTCPStream{local: local, remote: remote, input: []byte("hello")}
-	listener := &fakeTCPListener{local: local, accepted: accepted}
-	backend := &fakeNamespace{listener: listener, stream: outbound}
-	namespaceHandle, err := table.Add(resource.KindNamespace, backend)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := poller.Register(namespaceHandle, resource.KindNamespace); err != nil {
-		t.Fatal(err)
-	}
-	state := &State{resources: table, readiness: poller, quotas: quota.NewAccount(quota.DefaultLimits()), policy: compiled, namespace: namespaceHandle}
-
-	listenerHandle, progress, err := state.ListenTCP(namespaceHandle, local)
-	if err != nil || progress != namespace.ProgressDone || listenerHandle == 0 {
-		t.Fatalf("ListenTCP = %v, %v, %v", listenerHandle, progress, err)
-	}
-	streamHandle, progress, err := state.ConnectTCP(namespaceHandle, remote)
-	if err != nil || progress != namespace.ProgressInProgress || streamHandle == 0 {
-		t.Fatalf("ConnectTCP = %v, %v, %v", streamHandle, progress, err)
-	}
-	if progress, err := state.FinishTCPConnect(streamHandle); err != nil || progress != namespace.ProgressDone {
-		t.Fatalf("FinishTCPConnect = %v, %v", progress, err)
-	}
-	acceptedHandle, progress, err := state.AcceptTCP(listenerHandle)
-	if err != nil || progress != namespace.ProgressDone || acceptedHandle == 0 {
-		t.Fatalf("AcceptTCP = %v, %v, %v", acceptedHandle, progress, err)
-	}
-	buffer := make([]byte, 3)
-	if result, err := state.ReadTCP(acceptedHandle, buffer); err != nil || result.Bytes != 3 || string(buffer) != "hel" {
-		t.Fatalf("ReadTCP = %+v %q, %v", result, buffer, err)
-	}
-	if result, err := state.WriteTCP(streamHandle, []byte("abcdef")); err != nil || result.Bytes != 3 || string(outbound.written) != "abc" {
-		t.Fatalf("WriteTCP = %+v %q, %v", result, outbound.written, err)
-	}
-	if progress, err := state.ShutdownTCPWrite(streamHandle); err != nil || progress != namespace.ProgressDone {
-		t.Fatalf("ShutdownTCPWrite = %v, %v", progress, err)
-	}
-	if snapshot := poller.Snapshot(); snapshot.Registrations != 4 {
-		t.Fatalf("TCP readiness registrations = %+v", snapshot)
-	}
-	if _, _, err := state.AcceptTCP(streamHandle); !errors.Is(err, resource.ErrBadHandle) {
-		t.Fatalf("wrong-kind accept error = %v", err)
-	}
-	if _, err := state.ReadTCP(listenerHandle, buffer); !errors.Is(err, resource.ErrBadHandle) {
-		t.Fatalf("wrong-kind read error = %v", err)
-	}
-	if err := state.CloseHandle(streamHandle, resource.KindTCPStream); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := state.FinishTCPConnect(streamHandle); !errors.Is(err, resource.ErrBadHandle) {
-		t.Fatalf("stale stream error = %v", err)
-	}
-	if err := state.CloseHandle(listenerHandle, resource.KindTCPStream); !errors.Is(err, resource.ErrBadHandle) {
-		t.Fatalf("wrong-kind listener close = %v", err)
-	}
-	if snapshot := poller.Snapshot(); snapshot.Registrations != 3 {
-		t.Fatalf("wrong-kind close changed registrations = %+v", snapshot)
-	}
-	if err := state.CloseHandle(listenerHandle, resource.KindTCPListener); err != nil {
-		t.Fatal(err)
-	}
-	if err := state.CloseHandle(acceptedHandle, resource.KindTCPStream); err != nil {
-		t.Fatal(err)
-	}
-	if listener.closed.Load() != 1 || outbound.closed.Load() != 1 || accepted.closed.Load() != 1 {
-		t.Fatalf("TCP close counts listener=%d outbound=%d accepted=%d", listener.closed.Load(), outbound.closed.Load(), accepted.closed.Load())
 	}
 }
 
@@ -583,38 +487,6 @@ func requireStateFailure(t testing.TB, err error) namespace.Failure {
 		t.Fatalf("uncategorized state error: %v", err)
 	}
 	return failure
-}
-
-func TestTCPRegistrationRollbackClosesBackendResource(t *testing.T) {
-	table, err := resource.NewTable()
-	if err != nil {
-		t.Fatal(err)
-	}
-	poller, err := readiness.New(table, readiness.Config{MaxRegistrations: 1})
-	if err != nil {
-		t.Fatal(err)
-	}
-	compiled, err := policy.Compile(policy.Config{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	local := namespace.Endpoint{Address: netip.MustParseAddr("192.0.2.1"), Port: 4302}
-	listener := &fakeTCPListener{local: local}
-	backend := &fakeNamespace{listener: listener}
-	namespaceHandle, err := table.Add(resource.KindNamespace, backend)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := poller.Register(namespaceHandle, resource.KindNamespace); err != nil {
-		t.Fatal(err)
-	}
-	state := &State{resources: table, readiness: poller, quotas: quota.NewAccount(quota.DefaultLimits()), policy: compiled, namespace: namespaceHandle}
-	if handle, progress, err := state.ListenTCP(namespaceHandle, local); handle != 0 || progress != 0 || !errors.Is(err, readiness.ErrLimit) {
-		t.Fatalf("ListenTCP rollback = %v, %v, %v", handle, progress, err)
-	}
-	if listener.closed.Load() != 1 || table.Len() != 1 || poller.Snapshot().Registrations != 1 {
-		t.Fatalf("failed listener retained state: closes=%d resources=%d readiness=%+v", listener.closed.Load(), table.Len(), poller.Snapshot())
-	}
 }
 
 func TestNamespaceCreationRollsBackEveryOwnedStage(t *testing.T) {

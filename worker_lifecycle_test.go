@@ -14,6 +14,7 @@ import (
 	"time"
 
 	instancestate "github.com/wago-org/net/internal/instance/core"
+	tcpinstance "github.com/wago-org/net/internal/instance/tcp"
 	"github.com/wago-org/net/internal/namespace"
 	"github.com/wago-org/net/internal/quota"
 	"github.com/wago-org/net/internal/resource"
@@ -83,7 +84,7 @@ func (e *workerNetworkExtension) Register(reg *wago.Registry) error {
 		if err != nil || progress != namespace.ProgressDone {
 			return fmt.Errorf("bind worker UDP: handle=%v progress=%v: %w", udp, progress, err)
 		}
-		tcp, progress, err := state.ListenTCP(state.NamespaceHandle(), namespace.Endpoint{Address: netip.MustParseAddr("192.0.2.81"), Port: 4481})
+		tcp, progress, err := tcpinstance.Listen(state, state.NamespaceHandle(), namespace.Endpoint{Address: netip.MustParseAddr("192.0.2.81"), Port: 4481})
 		if err != nil || progress != namespace.ProgressDone {
 			return fmt.Errorf("listen worker TCP: handle=%v progress=%v: %w", tcp, progress, err)
 		}
