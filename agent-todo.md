@@ -26,7 +26,7 @@ and lneto as the first backend.
 - External workers main: `1e9139756d8a3c631c59c00b028038c83bfa8341`, pinned as `v0.0.0-20260711080606-1e9139756d8a`. Exact Wago documentation reserves pooling for a future plugin; workers contains no pool implementation, and the refreshed `wago-org` repository inventory exposes no pool-named repository.
 - Current selective networking review: `173b38a4d5a0db0e6058544576942a46b9d543df`, parent `164ee79e98d7e51bf3553fb18b46fd2044b223aa`. It preserves protocol compile isolation while using Wago `8131d967` for exact expiring caller identity and external workers `1e913975` for managed-child cleanup.
 - lneto main: `ab1a0c735a8b534a1d6322a3e245bc11a09431e7` (2026-07-10).
-- WASI audit: `3df6c766ad00e83b314da799dbf9a77b409ad19d`; reviewed `origin/main` at `1a7eeb215229e05bcb0f09d5cb3280d231739def` changes only README/CI files, has an implementation-tree inventory identical to the pin, and still reaches the native preview-1 SIGSEGV, so the release pin remains unchanged.
+- WASI audit: `3df6c766ad00e83b314da799dbf9a77b409ad19d`; reviewed `origin/main` at `1a7eeb215229e05bcb0f09d5cb3280d231739def` changes only README/CI files and has an implementation-tree inventory identical to the pin. Production Wago `97e6f91` matches the exact four-pass/four-fault preview-1 matrix. Wago fix review `5c7f76dba0aa82ca94a1dd644318ed062b03f7cc` (tree `442d6a7506260565bccb01e32e016f6dccc25d6c`, parent `97e6f91`) fixes the minimized synchronous-host register-ABI indirect-call fault and passes the complete reviewed WASI suite, but remains unpublished and unadopted.
 
 ## Approved protocol-submodule target
 
@@ -618,6 +618,16 @@ no signature, key, trust root, production decision, or hosted-activation claim.
   production Wago source.
 - `e76869c` — adds release-input fixtures proving dirty source preservation and
   fail-closed wrong/dirty substitutes, including linked-worktree compatibility.
+- `e080b17` — records the exact clean-production-input strict signoff and remaining
+  publication, arm64, and WASI blockers.
+- `5c7f76db` (Wago fix review) — keeps synchronous-host funcref descriptors on
+  the wrapper ABI, adds a minimized 6,719-byte regression, and makes the complete
+  reviewed preview-1 corpus pass without changing the guest ABI.
+- `a3c6123` — adds an exact-object audit for the Wago preview-1 fix review,
+  underlying ordered-parent production merge, reviewed WASI tree, minimized
+  trigger digest, focused Wago regression, and full isolated WASI suite.
+- `ee30bb9` — replaces broad WASI crash matching with exact isolated passing and
+  faulting subtests plus fail-closed package/address/PC/runtime-signature checks.
 
 ## Active work
 
@@ -654,20 +664,25 @@ least-authority direct/managed/external-worker lifecycle tests, granular custom
 CLI inspection, deterministic source packs, and cold-cache pack-only
 reconstruction.
 
-The complete heavyweight local release gate is now green. A strict
-`RUN_WASI=1 FUZZTIME=1s` run at `e76869c4991b408e1c25093fd98ced52f369d3f2`
+The complete heavyweight local release gate is green. The latest strict
+`RUN_WASI=1 FUZZTIME=1s` run at `ee30bb92e4813c42b80f5ab3ef3162e4bdfdeaf0`
 used exact clean production Wago revision `97e6f91`, tree `adbba31c`, and ordered
 parents `54499ba5` / `ffd5ef4b` while leaving the user-owned
 `.audit/wago/src/wago/bottomref_test.go` modification untouched. Standard and
 module-mode Go, race, vet, generated-module tidy, fuzz, benchmarks, TinyGo,
-arm64 cross-build, granular custom CLI, Wago/lneto, accepted WASI, clean-tree,
+arm64 cross-build, granular custom CLI, Wago/lneto, exact WASI matrix, clean-tree,
 source-pack, pack-only current-review, provenance, and standalone bundle checks
-passed. Provenance SHA-256 was
-`4ecf8956e6ede7d4bd1e4733a011cd20f257173ce8c37a9b430da39761226c1e`; bundle
-SHA-256 was `fe615d7af0eb86dc3526be5eb2c347860cb02d5db7af12a039c517d1f0c867a2`.
+passed. The exact matrix records passing `markdown`, `crcsum`, `base64x`, and
+`jsonproc`, and isolated native faults for `blake3sum`, `script`, `regexmatch`,
+and `bignum`. Provenance SHA-256 was
+`ad999e2801f75d7f482f889ae02a251dbcb9673d577dc58135444cad08833ef9`; bundle
+SHA-256 was `d1d5409df116719a4cd0bc89af524f47a65914828513f11b8b32b73ac1cf1a9a`;
+distribution-statement SHA-256 was
+`069a352b766a66e5bbf8cc249d9a4a376df08e3d796a363b172ff76ea59f56a7`.
 Native/QEMU arm64 execution, publication of current and production subjects, and
-removal of the accepted WASI preview-1 exceptions remain external production
-activation blockers rather than protocol architecture gaps.
+review/publication/adoption of Wago fix `5c7f76db` before removing the two exact
+WASI exceptions remain production activation blockers rather than protocol
+architecture gaps.
 
 ## Ordered backlog
 
@@ -677,9 +692,11 @@ activation blockers rather than protocol architecture gaps.
    immutable refs, then switch `CURRENT_PLUGIN_ADOPTION=adopted` only after the
    topology audit proves all adopted Wago/net/workers subjects fetchable. Do not
    substitute this for publication of the production merge.
-3. Activate hosted release automation only after the production Wago ref is
-   fetchable, require executed linux/arm64 smoke on an arm64/QEMU tier, and remove
-   the WASI exception only after reviewing and pinning an upstream fix.
+3. Review and publish Wago preview-1 fix `5c7f76db`, integrate it without
+   rewriting the ordered-parent `97e6f91` merge history, and select the resulting
+   exact production input before removing either WASI exception. Activate hosted
+   release automation only after that input is fetchable and linux/arm64 smoke
+   executes on an arm64/QEMU tier.
 4. Rerun the strict complete release gate on each final candidate subject using
    the exact clean production Wago worktree. Keep the dirty source-audit
    preservation fixture and the reviewed Wago `8131d967`, selective networking
@@ -752,12 +769,15 @@ activation blockers rather than protocol architecture gaps.
   `qemu-aarch64`. This linux/amd64 host exposes neither runner, so the committed
   gate truthfully records `skipped-no-runner`; `ARM64_EXECUTION=required` is the
   fatal mode for a real arm64/QEMU tier.
-- WASI `origin/main` at `1a7eeb2` is now audited. The two new commits change only
+- WASI `origin/main` at `1a7eeb2` is audited. The two new commits change only
   `.github/workflows/ci.yml` and `README.md`; the implementation-tree inventory
-  is byte-identical to the pin, and an isolated exact-object full suite still
-  reaches only the known native `p1.TestWASIApps` SIGSEGV. The release pin and
-  narrow accepted exception therefore remain unchanged until an actual reviewed
-  implementation fix passes.
+  is byte-identical to the pin. Production Wago `97e6f91` must match the exact
+  `p1.TestWASIApps` matrix: four named passes and four named native faults with
+  equal fault address/PC and matching `runtime.sigpanic` return PC. A 6,719-byte
+  reduction proves the host callback is never entered and identifies Wago's
+  synchronous-host register-ABI indirect-call path. Wago review `5c7f76db`
+  fixes it and passes all eight cases, so the remaining work is exact Wago review,
+  integration, publication, and production adoption rather than a WASI pin move.
 
 ## Verification
 
@@ -818,12 +838,15 @@ pre-ledger-amend release gate passed at net subject
   `linux/arm64` package cross-build and arm64 smoke test-binary cross-compile pass.
   No native/QEMU runner is installed on this host, so execution is recorded as
   `skipped-no-runner`, not as arm64 runtime validation.
-- The isolated reviewed WASI upstream audit proves only README/CI changed,
-  requires an identical implementation inventory SHA-256
-  `5c2878e91b26177ddf8361c2618d0258b9b622e129b1688e4faf272ae851788c`, and
-  still reaches the known native `p1` SIGSEGV. The pinned suite independently
-  reaches the same accepted signature under Go 1.24.4; any other failure or a
-  passing upstream suite would force re-review.
+- The isolated reviewed WASI upstream audit proves only README/CI changed and
+  requires implementation inventory SHA-256
+  `5c2878e91b26177ddf8361c2618d0258b9b622e129b1688e4faf272ae851788c`. Both
+  reviewed and pinned production inputs match the exact four-pass/four-fault
+  matrix under Go 1.24.4; the matcher rejects other packages, tests, panics,
+  timeouts, extra selections, and address/PC drift. The separate exact-object
+  Wago fix audit verifies `5c7f76db`, trigger SHA-256
+  `3d93d0329b190e98c4956e0abe05039954f8bf61a22f833bf5a40af5798f668d`, the
+  focused regression, and a full passing reviewed WASI suite.
 - The current-main Wago lifecycle replay passes the complete standard-Go suite,
   focused start/failure/close race tests, vet, facade generation checks, and
   TinyGo `src/wago`. It is based directly on `7fbc00a`, preserves #241, and proves
@@ -1005,15 +1028,18 @@ trust-policy provisioning, and the signed trusted channel remain external.
 
 ## Next recursion
 
-1. Re-fetch Wago, net, workers, lneto, and WASI moving refs and re-run the exact
-   publication topology audit before proposing any repository change.
-2. If the production Wago merge and current Wago/net review subjects have become
-   available at immutable refs, adopt them in bounded atomic pin/topology/signoff
-   commits while preserving ordered merge parents and least authority.
-3. If those external refs remain unavailable and no arm64/WASI prerequisite has
-   changed, do not invent another receipt schema or publisher identity. Record
-   that fewer than three valid repository commits remain, keep all trees clean,
-   and report the external publication/runtime blockers truthfully.
+1. Review Wago fix `5c7f76db` against current Wago movement and determine the
+   publication-safe production topology that preserves `97e6f91` and both of its
+   ordered parents rather than treating the local child worktree as published.
+2. If supportable, create the smallest exact Wago integration/review subject,
+   update source-pack/reconstruction/release inputs only after its topology is
+   explicit, and rerun the strict gate expecting zero WASI exceptions.
+3. Re-fetch Wago, net, workers, lneto, and WASI publication refs. Adopt current
+   Wago/networking reviews only after immutable fetchability is proven, and keep
+   `ARM64_EXECUTION=required` blocked until a native/QEMU runner executes.
+4. If publication or arm64 execution remains unavailable, preserve the exact
+   local fix evidence without inventing publisher identity, another receipt
+   schema, or a false production-ready claim.
 
 After any supportable slice, run the committed release gate and recurse only if a
 new thread can make concrete progress toward the long-term completion criteria.

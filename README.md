@@ -213,15 +213,22 @@ The current Wago review is replayed on exact upstream
 validates aggregate plus granular registration under standard Go and TinyGo.
 The strict local release gate now uses an exact clean production-Wago worktree,
 so a separate user-owned dirty audit checkout is neither cleaned nor used for
-compilation. The complete gate passes locally with truthful retained evidence;
-production activation remains blocked by absent native/QEMU arm64 execution,
-unpublished review and production Wago subjects, and the accepted WASI
-preview-1 exceptions.
+compilation. The complete gate passes locally with truthful retained evidence.
+The retained production WASI exception is now an exact four-pass/four-fault
+subtest matrix,
+not a broad crash grep. A minimized trigger identifies Wago's synchronous-host
+register-ABI `call_indirect` path as the cause, and exact Wago fix review
+`5c7f76dba0aa82ca94a1dd644318ed062b03f7cc` makes the complete reviewed WASI
+suite pass. Production activation remains blocked by absent native/QEMU arm64
+execution, unpublished current/production subjects, and publication and adoption
+of that Wago fix before the two production WASI exceptions can be removed.
 
 See [`docs/release-signoff.md`](docs/release-signoff.md) for the exact matrix,
-pinned revisions, CI tiers, and the narrowly accepted known WASI preview-1 native
-SIGSEGV. Long-running implementation work follows
-`.pi/skills/recursive-handoff/SKILL.md` and the durable state in `agent-todo.md`.
+pinned revisions, CI tiers, strict evidence, and fixed-review status, and
+[`docs/wasi-upstream-preview1-audit.md`](docs/wasi-upstream-preview1-audit.md)
+for the minimized root cause and fail-closed exception contract. Long-running
+implementation work follows `.pi/skills/recursive-handoff/SKILL.md` and the
+durable state in `agent-todo.md`.
 
 ## License
 

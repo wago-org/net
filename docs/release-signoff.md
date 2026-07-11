@@ -76,8 +76,9 @@ The gate performs, in order:
    tests, using a temporary helper only for Wago main's unrelated missing
    `trapCode` test helper;
 10. the complete pinned lneto test suite;
-11. the pinned WASI suite, accepting only the documented native preview-1
-    SIGSEGV signature if it remains; and
+11. the pinned WASI non-corpus and four passing corpus cases, plus four isolated
+    faulting cases accepted only when they match the exact package, test,
+    SIGSEGV code, equal address/PC, and `runtime.sigpanic` return-PC signature; and
 12. final clean-tree checks for production and current review repositories;
 13. deterministic non-thin Git object packs for the exact plugin subject,
     production Wago/lneto/WASI inputs, current Wago/networking review subjects,
@@ -126,8 +127,38 @@ review bundle SHA-256 was
 `fe615d7af0eb86dc3526be5eb2c347860cb02d5db7af12a039c517d1f0c867a2`.
 Arm64 execution remained truthfully `skipped-no-runner`; current
 Wago/networking review subjects and the production ordered-parent Wago merge
-remain unpublished, and the WASI preview-1 exceptions remain accepted rather
-than fixed.
+remain unpublished, and that historical run retained the then-broad WASI
+preview-1 exceptions.
+
+A newer strict `RUN_WASI=1 FUZZTIME=1s` run passed on July 11, 2026, at plugin
+subject `ee30bb92e4813c42b80f5ab3ef3162e4bdfdeaf0`. The WASI gates now require an
+exact matrix: `markdown`, `crcsum`, `base64x`, and `jsonproc` pass, while isolated
+`blake3sum`, `script`, `regexmatch`, and `bignum` runs must each fail only
+`github.com/wago-org/wasi/p1` with SIGSEGV code `0x1`, equal fault address/PC,
+and the same `runtime.sigpanic` return PC. Positive and negative matcher fixtures
+reject other tests, packages, panics, timeouts, extra selected tests, and
+address/PC drift. The complete release path again passed standard/module Go,
+race, vet, tidy, fuzz, benchmarks, TinyGo, arm64 cross-build, granular custom
+CLI inspection, Wago/lneto, final clean trees, seven source packs, cold-cache
+review reconstruction, provenance, and standalone bundle verification. It
+recorded 115 artifacts, two exact accepted exceptions, one arm64 limitation,
+provenance SHA-256
+`ad999e2801f75d7f482f889ae02a251dbcb9673d577dc58135444cad08833ef9`, review
+bundle SHA-256
+`d1d5409df116719a4cd0bc89af524f47a65914828513f11b8b32b73ac1cf1a9a`, and
+distribution-statement SHA-256
+`069a352b766a66e5bbf8cc249d9a4a376df08e3d796a363b172ff76ea59f56a7`.
+Publication truth and `skipped-no-runner` remained unchanged.
+
+Separate Wago fix review
+`5c7f76dba0aa82ca94a1dd644318ed062b03f7cc` (tree
+`442d6a7506260565bccb01e32e016f6dccc25d6c`, direct parent production merge
+`97e6f91`) keeps synchronous-host funcrefs on the wrapper ABI. Its minimized
+6,719-byte regression and the complete reviewed WASI suite pass through
+`scripts/wasi-preview1-fix-review.sh`. Production still selects exact published
+evidence at `97e6f91`; remove the two exceptions only after the fix is reviewed,
+integrated without rewriting the ordered merge, published, selected, and passed
+through this complete gate.
 
 Protocol-submodule release acceptance also includes
 `internal/dependencytest`'s root/single/pair/all `go list -deps` matrix. Every
@@ -157,7 +188,10 @@ inspection.
 
 The temporary Wago helper is created only in the selected clean substitute and
 removed by a shell trap. The dirty source audit worktree is never used for that
-helper. Any other Wago/WASI error, revision/tree/parent drift, selected-module
+helper. The WASI exception runner disables core dumps and executes each named
+faulting subtest in its own `go test` process; a successful formerly faulting case
+also fails closed so the exception must be removed and the production input
+reviewed. Any other Wago/WASI error, revision/tree/parent drift, selected-module
 mismatch, generated-module instability, repository module-file change, generated
 artifact, or dirty selected tree fails the gate. Set `RUN_WASI=0` only for a deliberately shortened PR job; release runs
 must leave it enabled. `ALLOW_DIRTY=1` exists only for developing the signoff
@@ -523,11 +557,15 @@ than a silent pin replacement. `scripts/current-plugin-review-signoff.sh`,
 `scripts/current-plugin-topology-audit.sh`, and
 `docs/current-plugin-review.md` bind and reconstruct the hardened current-main
 review while keeping unpublished subjects review-only and pooling unsupported.
-`scripts/wasi-upstream-preview1-audit.sh` and
+`scripts/wasi-upstream-preview1-audit.sh`,
+`scripts/test-wasi-preview1-exception.sh`, and
 `docs/wasi-upstream-preview1-audit.md` prove that the reviewed newer WASI tree
-changes only documentation and CI, then reproduce the same native preview-1
-SIGSEGV from an isolated exact-object export; the release pin therefore remains
-unchanged. Once the networking merge is published, CI
+changes only documentation and CI, then bind the retained production exception
+to the exact four-pass/four-fault preview-1 matrix. The separate
+`scripts/wasi-preview1-fix-review.sh` verifies the minimized Wago-only root cause
+and full-suite pass on exact unpublished Wago fix review `5c7f76db`; the WASI pin
+therefore remains unchanged, while production exception removal waits for Wago
+fix publication and adoption. Once the networking merge is published, CI
 should check out the exact pinned Wago, lneto, and WASI
 revisions in the required adjacent layout and invoke this script. Do not replace
 the pin with a moving branch.
