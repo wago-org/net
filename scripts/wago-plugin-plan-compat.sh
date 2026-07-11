@@ -23,7 +23,7 @@ require_absent() {
   fi
 }
 
-[[ -d "$wago_dir/.git" ]] || fail "missing Wago repository: $wago_dir"
+git -C "$wago_dir" rev-parse --is-inside-work-tree >/dev/null 2>&1 || fail "missing Wago repository: $wago_dir"
 for revision in "$pinned_merge" "$reviewed_redesign" "$observed_main" "$worker_parent"; do
   git -C "$wago_dir" cat-file -e "$revision^{commit}" 2>/dev/null || fail "missing commit $revision; fetch Wago refs first"
 done

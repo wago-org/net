@@ -16,8 +16,8 @@ fail() { echo "wasi-upstream-preview1-audit: $*" >&2; exit 1; }
 for command in awk git go grep mktemp sed sha256sum tar; do
   command -v "$command" >/dev/null || fail "missing required command: $command"
 done
-[[ -d "$wasi_dir/.git" ]] || fail "missing WASI repository: $wasi_dir"
-[[ -d "$wago_dir/.git" ]] || fail "missing Wago repository: $wago_dir"
+git -C "$wasi_dir" rev-parse --is-inside-work-tree >/dev/null 2>&1 || fail "missing WASI repository: $wasi_dir"
+git -C "$wago_dir" rev-parse --is-inside-work-tree >/dev/null 2>&1 || fail "missing Wago repository: $wago_dir"
 for revision in "$pinned_wasi" "$reviewed_parent" "$reviewed_upstream"; do
   git -C "$wasi_dir" cat-file -e "$revision^{commit}" 2>/dev/null || fail "missing commit $revision; fetch WASI refs first"
 done

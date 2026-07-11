@@ -13,7 +13,7 @@ readonly reviewed_worker_base=0d4f4a46b68e5caadb601d02cd1af92c8fddbc11
 
 fail() { echo "wago-upstream-review: $*" >&2; exit 1; }
 
-[[ -d "$wago_dir/.git" ]] || fail "missing Wago repository: $wago_dir"
+git -C "$wago_dir" rev-parse --is-inside-work-tree >/dev/null 2>&1 || fail "missing Wago repository: $wago_dir"
 for revision in "$merge" "$lifecycle_parent" "$worker_parent" "$reviewed_main_base" "$reviewed_worker_base"; do
   git -C "$wago_dir" cat-file -e "$revision^{commit}" 2>/dev/null || fail "missing commit $revision"
 done
