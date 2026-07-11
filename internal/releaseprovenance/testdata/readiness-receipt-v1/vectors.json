@@ -1,0 +1,83 @@
+{
+  "schema": "github.com/wago-org/net/readiness-receipt-vectors/v1",
+  "receiptEncoding": "exact-canonical-file-bytes-with-adjacent-sha256",
+  "subject": "1111111111111111111111111111111111111111",
+  "statementSha256": "2222222222222222222222222222222222222222222222222222222222222222",
+  "trustPolicySha256": "3333333333333333333333333333333333333333333333333333333333333333",
+  "files": [
+    {
+      "path": "blocked-tampered.json",
+      "sha256": "bb581e3b1994b35122bd92d9c5279c12de63ef30428f75714140e32e66c70993"
+    },
+    {
+      "path": "blocked-tampered.json.sha256",
+      "sha256": "04b22bb83eccb5c5dc5182054579fc32583ddf198c4c131365af9403eb2555fe"
+    },
+    {
+      "path": "blocked.json",
+      "sha256": "1b82d8ad961a30d83f879dde241de9c88704390e6ab1cc89998ef9e9c6542a97"
+    },
+    {
+      "path": "blocked.json.sha256",
+      "sha256": "d34b33c0105417604250b911d7c18bf4e1314639f767438a3b2e13e2f09f313c"
+    },
+    {
+      "path": "ready.json",
+      "sha256": "fc9957cb26cdbe166d56ea9c8e0a0a506c89575317866a0e23f89706a2fb6f4a"
+    },
+    {
+      "path": "ready.json.sha256",
+      "sha256": "a45649c93a840f5f2d919f89532c034f32994710c3e7c3979a378d6f3696d3f8"
+    }
+  ],
+  "cases": [
+    {
+      "name": "ready receipt",
+      "receipt": "ready.json",
+      "subject": "1111111111111111111111111111111111111111",
+      "statementSha256": "2222222222222222222222222222222222222222222222222222222222222222",
+      "trustPolicySha256": "3333333333333333333333333333333333333333333333333333333333333333",
+      "result": "ready"
+    },
+    {
+      "name": "blocked receipt",
+      "receipt": "blocked.json",
+      "subject": "1111111111111111111111111111111111111111",
+      "statementSha256": "2222222222222222222222222222222222222222222222222222222222222222",
+      "trustPolicySha256": "3333333333333333333333333333333333333333333333333333333333333333",
+      "result": "blocked"
+    },
+    {
+      "name": "tampered receipt",
+      "receipt": "blocked-tampered.json",
+      "subject": "1111111111111111111111111111111111111111",
+      "statementSha256": "2222222222222222222222222222222222222222222222222222222222222222",
+      "trustPolicySha256": "3333333333333333333333333333333333333333333333333333333333333333",
+      "result": "reject"
+    },
+    {
+      "name": "wrong subject constraint",
+      "receipt": "blocked.json",
+      "subject": "ffffffffffffffffffffffffffffffffffffffff",
+      "statementSha256": "2222222222222222222222222222222222222222222222222222222222222222",
+      "trustPolicySha256": "3333333333333333333333333333333333333333333333333333333333333333",
+      "result": "reject"
+    },
+    {
+      "name": "wrong statement constraint",
+      "receipt": "blocked.json",
+      "subject": "1111111111111111111111111111111111111111",
+      "statementSha256": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "trustPolicySha256": "3333333333333333333333333333333333333333333333333333333333333333",
+      "result": "reject"
+    },
+    {
+      "name": "wrong trust policy constraint",
+      "receipt": "blocked.json",
+      "subject": "1111111111111111111111111111111111111111",
+      "statementSha256": "2222222222222222222222222222222222222222222222222222222222222222",
+      "trustPolicySha256": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "result": "reject"
+    }
+  ]
+}

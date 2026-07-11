@@ -180,13 +180,18 @@ identity. An optional verifier accepts only a raw detached Ed25519 signature and
 an explicitly supplied canonical single-key trust policy; key IDs are opaque and
 cannot trigger file, URL, environment, or network discovery. Optional exact
 statement-digest and plugin-subject constraints prevent same-key rollback when
-provisioned externally. Public positive/negative raw-signature vectors contain no
-private key or publisher claim. A separate strict production-candidate profile
-first requires that trusted statement, then requires adopted current subjects,
-the published ordered-parent production Wago merge, executed linux/arm64
-evidence, and zero accepted exceptions. It atomically retains a canonical JSON
-decision plus SHA-256 sidecar even for a valid blocked candidate before external
-hosted activation may proceed.
+provisioned externally. Successful verification carries the SHA-256 of the exact
+canonical trust policy, so a reused opaque key label cannot hide policy rotation.
+Public positive/negative raw-signature vectors contain no private key or publisher
+claim. A separate strict production-candidate profile first requires that trusted
+statement, then requires adopted current subjects, the published ordered-parent
+production Wago merge, executed linux/arm64 evidence, and zero accepted
+exceptions. It atomically retains a canonical JSON decision plus SHA-256 sidecar
+even for a valid blocked candidate. Standalone verification requires exact
+subject, statement, and trust-policy digests and treats `ready=false` as valid
+evidence rather than corruption. Public synthetic ready/blocked/tamper/constraint
+vectors exercise the receipt contract without making a production decision or
+enabling hosted activation.
 
 ## Completed work
 
@@ -384,24 +389,34 @@ hosted activation may proceed.
 - `f5e6813` — publishes exact-byte Ed25519 positive and negative interoperability
   vectors with canonical statement/policy metadata and no tracked private key,
   trust root, publisher identity, or release claim.
-- `HEAD` (`net: retain canonical production readiness receipts`) — binds strict
+- `e90cb01` (`net: retain canonical production readiness receipts`) — binds strict
   decisions to the exact statement, provenance, archive, key label, and ordered
   blockers, then atomically writes canonical JSON plus an adjacent SHA-256 sidecar
   before returning the truthful ready/blocked process status.
+- `fc17da1` — records the exact canonical trust-policy SHA-256 in trusted
+  distribution verification and production-readiness receipts, distinguishing
+  policy rotation even if an opaque key label is reused.
+- `42de1b8` — independently verifies canonical retained readiness receipts and
+  exact adjacent sidecars against required subject, statement, and trust-policy
+  constraints while accepting valid blocked evidence.
+- `HEAD` (`net: publish readiness receipt interoperability cases`) — publishes
+  deterministic synthetic ready/blocked receipts plus tamper and wrong-constraint
+  cases without a production decision, publisher identity, or hosted activation.
 
 ## Active work
 
-Recursion 21 is complete with exactly three bounded atomic commits in the
-production networking repository. Explicit anti-rollback constraints can now be
-provisioned with the no-discovery trust policy; public interoperability vectors
-exercise exact raw Ed25519 verification without storing a private release key;
-and the strict production command retains a checksummed denial receipt before
-returning nonzero for the current five blockers. No publisher identity, signed
-release, trust-root provisioning, or hosted automation claim was added. The exact
-workers subject remains published, while current Wago/networking reviews and the
-production ordered-parent Wago merge remain unpublished. Pooling remains
-unsupported, native arm64 execution is unavailable, and both WASI preview-1
-exceptions remain active.
+Recursion 22 is complete with exactly three bounded atomic commits in the
+production networking repository. Trusted distribution verification and strict
+readiness decisions now bind the exact canonical trust-policy digest; retained
+receipts can be verified independently against explicit subject, statement, and
+policy constraints; and public synthetic ready/blocked/tamper/constraint vectors
+exercise that contract. A valid blocked decision remains evidence, not corruption,
+and activation still separately requires `ready=true`. No publisher identity,
+signed release, trust-root provisioning, production decision, or hosted
+automation claim was added. The exact workers subject remains published, while
+current Wago/networking reviews and the production ordered-parent Wago merge
+remain unpublished. Pooling remains unsupported, native arm64 execution is
+unavailable, and both WASI preview-1 exceptions remain active.
 
 ## Ordered backlog
 
@@ -436,9 +451,10 @@ exceptions remain active.
   optional exact statement/subject constraints prevent same-key rollback when
   provisioned through the trusted channel. This repository still supplies no
   private key or publisher identity. The current production-readiness profile
-  retains a checksummed denial after valid test signing, with exact blockers for
-  unpublished current/production subjects, skipped arm64 execution, and both
-  accepted WASI exceptions.
+  retains a checksummed denial after valid test signing, binds the exact canonical
+  trust-policy digest, and can be independently verified as blocked evidence. Its
+  exact blockers remain unpublished current/production subjects, skipped arm64
+  execution, and both accepted WASI exceptions.
 - No fetchable external pool implementation is present. Exact Wago documentation
   reserves pooling for a future plugin, reviewed workers contains no pool source,
   and the refreshed public `wago-org` repository inventory has no pool-named
@@ -606,6 +622,26 @@ pre-ledger-amend release gate passed at net subject
   ordered blockers, deterministic atomic rewrite, and an adjacent checksum. The
   actual strict script against the recursion-20 bundle returned status 1, retained
   a checksum-valid denial receipt, and reported the same five blocker IDs.
+- Recursion-22 targeted release-provenance tests bind the exact canonical
+  trust-policy SHA-256 through signed verification and strict decisions, verify
+  ready and blocked retained receipts without the archive, reject stale sidecars,
+  noncanonical JSON, and wrong subject/statement/policy constraints, and validate
+  every exact byte and digest in the public synthetic receipt vectors.
+- The complete recursion-22 pre-ledger-amend release gate passed at net subject
+  `1fe687af90070065a6e7da3502414b11f4ca001c` after every moving ref was
+  refreshed and all production/current/older repositories were clean. Three-second
+  fuzz runs completed 97,879 DNS-wire, 1,080,333 DNS-layout, 117,940
+  guest-DNS-memory, and 1,162,826 shared-layout executions. Benchmarks measured
+  123.4 ns/op guest UDP poll, 119.7 ns/op guest TCP poll, and 20.33 ns/op UDP
+  queue, all at 0 B/op and 0 allocs/op. Arm64 execution remained
+  `skipped-no-runner`. The schema-v2 bundle retained 57 artifacts, two accepted
+  exceptions, one limitation, review-only current subjects, unpublished
+  production Wago, and disabled hosted automation. Provenance SHA-256 was
+  `74b236d31e14dfca39b767efb3635a57981f7b396d99fa1fca5d91f515449c6c`,
+  bundle SHA-256 was
+  `07761552205e860eaaf2498d0748aa9ee83b51bf7305df4fa462acd8c3f2e95b`,
+  and unsigned statement SHA-256 was
+  `0e81243712998f3ff43e9ea5c3443419353bd8a14762479977fda3f0db3f74b1`.
 - The complete recursion-19 pre-ledger-amend release gate passed at net subject
   `59a5035024560c1290ff8d620f79ba4f293a59f6`. Its first topology attempt exposed
   a transient GitHub organization API HTTP 502; the final subject adds three
@@ -691,20 +727,19 @@ provisioning, and the signed trusted channel remain external.
 
 ## Next recursion
 
-1. `net: bind readiness receipts to exact trust policies`
-   - Scope: record the canonical trust-policy SHA-256 in trusted-distribution and
-     production-readiness receipts so external automation can distinguish policy
-     rotation even when an opaque key label is reused.
-2. `net: verify retained readiness receipts independently`
+1. `net: retain canonical trusted-distribution receipts`
+   - Scope: atomically retain a checksum-valid intermediary verification receipt
+     binding the exact signature, statement, trust-policy, provenance, archive,
+     subject, and opaque key label without claiming real-world publisher identity.
+2. `net: verify trusted-distribution receipts independently`
    - Scope: add standalone canonical receipt/sidecar verification with explicit
-     expected subject, statement, and trust-policy digests; preserve blocked
-     decisions as valid evidence rather than treating readiness=false as corruption.
-3. `net: publish readiness receipt interoperability cases`
-   - Scope: add deterministic ready/blocked receipt verification fixtures and
-     tamper/constraint negative cases without claiming a production decision or
-     enabling hosted automation.
+     expected subject, statement, trust-policy, and signature digests, keeping
+     cryptographic verification evidence distinct from production readiness.
+3. `net: publish trusted-distribution receipt interoperability cases`
+   - Scope: add deterministic synthetic positive and tamper/constraint vectors
+     without storing a private key, production trust root, or signed release.
 
 After those exactly three commits, refresh every moving ref, run the complete
 committed release gate, update this ledger, and recurse again if the long-term
-completion criteria remain unmet. Re-plan if repository or external publisher
-requirements do not support these bounded trust-integration steps.
+completion criteria remain unmet. Re-plan if the intermediary receipt would not
+add independently useful evidence or external publication changes the priorities.

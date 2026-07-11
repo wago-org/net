@@ -304,6 +304,13 @@ returns success for either a valid ready decision or a valid blocked decision;
 `ready=false` is retained evidence rather than corruption. Activation automation
 must separately require `ready=true` after verification.
 
+Public receipt interoperability vectors live under
+`internal/releaseprovenance/testdata/readiness-receipt-v1/`. They provide
+canonical synthetic ready and blocked receipts with exact sidecars, a
+basename-correct stale checksum for a tampered receipt, and wrong subject,
+statement, and trust-policy constraint cases. The vectors are not a production
+decision or trust input and do not enable hosted automation.
+
 Verification rejects a different schema; changed or
 unordered evidence; unknown or noncanonical manifest fields; unsafe archive
 paths; wrong exact production or first-class current-review subjects, trees, or
