@@ -21,7 +21,7 @@ and lneto as the first backend.
 ## Pinned analysis revisions
 
 - Wago main: `8ef17eeb3a74f4982ef64d125282c1dab8c8e240` (2026-07-10).
-- Wago lifecycle branch: `dd82ec9a8963463e6516bf803bec58b3a89b89b3` on `net/instance-close-hooks`.
+- Wago lifecycle branch: `01569366a38e8f577c2764a11941908351cc9181` on `net/instance-close-hooks`.
 - lneto main: `ab1a0c735a8b534a1d6322a3e245bc11a09431e7` (2026-07-10).
 - WASI audit: `3df6c766ad00e83b314da799dbf9a77b409ad19d`.
 
@@ -32,13 +32,22 @@ will use independently owned modules such as `wago_net_udp` and `wago_net_tcp`
 because Wago rejects two extensions claiming one import module. The core currently
 provides `abi_version`, `net.info`, the ABI version constant, and the common status
 taxonomy. `internal/abi` provides checked guest-memory ranges and the fixed 32-byte
-IPv4/IPv6 address codec. No namespace, handle table, policy, poller, protocol, or
+IPv4/IPv6 address codec.
+
+`internal/resource` now provides O(1), kind-checked, generation-safe opaque handles
+with never-reused table identities, safe slot retirement before generation wrap,
+reverse-creation O(live) cleanup, fuzz coverage, and focused benchmarks. Each core
+`Extension` owns an `internal/instance.Manager` that attaches one resource table to
+each exact Runtime-created `*wago.Instance`, resolves host callers through the
+optional `wago.InstanceHostModule`, and removes state in `BeforeClose`. The map is
+extension-local, not process-global. No policy, namespace, poller, protocol, or
 lneto backend is implemented yet.
 
-Wago main has no deterministic per-instance close hook. The companion Wago branch
-adds `HookRegistry.BeforeClose`, reverse-order exactly-once invocation, cleanup on
-failed post-instantiation setup, class `ResetReinstantiate` coverage, low-level API
-isolation, and transactional hook registration without increasing `Instance` size.
+The companion Wago branch adds `HookRegistry.BeforeClose`, reverse-order
+exactly-once invocation, cleanup on failed post-instantiation setup, class
+`ResetReinstantiate` coverage, low-level API isolation, and transactional hook
+registration without increasing `Instance` size. It also exposes optional exact
+host-call instance identity without expanding `HostModule` or changing `HostFunc`.
 
 ## Completed work
 
@@ -49,28 +58,34 @@ isolation, and transactional hook registration without increasing `Instance` siz
   packaging manifest, self-registration, ABI version/status definitions,
   architecture documentation, recursive skill, and durable ledger. Standard,
   race, and vet checks pass.
-- `HEAD` (`net: add checked guest-memory and address codecs`) — added centralized
+- `b3ec3be03dd809cf85e6faaa805ff8cd687d934a` — added centralized
   uint64-checked ranges, atomic output helpers, the fixed v1 IPv4/IPv6 codec,
   unit tests, and fuzz targets.
+- `c005703fa32790def6befa076fcd7f9b14f20b31` — added typed generation-safe
+  resource handles, strict stale/forged/wrong-kind/reuse/cross-table rejection,
+  rollover retirement, deterministic cleanup, fuzzing, and benchmarks.
+- `01569366a38e8f577c2764a11941908351cc9181` — added Wago's optional
+  `InstanceHostModule` facade and exact identity tests for Runtime and low-level
+  host calls while preserving HostModule-only mocks and TinyGo's HostFunc shape.
+- `HEAD` (`net: attach per-instance lifecycle state`) — attached extension-local
+  state and one resource table per exact Runtime instance, with deterministic
+  failed-setup, repeated/concurrent close, isolation, cross-instance rejection,
+  and `ResetReinstantiate` release coverage.
 
 ## Active work
 
-Recursion 1 is complete. The next recursion should implement resource identity,
-the missing host-call instance identity prerequisite, and per-instance lifecycle
-attachment in three commits.
+Recursion 2 is complete with exactly three commits. The next recursion should add
+endpoint policy, per-instance quota accounting, and backend-neutral namespace
+contracts in three commits.
 
 ## Ordered backlog
 
-1. Integrate the Wago close-hook change into the plugin's selected Wago revision.
-2. Add generation-safe, kind-safe per-instance resource handles.
-3. Expose optional Runtime instance identity to host imports without expanding the
-   minimal `HostModule` interface.
-4. Add per-instance networking state and close-hook cleanup.
-5. Add endpoint/domain policy and quota primitives.
-6. Define backend-neutral namespace interfaces.
-7. Construct an lneto namespace and deterministic in-memory Ethernet link.
-8. Add bounded manual service, readiness, and poll.
-9. Implement and harden UDP before TCP and DNS.
+1. Reconcile and upstream the Wago close-hook/identity changes against PR #232.
+2. Add endpoint/domain policy and quota primitives.
+3. Define backend-neutral namespace interfaces.
+4. Construct an lneto namespace and deterministic in-memory Ethernet link.
+5. Add bounded manual service, readiness, and poll.
+6. Implement and harden UDP before TCP and DNS.
 
 ## Blockers and discovered prerequisites
 
@@ -79,15 +94,13 @@ attachment in three commits.
   the lifecycle change itself passes; this unrelated upstream defect is not part
   of the lifecycle commit.
 - Wago PR #232 (`plugin-improvements`) independently contains broader
-  `BeforeClose`/`AfterClose` lifecycle work. The focused lifecycle branch should
-  be reconciled with that PR before upstreaming.
+  `BeforeClose`/`AfterClose` lifecycle work, while Wago main lacks both focused
+  lifecycle commits. Reconcile the working branch with that PR before upstreaming;
+  do not silently overwrite its design.
 - `ResetMemorySnapshot` reuses one physical instance across leases and therefore
-  does not invoke close hooks on release. Resource-owning plugins need reset hooks,
-  a class eligibility restriction, or forced reinstantiation before supporting
-  that reset policy.
-- Wago `HostModule` exposes memory but not public instance identity. Per-instance
-  host-call state needs a small runtime surface or another explicit attachment
-  mechanism; do not use a process-global pointer map.
+  does not invoke close hooks on release. The plugin now explicitly documents this
+  policy as unsupported and requires `ResetReinstantiate`, but Wago still lacks a
+  reset hook or extension eligibility control that could enforce the restriction.
 - lneto's high-level TCP/UDP `Read`, `Write`, `ReadFrom`, and `WriteTo` use backoff
   loops and may block. Lower-level handlers are usable for some paths, but UDP
   packet-connection and registration cleanup need focused nonblocking APIs.
@@ -96,55 +109,67 @@ attachment in three commits.
 
 ## Verification
 
-Latest outcomes:
+Latest outcomes after recursion 2:
 
-- `cd .audit/lneto && go test ./...` — pass.
-- `cd .audit/wasi && go test ./...` — fails with an existing native execution
-  SIGSEGV in `p1` under the current Go 1.24 environment.
-- `cd .audit/wago && go test ./src/wago` — baseline compile failure: undefined
-  `trapCode` in `cross_instance_test.go`.
-- Wago lifecycle tests with temporary baseline helper — pass.
-- Wago lifecycle race tests with temporary baseline helper — pass.
-- `go test ./...` in the plugin — pass.
-- `go test -race ./...` in the plugin — pass.
-- `go vet ./...` in the plugin — pass.
-- `go test ./internal/abi -run '^$' -fuzz '^FuzzSlice$' -fuzztime=3s` — pass,
-  630,644 executions.
-- `go test ./internal/abi -run '^$' -fuzz '^FuzzDecodeAddressV1$' -fuzztime=3s`
-  — pass, 754,480 executions.
-- `go vet ./src/wago` — reports existing unsafe-pointer warnings in
-  `instantiate.go`; no new warning is attributable to the lifecycle hook.
+- Plugin `go test ./... -count=1` — pass.
+- Plugin `go test -race ./... -count=1` — pass.
+- Plugin `go vet ./...` — pass.
+- `FuzzSlice` for 3 seconds — pass, 973,485 executions.
+- `FuzzDecodeAddressV1` for 3 seconds — pass, 1,070,447 executions.
+- `FuzzTableHandles` for 3 seconds — pass, 1,082,770 executions.
+- Wago `GOWORK=off go test ./internal/genfacade -count=1` — pass.
+- Wago `GOWORK=off go test ./src/wago -count=1` with a temporary uncommitted
+  `trapCode` baseline helper — pass.
+- Focused Wago lifecycle/identity race tests with the same temporary helper — pass.
+- Wago `go vet ./src/wago` with the helper reaches only the five existing
+  `possible misuse of unsafe.Pointer` warnings in `instantiate.go`; without the
+  helper it first fails on Wago main's unrelated undefined `trapCode` defect.
+- lneto `GOWORK=off go test ./... -count=1` — pass.
+- Generated custom Wago binary blank-importing `github.com/wago-org/net/register`
+  — build pass; `plugin inspect net --json` remains truthful (`net.info` and only
+  `wago_net.abi_version`).
+- WASI `GOWORK=off go test ./... -count=1` — unchanged existing native SIGSEGV in
+  `p1` under Go 1.24.4.
 - TinyGo — not installed in this environment.
 
 ## Performance baselines
 
-No plugin benchmarks exist yet. The Wago lifecycle hook preserves the documented
-776-byte `Instance` footprint and adds no field or allocation to instances when
-no hook is registered. The memory/address helpers are allocation-free by
-inspection and tests, but benchmark baselines have not yet been recorded.
+Focused resource-table baselines on linux/amd64, Ryzen 7 8845HS, Go 1.24.4:
+
+- lookup: 6.057 ns/op, 0 B/op, 0 allocs/op;
+- close 1 live resource: 205.9 ns/op;
+- close 64 live resources: 3.289 us/op;
+- close 1024 live resources: 45.556 us/op.
+
+The Wago lifecycle hook still preserves the documented 776-byte `Instance`
+footprint. Optional instance identity adds one method to the existing concrete
+host-module value and does not change `HostFunc` or the minimal `HostModule`.
 
 ## Security review
 
-Current guest-visible code exposes no handles, endpoints, or packet data. The ABI
-version and status taxonomy add no network authority. Guest-memory ranges use
-uint64 arithmetic, valid zero-length end ranges, and validate full outputs before
-mutation. The address codec rejects reserved bits, family ambiguity, IPv4-mapped
-IPv6, invalid IPv4 tails, and structurally invalid scope/flow fields. Main risks
-are future per-instance state attachment, lifecycle behavior under snapshot pool
-reuse, and preventing blocking lneto wrappers from entering host imports.
+Current guest-visible code still exposes no handles, endpoints, or packet data;
+resource handles and instance state are internal foundations only. Handles contain
+no Go pointers, reject wrong table/kind/generation in O(1), invalidate before
+backend close, and retire before generation wrap. Instance attachment uses exact
+Wago identity and deterministic close hooks rather than a process-global pointer
+map. Guest-memory and address hardening remains unchanged. Main risks are enforcing
+the `ResetMemorySnapshot` prohibition, designing policy/quotas without confused
+deputy paths, and preventing blocking lneto wrappers from entering host imports.
 
 ## Next recursion
 
-1. `net: add generation-safe resource handles`
-   - Scope: typed kinds, zero invalid, generation rollover, O(1) live tracking.
-   - Tests: stale, forged, wrong-kind, reuse, cross-table, repeated close.
-2. `wago: expose optional host-call instance identity`
-   - Scope: an additive interface implemented by Wago's concrete HostModule;
-     preserve existing mocks and the minimal HostModule contract.
-   - Tests: Runtime and low-level host imports see the exact calling instance;
-     existing HostModule-only mocks remain source-compatible.
-3. `net: attach per-instance lifecycle state`
-   - Scope: extension-local instance map, one resource table per instance,
-     deterministic BeforeClose cleanup, no process-global state.
-   - Tests: isolation, failed setup, class release, concurrent close, cross-instance
-     handle rejection.
+1. `net: add endpoint policy primitives`
+   - Scope: immutable allow/deny rules for IP prefixes, ports, transport direction,
+     DNS suffixes, multicast/broadcast/loopback, and explicit privileged defaults.
+   - Tests/fuzz: precedence, normalization, wildcard denial, mapped-address safety,
+     and authority-changing operation checks.
+2. `net: add per-instance quota accounting`
+   - Scope: bounded counters for total resources, protocol resources, queued bytes,
+     DNS work, and service budgets; reserve/commit/release without underflow or
+     leak on failure.
+   - Tests/race: concurrent reserve/release, rollback, exact limits, cleanup.
+3. `net: define backend-neutral namespace interfaces`
+   - Scope: address/endpoint-neutral UDP/TCP/DNS/service contracts with strictly
+     nonblocking Try-style operations and no lneto types in guest-facing layers.
+   - Tests: compile-time fake backend plus semantic contract tests; no protocol
+     imports or lneto implementation yet if that would exceed the bounded slice.

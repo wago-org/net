@@ -15,6 +15,10 @@ if err := rt.Use(wagonet.Init(wagonet.Config{})); err != nil {
 }
 ```
 
+Networking extensions currently require ordinary Runtime instances or classes
+using `wago.ResetReinstantiate`. Do not use `wago.ResetMemorySnapshot`: Wago does
+not yet notify extensions when a physical instance is reset between leases.
+
 Custom Wago binaries can include the plugin through its self-registering package:
 
 ```go

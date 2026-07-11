@@ -46,9 +46,27 @@ reverse-creation O(live) cleanup. The table exists independently of protocol
 resources so its stale, forged, wrong-kind, reuse, and cross-table behavior can
 be hardened before sockets are exposed.
 
-No networking resources or backend are attached yet. Wago main at revision
-`8ef17eeb3a74f4982ef64d125282c1dab8c8e240` lacks an instance-close hook. The
-companion Wago branch `net/instance-close-hooks` adds a zero-footprint
-`BeforeClose` hook in commit `dd82ec9a8963463e6516bf803bec58b3a89b89b3`;
-resource-owning imports remain blocked until that change is integrated into the
-Wago dependency used by this module.
+Each `Extension` now owns a private instance-state manager. Runtime
+instantiation attaches one resource table to the exact `*wago.Instance`; host
+imports recover that identity through the additive `wago.InstanceHostModule`
+interface, and `BeforeClose` removes the attachment before reverse-creation
+resource cleanup. Failed later setup and `ResetReinstantiate` replacement use the
+same close path. No process-global instance map is used. The low-level `Imports`
+bundle remains suitable only for stateless core imports such as `abi_version`;
+resource-owning protocol extensions require the Runtime lifecycle path.
+
+The companion Wago branch `net/instance-close-hooks` contains the prerequisites:
+commit `dd82ec9a8963463e6516bf803bec58b3a89b89b3` adds deterministic close hooks,
+and commit `0156936` adds optional exact host-call instance identity without
+expanding the minimal `HostModule` interface.
+
+## Pool reset restriction
+
+`wago.ResetMemorySnapshot` is **not supported** for any class using networking
+extensions. It reuses a physical instance without a close or reset hook, so
+lease-scoped network resources would cross tenant boundaries. Such classes are
+blocked by project policy and must use `wago.ResetReinstantiate`. This restriction
+cannot yet be enforced by the plugin because Wago does not expose reset-policy
+eligibility to extensions; do not enable snapshot reuse until Wago provides a
+reset lifecycle hook or an extension eligibility control and this suite adds
+corresponding cleanup tests.

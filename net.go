@@ -6,7 +6,9 @@ package net
 import (
 	"embed"
 	"encoding/json"
+	"sync"
 
+	instancestate "github.com/wago-org/net/internal/instance"
 	wago "github.com/wago-org/wago"
 )
 
@@ -29,16 +31,24 @@ type Config struct{}
 // Extension implements the core Wago networking extension.
 type Extension struct {
 	config Config
+
+	stateOnce sync.Once
+	instances *instancestate.Manager
 }
 
 // Init constructs the core networking extension.
-func Init(config Config) *Extension { return &Extension{config: config} }
+func Init(config Config) *Extension {
+	return &Extension{config: config, instances: instancestate.NewManager()}
+}
 
 // Info returns extension metadata loaded from wago.json.
 func (e *Extension) Info() wago.ExtensionInfo { return extensionInfo }
 
 // Register declares the core networking capability and host imports.
 func (e *Extension) Register(reg *wago.Registry) error {
+	instances := e.instanceManager()
+	reg.Hooks().AfterInstantiate(instances.AfterInstantiate)
+	reg.Hooks().BeforeClose(instances.BeforeClose)
 	reg.Capability(CapInfo, wago.CapabilityDocs("inspect the Wago networking ABI and interfaces"))
 	module := reg.ImportModule(Module)
 	for _, binding := range e.bindings() {
@@ -51,9 +61,9 @@ func (e *Extension) Register(reg *wago.Registry) error {
 	return nil
 }
 
-// Imports returns the core host imports for Wago's low-level Instantiate path.
-// The Runtime extension path is preferred because it includes capability and
-// inspection metadata.
+// Imports returns the stateless core host imports for Wago's low-level
+// Instantiate path. Resource-owning protocol imports require the Runtime
+// extension path so per-instance lifecycle state can be attached and cleaned.
 func Imports(config Config) wago.Imports {
 	ext := Init(config)
 	imports := make(wago.Imports)
@@ -86,6 +96,15 @@ func (e *Extension) bindings() []binding {
 
 func abiVersion(_ wago.HostModule, _ []uint64, results []uint64) {
 	results[0] = uint64(ABIVersion1)
+}
+
+func (e *Extension) instanceManager() *instancestate.Manager {
+	e.stateOnce.Do(func() {
+		if e.instances == nil {
+			e.instances = instancestate.NewManager()
+		}
+	})
+	return e.instances
 }
 
 type manifest struct {
