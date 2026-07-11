@@ -24,9 +24,9 @@ func Init(config wagonet.Config) *wagonet.Extension {
 		tcpConfig = tcp.Config(config.StaticIPv4.TCP)
 		dnsConfig = dns.Config(config.StaticIPv4.DNS)
 	}
-	mustRegister(udp.Register(network, udp.WithConfig(udpConfig)))
+	mustRegister(udp.Register(network, udp.WithConfig(udpConfig), udp.WithoutDefaultAuthority()))
 	mustRegister(tcp.Register(network, tcp.WithConfig(tcpConfig), tcp.WithoutDefaultAuthority()))
-	mustRegister(dns.Register(network, dns.WithConfig(dnsConfig)))
+	mustRegister(dns.Register(network, dns.WithConfig(dnsConfig), dns.WithoutDefaultAuthority()))
 	return network
 }
 

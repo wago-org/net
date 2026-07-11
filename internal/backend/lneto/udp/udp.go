@@ -21,8 +21,9 @@ var _ udpns.Socket = (*udpSocket)(nil)
 var errPolicyDenied = errors.New("net: endpoint policy denied operation")
 
 const (
-	serviceOrder = 20
-	closeOrder   = 30
+	firstEphemeralUDPPort uint16 = 49152
+	serviceOrder                 = 20
+	closeOrder                   = 30
 )
 
 // Config fixes all storage allocated for each nonblocking UDP socket. Zero
@@ -48,6 +49,7 @@ type Adapter struct {
 	quotas                 *quota.Account
 	byPort                 map[uint16]*udpSocket
 	sockets                []*udpSocket
+	nextPort               uint16
 	cursor                 int
 }
 
@@ -66,6 +68,7 @@ func New(common *lnetocore.Namespace, config Config) (*Adapter, error) {
 		ipv4Address: common.IPv4AddressLocked(), hardwareAddress: common.HardwareAddressLocked(),
 		gatewayHardwareAddress: common.GatewayHardwareAddressLocked(), policy: common.PolicyLocked(), quotas: common.QuotasLocked(),
 		byPort: make(map[uint16]*udpSocket, config.MaxSockets), sockets: make([]*udpSocket, 0, config.MaxSockets),
+		nextPort: firstEphemeralUDPPort,
 	}
 	common.Unlock()
 	if err := common.Install(lnetocore.Participant{
@@ -229,7 +232,7 @@ func (n *Adapter) TryBind(local nscore.Endpoint) (nscore.Resource, nscore.Progre
 	if n.core.ClosedLocked() {
 		return nil, 0, nscore.Fail(nscore.FailureClosed, net.ErrClosed)
 	}
-	if !local.Valid() || !local.Address.Is4() || local.Port == 0 {
+	if !local.Valid() || !local.Address.Is4() {
 		return nil, 0, nscore.Fail(nscore.FailureInvalidArgument, lneto.ErrInvalidAddr)
 	}
 	if n.config.MaxSockets == 0 {
@@ -244,7 +247,19 @@ func (n *Adapter) TryBind(local nscore.Endpoint) (nscore.Resource, nscore.Progre
 	if len(n.sockets) == int(n.config.MaxSockets) {
 		return nil, 0, nscore.Fail(nscore.FailureResourceLimit, lneto.ErrExhausted)
 	}
-	portLease, ok := n.core.TryLeaseUDPPortLocked(local.Port)
+	var portLease *lnetocore.UDPPortLease
+	var ok bool
+	if local.Port == 0 {
+		attempts := int(n.config.MaxSockets) + n.core.UDPPortLeaseCountLocked() + 1
+		var next uint16
+		portLease, next, ok = n.core.TryLeaseUDPPortRangeLocked(n.nextPort, firstEphemeralUDPPort, attempts)
+		if ok {
+			n.nextPort = next
+			local.Port = portLease.UDPPort()
+		}
+	} else {
+		portLease, ok = n.core.TryLeaseUDPPortLocked(local.Port)
+	}
 	if !ok {
 		return nil, 0, nscore.Fail(nscore.FailureAddressInUse, lneto.ErrAlreadyRegistered)
 	}
