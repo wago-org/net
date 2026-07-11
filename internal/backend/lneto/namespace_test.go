@@ -4,6 +4,8 @@ import (
 	"io"
 	"net"
 	"net/netip"
+	"os"
+	"strings"
 	"sync"
 	"testing"
 
@@ -335,6 +337,193 @@ func TestUDPBindDenialAndUnsupportedFamilies(t *testing.T) {
 	}
 }
 
+func TestTCPImmediateConnectAcceptPartialIOAndEOF(t *testing.T) {
+	aConfig := tcpTestConfig(t, 31)
+	bConfig := tcpTestConfig(t, 32)
+	aConfig.GatewayHardwareAddress = bConfig.HardwareAddress
+	bConfig.GatewayHardwareAddress = aConfig.HardwareAddress
+	a := newTestNamespace(t, aConfig)
+	b := newTestNamespace(t, bConfig)
+	t.Cleanup(func() { _ = a.Close() })
+	t.Cleanup(func() { _ = b.Close() })
+
+	serverEndpoint := namespace.Endpoint{Address: bConfig.IPv4Address, Port: 4232}
+	listenerResource, progress, err := b.TryListenTCP(serverEndpoint)
+	if err != nil || progress != namespace.ProgressDone {
+		t.Fatalf("listen = %T, %v, %v", listenerResource, progress, err)
+	}
+	listener := listenerResource.(*tcpListener)
+	clientResource, progress, err := a.TryConnectTCP(serverEndpoint)
+	if err != nil || progress != namespace.ProgressInProgress {
+		t.Fatalf("connect = %T, %v, %v", clientResource, progress, err)
+	}
+	client := clientResource.(*tcpStream)
+	if progress, err := client.TryFinishConnect(); err != nil || progress != namespace.ProgressInProgress {
+		t.Fatalf("initial finish connect = %v, %v", progress, err)
+	}
+	if result, err := client.TryWrite([]byte("early")); err != nil || result.State != namespace.IOWouldBlock {
+		t.Fatalf("pre-connect write = %+v, %v", result, err)
+	}
+
+	tcpTransfer(t, a, b)
+	tcpTransfer(t, b, a)
+	tcpTransfer(t, a, b)
+	if progress, err := client.TryFinishConnect(); err != nil || progress != namespace.ProgressDone {
+		t.Fatalf("finish connect = %v, %v", progress, err)
+	}
+	if got := listener.Readiness(); got != namespace.ReadyAccept {
+		t.Fatalf("listener readiness = %v", got)
+	}
+	serverResource, progress, err := listener.TryAccept()
+	if err != nil || progress != namespace.ProgressDone {
+		t.Fatalf("accept = %T, %v, %v", serverResource, progress, err)
+	}
+	server := serverResource.(*tcpStream)
+	if result, err := server.TryRead(make([]byte, 8)); err != nil || result.State != namespace.IOWouldBlock {
+		t.Fatalf("empty read = %+v, %v", result, err)
+	}
+
+	payload := make([]byte, aConfig.TCP.TransmitBytes+17)
+	for i := range payload {
+		payload[i] = byte(i)
+	}
+	written, err := client.TryWrite(payload)
+	if err != nil || written.State != namespace.IOReady || written.Bytes != aConfig.TCP.TransmitBytes {
+		t.Fatalf("partial write = %+v, %v", written, err)
+	}
+	if blocked, err := client.TryWrite(payload[written.Bytes:]); err != nil || blocked.State != namespace.IOWouldBlock {
+		t.Fatalf("full-buffer write = %+v, %v", blocked, err)
+	}
+	tcpTransfer(t, a, b)
+	first := make([]byte, 31)
+	read, err := server.TryRead(first)
+	if err != nil || read != (namespace.IOResult{Bytes: len(first), State: namespace.IOReady}) || string(first) != string(payload[:len(first)]) {
+		t.Fatalf("partial read = %+v, %v", read, err)
+	}
+	rest := make([]byte, len(payload))
+	read, err = server.TryRead(rest)
+	if err != nil || read.State != namespace.IOReady || read.Bytes != written.Bytes-len(first) || string(rest[:read.Bytes]) != string(payload[len(first):written.Bytes]) {
+		t.Fatalf("remaining read = %+v, %v", read, err)
+	}
+
+	tcpTransfer(t, b, a) // ACK frees the client's bounded transmit buffer.
+	if result, err := client.TryWrite(payload[written.Bytes:]); err != nil || result.Bytes != len(payload)-written.Bytes {
+		t.Fatalf("write after ACK = %+v, %v", result, err)
+	}
+	tcpTransfer(t, a, b)
+	if _, err := server.TryRead(rest); err != nil {
+		t.Fatalf("read final payload: %v", err)
+	}
+	tcpTransfer(t, b, a)
+	if progress, err := client.TryShutdownWrite(); err != nil || progress != namespace.ProgressDone {
+		t.Fatalf("shutdown write = %v, %v", progress, err)
+	}
+	tcpTransfer(t, a, b)
+	if result, err := server.TryRead(rest); err != nil || result.State != namespace.IOEOF {
+		t.Fatalf("read after FIN = %+v, %v", result, err)
+	}
+}
+
+func TestTCPConnectResetBeforeEstablishment(t *testing.T) {
+	config := tcpTestConfig(t, 35)
+	ns := newTestNamespace(t, config)
+	t.Cleanup(func() { _ = ns.Close() })
+	remote := namespace.Endpoint{Address: netip.MustParseAddr("192.0.2.36"), Port: 4299}
+	streamResource, progress, err := ns.TryConnectTCP(remote)
+	if err != nil || progress != namespace.ProgressInProgress {
+		t.Fatalf("connect = %T, %v, %v", streamResource, progress, err)
+	}
+	stream := streamResource.(*tcpStream)
+	ns.mu.Lock()
+	stream.conn.Abort() // Models the terminal state lneto enters after a reset.
+	ns.mu.Unlock()
+	if progress, err := stream.TryFinishConnect(); progress != 0 || requireFailure(t, err) != namespace.FailureConnectionRefused {
+		t.Fatalf("finish reset connect = %v, %v", progress, err)
+	}
+	if got := stream.Readiness(); got&namespace.ReadyError == 0 || got&namespace.ReadyClosed == 0 {
+		t.Fatalf("reset readiness = %v", got)
+	}
+}
+
+func TestTCPPolicyQuotaPortReuseAndImmediateSourceScan(t *testing.T) {
+	config := tcpTestConfig(t, 33)
+	retained := uint64(config.TCP.AcceptBacklog) * uint64(config.TCP.ReceiveBytes+config.TCP.TransmitBytes)
+	config.Quotas = quota.NewAccount(quota.Limits{Resources: 1, TCPResources: 1, QueuedBytes: retained})
+	ns := newTestNamespace(t, config)
+	local := namespace.Endpoint{Address: config.IPv4Address, Port: 4233}
+	listener, progress, err := ns.TryListenTCP(local)
+	if err != nil || progress != namespace.ProgressDone {
+		t.Fatalf("listen = %T, %v, %v", listener, progress, err)
+	}
+	if usage, _ := config.Quotas.Snapshot(); usage.Resources != 1 || usage.TCPResources != 1 || usage.QueuedBytes != retained {
+		t.Fatalf("listener quota = %+v", usage)
+	}
+	if _, _, err := ns.TryListenTCP(namespace.Endpoint{Address: config.IPv4Address, Port: 4234}); requireFailure(t, err) != namespace.FailureResourceLimit {
+		t.Fatalf("second listener quota error = %v", err)
+	}
+	denied := namespace.Endpoint{Address: netip.MustParseAddr("198.51.100.33"), Port: 443}
+	if _, _, err := ns.TryConnectTCP(denied); requireFailure(t, err) != namespace.FailureAccessDenied {
+		t.Fatalf("denied connect error = %v", err)
+	}
+	if err := listener.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if usage, _ := config.Quotas.Snapshot(); usage != (quota.Usage{}) {
+		t.Fatalf("quota after listener close = %+v", usage)
+	}
+	if rebound, progress, err := ns.TryListenTCP(local); err != nil || progress != namespace.ProgressDone || rebound == listener {
+		t.Fatalf("listener port reuse = %T, %v, %v", rebound, progress, err)
+	}
+
+	source, err := os.ReadFile("tcp.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, forbidden := range []string{"conn.Read(", "conn.Write(", "conn.Flush(", "StackBlocking", "StackGo("} {
+		if strings.Contains(string(source), forbidden) {
+			t.Fatalf("host-facing TCP adapter references blocking wrapper %q", forbidden)
+		}
+	}
+}
+
+func TestTCPConcurrentOperationsAndNamespaceClose(t *testing.T) {
+	config := tcpTestConfig(t, 34)
+	ns := newTestNamespace(t, config)
+	remote := namespace.Endpoint{Address: netip.MustParseAddr("192.0.2.35"), Port: 4235}
+	streamResource, progress, err := ns.TryConnectTCP(remote)
+	if err != nil || progress != namespace.ProgressInProgress {
+		t.Fatalf("connect = %T, %v, %v", streamResource, progress, err)
+	}
+	stream := streamResource.(*tcpStream)
+	var wait sync.WaitGroup
+	for range 8 {
+		wait.Add(1)
+		go func() {
+			defer wait.Done()
+			buffer := make([]byte, 8)
+			for range 100 {
+				_, _ = stream.TryFinishConnect()
+				_, _ = stream.TryRead(buffer)
+				_, _ = stream.TryWrite(buffer)
+				if !stream.Readiness().Valid() {
+					t.Error("invalid TCP readiness")
+					return
+				}
+			}
+		}()
+	}
+	if err := ns.Close(); err != nil {
+		t.Fatal(err)
+	}
+	wait.Wait()
+	if got := stream.Readiness(); got != namespace.ReadyClosed {
+		t.Fatalf("closed stream readiness = %v", got)
+	}
+	if usage, _ := config.Quotas.Snapshot(); usage != (quota.Usage{}) {
+		t.Fatalf("namespace close retained quota = %+v", usage)
+	}
+}
+
 func TestReadinessAndCloseAreLevelTriggeredAndDeterministic(t *testing.T) {
 	ns := newTestNamespace(t, testConfig(7))
 	link := ns.Link()
@@ -569,6 +758,43 @@ func udpTestConfig(t testing.TB, id byte) Config {
 		MaxPayloadBytes:   32,
 	}
 	return config
+}
+
+func tcpTestConfig(t testing.TB, id byte) Config {
+	t.Helper()
+	config := testConfig(id)
+	compiled, err := policy.Compile(policy.Config{Rules: []policy.Rule{{
+		Action:     policy.ActionAllow,
+		Transports: []policy.Transport{policy.TransportTCP},
+		Directions: []policy.Direction{policy.DirectionInbound, policy.DirectionOutbound},
+		Prefixes:   []netip.Prefix{netip.MustParsePrefix("192.0.2.0/24")},
+	}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	config.Policy = compiled
+	config.Quotas = quota.NewAccount(quota.Limits{Resources: 16, TCPResources: 16, QueuedBytes: 16 << 10})
+	config.TCP = TCPConfig{
+		MaxListeners: 2, MaxOutboundStreams: 2, AcceptBacklog: 2,
+		ReceiveBytes: 256, TransmitBytes: 256, TransmitPackets: 4,
+	}
+	return config
+}
+
+func tcpTransfer(t testing.TB, from, to *Namespace) {
+	t.Helper()
+	from.nextIngress = false
+	budget := namespace.ServiceBudget{Packets: 1, Bytes: uint32(from.requiredFrameBytes), Operations: 1}
+	report, progress, err := from.TryService(budget)
+	if err != nil || progress != namespace.ProgressDone || report.Packets != 1 {
+		t.Fatalf("TCP egress service = %+v, %v, %v", report, progress, err)
+	}
+	transferOne(t, from.Link(), to.Link())
+	to.nextIngress = true
+	report, progress, err = to.TryService(budget)
+	if err != nil || progress != namespace.ProgressDone || report.Packets != 1 {
+		t.Fatalf("TCP ingress service = %+v, %v, %v", report, progress, err)
+	}
 }
 
 func bindUDP(t testing.TB, ns *Namespace, local namespace.Endpoint) namespace.UDPSocket {

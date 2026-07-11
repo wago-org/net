@@ -13,6 +13,7 @@ import (
 
 	lneto "github.com/soypat/lneto"
 	"github.com/soypat/lneto/ethernet"
+	lnetotcp "github.com/soypat/lneto/tcp"
 	"github.com/soypat/lneto/x/xnet"
 	"github.com/wago-org/net/internal/namespace"
 	"github.com/wago-org/net/internal/packetlink"
@@ -44,6 +45,7 @@ type Config struct {
 	MTU                    uint16
 	Link                   packetlink.Config
 	UDP                    UDPConfig
+	TCP                    TCPConfig
 	Policy                 *policy.Policy
 	Quotas                 *quota.Account
 }
@@ -68,6 +70,12 @@ type Namespace struct {
 	udpByPort              map[uint16]*udpSocket
 	udpOrder               []*udpSocket
 	udpCursor              int
+	tcpConfig              TCPConfig
+	tcpListeners           []*tcpListener
+	tcpStreams             []*tcpStream
+	tcpPorts               map[uint16]struct{}
+	nextTCPPort            uint16
+	nextTCPISS             lnetotcp.Value
 	closed                 bool
 }
 
@@ -92,11 +100,12 @@ func New(config Config) (*Namespace, error) {
 	}
 	stack := new(xnet.StackAsync)
 	stackConfig := xnet.StackConfig{
-		HardwareAddress: config.HardwareAddress,
-		StaticAddress4:  config.IPv4Address.As4(),
-		RandSeed:        config.RandSeed,
-		Hostname:        config.Hostname,
-		MTU:             config.MTU,
+		HardwareAddress:   config.HardwareAddress,
+		StaticAddress4:    config.IPv4Address.As4(),
+		RandSeed:          config.RandSeed,
+		Hostname:          config.Hostname,
+		MTU:               config.MTU,
+		MaxActiveTCPPorts: config.TCP.MaxListeners + config.TCP.MaxOutboundStreams,
 	}
 	if err := stack.Reset(stackConfig); err != nil {
 		_ = link.Close()
@@ -120,6 +129,12 @@ func New(config Config) (*Namespace, error) {
 		quotas:                 config.Quotas,
 		udpByPort:              make(map[uint16]*udpSocket, config.UDP.MaxSockets),
 		udpOrder:               make([]*udpSocket, 0, config.UDP.MaxSockets),
+		tcpConfig:              config.TCP,
+		tcpListeners:           make([]*tcpListener, 0, config.TCP.MaxListeners),
+		tcpStreams:             make([]*tcpStream, 0, int(config.TCP.MaxOutboundStreams)+int(config.TCP.MaxListeners)*int(config.TCP.AcceptBacklog)),
+		tcpPorts:               make(map[uint16]struct{}, int(config.TCP.MaxListeners)+int(config.TCP.MaxOutboundStreams)),
+		nextTCPPort:            firstEphemeralTCPPort,
+		nextTCPISS:             lnetotcp.Value(config.RandSeed),
 	}, nil
 }
 
@@ -170,6 +185,16 @@ func (n *Namespace) Close() error {
 		return nil
 	}
 	n.closed = true
+	for len(n.tcpListeners) > 0 {
+		n.tcpListeners[len(n.tcpListeners)-1].closeLocked()
+	}
+	for len(n.tcpStreams) > 0 {
+		n.tcpStreams[len(n.tcpStreams)-1].closeLocked()
+	}
+	clear(n.tcpPorts)
+	n.tcpPorts = nil
+	n.tcpListeners = nil
+	n.tcpStreams = nil
 	for len(n.udpOrder) > 0 {
 		n.udpOrder[len(n.udpOrder)-1].closeLocked()
 	}
@@ -191,17 +216,11 @@ func (n *Namespace) TryBindUDP(local namespace.Endpoint) (namespace.UDPSocket, n
 }
 
 func (n *Namespace) TryListenTCP(local namespace.Endpoint) (namespace.TCPListener, namespace.Progress, error) {
-	if err := n.checkEndpoint(local); err != nil {
-		return nil, 0, err
-	}
-	return nil, 0, namespace.Fail(namespace.FailureNotSupported, lneto.ErrUnsupported)
+	return n.tryListenTCP(local)
 }
 
 func (n *Namespace) TryConnectTCP(remote namespace.Endpoint) (namespace.TCPStream, namespace.Progress, error) {
-	if err := n.checkEndpoint(remote); err != nil {
-		return nil, 0, err
-	}
-	return nil, 0, namespace.Fail(namespace.FailureNotSupported, lneto.ErrUnsupported)
+	return n.tryConnectTCP(remote)
 }
 
 func (n *Namespace) TryResolve(request namespace.DNSRequest) (namespace.DNSQuery, namespace.Progress, error) {
@@ -357,7 +376,26 @@ func validConfig(config Config, requireAuthority bool) bool {
 	if config.Link.MaxFrameBytes < requiredFrameBytes || config.Link.IngressFrames <= 0 || config.Link.EgressFrames <= 0 {
 		return false
 	}
-	return validUDPConfig(config.UDP, int(config.MTU), config.Policy, config.Quotas, requireAuthority)
+	return validUDPConfig(config.UDP, int(config.MTU), config.Policy, config.Quotas, requireAuthority) &&
+		validTCPConfig(config.TCP, config.Policy, config.Quotas, requireAuthority)
+}
+
+func validTCPConfig(config TCPConfig, compiled *policy.Policy, account *quota.Account, requireAuthority bool) bool {
+	if config.MaxListeners == 0 && config.MaxOutboundStreams == 0 {
+		return config == (TCPConfig{})
+	}
+	if requireAuthority && (compiled == nil || account == nil) {
+		return false
+	}
+	if uint32(config.MaxListeners)+uint32(config.MaxOutboundStreams) > uint32(^uint16(0)) ||
+		config.ReceiveBytes < 256 || config.TransmitBytes < 256 || config.TransmitPackets <= 0 || config.TransmitPackets > config.TransmitBytes {
+		return false
+	}
+	if config.MaxListeners > 0 && config.AcceptBacklog == 0 || config.MaxListeners == 0 && config.AcceptBacklog != 0 {
+		return false
+	}
+	stride := uint64(config.ReceiveBytes) + uint64(config.TransmitBytes)
+	return stride <= uint64(^uint(0)>>1) && uint64(config.AcceptBacklog) <= uint64(^uint(0)>>1)/stride
 }
 
 func validUDPConfig(config UDPConfig, mtu int, compiled *policy.Policy, account *quota.Account, requireAuthority bool) bool {
