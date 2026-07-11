@@ -31,12 +31,13 @@ and lneto as the first backend.
 The root extension owns distinct import modules because Wago assigns one owner
 to an entire module. `wago_net` exposes `abi_version` under `net.info`;
 `wago_net_udp` exposes complete namespace discovery plus UDP bind/send/receive,
-close, and bounded poll under the narrow `net.udp` capability. TCP and DNS
-modules remain absent. `internal/abi` provides uint64-checked guest ranges,
-disjoint multi-output validation, fixed v1 endpoint/UDP/TCP/poll layouts, and
-atomic encoders without exposing lneto types. The reserved 72-byte TCP stream
-layout contains handle/local/remote endpoints; the 8-byte partial-I/O result is
-written only for ready progress, while AGAIN/EOF leave it unchanged.
+close, and bounded poll under narrow `net.udp`; and `wago_net_tcp` exposes the
+complete listener/stream surface plus its own bounded poll under narrow
+`net.tcp`. DNS remains absent. `internal/abi` provides uint64-checked guest
+ranges, disjoint multi-output validation, fixed v1 endpoint/UDP/TCP/poll layouts,
+and atomic encoders without exposing lneto types. The 72-byte TCP stream layout
+contains handle/local/remote endpoints; the 8-byte partial-I/O result is written
+only for ready progress, while AGAIN/EOF leave it unchanged.
 
 `internal/resource` provides O(1), kind-checked, generation-safe opaque handles
 with never-reused table identities, safe slot retirement before generation wrap,
@@ -92,12 +93,13 @@ are covered. DNS remains truthfully not-supported.
 `internal/readiness` provides a finite coordinator per instance resource table.
 Registrations preserve exact handle kind, polls are level-triggered and bounded
 by scans, event outputs, and namespace service attempts, and stale handles are
-removed within the scan budget. Configured namespace and UDP creation add handles
-and registrations transactionally; wrong-kind close cannot unregister a valid
-handle, and explicit close removes readiness before generation retirement. The
-guest poll validates complete output capacity before work, uses per-instance
-scratch, and reserves `scans + events + service_attempts` service units for the
-call. No poll sleeps or performs an unbounded registration scan.
+removed within the scan budget. Configured namespace plus UDP/TCP creation add
+handles and registrations transactionally; wrong-kind close cannot unregister a
+valid handle, and explicit close removes readiness before generation retirement.
+Both protocol poll imports validate complete output capacity before work, use
+per-instance scratch, and reserve `scans + events + service_attempts` service
+units for the call. TCP poll is independently gated by `net.tcp` and does not
+require `net.udp`. No poll sleeps or performs an unbounded registration scan.
 
 The companion Wago branch adds `HookRegistry.BeforeClose`, reverse-order
 exactly-once invocation, cleanup on failed post-instantiation setup, class
@@ -161,28 +163,36 @@ host-call instance identity without expanding `HostModule` or changing `HostFunc
 - `c8efb7f` — added generation-safe instance-owned TCP listener/stream handles,
   transactional readiness registration, exact kind/cross/stale checks, rollback,
   partial-I/O state methods, root TCP configuration, and truthful non-advertising.
-- `HEAD` (`net: define the checked guest TCP ABI`) — fixes reserved v1 TCP stream
-  and partial-I/O layouts, disjoint checked ranges, atomic codecs, stable IO
-  status semantics, malformed-layout fuzz coverage, and documentation without
-  registering an incomplete TCP module.
+- `044c04d` — fixed v1 TCP stream and partial-I/O layouts, disjoint checked
+  ranges, atomic codecs, stable IO status semantics, malformed-layout fuzz
+  coverage, and documentation without registering an incomplete TCP module.
+- `c07e7e1` — added unregistered checked TCP namespace/listen/connect/finish host
+  functions, pre-allocation range validation, endpoint descriptors, rollback on
+  impossible encoding failures, and policy/quota/kind/isolation tests.
+- `6272362` — completed unregistered accept/read/write/shutdown/kind-specific
+  close/TCP-poll host functions, AGAIN/EOF non-mutation, accept rollback, race,
+  fuzz, bounded readiness, and guest-poll benchmark coverage.
+- `HEAD` (`net: expose the complete TCP capability`) — registers the complete
+  `wago_net_tcp` table under narrow `net.tcp`, adds capability denial and full
+  registered two-namespace exchange tests, and updates package/ABI/architecture
+  documentation and inspection signoff while keeping DNS absent.
 
 ## Active work
 
-Recursion 7 is complete with exactly three bounded commits. Immediate lneto TCP,
-instance-owned listener/stream handles, and the reserved checked guest TCP ABI are
-complete internally. `wago_net_tcp` remains absent until every host binding is
-implemented and tested together; DNS remains absent and unsupported. Wago
-lifecycle reconciliation and reset-policy enforcement remain prerequisites for
-upstream production use.
+Recursion 8 is complete with exactly three bounded commits. Checked TCP creation
+and stream bindings are complete, and `wago_net_tcp` plus narrow `net.tcp` are now
+advertised as one complete table. Registered two-namespace request/reply/FIN,
+capability denial, malformed memory, rollback, kind/isolation, bounded poll, race,
+fuzz, benchmark, package, and custom-inspection coverage pass. DNS remains absent
+and unsupported. Wago lifecycle reconciliation and enforceable reset eligibility
+remain prerequisites for upstream production use.
 
 ## Ordered backlog
 
-1. Implement all checked TCP host bindings behind unregistered binding tables,
-   then expose `wago_net_tcp` and `net.tcp` only when the module is complete.
-2. Reconcile and upstream the Wago close-hook/identity changes against PR #232,
+1. Reconcile and upstream the Wago close-hook/identity changes against PR #232,
    including enforceable reset eligibility for networking extensions.
-3. Harden bounded DNS ownership and guest imports before advertising DNS.
-4. Complete TinyGo, package, fuzz/race/benchmark, and release signoff.
+2. Harden bounded DNS ownership and guest imports before advertising DNS.
+3. Complete TinyGo, package, fuzz/race/benchmark, and release signoff.
 
 ## Blockers and discovered prerequisites
 
@@ -214,41 +224,39 @@ upstream production use.
 
 ## Verification
 
-Latest outcomes after recursion 7:
+Latest outcomes after recursion 8:
 
-- Plugin `go test ./... -count=1` and `GOWORK=off go test ./... -count=1` — pass.
-- Plugin `go test -race ./... -count=1` — pass, including immediate TCP exchange,
-  concurrent TCP operations versus namespace close, instance ownership, UDP guest
-  operations, readiness, quota, and lifecycle.
-- Plugin `go vet ./...` — pass.
-- Post-commit `FuzzV1Layouts` for 3 seconds — pass, 1,183,199 executions with
-  the 22-entry cached corpus while exercising TCP create/I/O range validation and
-  codecs; the pre-commit run discovered five of those inputs.
-- `BenchmarkGuestUDPPoll` three-run sample — 171.8–905.8 ns/op, 120 B/op,
-  3 allocs/op on the recorded Ryzen 7 8845HS host. The allocation-free internal
-  UDP queue baseline remains 21.53–47.70 ns/op, 0 B/op, 0 allocs/op.
-- Post-commit `BenchmarkGuestUDPPoll` — 173.6 ns/op, 120 B/op, 3 allocs/op;
-  `BenchmarkUDPDatagramQueueRoundTrip` — 20.51 ns/op, 0 B/op, 0 allocs/op.
-- Guest tests prove capability denial, unavailable namespace truthfulness,
-  two-instance/cross-handle isolation, policy denial, exact quota, empty and
-  truncated datagrams, queue full, failed-output rollback, stale close, rebind,
-  level transitions, service bounds, stale poll removal, and cleanup.
+- Plugin `go test ./... -count=1`, `GOWORK=off go test ./... -count=1`,
+  `go test -race ./... -count=1`, and `go vet ./...` — pass.
+- TCP guest coverage proves namespace truthfulness, capability denial, complete
+  binding metadata, policy denial, exact quota, stale/wrong-kind/cross-instance
+  rejection, pre-work malformed-memory rejection, connect/accept rollback,
+  partial read/write metadata, AGAIN/EOF non-mutation, half-close, bounded poll,
+  close races, and full registered two-namespace request/reply/FIN exchange.
+- Post-commit `FuzzV1Layouts` for 3 seconds — pass, 758,966 executions with the
+  23-entry corpus. Post-commit `FuzzGuestTCPStreamMemory` for 3 seconds — pass,
+  210,916 executions with the 8-entry corpus.
+- Post-amend `BenchmarkGuestUDPPoll` — 171.9 ns/op, 120 B/op, 3 allocs/op;
+  `BenchmarkGuestTCPPoll` — 167.4 ns/op, 120 B/op, 3 allocs/op;
+  `BenchmarkUDPDatagramQueueRoundTrip` — 20.34 ns/op, 0 B/op, 0 allocs/op.
 - Source scan — lneto imports remain confined to `internal/backend/lneto`; guest,
   ABI, instance, policy, quota, resource, and readiness layers expose no lneto
   types. The TCP adapter contains no host-facing `tcp.Conn.Read`, `Write`,
   `Flush`, `StackBlocking`, or `StackGo` call.
-- Wago `GOWORK=off go test ./internal/genfacade -count=1` — pass.
-- Wago `GOWORK=off go test ./src/wago -count=1` and focused lifecycle/identity
-  race tests pass with the temporary missing `trapCode` helper; helper removed.
+- Wago `GOWORK=off go test ./internal/genfacade -count=1` — pass. Direct
+  `./src/wago` still fails only for the unrelated missing `trapCode`; with a
+  temporary test helper, the full package and focused lifecycle/identity/cross-
+  instance race tests pass, and the helper is removed.
 - lneto `GOWORK=off go test ./... -count=1` — pass.
 - Generated custom Wago CLI blank-importing `github.com/wago-org/net/register`
-  builds and `plugin inspect net --json` reports exactly `net.info`, `net.udp`,
-  `wago_net.abi_version`, and the six complete `wago_net_udp` imports including
-  bounded `poll`; TCP and DNS remain absent.
-- Plugin, Wago, lneto, and WASI trees are clean after the three commits; ignored
-  `go.work` continues to redirect local Wago and lneto dependencies.
-- TinyGo remains unavailable (`command -v tinygo` produced no path). WASI native
-  `p1` SIGSEGV under Go 1.24.4 was not rerun and remains an unrelated audit issue.
+  builds. `plugin inspect net --json` reports exactly capabilities `net.info`,
+  `net.tcp`, `net.udp` and 18 imports: core `abi_version`, six UDP functions, and
+  eleven TCP functions. No DNS module or capability is present.
+- WASI `GOWORK=off go test ./... -count=1` still reaches the known native `p1`
+  SIGSEGV under Go 1.24.4 after other packages pass; this remains unrelated.
+- TinyGo remains unavailable (`command -v tinygo` produced no path).
+- Plugin, Wago, lneto, and WASI tracked trees are clean after the three commits;
+  ignored `go.work` continues to redirect local Wago and lneto dependencies.
 
 ## Performance baselines
 
@@ -259,19 +267,19 @@ Focused resource-table baselines on linux/amd64, Ryzen 7 8845HS, Go 1.24.4:
 - close 64 live resources: 3.289 us/op;
 - close 1024 live resources: 45.556 us/op.
 
-The fixed UDP queue round trip remains allocation-free at 21.53–47.70 ns/op.
-The complete guest poll path, including checked memory, quota tokens, coordinator
-scan, and event/result encoding, measured 171.8–905.8 ns/op with 120 B/op and
-3 allocs/op in the latest concurrent three-run sample. Reducing quota-token
+The fixed UDP queue round trip remains allocation-free and measured 20.34 ns/op.
+The complete guest poll paths, including checked memory, quota tokens,
+coordinator scan, and event/result encoding, measured 171.9 ns/op for UDP and
+167.4 ns/op for TCP, both at 120 B/op and 3 allocs/op. Reducing quota-token
 allocations is an optimization opportunity, not a correctness blocker.
 
 ## Security review
 
-Guest-visible UDP now exposes only opaque handles, checked endpoint/result/event
-layouts, and stable statuses. Reserved TCP layouts likewise contain no backend
-identity and are not advertised before complete bindings exist. Every call
-resolves exact instance identity, and
-stale, wrong-kind, cross-instance, zero, or forged handles fail closed. Policy
+Guest-visible UDP and TCP expose only opaque handles, checked endpoint/result/
+event layouts, and stable statuses. TCP was advertised only after its complete
+binding table, rollback paths, kind-specific closes, and independent capability
+were tested together. Every call resolves exact instance identity; stale, wrong-
+kind, cross-instance, zero, or forged handles fail closed. Policy
 defaults deny unmatched and privileged endpoint classes; deny rules are order-
 independent and IPv4-mapped IPv6 cannot cross family rules. Quotas have no
 unlimited sentinel, reject exact limit overflow without arithmetic wrap, and
@@ -281,39 +289,37 @@ Packet-link and UDP datagram storage are fixed and cleared on close; failed fill
 full queues, and insufficient budgets do not partially commit frames or payloads.
 The concrete backend performs no hidden retry and cannot exceed a service
 operation attempt budget. UDP rejects fragmented or bad-checksum traffic, enforces
-bind/send authority separately, and retains no caller slices. Readiness stores
-only generation-checked handles, bounds scans/events/service calls independently,
-removes stale registrations without exposing raw pointers, and is unregistered
+bind/send authority separately, and retains no caller slices. TCP validates all
+ranges before creation or byte consumption, writes descriptors atomically,
+rolls back failed connect/accept outputs, and leaves outputs unchanged on AGAIN
+or EOF. Readiness stores only generation-checked handles, bounds scans/events/
+service calls independently, removes stale registrations without exposing raw
+pointers, and is unregistered
 before explicit handle retirement.
 
 Remaining risks are engine enforcement of the `ResetMemorySnapshot` prohibition,
-correctly reconciling Wago PR #232, finishing all checked TCP guest bindings before
-advertising the capability, lneto listener-slot reuse occurring on bounded
-listener maintenance after accepted-stream close, ensuring future protocol
+correctly reconciling Wago PR #232, lneto listener-slot reuse occurring on bounded
+listener maintenance after accepted-stream close, ensuring future DNS/protocol
 adapters repeat policy checks and pair every quota reservation, reducing guest
 poll quota-token allocations, and completing TinyGo validation when available.
 
 ## Next recursion
 
-1. `net: add checked TCP creation host functions`
-   - Scope: implement unregistered TinyGo-compatible binding functions for TCP
-     namespace discovery, listen, connect, and finish-connect. Prevalidate all
-     complete ranges before allocation, write stream descriptors on OK/IN_PROGRESS,
-     and roll back handles on impossible encoding failures.
-   - Tests: malformed memory, denied policy, exact quota, stale/cross/wrong handles,
-     failed-output rollback, connect progress, and two-instance isolation.
-2. `net: add checked TCP stream host functions`
-   - Scope: implement unregistered accept, partial read/write, shutdown, separate
-     listener/stream close, and TCP poll bindings using exact State operations.
-     AGAIN/EOF must not mutate outputs; no guest slice may outlive the call.
-   - Tests: partial metadata, would-block, EOF, accept rollback, close races,
-     malformed-memory fuzzing, bounded poll readiness, and benchmarks.
-3. `net: expose the complete TCP capability`
-   - Scope: register `wago_net_tcp` and narrow `net.tcp` only after the binding
-     table is complete, keep low-level `Imports` stateless, update package/docs,
-     and verify custom Wago inspection exposes exactly the intended modules.
-   - Tests: capability denial, full guest two-namespace exchange, TinyGo-compatible
-     signatures, race/fuzz/package signoff, and truthful absence of DNS.
+1. `wago: reconcile deterministic close hooks with plugin improvements`
+   - Scope: re-read current Wago main and `origin/plugin-improvements`, reconcile
+     the local `BeforeClose` design with its broader lifecycle work instead of
+     overwriting either branch, and preserve reverse-order exactly-once cleanup,
+     failed-instantiation cleanup, low-level isolation, and transactional hook
+     registration.
+2. `wago: enforce extension reset eligibility`
+   - Scope: add an additive extension declaration/registry aggregate that lets
+     Runtime classes reject or safely downgrade `ResetMemorySnapshot` when an
+     extension requires reinstantiation; keep minimal interfaces and TinyGo host
+     function shapes stable.
+3. `net: require reinstantiation for networking instances`
+   - Scope: declare the networking extension's reset requirement, add class pool
+     tests proving no UDP/TCP state crosses leases, update package/architecture
+     docs, and run cross-repository lifecycle/race/custom-inspection signoff.
 
 After those exactly three commits, run combined verification, update this ledger,
 and recurse again if the long-term completion criteria remain unmet.

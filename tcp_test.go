@@ -18,21 +18,152 @@ import (
 	"github.com/wago-org/net/internal/readiness"
 	"github.com/wago-org/net/internal/resource"
 	wago "github.com/wago-org/wago"
+	"github.com/wago-org/wago/src/core/compiler/wasm"
+	"github.com/wago-org/wago/testutil/wasmtest"
 )
 
-func TestTCPBindingsStayUnregisteredUntilCapabilityCommit(t *testing.T) {
+func TestTCPBindingsAreRegisteredOnlyAsCompleteTable(t *testing.T) {
 	extension := Init(guestTCPConfig(1, 2))
 	runtime := runtimeForExtension(t, extension)
 	if got := len(extension.tcpBindings()); got != 11 {
 		t.Fatalf("complete checked TCP bindings = %d, want 11", got)
 	}
-	if _, ok := runtime.HostImports()[TCPModule+".namespace_default"]; ok {
-		t.Fatal("incomplete TCP table was registered")
-	}
-	for _, capability := range runtime.Capabilities() {
-		if capability == CapTCP {
-			t.Fatal("incomplete TCP capability was advertised")
+	for _, binding := range extension.tcpBindings() {
+		if _, ok := runtime.HostImports()[TCPModule+"."+binding.name].(wago.HostFunc); !ok {
+			t.Fatalf("registered TCP binding %q missing", binding.name)
 		}
+	}
+	foundCapability := false
+	for _, capability := range runtime.Capabilities() {
+		foundCapability = foundCapability || capability == CapTCP
+	}
+	if !foundCapability {
+		t.Fatal("complete TCP capability was not advertised")
+	}
+	for name := range Imports(guestTCPConfig(1, 2)) {
+		if len(name) >= len(TCPModule)+1 && name[:len(TCPModule)+1] == TCPModule+"." {
+			t.Fatalf("low-level stateless imports exposed TCP resource function %q", name)
+		}
+	}
+}
+
+func TestGuestTCPUnavailableNamespaceIsTruthful(t *testing.T) {
+	extension := Init(Config{})
+	runtime := runtimeForExtension(t, extension)
+	instance, err := runtime.Instantiate(context.Background(), emptyModule(t, runtime))
+	if err != nil {
+		t.Fatalf("Instantiate: %v", err)
+	}
+	defer instance.Close()
+	host := udpHostModule{instance: instance, memory: bytes.Repeat([]byte{0x5a}, 16)}
+	before := append([]byte(nil), host.memory...)
+	if got := callRegisteredTCP(t, runtime, "namespace_default", host, 0); got != StatusNotSupported {
+		t.Fatalf("TCP namespace without configuration = %v", got)
+	}
+	if !bytes.Equal(host.memory, before) {
+		t.Fatal("unavailable TCP namespace mutated output")
+	}
+}
+
+func TestGuestTCPImportCapabilityGate(t *testing.T) {
+	extension := Init(Config{})
+	runtime := runtimeForExtension(t, extension)
+	importEntry := append(append(wasmtest.Name(TCPModule), wasmtest.Name("namespace_default")...), 0x00, 0x00)
+	wasmBytes := wasmtest.Module(
+		wasmtest.Section(1, wasmtest.Vec(wasmtest.FuncType([]wasm.ValType{wasm.I32}, []wasm.ValType{wasm.I32}))),
+		wasmtest.Section(2, wasmtest.Vec(importEntry)),
+	)
+	module, err := runtime.Compile(wasmBytes)
+	if err != nil {
+		t.Fatalf("Compile TCP capability module: %v", err)
+	}
+	if _, err := runtime.Instantiate(context.Background(), module, wago.WithPolicy(wago.Policy{DeniedCapabilities: []wago.Capability{CapTCP}})); !errors.Is(err, wago.ErrPermissionDenied) {
+		t.Fatalf("denied TCP capability instantiate = %v", err)
+	}
+	instance, err := runtime.Instantiate(context.Background(), module, wago.WithPolicy(wago.Policy{AllowedCapabilities: []wago.Capability{CapTCP}}))
+	if err != nil {
+		t.Fatalf("allowed TCP capability instantiate: %v", err)
+	}
+	_ = instance.Close()
+}
+
+func TestRegisteredGuestTCPTwoNamespaceExchange(t *testing.T) {
+	clientExt, clientRuntime, clientInstance, clientHost := newGuestTCPInstance(t, 3, 4)
+	serverExt, serverRuntime, serverInstance, serverHost := newGuestTCPInstance(t, 4, 3)
+	defer clientInstance.Close()
+	defer serverInstance.Close()
+	clientState, _ := clientExt.instanceManager().ForInstance(clientInstance)
+	serverState, _ := serverExt.instanceManager().ForInstance(serverInstance)
+
+	if got := callRegisteredTCP(t, clientRuntime, "namespace_default", clientHost, 0); got != StatusOK {
+		t.Fatalf("client namespace = %v", got)
+	}
+	clientNamespace := resource.Handle(binary.LittleEndian.Uint64(clientHost.memory[:8]))
+	if got := callRegisteredTCP(t, serverRuntime, "namespace_default", serverHost, 0); got != StatusOK {
+		t.Fatalf("server namespace = %v", got)
+	}
+	serverNamespace := resource.Handle(binary.LittleEndian.Uint64(serverHost.memory[:8]))
+	serverEndpoint := endpointFor(4, 4604)
+	encodeGuestEndpoint(t, serverHost.memory, 0, serverEndpoint)
+	if got := callRegisteredTCP(t, serverRuntime, "listen", serverHost, uint64(serverNamespace), 0, 64); got != StatusOK {
+		t.Fatalf("registered listen = %v", got)
+	}
+	listener := resource.Handle(binary.LittleEndian.Uint64(serverHost.memory[64:72]))
+
+	encodeGuestEndpoint(t, clientHost.memory, 0, serverEndpoint)
+	if got := callRegisteredTCP(t, clientRuntime, "connect", clientHost, uint64(clientNamespace), 0, 64); got != StatusInProgress {
+		t.Fatalf("registered connect = %v", got)
+	}
+	clientStream, _, _ := decodeGuestTCPStream(t, clientHost.memory, 64)
+	transferGuestUDP(t, clientState, serverState)
+	transferGuestUDP(t, serverState, clientState)
+	transferGuestUDP(t, clientState, serverState)
+	if got := callRegisteredTCP(t, clientRuntime, "finish_connect", clientHost, uint64(clientStream)); got != StatusOK {
+		t.Fatalf("registered finish_connect = %v", got)
+	}
+	if got := callRegisteredTCP(t, serverRuntime, "accept", serverHost, uint64(listener), 128); got != StatusOK {
+		t.Fatalf("registered accept = %v", got)
+	}
+	serverStream, _, _ := decodeGuestTCPStream(t, serverHost.memory, 128)
+
+	copy(clientHost.memory[256:], []byte("request"))
+	if got := callRegisteredTCP(t, clientRuntime, "write", clientHost, uint64(clientStream), 256, 7, 320); got != StatusOK {
+		t.Fatalf("registered client write = %v", got)
+	}
+	transferGuestUDP(t, clientState, serverState)
+	if got := callRegisteredTCP(t, serverRuntime, "read", serverHost, uint64(serverStream), 256, 16, 320); got != StatusOK {
+		t.Fatalf("registered server read = %v", got)
+	}
+	if count := binary.LittleEndian.Uint32(serverHost.memory[320:324]); count != 7 || string(serverHost.memory[256:263]) != "request" {
+		t.Fatalf("registered server payload = %d/%q", count, serverHost.memory[256:263])
+	}
+
+	copy(serverHost.memory[384:], []byte("reply"))
+	if got := callRegisteredTCP(t, serverRuntime, "write", serverHost, uint64(serverStream), 384, 5, 448); got != StatusOK {
+		t.Fatalf("registered server write = %v", got)
+	}
+	transferGuestUDP(t, serverState, clientState)
+	if got := callRegisteredTCP(t, clientRuntime, "read", clientHost, uint64(clientStream), 384, 16, 448); got != StatusOK {
+		t.Fatalf("registered client read = %v", got)
+	}
+	if count := binary.LittleEndian.Uint32(clientHost.memory[448:452]); count != 5 || string(clientHost.memory[384:389]) != "reply" {
+		t.Fatalf("registered client payload = %d/%q", count, clientHost.memory[384:389])
+	}
+	if got := callRegisteredTCP(t, clientRuntime, "shutdown_write", clientHost, uint64(clientStream)); got != StatusOK {
+		t.Fatalf("registered shutdown = %v", got)
+	}
+	transferGuestUDP(t, clientState, serverState)
+	if got := callRegisteredTCP(t, serverRuntime, "read", serverHost, uint64(serverStream), 512, 16, 544); got != StatusEOF {
+		t.Fatalf("registered EOF = %v", got)
+	}
+	if got := callRegisteredTCP(t, clientRuntime, "close_stream", clientHost, uint64(clientStream)); got != StatusOK {
+		t.Fatalf("registered client close = %v", got)
+	}
+	if got := callRegisteredTCP(t, serverRuntime, "close_stream", serverHost, uint64(serverStream)); got != StatusOK {
+		t.Fatalf("registered server close = %v", got)
+	}
+	if got := callRegisteredTCP(t, serverRuntime, "close_listener", serverHost, uint64(listener)); got != StatusOK {
+		t.Fatalf("registered listener close = %v", got)
 	}
 }
 
@@ -525,6 +656,17 @@ func guestTCPListen(t testing.TB, extension *Extension, host udpHostModule, name
 		t.Fatalf("TCP listen %v = %v", local, got)
 	}
 	return resource.Handle(binary.LittleEndian.Uint64(host.memory[out : out+abi.HandleV1Size]))
+}
+
+func callRegisteredTCP(t testing.TB, runtime *wago.Runtime, name string, host udpHostModule, params ...uint64) Status {
+	t.Helper()
+	fn, ok := runtime.HostImports()[TCPModule+"."+name].(wago.HostFunc)
+	if !ok {
+		t.Fatalf("registered TCP binding %q missing", name)
+	}
+	results := []uint64{0}
+	fn(host, params, results)
+	return Status(wago.AsI32(results[0]))
 }
 
 func callTCP(t testing.TB, extension *Extension, name string, host udpHostModule, params ...uint64) Status {

@@ -1,5 +1,5 @@
 // Package net provides the core of Wago's capability-gated networking plugin
-// suite. The guest ABI is backend-neutral; lneto is the first planned backend,
+// suite. The guest ABI is backend-neutral; lneto is the first backend and is
 // not part of the public contract.
 package net
 
@@ -169,8 +169,10 @@ func (e *Extension) Register(reg *wago.Registry) error {
 	reg.Hooks().BeforeClose(instances.BeforeClose)
 	reg.Capability(CapInfo, wago.CapabilityDocs("inspect the Wago networking ABI and interfaces"))
 	reg.Capability(CapUDP, wago.CapabilityDocs("use checked nonblocking UDP networking for the exact calling instance"))
+	reg.Capability(CapTCP, wago.CapabilityDocs("use checked nonblocking TCP networking for the exact calling instance"))
 	registerBindings(reg.ImportModule(Module), e.bindings())
 	registerBindings(reg.ImportModule(UDPModule), e.udpBindings())
+	registerBindings(reg.ImportModule(TCPModule), e.tcpBindings())
 	return nil
 }
 

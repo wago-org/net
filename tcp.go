@@ -6,9 +6,9 @@ import (
 	wago "github.com/wago-org/wago"
 )
 
-// tcpBindings is deliberately unregistered until every TCP operation has a
-// checked host binding. Keeping the functions in one binding table lets tests
-// harden the TinyGo-compatible slot shapes before the capability is advertised.
+// tcpBindings is the complete checked TCP operation table. Registration and
+// implementation share this table so capability inspection and TinyGo-compatible
+// slot shapes cannot drift from the host functions.
 func (e *Extension) tcpBindings() []binding {
 	return []binding{
 		{

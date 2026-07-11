@@ -35,15 +35,17 @@ protocol modules; no process-global state or placeholder protocol module is used
 
 ## Current implementation
 
-The root extension owns two distinct import modules: `wago_net` declares
-`net.info` and exposes `abi_version`, while `wago_net_udp` declares the narrow
-`net.udp` capability and exposes only the complete namespace discovery plus UDP
-bind/send/receive/close operations. The low-level `Imports` bundle remains core-
-only because protocol resources require Runtime lifecycle identity. Registration
-and implementation share binding tables so inspection metadata and actual
-bindings do not drift. `internal/abi` provides allocation-free checked ranges,
-fixed-width endpoint, UDP receive, reserved TCP stream/I/O layouts, disjoint
-multi-output validation, and bounded poll codecs without exposing lneto types.
+The root extension owns three distinct import modules: `wago_net` declares
+`net.info` and exposes `abi_version`; `wago_net_udp` declares narrow `net.udp`
+authority; and `wago_net_tcp` declares narrow `net.tcp` authority. UDP and TCP
+each expose complete configured-namespace discovery, protocol operations,
+kind-safe close, and independently capability-gated bounded poll. The low-level
+`Imports` bundle remains core-only because protocol resources require Runtime
+lifecycle identity. Registration and implementation share binding tables so
+inspection metadata, TinyGo-compatible slot shapes, and actual host functions do
+not drift. `internal/abi` provides allocation-free checked ranges, fixed-width
+endpoint, UDP receive, TCP stream/I/O layouts, disjoint multi-output validation,
+and bounded poll codecs without exposing lneto types.
 `internal/resource` provides O(1) opaque-handle lookup with exact kind checks,
 never-reused table identities, per-slot generations, rollover retirement, and
 reverse-creation O(live) cleanup. The table exists independently of protocol
@@ -105,18 +107,20 @@ complete event capacity and result range before work, uses per-instance scratch
 storage, and transactionally accounts `scans + events + service_attempts` against
 finite service-work quota for the duration of each call.
 
-Each `Extension` owns one private instance-state manager shared by its core and
-UDP module bindings. Runtime instantiation attaches one resource table, readiness
-coordinator, immutable policy, and finite quota ledger to the exact
+Each `Extension` owns one private instance-state manager shared by its core, UDP,
+and TCP module bindings. Runtime instantiation attaches one resource table,
+readiness coordinator, immutable policy, and finite quota ledger to the exact
 `*wago.Instance`. Optional static
 IPv4 configuration transactionally reserves namespace quota, constructs the
 backend, inserts a generation-safe handle, and registers bounded readiness before
-the state is published. UDP and internal TCP creation repeat that transaction for their exact socket,
-listener, or stream handle and poll registration; every failed stage closes the
-backend resource and releases accounting. TCP guest bindings remain absent even
-though the backend-neutral v1 stream and partial-I/O layouts are now fixed; the
-suite does not advertise a capability before all checked bindings exist. Host
-imports recover exact identity through the additive
+the state is published. UDP and TCP creation repeat that transaction for their
+exact socket, listener, or stream handle and poll registration; every failed
+stage closes the backend
+resource and releases accounting. TCP guest bindings prevalidate all complete
+endpoint, descriptor, payload, result, event, and poll ranges before backend
+work. Connect and accept roll back newly owned handles if descriptor encoding
+cannot complete; AGAIN and EOF stream results leave guest outputs unchanged.
+Host imports recover exact identity through the additive
 `wago.InstanceHostModule` interface, and `BeforeClose` removes the attachment
 before polling shutdown, reverse-creation resource cleanup, and quota shutdown.
 Failed later setup and `ResetReinstantiate` replacement use the same close path.

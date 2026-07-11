@@ -3,23 +3,21 @@
 Capability-gated networking plugins for the [Wago](https://github.com/wago-org/wago)
 WebAssembly runtime, backed initially by [lneto](https://github.com/soypat/lneto).
 
-The repository now exposes the experimental `wago_net.abi_version` core import
-and a separately capability-gated `wago_net_udp` module for discovery of one
-configured namespace plus nonblocking UDP bind, send, receive, and close. The
-stable numeric status taxonomy and fixed v1 address/receive layouts use central
+The repository exposes the experimental `wago_net.abi_version` core import plus
+separately capability-gated `wago_net_udp` and `wago_net_tcp` modules. UDP covers
+configured-namespace discovery, bind, send, receive, close, and bounded poll. TCP
+covers discovery, listen, nonblocking connect completion, accept, partial
+read/write, write-half shutdown, kind-specific close, and its own bounded poll.
+The stable numeric status taxonomy and fixed v1 address/result layouts use central
 checked guest memory; exact instance identity, generation/kind-checked handles,
 immutable endpoint policy, finite quotas, and deterministic lifecycle cleanup
 remain mandatory on every guest operation. The lneto backend uses adapter-owned
-fixed UDP queues and immediate frame codecs, preserving empty and truncated
-datagrams without blocking or backoff. Guest polling is level-triggered and
-bounded independently by scans, event outputs, namespace service attempts, and
-per-attempt packet/byte/operation budgets; each call transactionally reserves and
-releases finite per-instance service-work quota. Immediate lneto TCP listeners,
-connect/accept, partial stream I/O, half-close, policy/quota ownership, readiness,
-and deterministic teardown are implemented internally, and the checked v1 TCP
-layouts are fixed; `wago_net_tcp` remains deliberately absent until every guest
-binding is hardened. DNS and privileged packet access remain absent and
-truthfully unsupported.
+fixed UDP queues, immediate frame codecs, and immediate TCP handler primitives;
+no host-facing path uses its blocking/backoff wrappers. Protocol polling is
+level-triggered and bounded independently by scans, event outputs, namespace
+service attempts, and per-attempt packet/byte/operation budgets, with finite
+per-instance service-work accounting. DNS and privileged packet access remain
+absent and truthfully unsupported.
 
 ```go
 rt := wago.NewRuntime()
@@ -28,8 +26,8 @@ if err := rt.Use(wagonet.Init(wagonet.Config{})); err != nil {
 }
 
 // A configured deployment can instead provide immutable policy, finite quota,
-// readiness, packet-link, static IPv4, UDP queue, and internal TCP settings. Each Runtime
-// instance then receives its own isolated namespace and generation-safe handles.
+// readiness, packet-link, static IPv4, UDP queue, and TCP pool settings. Each
+// Runtime instance then receives its own isolated namespace and handles.
 ```
 
 Networking extensions currently require ordinary Runtime instances or classes

@@ -24,12 +24,12 @@ func TestExtensionMetadataAndABIBinding(t *testing.T) {
 	if err := rt.Use(ext); err != nil {
 		t.Fatalf("Use: %v", err)
 	}
-	if got := rt.Capabilities(); !reflect.DeepEqual(got, []wago.Capability{CapInfo, CapUDP}) {
+	if got := rt.Capabilities(); !reflect.DeepEqual(got, []wago.Capability{CapInfo, CapTCP, CapUDP}) {
 		t.Fatalf("Capabilities = %v", got)
 	}
 	imports := rt.ProvidedImports()
-	if len(imports) != 7 {
-		t.Fatalf("ProvidedImports length = %d, want 7", len(imports))
+	if len(imports) != 18 {
+		t.Fatalf("ProvidedImports length = %d, want 18", len(imports))
 	}
 	got := imports[0]
 	if got.Module != Module || got.Name != "abi_version" || !got.HasCapability || got.Capability != CapInfo {
@@ -46,15 +46,40 @@ func TestExtensionMetadataAndABIBinding(t *testing.T) {
 		"receive":           {wago.ValI64, wago.ValI32, wago.ValI32, wago.ValI32},
 		"send":              {wago.ValI64, wago.ValI32, wago.ValI32, wago.ValI32},
 	}
-	for _, spec := range imports[1:] {
-		params, ok := wantUDP[spec.Name]
-		if !ok || spec.Module != UDPModule || !spec.HasCapability || spec.Capability != CapUDP || !reflect.DeepEqual(spec.Params, params) || !reflect.DeepEqual(spec.Results, []wago.ValType{wago.ValI32}) {
-			t.Fatalf("UDP import metadata = %+v", spec)
-		}
-		delete(wantUDP, spec.Name)
+	wantTCP := map[string][]wago.ValType{
+		"accept":            {wago.ValI64, wago.ValI32},
+		"close_listener":    {wago.ValI64},
+		"close_stream":      {wago.ValI64},
+		"connect":           {wago.ValI64, wago.ValI32, wago.ValI32},
+		"finish_connect":    {wago.ValI64},
+		"listen":            {wago.ValI64, wago.ValI32, wago.ValI32},
+		"namespace_default": {wago.ValI32},
+		"poll":              {wago.ValI32, wago.ValI32, wago.ValI32, wago.ValI32},
+		"read":              {wago.ValI64, wago.ValI32, wago.ValI32, wago.ValI32},
+		"shutdown_write":    {wago.ValI64},
+		"write":             {wago.ValI64, wago.ValI32, wago.ValI32, wago.ValI32},
 	}
-	if len(wantUDP) != 0 {
-		t.Fatalf("missing UDP imports: %v", wantUDP)
+	for _, spec := range imports[1:] {
+		var params []wago.ValType
+		var capability wago.Capability
+		switch spec.Module {
+		case UDPModule:
+			params = wantUDP[spec.Name]
+			capability = CapUDP
+			delete(wantUDP, spec.Name)
+		case TCPModule:
+			params = wantTCP[spec.Name]
+			capability = CapTCP
+			delete(wantTCP, spec.Name)
+		default:
+			t.Fatalf("unexpected networking import metadata = %+v", spec)
+		}
+		if params == nil || !spec.HasCapability || spec.Capability != capability || !reflect.DeepEqual(spec.Params, params) || !reflect.DeepEqual(spec.Results, []wago.ValType{wago.ValI32}) {
+			t.Fatalf("protocol import metadata = %+v", spec)
+		}
+	}
+	if len(wantUDP) != 0 || len(wantTCP) != 0 {
+		t.Fatalf("missing protocol imports: UDP=%v TCP=%v", wantUDP, wantTCP)
 	}
 
 	fn, ok := rt.HostImports()[Module+".abi_version"].(wago.HostFunc)
@@ -68,7 +93,7 @@ func TestExtensionMetadataAndABIBinding(t *testing.T) {
 	}
 }
 
-func TestTCPConfigurationRemainsInternalUntilGuestSurfaceIsComplete(t *testing.T) {
+func TestTCPConfigurationAdvertisesCompleteGuestSurface(t *testing.T) {
 	extension := Init(Config{StaticIPv4: &StaticIPv4Config{
 		Hostname:               "tcp1",
 		RandSeed:               1,
@@ -86,13 +111,20 @@ func TestTCPConfigurationRemainsInternalUntilGuestSurfaceIsComplete(t *testing.T
 	if err := runtime.Use(extension); err != nil {
 		t.Fatalf("Use TCP-configured extension: %v", err)
 	}
-	if got := runtime.Capabilities(); !reflect.DeepEqual(got, []wago.Capability{CapInfo, CapUDP}) {
-		t.Fatalf("TCP configuration advertised capability early: %v", got)
+	if got := runtime.Capabilities(); !reflect.DeepEqual(got, []wago.Capability{CapInfo, CapTCP, CapUDP}) {
+		t.Fatalf("TCP capabilities = %v", got)
 	}
+	var tcpImports int
 	for _, spec := range runtime.ProvidedImports() {
-		if spec.Module == "wago_net_tcp" {
-			t.Fatalf("incomplete TCP import advertised: %+v", spec)
+		if spec.Module == TCPModule {
+			tcpImports++
 		}
+		if spec.Module == "wago_net_dns" {
+			t.Fatalf("unsupported DNS import advertised: %+v", spec)
+		}
+	}
+	if tcpImports != 11 {
+		t.Fatalf("TCP import count = %d, want 11", tcpImports)
 	}
 }
 

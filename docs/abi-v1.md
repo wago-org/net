@@ -101,12 +101,13 @@ payload size. Truncation consumes and discards the unread suffix. Empty datagram
 are represented by `OK`, zero lengths, and a valid source endpoint; they are not
 confused with `AGAIN`.
 
-## Reserved TCP module and signatures
+## TCP module and signatures
 
-The backend-neutral TCP ABI is fixed for a future independently gated
-`wago_net_tcp` module, but **no TCP import or `net.tcp` capability is currently
-registered**. Advertising waits until every host binding and its guest-memory
-rollback path is complete. The reserved signatures all return one `i32` status:
+The complete backend-neutral TCP ABI is independently gated in the
+`wago_net_tcp` module by the narrow `net.tcp` capability. Every resource call
+requires exact Runtime instance identity; no TCP resource import is exposed by
+the low-level stateless `Imports` bundle. The signatures all return one `i32`
+status:
 
 ```text
 namespace_default(out_handle_ptr: i32) -> i32
@@ -122,9 +123,11 @@ close_stream(stream: i64) -> i32
 poll(events_ptr: i32, event_capacity: i32, budget_ptr: i32, out_result_ptr: i32) -> i32
 ```
 
-`listen` writes an opaque listener handle only on `OK`. `connect` writes a stream
-structure on both `OK` and `IN_PROGRESS`; the latter is completed by bounded
-service plus `finish_connect`. `accept` returns only fully established streams.
+`namespace_default` returns `NOT_SUPPORTED` when no static namespace is
+configured. `listen` writes an opaque listener handle only on `OK`. `connect`
+writes a stream structure on both `OK` and `IN_PROGRESS`; the latter is completed
+by bounded service plus `finish_connect`. `accept` returns only fully established
+streams and writes no output on `AGAIN`.
 `read` and `write` report one immediate partial operation: `OK` writes result
 metadata, `AGAIN` accepts or consumes no bytes and leaves output unchanged, and
 `EOF` applies only to reads after buffered input is drained. A zero-length read
@@ -136,8 +139,11 @@ Before any state change, create operations validate their complete endpoint and
 stream-output ranges and require nonempty input/output ranges to be disjoint.
 Read and write likewise validate the complete payload and result ranges before
 consuming or accepting stream bytes. A checked range failure returns
-`INVALID_ARGUMENT` without backend work or output mutation. No guest-memory
-slice may be retained beyond the host call.
+`INVALID_ARGUMENT` without backend work or output mutation. Descriptor encoding
+failure after connect or accept closes the newly allocated stream handle before
+returning. No guest-memory slice may be retained beyond the host call. TCP
+`poll` uses the shared layouts and state coordinator but is registered under
+`net.tcp`; it never depends on a guest holding `net.udp`.
 
 `wago_net_tcp_stream_v1` is 72 bytes:
 
