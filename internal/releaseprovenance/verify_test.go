@@ -823,6 +823,97 @@ func TestProductionReadinessV2BindsFreshTrustedDistributionReceipt(t *testing.T)
 	}
 }
 
+func TestVerifyReleaseDecisionChainIndependently(t *testing.T) {
+	fixture := newSignedDistributionFixture(t)
+	trusted, err := verifySignedDistribution(fixture.bundle, fixture.statement, fixture.signature, fixture.policy, fixture.opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	trustedReceiptPath := filepath.Join(t.TempDir(), "trusted-distribution.json")
+	trustedReceiptHash, err := WriteTrustedDistributionReceipt(trustedReceiptPath, trusted)
+	if err != nil {
+		t.Fatal(err)
+	}
+	report := assessProductionReadinessV2(trusted, trustedReceiptHash)
+	readinessPath := filepath.Join(t.TempDir(), "production-readiness.json")
+	readinessHash, err := WriteProductionReadinessReceiptV2(readinessPath, report)
+	if err != nil {
+		t.Fatal(err)
+	}
+	opts := ProductionReadinessV2VerifyOptions{
+		ExpectedSubject: fixture.opts.ExpectedSubject, ExpectedStatementSHA256: fixture.statementHash,
+		ExpectedSignatureSHA256: fixture.signatureHash, ExpectedTrustPolicySHA256: fixture.policyHash,
+		ExpectedTrustedDistributionReceiptSHA256: trustedReceiptHash,
+	}
+	verifiedReport, verifiedReadinessHash, err := VerifyProductionReadinessReceiptV2(readinessPath, opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if verifiedReadinessHash != readinessHash || !reflect.DeepEqual(verifiedReport, report) {
+		t.Fatalf("verified readiness v2 = %+v, %s", verifiedReport, verifiedReadinessHash)
+	}
+	chain, err := VerifyReleaseDecisionChain(trustedReceiptPath, readinessPath, opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if chain.TrustedDistributionSHA256 != trustedReceiptHash || chain.ProductionReadinessSHA256 != readinessHash ||
+		!reflect.DeepEqual(chain.ProductionReadiness, report) {
+		t.Fatalf("verified release decision chain = %+v", chain)
+	}
+
+	for _, test := range []struct {
+		name   string
+		mutate func(*ProductionReadinessV2VerifyOptions)
+	}{
+		{name: "subject", mutate: func(opts *ProductionReadinessV2VerifyOptions) { opts.ExpectedSubject = strings.Repeat("f", 40) }},
+		{name: "statement", mutate: func(opts *ProductionReadinessV2VerifyOptions) { opts.ExpectedStatementSHA256 = strings.Repeat("f", 64) }},
+		{name: "signature", mutate: func(opts *ProductionReadinessV2VerifyOptions) { opts.ExpectedSignatureSHA256 = strings.Repeat("f", 64) }},
+		{name: "trust policy", mutate: func(opts *ProductionReadinessV2VerifyOptions) {
+			opts.ExpectedTrustPolicySHA256 = strings.Repeat("f", 64)
+		}},
+		{name: "trusted receipt", mutate: func(opts *ProductionReadinessV2VerifyOptions) {
+			opts.ExpectedTrustedDistributionReceiptSHA256 = strings.Repeat("f", 64)
+		}},
+	} {
+		t.Run("decision chain constraint "+test.name, func(t *testing.T) {
+			wrong := opts
+			test.mutate(&wrong)
+			if _, err := VerifyReleaseDecisionChain(trustedReceiptPath, readinessPath, wrong); err == nil {
+				t.Fatalf("wrong %s constraint unexpectedly accepted", test.name)
+			}
+		})
+	}
+
+	tamperedPath := filepath.Join(t.TempDir(), "production-readiness.json")
+	readinessData, err := os.ReadFile(readinessPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tamperedData := bytes.Replace(readinessData, []byte(fixture.keyID), []byte("release-test-2027"), 1)
+	if err := os.WriteFile(tamperedPath, tamperedData, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(tamperedPath+".sha256", []byte(readinessHash+"  "+filepath.Base(tamperedPath)+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := VerifyReleaseDecisionChain(trustedReceiptPath, tamperedPath, opts); err == nil {
+		t.Fatal("tampered linked readiness unexpectedly accepted")
+	}
+
+	wrongLink := *report
+	wrongLink.TrustedKeyID = "different-opaque-label"
+	wrongLinkPath := filepath.Join(t.TempDir(), "production-readiness.json")
+	if _, err := WriteProductionReadinessReceiptV2(wrongLinkPath, &wrongLink); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := VerifyProductionReadinessReceiptV2(wrongLinkPath, opts); err != nil {
+		t.Fatalf("individually valid wrong-link receipt: %v", err)
+	}
+	if _, err := VerifyReleaseDecisionChain(trustedReceiptPath, wrongLinkPath, opts); err == nil {
+		t.Fatal("individually valid but differently labeled receipt chain unexpectedly accepted")
+	}
+}
+
 type signedDistributionFixture struct {
 	bundle, statement, signature, policy                        string
 	opts                                                        VerifyOptions

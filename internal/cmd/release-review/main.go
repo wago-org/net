@@ -10,7 +10,7 @@ import (
 )
 
 func main() {
-	mode := flag.String("mode", "verify", "operation: verify, export, statement, verify-signed, verify-trusted-receipt, verify-production-candidate, verify-production-candidate-chain, or verify-readiness-receipt")
+	mode := flag.String("mode", "verify", "operation: verify, export, statement, verify-signed, verify-trusted-receipt, verify-production-candidate, verify-production-candidate-chain, verify-readiness-receipt, or verify-release-decision-chain")
 	source := flag.String("source", "", "extracted release-signoff evidence directory")
 	bundle := flag.String("bundle", "", "review bundle directory or .tar.gz path")
 	out := flag.String("out", "", "mode-specific destination path")
@@ -25,6 +25,7 @@ func main() {
 	statementSHA256 := flag.String("statement-sha256", "", "exact statement SHA-256 required by receipt policy")
 	signatureSHA256 := flag.String("signature-sha256", "", "exact signature SHA-256 required by receipt policy")
 	trustPolicySHA256 := flag.String("trust-policy-sha256", "", "exact trust-policy SHA-256 required by receipt policy")
+	trustedReceiptSHA256 := flag.String("trusted-receipt-sha256", "", "exact trusted-distribution receipt SHA-256 required by chain policy")
 	flag.Parse()
 	opts := releaseprovenance.VerifyOptions{
 		ExpectedSubject: *subject, ExpectedBundleSHA256: *bundleSHA256, StrictDistribution: *strictDistribution,
@@ -176,6 +177,27 @@ func main() {
 		fmt.Printf("release-review: verified production readiness receipt %s\n", *receiptPath)
 		fmt.Printf("readiness_sha256=%s\nready=%t\nsubject=%s\nstatement_sha256=%s\ntrust_policy_sha256=%s\nblockers=%d\n",
 			receiptHash, report.Ready, report.Subject, report.StatementSHA256, report.TrustPolicySHA256, len(report.Blockers))
+	case "verify-release-decision-chain":
+		if *trustedReceiptPath == "" || *receiptPath == "" || *subject == "" || *statementSHA256 == "" ||
+			*signatureSHA256 == "" || *trustPolicySHA256 == "" || *trustedReceiptSHA256 == "" {
+			fmt.Fprintln(os.Stderr, "release-review: -trusted-receipt, -receipt, -subject, -statement-sha256, -signature-sha256, -trust-policy-sha256, and -trusted-receipt-sha256 are required for verify-release-decision-chain")
+			os.Exit(2)
+		}
+		chain, err := releaseprovenance.VerifyReleaseDecisionChain(*trustedReceiptPath, *receiptPath, releaseprovenance.ReleaseDecisionChainVerifyOptions{
+			ExpectedSubject: *subject, ExpectedStatementSHA256: *statementSHA256,
+			ExpectedSignatureSHA256: *signatureSHA256, ExpectedTrustPolicySHA256: *trustPolicySHA256,
+			ExpectedTrustedDistributionReceiptSHA256: *trustedReceiptSHA256,
+		})
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+		fmt.Printf("release-review: verified release decision chain %s -> %s\n", *trustedReceiptPath, *receiptPath)
+		fmt.Printf("trusted_distribution_sha256=%s\nreadiness_sha256=%s\nready=%t\nsubject=%s\nstatement_sha256=%s\nsignature_sha256=%s\ntrust_policy_sha256=%s\nblockers=%d\n",
+			chain.TrustedDistributionSHA256, chain.ProductionReadinessSHA256, chain.ProductionReadiness.Ready,
+			chain.ProductionReadiness.Subject, chain.ProductionReadiness.StatementSHA256,
+			chain.ProductionReadiness.SignatureSHA256, chain.ProductionReadiness.TrustPolicySHA256,
+			len(chain.ProductionReadiness.Blockers))
 	default:
 		fmt.Fprintf(os.Stderr, "release-review: unsupported mode %q\n", *mode)
 		os.Exit(2)

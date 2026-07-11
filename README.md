@@ -83,9 +83,12 @@ production activation behind published exact subjects, executed arm64
 evidence, and zero accepted exceptions; freshly recomputes strict readiness from
 the original signed inputs while binding a new v2 decision to the exact retained
 trusted-distribution receipt and signature digest; preserves the v1 receipt
-contract for compatibility; atomically retains and independently verifies
-checksummed canonical readiness receipts, with public ready/blocked/tamper/
-constraint interoperability vectors for external automation; audits unsupported
+contract for compatibility; independently verifies both canonical receipt/
+sidecar pairs and their exact linkage under explicit subject, statement,
+signature, policy, and intermediary-receipt constraints without treating
+retained evidence as fresh cryptography or publisher identity; keeps public
+ready/blocked/tamper/constraint interoperability vectors for external
+automation; audits unsupported
 pool topology; runs bounded
 fuzz smoke, benchmarks, TinyGo,
 cross-build, package/custom CLI inspection, and final clean-tree checks; and

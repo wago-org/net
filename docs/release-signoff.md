@@ -356,6 +356,31 @@ basename-correct stale checksum for a tampered receipt, and wrong subject,
 statement, and trust-policy constraint cases. The vectors are not a production
 decision or trust input and do not enable hosted automation.
 
+The complete v2 retained chain can be verified without the original archive,
+statement, signature bytes, policy, or public key when an independent trusted
+channel supplies all five selection values:
+
+```sh
+GOWORK=off go run ./internal/cmd/release-review \
+  -mode verify-release-decision-chain \
+  -trusted-receipt /automation/release.trusted-distribution.json \
+  -receipt /automation/release.production-readiness.json \
+  -subject <40-lowercase-hex-plugin-commit> \
+  -statement-sha256 <64-lowercase-hex-statement-digest> \
+  -signature-sha256 <64-lowercase-hex-signature-digest> \
+  -trust-policy-sha256 <64-lowercase-hex-policy-digest> \
+  -trusted-receipt-sha256 <64-lowercase-hex-intermediary-receipt-digest>
+```
+
+The chain verifier checks canonical JSON and exact adjacent sidecars for both
+receipts, all explicit constraints, the intermediary receipt digest, and exact
+algorithm, opaque key label, subject, statement, signature, policy, provenance,
+and archive linkage. It accepts either a valid ready or blocked decision. It does
+not repeat Ed25519 or archive verification, establish publisher identity, or
+make a fresh readiness decision; activation must separately require `ready=true`.
+The standalone v1 readiness verifier above remains compatible with previously
+retained receipts.
+
 Verification rejects a different schema; changed or
 unordered evidence; unknown or noncanonical manifest fields; unsafe archive
 paths; wrong exact production or first-class current-review subjects, trees, or
