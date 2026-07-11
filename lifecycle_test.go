@@ -386,19 +386,40 @@ func TestInstanceStateCleanupAfterLaterSetupFailure(t *testing.T) {
 	}
 }
 
-func TestResetReinstantiateReleaseCleansOldInstanceState(t *testing.T) {
-	extension := Init(Config{})
+func TestNetworkingRequirementReinstantiatesSnapshotClass(t *testing.T) {
+	limits := QuotaLimits{Resources: 4, UDPResources: 1, TCPResources: 2, QueuedBytes: 2048, ServiceUnits: 64}
+	ready := ReadinessConfig{MaxRegistrations: 4}
+	prefix := netip.MustParsePrefix("192.0.2.0/24")
+	extension := Init(Config{
+		Policy: PolicyConfig{Rules: []PolicyRule{{
+			Action: PolicyAllow, Transports: []PolicyTransport{PolicyTransportUDP, PolicyTransportTCP},
+			Directions: []PolicyDirection{PolicyInbound, PolicyOutbound}, Prefixes: []netip.Prefix{prefix},
+		}}},
+		Limits: &limits, Readiness: &ready,
+		StaticIPv4: &StaticIPv4Config{
+			Hostname: "pooled-net", RandSeed: 71,
+			HardwareAddress: [6]byte{2, 0, 0, 0, 0, 71}, GatewayHardwareAddress: [6]byte{2, 0, 0, 0, 0, 72},
+			IPv4Address: netip.MustParseAddr("192.0.2.71"), MTU: 1500,
+			Link: PacketLinkConfig{MaxFrameBytes: 1514, IngressFrames: 8, EgressFrames: 8},
+			UDP:  UDPConfig{MaxSockets: 1, ReceiveBytes: 64, TransmitBytes: 64, ReceiveDatagrams: 2, TransmitDatagrams: 2, MaxPayloadBytes: 32},
+			TCP:  TCPConfig{MaxListeners: 1, MaxOutboundStreams: 1, AcceptBacklog: 1, ReceiveBytes: 256, TransmitBytes: 256, TransmitPackets: 4},
+		},
+	})
 	manager := extension.instanceManager()
 	runtime := wago.NewRuntime()
 	if err := runtime.Use(extension); err != nil {
 		t.Fatalf("Use: %v", err)
 	}
 	class, err := runtime.Class(emptyModule(t, runtime), wago.ClassOptions{
-		Pool: wago.PoolOptions{MaxInstances: 1, Reset: wago.ResetReinstantiate},
+		Pool: wago.PoolOptions{MinInstances: 1, MaxInstances: 1, Reset: wago.ResetMemorySnapshot},
 	})
 	if err != nil {
 		t.Fatalf("Class: %v", err)
 	}
+	if got := class.ResetPolicy(); got != wago.ResetReinstantiate {
+		t.Fatalf("effective reset policy = %v, want reinstantiate", got)
+	}
+
 	lease, err := class.Acquire(context.Background())
 	if err != nil {
 		t.Fatalf("Acquire: %v", err)
@@ -408,21 +429,58 @@ func TestResetReinstantiateReleaseCleansOldInstanceState(t *testing.T) {
 	if !ok {
 		t.Fatal("old instance state not attached")
 	}
-	owned := &lifecycleResource{}
-	if _, err := oldState.Resources().Add(resource.KindDNSQuery, owned); err != nil {
-		t.Fatalf("Add resource: %v", err)
+	localUDP := namespace.Endpoint{Address: netip.MustParseAddr("192.0.2.71"), Port: 4100}
+	udpHandle, progress, err := oldState.BindUDP(oldState.NamespaceHandle(), localUDP)
+	if err != nil || progress != namespace.ProgressDone {
+		t.Fatalf("BindUDP = %v, %v, %v", udpHandle, progress, err)
+	}
+	localTCP := namespace.Endpoint{Address: netip.MustParseAddr("192.0.2.71"), Port: 4200}
+	tcpHandle, progress, err := oldState.ListenTCP(oldState.NamespaceHandle(), localTCP)
+	if err != nil || progress != namespace.ProgressDone {
+		t.Fatalf("ListenTCP = %v, %v, %v", tcpHandle, progress, err)
 	}
 	if err := lease.Release(); err != nil {
 		t.Fatalf("Release: %v", err)
 	}
-	if owned.closed.Load() != 1 {
-		t.Fatalf("released resource close count = %d, want 1", owned.closed.Load())
-	}
 	if _, ok := manager.ForInstance(oldInstance); ok {
-		t.Fatal("ResetReinstantiate retained old instance state")
+		t.Fatal("snapshot-configured class retained old networking state")
 	}
-	if got := manager.Len(); got != 1 {
-		t.Fatalf("fresh idle instance states = %d, want 1", got)
+	if _, err := oldState.Resources().Lookup(udpHandle, resource.KindUDPSocket); !errors.Is(err, resource.ErrClosed) {
+		t.Fatalf("old UDP handle after release = %v, want ErrClosed", err)
+	}
+	if _, err := oldState.Resources().Lookup(tcpHandle, resource.KindTCPListener); !errors.Is(err, resource.ErrClosed) {
+		t.Fatalf("old TCP handle after release = %v, want ErrClosed", err)
+	}
+	if usage, closed := oldState.Quotas().Snapshot(); !closed || usage != (quota.Usage{}) {
+		t.Fatalf("old quota after release = %+v, closed=%v", usage, closed)
+	}
+
+	freshLease, err := class.Acquire(context.Background())
+	if err != nil {
+		t.Fatalf("Acquire fresh: %v", err)
+	}
+	freshInstance := freshLease.Instance()
+	freshState, ok := manager.ForInstance(freshInstance)
+	if !ok || freshInstance == oldInstance || freshState == oldState {
+		t.Fatalf("fresh instance/state = %p/%p, old = %p/%p, attached=%v", freshInstance, freshState, oldInstance, oldState, ok)
+	}
+	if _, err := freshState.Resources().Lookup(udpHandle, resource.KindUDPSocket); !errors.Is(err, resource.ErrBadHandle) {
+		t.Fatalf("old UDP handle in fresh lease = %v, want ErrBadHandle", err)
+	}
+	if _, err := freshState.Resources().Lookup(tcpHandle, resource.KindTCPListener); !errors.Is(err, resource.ErrBadHandle) {
+		t.Fatalf("old TCP handle in fresh lease = %v, want ErrBadHandle", err)
+	}
+	if usage, closed := freshState.Quotas().Snapshot(); closed || usage.Resources != 1 || usage.UDPResources != 0 || usage.TCPResources != 0 {
+		t.Fatalf("fresh quota before resources = %+v, closed=%v", usage, closed)
+	}
+	if rebound, progress, err := freshState.BindUDP(freshState.NamespaceHandle(), localUDP); err != nil || progress != namespace.ProgressDone || rebound == 0 {
+		t.Fatalf("fresh BindUDP = %v, %v, %v", rebound, progress, err)
+	}
+	if relistened, progress, err := freshState.ListenTCP(freshState.NamespaceHandle(), localTCP); err != nil || progress != namespace.ProgressDone || relistened == 0 {
+		t.Fatalf("fresh ListenTCP = %v, %v, %v", relistened, progress, err)
+	}
+	if err := freshLease.Release(); err != nil {
+		t.Fatalf("Release fresh: %v", err)
 	}
 	if err := class.Close(); err != nil {
 		t.Fatalf("Class.Close: %v", err)

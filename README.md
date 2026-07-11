@@ -30,9 +30,10 @@ if err := rt.Use(wagonet.Init(wagonet.Config{})); err != nil {
 // Runtime instance then receives its own isolated namespace and handles.
 ```
 
-Networking extensions currently require ordinary Runtime instances or classes
-using `wago.ResetReinstantiate`. Do not use `wago.ResetMemorySnapshot`: Wago does
-not yet notify extensions when a physical instance is reset between leases.
+The extension declares that networking state requires physical reinstantiation.
+Wago therefore downgrades `ResetMemorySnapshot` and other in-place class reset
+requests to `ResetReinstantiate`; UDP/TCP handles, queues, policy state, and quota
+accounts cannot cross leases even when callers request snapshot reuse.
 
 Custom Wago binaries can include the plugin through its self-registering package:
 

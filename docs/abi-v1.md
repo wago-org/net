@@ -252,6 +252,13 @@ tentative reservation, and instance teardown clears both committed allocations
 and abandoned reservations. Exact default limits remain implementation policy,
 not ABI constants.
 
+The host extension requires physical reinstantiation between class leases.
+Consequently, a Wago class configured with an in-place reset policy is safely
+executed as `ResetReinstantiate` while networking is registered. This is an
+embedding/lifecycle guarantee rather than a guest-visible status or layout: no
+handle, queued byte, listener, stream, socket, readiness registration, or quota
+token survives into the next lease.
+
 ## Compatibility boundary
 
 This is a Wago-specific core Wasm ABI. It is not a WASI Component Model or WIT

@@ -1,6 +1,8 @@
 // Package net provides the core of Wago's capability-gated networking plugin
 // suite. The guest ABI is backend-neutral; lneto is the first backend and is
-// not part of the public contract.
+// not part of the public contract. Runtime registration requires physical
+// reinstantiation between class leases so instance-owned network state cannot
+// survive an in-place Wasm memory reset.
 package net
 
 import (
@@ -165,6 +167,7 @@ func (e *Extension) Register(reg *wago.Registry) error {
 		return e.configErr
 	}
 	instances := e.instanceManager()
+	reg.RequireReinstantiation()
 	reg.Hooks().AfterInstantiate(instances.AfterInstantiate)
 	reg.Hooks().BeforeClose(instances.BeforeClose)
 	reg.Capability(CapInfo, wago.CapabilityDocs("inspect the Wago networking ABI and interfaces"))

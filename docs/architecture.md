@@ -123,23 +123,26 @@ cannot complete; AGAIN and EOF stream results leave guest outputs unchanged.
 Host imports recover exact identity through the additive
 `wago.InstanceHostModule` interface, and `BeforeClose` removes the attachment
 before polling shutdown, reverse-creation resource cleanup, and quota shutdown.
-Failed later setup and `ResetReinstantiate` replacement use the same close path.
-No process-global instance map is used. The low-level `Imports` bundle remains
+The extension also calls `Registry.RequireReinstantiation`, so class resets that
+would reuse a physical instance are engine-downgraded to the same deterministic
+close-and-recreate path. Failed later setup and class replacement use that close
+path as well. No process-global instance map is used. The low-level `Imports` bundle remains
 suitable only for stateless core imports such as `abi_version`; resource-owning
 protocol extensions require the Runtime lifecycle path.
 
 The companion Wago branch `net/instance-close-hooks` contains the prerequisites:
-commit `dd82ec9a8963463e6516bf803bec58b3a89b89b3` adds deterministic close hooks,
-and commit `0156936` adds optional exact host-call instance identity without
-expanding the minimal `HostModule` interface.
+commit `74e1e32` reconciles deterministic `BeforeClose` cleanup with the broader
+plugin lifecycle design, preserves exact host-call identity, and adds origin/error/
+after-close lifecycle metadata; commit `54499ba` adds transactional extension
+reset eligibility without changing `Instance` size, the low-level APIs, or the
+TinyGo-compatible `HostFunc` shape.
 
-## Pool reset restriction
+## Pool reset enforcement
 
-`wago.ResetMemorySnapshot` is **not supported** for any class using networking
-extensions. It reuses a physical instance without a close or reset hook, so
-lease-scoped network resources would cross tenant boundaries. Such classes are
-blocked by project policy and must use `wago.ResetReinstantiate`. This restriction
-cannot yet be enforced by the plugin because Wago does not expose reset-policy
-eligibility to extensions; do not enable snapshot reuse until Wago provides a
-reset lifecycle hook or an extension eligibility control and this suite adds
-corresponding cleanup tests.
+The networking extension declares `Registry.RequireReinstantiation`. A class may
+still request `wago.ResetMemorySnapshot`, but `Class.ResetPolicy` reports and
+`Lease.Release` enforces `wago.ResetReinstantiate` while networking is registered.
+The old physical instance is closed before its fresh replacement is published;
+old UDP/TCP handles become closed in the retired state and fail as cross-table
+handles in the new state. Tests rebind the same UDP and TCP ports on the fresh
+lease to prove backend resources and quotas did not cross the boundary.
