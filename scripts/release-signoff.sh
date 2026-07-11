@@ -131,17 +131,25 @@ record_check go-mod-tidy pass 'no module-file changes'
 log "bounded fuzz corpus smoke ($fuzztime each)"
 go test ./internal/backend/lneto/dns -run '^$' -fuzz '^FuzzDNSWireResponse$' -fuzztime="$fuzztime" | tee "$out/fuzz-dns-wire.txt"
 record_check fuzz-dns-wire pass "$fuzztime"
-go test ./internal/abi -run '^$' -fuzz '^FuzzDNSV1Layouts$' -fuzztime="$fuzztime" | tee "$out/fuzz-dns-layout.txt"
+go test ./internal/abi/dns -run '^$' -fuzz '^FuzzDNSV1Layouts$' -fuzztime="$fuzztime" | tee "$out/fuzz-dns-layout.txt"
 record_check fuzz-dns-layout pass "$fuzztime"
+go test ./internal/abi/tcp -run '^$' -fuzz '^FuzzV1Layouts$' -fuzztime="$fuzztime" | tee "$out/fuzz-tcp-layout.txt"
+record_check fuzz-tcp-layout pass "$fuzztime"
+go test ./internal/abi/udp -run '^$' -fuzz '^FuzzReceiveResultV1$' -fuzztime="$fuzztime" | tee "$out/fuzz-udp-layout.txt"
+record_check fuzz-udp-layout pass "$fuzztime"
+go test ./internal/abi/core -run '^$' -fuzz '^FuzzV1Layouts$' -fuzztime="$fuzztime" | tee "$out/fuzz-shared-layout.txt"
+record_check fuzz-shared-layout pass "$fuzztime"
 go test . -run '^$' -fuzz '^FuzzGuestDNSMemory$' -fuzztime="$fuzztime" | tee "$out/fuzz-dns-guest.txt"
 record_check fuzz-dns-guest pass "$fuzztime"
-go test ./internal/abi -run '^$' -fuzz '^FuzzV1Layouts$' -fuzztime="$fuzztime" | tee "$out/fuzz-shared-layout.txt"
-record_check fuzz-shared-layout pass "$fuzztime"
+go test . -run '^$' -fuzz '^FuzzGuestTCPStreamMemory$' -fuzztime="$fuzztime" | tee "$out/fuzz-tcp-guest.txt"
+record_check fuzz-tcp-guest pass "$fuzztime"
+go test . -run '^$' -fuzz '^FuzzGuestUDPPollMemory$' -fuzztime="$fuzztime" | tee "$out/fuzz-udp-guest.txt"
+record_check fuzz-udp-guest pass "$fuzztime"
 
 log "benchmarks"
 go test . -run '^$' -bench 'BenchmarkGuest(UDP|TCP)Poll$' -benchmem -count=1 | tee "$out/bench-guest-poll.txt"
 record_check benchmark-guest-poll pass 'benchmem count=1'
-go test ./internal/backend/lneto -run '^$' -bench '^BenchmarkUDPDatagramQueueRoundTrip$' -benchmem -count=1 | tee "$out/bench-udp-queue.txt"
+go test ./internal/backend/lneto/udp -run '^$' -bench '^BenchmarkUDPDatagramQueueRoundTrip$' -benchmem -count=1 | tee "$out/bench-udp-queue.txt"
 record_check benchmark-udp-queue pass 'benchmem count=1'
 
 log "TinyGo and cross-compile"
@@ -163,7 +171,7 @@ log "source boundaries and custom package inspection"
 record_check source-boundaries pass 'lneto imports and blocking API guard'
 WAGO_DIR="$wago_dir" LNETO_DIR="$lneto_dir" SIGNOFF_CUSTOM_DIR="$out/custom-cli" \
   "$root/scripts/custom-cli-signoff.sh"
-record_check custom-cli-inspection pass 'Go and TinyGo byte-identical; 4 capabilities; 24 imports'
+record_check custom-cli-inspection pass 'Go and TinyGo byte-identical for granular TCP/UDP/DNS and explicit all-protocol bundles'
 
 helper="$wago_dir/src/wago/trap_code_release_signoff_test.go"
 cleanup() { rm -f "$helper"; }

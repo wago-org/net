@@ -34,16 +34,26 @@ replace github.com/wago-org/wago => $wago_dir
 replace github.com/soypat/lneto => $lneto_dir
 replace github.com/wago-org/workers => $workers_dir
 EOF
-cat >"$out/main.go" <<'EOF'
+
+write_cli() {
+  local key=$1 package=$2
+  mkdir -p "$out/cmd/$key"
+  cat >"$out/cmd/$key/main.go" <<EOF
 package main
 
 import (
-	_ "github.com/wago-org/net/register"
+	_ "$package"
 	"github.com/wago-org/wago/cli/wagocli"
 )
 
-func main() { wagocli.Main("net-release-signoff") }
+func main() { wagocli.Main("$key-release-signoff") }
 EOF
+}
+write_cli net github.com/wago-org/net/register
+write_cli net-tcp github.com/wago-org/net/tcp/register
+write_cli net-udp github.com/wago-org/net/udp/register
+write_cli net-dns github.com/wago-org/net/dns/register
+
 cat >"$out/cmd/validate/main.go" <<'EOF'
 package main
 
@@ -61,11 +71,39 @@ type inspection struct {
 	} `json:"imports"`
 }
 
+type expectation struct {
+	capabilities []string
+	imports      map[string]int
+}
+
+var expectations = map[string]expectation{
+	"net": {
+		capabilities: []string{"net.dns", "net.info", "net.tcp", "net.udp"},
+		imports: map[string]int{"wago_net": 1, "wago_net_dns": 6, "wago_net_tcp": 11, "wago_net_udp": 6},
+	},
+	"net-tcp": {
+		capabilities: []string{"net.info", "net.tcp"},
+		imports: map[string]int{"wago_net": 1, "wago_net_tcp": 11},
+	},
+	"net-udp": {
+		capabilities: []string{"net.info", "net.udp"},
+		imports: map[string]int{"wago_net": 1, "wago_net_udp": 6},
+	},
+	"net-dns": {
+		capabilities: []string{"net.dns", "net.info"},
+		imports: map[string]int{"wago_net": 1, "wago_net_dns": 6},
+	},
+}
+
 func main() {
-	if len(os.Args) != 2 {
-		panic("usage: validate <inspection.json>")
+	if len(os.Args) != 3 {
+		panic("usage: validate <plugin> <inspection.json>")
 	}
-	data, err := os.ReadFile(os.Args[1])
+	want, ok := expectations[os.Args[1]]
+	if !ok {
+		panic("unknown plugin " + os.Args[1])
+	}
+	data, err := os.ReadFile(os.Args[2])
 	if err != nil {
 		panic(err)
 	}
@@ -73,17 +111,15 @@ func main() {
 	if err := json.Unmarshal(data, &got); err != nil {
 		panic(err)
 	}
-	wantCapabilities := []string{"net.dns", "net.info", "net.tcp", "net.udp"}
-	if !reflect.DeepEqual(got.Capabilities, wantCapabilities) {
-		panic(fmt.Sprintf("capabilities = %v, want %v", got.Capabilities, wantCapabilities))
+	if !reflect.DeepEqual(got.Capabilities, want.capabilities) {
+		panic(fmt.Sprintf("capabilities = %v, want %v", got.Capabilities, want.capabilities))
 	}
 	counts := map[string]int{}
 	for _, imp := range got.Imports {
 		counts[imp.Module]++
 	}
-	wantCounts := map[string]int{"wago_net": 1, "wago_net_dns": 6, "wago_net_tcp": 11, "wago_net_udp": 6}
-	if len(got.Imports) != 24 || !reflect.DeepEqual(counts, wantCounts) {
-		panic(fmt.Sprintf("imports = %d %v, want 24 %v", len(got.Imports), counts, wantCounts))
+	if !reflect.DeepEqual(counts, want.imports) {
+		panic(fmt.Sprintf("imports = %d %v, want %v", len(got.Imports), counts, want.imports))
 	}
 }
 EOF
@@ -91,12 +127,14 @@ EOF
 (
   cd "$out"
   GOWORK=off go mod tidy
-  GOWORK=off go build -trimpath -o wago-go .
-  GOWORK=off tinygo build -scheduler=tasks -o wago-tinygo .
-  ./wago-go plugin inspect net --json >inspection-go.json
-  ./wago-tinygo plugin inspect net --json >inspection-tinygo.json
-  cmp inspection-go.json inspection-tinygo.json
-  GOWORK=off go run ./cmd/validate inspection-go.json
+  for key in net net-tcp net-udp net-dns; do
+    GOWORK=off go build -trimpath -o "wago-$key-go" "./cmd/$key"
+    GOWORK=off tinygo build -scheduler=tasks -o "wago-$key-tinygo" "./cmd/$key"
+    "./wago-$key-go" plugin inspect "$key" --json >"inspection-$key-go.json"
+    "./wago-$key-tinygo" plugin inspect "$key" --json >"inspection-$key-tinygo.json"
+    cmp "inspection-$key-go.json" "inspection-$key-tinygo.json"
+    GOWORK=off go run ./cmd/validate "$key" "inspection-$key-go.json"
+  done
 )
 
-echo "custom-cli: standard Go and TinyGo inspection match at $out/inspection-go.json"
+echo "custom-cli: standard Go and TinyGo inspection match for net, net-tcp, net-udp, and net-dns at $out"
