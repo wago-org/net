@@ -25,7 +25,7 @@ readonly expected_wago_parent_workers=$production_wago_parent_workers
 readonly expected_lneto=ab1a0c735a8b534a1d6322a3e245bc11a09431e7
 readonly expected_wasi=3df6c766ad00e83b314da799dbf9a77b409ad19d
 readonly expected_current_net=173b38a4d5a0db0e6058544576942a46b9d543df
-readonly expected_current_wago=8131d967211871936793a4f129164ec0cd928ea9
+readonly expected_current_wago=540c453de318a8385d63ee335e4fd881a628aafc
 readonly expected_workers=1e9139756d8a3c631c59c00b028038c83bfa8341
 
 log() { printf '\n==> %s\n' "$*"; }
@@ -111,6 +111,9 @@ record_check wago-plugin-plan-compat pass 'reviewed redesign requires migration;
 CURRENT_WAGO_DIR="$current_wago_dir" CURRENT_NET_DIR="$current_net_dir" WORKERS_DIR="$workers_dir" \
   "$root/scripts/current-plugin-topology-audit.sh" | tee "$out/current-plugin-topology.txt"
 record_check current-plugin-topology-audit pass 'moving refs refreshed; explicit publication truth; pooling unsupported'
+CURRENT_WAGO_WASI_FIX_DIR="$current_wago_dir" WASI_DIR="$wasi_dir" WASI_FIX_REVIEW_OUT="$out/wasi-fix-review" \
+  "$root/scripts/wasi-preview1-fix-review.sh" | tee "$out/wasi-preview1-fix-review.txt"
+record_check wasi-preview1-fix-review pass 'patch-equivalent production/current Wago fixes; exact lineages; standard/race/TinyGo and both complete WASI suites'
 if grep -q '^adoption mode: adopted$' "$out/current-plugin-topology.txt"; then
   current_plugin_publication=adopted
 else

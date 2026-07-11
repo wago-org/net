@@ -19,7 +19,7 @@ The script refuses revision drift before doing work:
 | Wago worker parent | `ffd5ef4b122cbd019897eeea3503789ab5860e4a` |
 | lneto | `ab1a0c735a8b534a1d6322a3e245bc11a09431e7` |
 | WASI audit | `3df6c766ad00e83b314da799dbf9a77b409ad19d` |
-| Current Wago lifecycle review | `8131d967211871936793a4f129164ec0cd928ea9` |
+| Current Wago integrated preview-1 fix review | `540c453de318a8385d63ee335e4fd881a628aafc` |
 | Current networking registration review | `173b38a4d5a0db0e6058544576942a46b9d543df` |
 | External workers | `1e9139756d8a3c631c59c00b028038c83bfa8341` |
 
@@ -54,8 +54,9 @@ The gate performs, in order:
 
 1. revision, tree, ordered merge-parent, toolchain, selected-module, and initial
    clean-tree checks; the exact reviewed plugin-plan compatibility decision; a moving-ref
-   publication/pool topology refresh for current Wago/net/workers; and an
-   isolated audit of the reviewed docs/CI-only WASI upstream snapshot;
+   publication/pool topology refresh for current Wago/net/workers; a dual-line
+   audit of the production-derived and current integrated Wago preview-1 fixes;
+   and an isolated audit of the reviewed production-line WASI snapshot;
 2. workspace and `GOWORK=off` Go tests, race tests, vet, package listing, and a
    no-change `go mod tidy`;
 3. bounded fuzz smoke for DNS wire parsing; split DNS, TCP, UDP, and shared-core
@@ -105,9 +106,12 @@ the pinned historical current-plugin review also passed after the custom CLI
 kept its aggregate-only compatibility mode. Arm64 execution was truthfully
 `skipped-no-runner`.
 
-The moving-ref compatibility blocker is resolved locally. Wago review
-`8131d967211871936793a4f129164ec0cd928ea9` replays the hardened lifecycle commit
-directly onto `18615546584ec09e607856a0da99851656f5be80`, and selective networking
+The moving-ref compatibility blocker is resolved locally. Current Wago review
+`540c453de318a8385d63ee335e4fd881a628aafc` preserves exact lineage through
+preview-1 fix port `90018dad`, lifecycle replay `8131d967`, and upstream
+`18615546584ec09e607856a0da99851656f5be80`. The integration directly invokes
+local wrapper table entries, preserving external managed-worker callbacks while
+the wrapper-descriptor WASI correction remains active. Selective networking
 review `173b38a4d5a0db0e6058544576942a46b9d543df` passes standard Go, focused race,
 vet, TinyGo, exact direct/managed/external-worker cleanup, and pack-only
 cold-cache reconstruction. The reconstructed custom CLI inspects all four keys:
@@ -150,15 +154,27 @@ distribution-statement SHA-256
 `069a352b766a66e5bbf8cc249d9a4a376df08e3d796a363b172ff76ea59f56a7`.
 Publication truth and `skipped-no-runner` remained unchanged.
 
-Separate Wago fix review
+A post-integration strict rerun at plugin subject `2021be6cebcb65e17cb10e7839e151db92747d1d`
+correctly stopped in the moving-ref topology gate after fetching new Wago main
+`2fbb34a50e89faad0f2ea4d47a219218d0cd2871` (tree
+`42ddd8148a73d0a0bd2faccb03c834cfa06e2df3`, parent `18615546`). That upstream
+commit changes only `cli/wagocli/plugin_build.go`, but the exact current review
+must still be replayed and re-reviewed before the strict gate can pass. The
+failure occurred before any production selection or exception status changed.
+
+Production-derived Wago fix review
 `5c7f76dba0aa82ca94a1dd644318ed062b03f7cc` (tree
 `442d6a7506260565bccb01e32e016f6dccc25d6c`, direct parent production merge
-`97e6f91`) keeps synchronous-host funcrefs on the wrapper ABI. Its minimized
-6,719-byte regression and the complete reviewed WASI suite pass through
-`scripts/wasi-preview1-fix-review.sh`. Production still selects exact published
-evidence at `97e6f91`; remove the two exceptions only after the fix is reviewed,
-integrated without rewriting the ordered merge, published, selected, and passed
-through this complete gate.
+`97e6f91`) keeps synchronous-host funcrefs on the wrapper ABI. Current-Wago port
+`90018dad` has the same stable patch ID, and integration child `540c453d` (tree
+`94168ab93497a9288029d47bdf37cc9f6b6e4049`) preserves managed table callbacks
+without weakening the wrapper correction. `scripts/wasi-preview1-fix-review.sh`
+re-fetches publication refs, verifies both exact lineages, runs full current Wago,
+focused race, TinyGo, production WASI `1a7eeb2`, and current capability-based
+WASI `cbdb9b32`. Production still selects exact `97e6f91`; remove the two
+exceptions only after a fixed subject is published without rewriting the merge,
+selected as the production Wago input, and the strict gate passes with zero
+exceptions.
 
 Protocol-submodule release acceptance also includes
 `internal/dependencytest`'s root/single/pair/all `go list -deps` matrix. Every
@@ -240,7 +256,7 @@ production net pack contains the exact release subject's commit and complete
 source tree; production Wago contains the merge commit, both ordered parent
 commits, and all three complete source trees; lneto and WASI contain their exact
 pinned commits and trees. Separate packs contain the exact current networking
-review, current Wago lifecycle replay, and external workers commit/tree closures.
+review, current Wago integrated-fix review, and external workers commit/tree closures.
 The isolated review output also records the exact local module mapping and
 committed Go checksum lines used while `GOPROXY=off`; its fresh `GOMODCACHE`
 acquires no module payload. No moving remote ref is needed to inspect those
@@ -562,10 +578,11 @@ review while keeping unpublished subjects review-only and pooling unsupported.
 `docs/wasi-upstream-preview1-audit.md` prove that the reviewed newer WASI tree
 changes only documentation and CI, then bind the retained production exception
 to the exact four-pass/four-fault preview-1 matrix. The separate
-`scripts/wasi-preview1-fix-review.sh` verifies the minimized Wago-only root cause
-and full-suite pass on exact unpublished Wago fix review `5c7f76db`; the WASI pin
-therefore remains unchanged, while production exception removal waits for Wago
-fix publication and adoption. Once the networking merge is published, CI
+`scripts/wasi-preview1-fix-review.sh` verifies the minimized Wago-only root cause,
+patch-equivalent production/current fix commits, the current managed-wrapper
+compatibility child, and complete passes for production WASI `1a7eeb2` and
+current WASI `cbdb9b32`. The production WASI pin therefore remains unchanged,
+while production exception removal waits for fixed Wago publication and adoption. Once the networking merge is published, CI
 should check out the exact pinned Wago, lneto, and WASI
 revisions in the required adjacent layout and invoke this script. Do not replace
 the pin with a moving branch.

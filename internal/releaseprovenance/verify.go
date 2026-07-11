@@ -24,9 +24,9 @@ const (
 	ExpectedLnetoRevision = "ab1a0c735a8b534a1d6322a3e245bc11a09431e7"
 	ExpectedWASIRevision  = "3df6c766ad00e83b314da799dbf9a77b409ad19d"
 
-	ExpectedCurrentWagoRevision = "8131d967211871936793a4f129164ec0cd928ea9"
-	ExpectedCurrentWagoTree     = "10d95a09e436f5644ec80736e686a4d33cf454fb"
-	ExpectedCurrentWagoParent   = "18615546584ec09e607856a0da99851656f5be80"
+	ExpectedCurrentWagoRevision = "540c453de318a8385d63ee335e4fd881a628aafc"
+	ExpectedCurrentWagoTree     = "94168ab93497a9288029d47bdf37cc9f6b6e4049"
+	ExpectedCurrentWagoParent   = "90018dadbc70c8620984bab71f1eace347c29fa8"
 	ExpectedCurrentNetRevision  = "173b38a4d5a0db0e6058544576942a46b9d543df"
 	ExpectedCurrentNetTree      = "ca7534943e653a6c04c63ec458fc00feb6350799"
 	ExpectedCurrentNetParent    = "164ee79e98d7e51bf3553fb18b46fd2044b223aa"
@@ -419,7 +419,7 @@ func expectedReviewSourceRepositories(opts VerifyOptions) []Repository {
 
 func validateChecks(checks []Check, arm64Status string) error {
 	requiredPass := []string{
-		"pinned-revisions", "initial-clean-trees", "wago-plugin-plan-compat", "current-plugin-topology-audit",
+		"pinned-revisions", "initial-clean-trees", "wago-plugin-plan-compat", "current-plugin-topology-audit", "wasi-preview1-fix-review",
 		"go-test-workspace", "go-test-module", "go-test-race", "go-vet", "go-list", "go-mod-tidy",
 		"fuzz-dns-wire", "fuzz-dns-layout", "fuzz-dns-guest", "fuzz-shared-layout",
 		"benchmark-guest-poll", "benchmark-udp-queue", "tinygo-test", "cross-build",

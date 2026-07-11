@@ -208,20 +208,25 @@ records disposable artifacts under `.wago/release-signoff`:
 scripts/release-signoff.sh
 ```
 
-The current Wago review is replayed on exact upstream
-`18615546584ec09e607856a0da99851656f5be80`, and pack-only reconstruction now
-validates aggregate plus granular registration under standard Go and TinyGo.
-The strict local release gate now uses an exact clean production-Wago worktree,
-so a separate user-owned dirty audit checkout is neither cleaned nor used for
-compilation. The complete gate passes locally with truthful retained evidence.
-The retained production WASI exception is now an exact four-pass/four-fault
-subtest matrix,
-not a broad crash grep. A minimized trigger identifies Wago's synchronous-host
-register-ABI `call_indirect` path as the cause, and exact Wago fix review
-`5c7f76dba0aa82ca94a1dd644318ed062b03f7cc` makes the complete reviewed WASI
-suite pass. Production activation remains blocked by absent native/QEMU arm64
-execution, unpublished current/production subjects, and publication and adoption
-of that Wago fix before the two production WASI exceptions can be removed.
+The current Wago review now ends at integrated fix subject
+`540c453de318a8385d63ee335e4fd881a628aafc`: lifecycle replay `8131d967` is a
+direct child of exact upstream `18615546584ec09e607856a0da99851656f5be80`,
+patch-equivalent preview-1 fix `90018dad` follows it, and `540c453d` preserves
+managed worker table callbacks by directly invoking local wrapper descriptors.
+Pack-only reconstruction validates aggregate plus granular registration,
+external-worker cleanup, standard Go, race, vet, and TinyGo on that exact line.
+Wago `origin/main` subsequently advanced to CLI-only child `2fbb34a5`; the
+moving-ref gate now fails closed until the review chain is replayed. The strict
+local release gate still uses an exact clean production-Wago
+worktree, so a separate user-owned dirty audit checkout is neither cleaned nor
+used for compilation. The retained production WASI exception is an exact
+four-pass/four-fault subtest matrix, not a broad crash grep. Production-derived
+fix review `5c7f76dba0aa82ca94a1dd644318ed062b03f7cc` and the current integrated line
+both pass their complete matching WASI suites; current WASI `cbdb9b32` supplies
+the capability-registration adaptation required by current Wago. Production
+activation remains blocked by absent native/QEMU arm64 execution, unpublished
+current/production subjects, and publication and adoption of an exact fixed
+production Wago input before the two production WASI exceptions can be removed.
 
 See [`docs/release-signoff.md`](docs/release-signoff.md) for the exact matrix,
 pinned revisions, CI tiers, strict evidence, and fixed-review status, and

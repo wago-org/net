@@ -62,9 +62,14 @@ Wago worktree while leaving the user-owned dirty audit checkout untouched.
 Production activation remains blocked by unpublished exact subjects, missing
 arm64 execution, and accepted WASI preview-1 exceptions. Those exceptions are
 now bound to an exact four-pass/four-fault corpus matrix. A minimized trigger
-identifies Wago's synchronous-host register-ABI `call_indirect` path, and exact
-unpublished Wago fix review `5c7f76db` makes the complete reviewed WASI suite
-pass; production removal waits for review, publication, and adoption of that fix.
+identifies Wago's synchronous-host register-ABI `call_indirect` path. Exact
+production-derived fix review `5c7f76db` passes the complete production-line
+WASI suite. The patch-equivalent current-Wago port `90018dad` plus managed-wrapper
+compatibility child `540c453d` pass current WASI `cbdb9b32`, full current Wago,
+and pack-only networking/worker reconstruction. Wago main then advanced to
+CLI-only child `2fbb34a5`, so moving-ref acceptance correctly waits for a fresh
+replay. Production removal still waits for publication and adoption of an exact
+fixed production input.
 
 ## Goal
 
@@ -316,8 +321,8 @@ refreshed current-Wago review and selective networking review also pass direct,
 managed, external-worker, and granular inspection reconstruction. Release
 validation selects the exact clean production Wago merge independently of the
 user-owned dirty audit checkout. Before declaring production completion,
-publish the exact required subjects, integrate and publish the reviewed Wago
-preview-1 fix without rewriting the ordered-parent production merge, execute the
+publish the exact required subjects, publish and select the production-derived
+Wago preview-1 fix without rewriting the ordered-parent production merge, execute the
 arm64 smoke on a native or QEMU runner, and remove the exact retained WASI
 preview-1 exceptions through a strict passing production gate.
 

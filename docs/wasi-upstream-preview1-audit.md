@@ -2,17 +2,19 @@
 
 Networking's production release gate remains pinned to Wago WASI
 `3df6c766ad00e83b314da799dbf9a77b409ad19d`. The separately reviewed
-`origin/main` snapshot is
+production-line review snapshot is
 `1a7eeb215229e05bcb0f09d5cb3280d231739def`, two documentation/CI commits
-later. The native fault is now minimized and locally fixed in Wago review
-`5c7f76dba0aa82ca94a1dd644318ed062b03f7cc`, but that Wago subject is not yet a
-published production input.
+later. Current `origin/main` is now `cbdb9b32a3f28c0e63c7ab40d9c59712162367c4`,
+which adds capability-based registration for current Wago and is reviewed
+separately below. The native fault is minimized and locally fixed in
+production-derived Wago review `5c7f76dba0aa82ca94a1dd644318ed062b03f7cc`,
+but that Wago subject is not yet a published production input.
 
 Run the retained production exception audit after fetching WASI and Wago refs:
 
 ```sh
 git -C .audit/wasi fetch --all --prune
-REQUIRE_CURRENT_WASI=1 scripts/wasi-upstream-preview1-audit.sh
+scripts/wasi-upstream-preview1-audit.sh
 ```
 
 Run the separate fixed-Wago review without mutating `.audit/wasi`:
@@ -21,9 +23,11 @@ Run the separate fixed-Wago review without mutating `.audit/wasi`:
 scripts/wasi-preview1-fix-review.sh
 ```
 
-Without `REQUIRE_CURRENT_WASI=1`, the upstream audit uses the exact reviewed
-objects and reports later movement of `origin/main`. This keeps the committed
-release gate reproducible while making moving-head review explicit.
+The production upstream audit uses the exact reviewed objects and reports later
+movement of `origin/main`. `REQUIRE_CURRENT_WASI=1` intentionally fails after
+that movement until its production pin policy is explicitly revised. The
+separate fixed-Wago review binds and tests exact current WASI `cbdb9b32` without
+changing the production input.
 
 ## Upstream WASI review result
 
@@ -77,11 +81,22 @@ revision/tree/ordered parents, the reviewed WASI revision/tree, the minimized
 trigger digest, source-worktree preservation, the focused Wago regression, and
 the full isolated WASI suite.
 
+The current-Wago line is explicit rather than silently rebased. Patch-equivalent
+fix port `90018dad` follows lifecycle replay `8131d967`; integration child
+`540c453d` directly invokes local untagged wrapper table entries so managed
+worker callbacks remain valid. Current WASI `cbdb9b32` is the direct child of
+`1a7eeb2` that adopts capability-based registration. Full current Wago, focused
+standard/race regressions, TinyGo, all eight current WASI corpus cases, and the
+pack-only networking external-worker lifecycle gate pass on exact integration
+subject `540c453d`.
+
 ## Pin and production decision
 
 **Retain WASI `3df6c76` and production Wago `97e6f91` for published evidence.**
-The WASI repository has no implementation change to adopt, and the correction
-belongs to Wago. The local fix review proves the accepted exceptions can be
+The production-line WASI range through `1a7eeb2` has no implementation change
+to adopt, and the native correction belongs to Wago. Later `cbdb9b32` is a
+current-plugin registration adaptation, not a substitute production pin. The
+local fix reviews prove the accepted exceptions can be
 removed after the exact Wago correction is independently reviewed, integrated
 without rewriting the ordered-parent production merge history, published at an
 immutable ref, selected by release tooling, and passed through the complete

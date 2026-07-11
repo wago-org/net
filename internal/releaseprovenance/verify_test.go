@@ -390,6 +390,14 @@ func TestDetachedSignatureInteroperabilityVectors(t *testing.T) {
 		}
 	}
 
+	// These exact-byte interoperability vectors intentionally retain the review
+	// selection that was signed when they were published. Validate their immutable
+	// historical policy without rewriting the bytes when the live review advances.
+	vectorPolicy := VerifyOptions{expectedReviewSources: []Repository{
+		{Name: "net-current-review", Revision: "173b38a4d5a0db0e6058544576942a46b9d543df", Tree: "ca7534943e653a6c04c63ec458fc00feb6350799", Parents: []string{"164ee79e98d7e51bf3553fb18b46fd2044b223aa"}},
+		{Name: "wago-current-review", Revision: "8131d967211871936793a4f129164ec0cd928ea9", Tree: "10d95a09e436f5644ec80736e686a4d33cf454fb", Parents: []string{"18615546584ec09e607856a0da99851656f5be80"}},
+		{Name: "workers-current", Revision: ExpectedWorkersRevision, Tree: ExpectedWorkersTree, Parents: []string{ExpectedWorkersParent1, ExpectedWorkersParent2}},
+	}}
 	for _, vector := range vectors.Cases {
 		statementData, err := os.ReadFile(filepath.Join(dir, vector.Statement))
 		if err != nil {
@@ -399,7 +407,7 @@ func TestDetachedSignatureInteroperabilityVectors(t *testing.T) {
 		if err := decodeCanonicalJSON(statementData, &statement, "distribution statement vector"); err != nil {
 			t.Fatal(err)
 		}
-		if err := validateDistributionStatement(&statement, VerifyOptions{}); err != nil {
+		if err := validateDistributionStatement(&statement, vectorPolicy); err != nil {
 			t.Fatal(err)
 		}
 		signature, err := os.ReadFile(filepath.Join(dir, vector.Signature))
@@ -1209,6 +1217,7 @@ func validReviewFixture(t *testing.T) (string, VerifyOptions) {
 		{Name: "initial-clean-trees", Status: "pass"},
 		{Name: "wago-plugin-plan-compat", Status: "pass"},
 		{Name: "current-plugin-topology-audit", Status: "pass"},
+		{Name: "wasi-preview1-fix-review", Status: "pass"},
 		{Name: "wasi-upstream-preview1-audit", Status: "accepted-exception", Detail: "reviewed docs/CI-only upstream retains crash"},
 		{Name: "go-test-workspace", Status: "pass"},
 		{Name: "go-test-module", Status: "pass"},

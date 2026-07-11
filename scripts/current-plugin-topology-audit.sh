@@ -9,8 +9,12 @@ adoption=${CURRENT_PLUGIN_ADOPTION:-review}
 require_production=${REQUIRE_PUBLISHED_WAGO_MERGE:-0}
 
 readonly wago_main=18615546584ec09e607856a0da99851656f5be80
-readonly wago_review=8131d967211871936793a4f129164ec0cd928ea9
-readonly wago_review_parent=18615546584ec09e607856a0da99851656f5be80
+readonly wago_lifecycle_review=8131d967211871936793a4f129164ec0cd928ea9
+readonly wago_lifecycle_parent=18615546584ec09e607856a0da99851656f5be80
+readonly wago_fix_review=90018dadbc70c8620984bab71f1eace347c29fa8
+readonly wago_fix_parent=8131d967211871936793a4f129164ec0cd928ea9
+readonly wago_review=540c453de318a8385d63ee335e4fd881a628aafc
+readonly wago_review_parent=90018dadbc70c8620984bab71f1eace347c29fa8
 readonly production_merge=97e6f91e6c822491577faa86f3c30aa5a8fff1e8
 readonly production_parent1=54499ba5135f69a062e23a7255f4a408d6cecf8c
 readonly production_parent2=ffd5ef4b122cbd019897eeea3503789ab5860e4a
@@ -46,7 +50,9 @@ git -C "$net_dir" fetch --prune origin
 [[ $(git -C "$wago_dir" rev-parse HEAD) == "$wago_review" ]] || fail "current Wago review checkout drifted"
 [[ $(git -C "$net_dir" rev-parse HEAD) == "$net_review" ]] || fail "current networking review checkout drifted"
 [[ $(git -C "$workers_dir" rev-parse HEAD) == "$workers_review" ]] || fail "workers checkout drifted"
-[[ $(parents "$wago_dir" "$wago_review") == "$wago_review_parent" ]] || fail "current Wago review parent drifted"
+[[ $(parents "$wago_dir" "$wago_review") == "$wago_review_parent" ]] || fail "current Wago integration review parent drifted"
+[[ $(parents "$wago_dir" "$wago_fix_review") == "$wago_fix_parent" ]] || fail "current Wago fix review parent drifted"
+[[ $(parents "$wago_dir" "$wago_lifecycle_review") == "$wago_lifecycle_parent" ]] || fail "current Wago lifecycle review parent drifted"
 [[ $(parents "$net_dir" "$net_review") == "$net_review_parent" ]] || fail "current networking review parent drifted"
 [[ $(parents "$workers_dir" "$workers_review") == "$workers_parent1 $workers_parent2" ]] || fail "workers ordered parents drifted"
 [[ $(parents "$wago_dir" "$production_merge") == "$production_parent1 $production_parent2" ]] || fail "production Wago merge ordered parents drifted"
@@ -120,7 +126,8 @@ PY
 [[ -z "$pool_repositories" ]] || fail "pool-named wago-org repositories require review: $pool_repositories"
 
 printf 'Wago origin/main: %s\n' "$wago_main"
-printf 'current Wago review refs: %s\n' "${wago_review_refs:-absent}"
+printf 'current Wago integrated fix review refs: %s\n' "${wago_review_refs:-absent}"
+printf 'current Wago integrated fix lineage: %s -> %s -> %s -> %s\n' "$wago_review" "$wago_fix_review" "$wago_lifecycle_review" "$wago_main"
 printf 'current networking review refs: %s\n' "${net_review_refs:-absent}"
 printf 'external workers refs: %s\n' "$workers_refs"
 printf 'production Wago merge refs: %s\n' "${production_refs:-absent}"
