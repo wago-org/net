@@ -53,6 +53,7 @@ if [[ $allow_dirty != 1 ]]; then
   assert_clean "$wasi_dir" WASI
 fi
 [[ $(realpath "$root/../wago") == $(realpath "$wago_dir") ]] || fail "../wago does not resolve to the pinned Wago audit checkout"
+WAGO_DIR="$wago_dir" "$root/scripts/wago-plugin-plan-compat.sh"
 
 rm -rf "$out"
 mkdir -p "$out"

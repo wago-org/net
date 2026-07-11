@@ -29,7 +29,8 @@ scripts/release-signoff.sh
 
 The gate performs, in order:
 
-1. revision, merge-parent, toolchain, symlink, and initial clean-tree checks;
+1. revision, merge-parent, toolchain, symlink, initial clean-tree, and exact
+   reviewed plugin-plan compatibility-decision checks;
 2. workspace and `GOWORK=off` Go tests, race tests, vet, package listing, and a
    no-change `go mod tidy`;
 3. bounded fuzz smoke for DNS wire parsing, DNS ABI layouts, checked DNS guest
@@ -80,8 +81,12 @@ commit above exists on the local `net/instance-close-hooks` audit branch and mus
 first be upstreamed without overwriting either Wago main or the divergent worker
 history. `scripts/wago-upstream-review.sh` and
 `docs/wago-upstream-review.md` verify and document the exact two-parent topology,
-current remote divergence, and immutable-publication requirement. Once that
-commit is published, CI should check out the exact pinned Wago, lneto, and WASI
+current remote divergence, and immutable-publication requirement.
+`scripts/wago-plugin-plan-compat.sh` and
+`docs/wago-plugin-plan-compatibility.md` separately pin the reviewed redesign
+snapshot and prove why it requires a lifecycle/identity/worker migration rather
+than a silent pin replacement. Once the networking merge is published, CI
+should check out the exact pinned Wago, lneto, and WASI
 revisions in the required adjacent layout and invoke this script. Do not replace
 the pin with a moving branch.
 
