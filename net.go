@@ -198,18 +198,6 @@ func New(options ...Option) *Network {
 	return newExtension(config)
 }
 
-// Init constructs the aggregate compatibility extension with UDP, TCP, and DNS
-// all selected. New code should use New plus protocol-local Register functions.
-func Init(config Config) *Extension {
-	extension := newExtension(config)
-	if extension.configErr == nil {
-		if err := extension.registerAllProtocols(); err != nil {
-			extension.configErr = err
-		}
-	}
-	return extension
-}
-
 func newExtension(config Config) *Extension {
 	managerConfig := instancestate.DefaultConfig()
 	managerConfig.Policy = config.Policy
@@ -245,50 +233,6 @@ func (e *Extension) RegisterModule(module plugin.Module) error {
 	return e.modules.Add(module)
 }
 
-// RegisterCompatibilityModule is a transitional internal-boundary adapter for
-// aggregate and not-yet-extracted protocol paths. The public TCP facade no
-// longer uses it. Its plugin.ModuleKey parameter prevents this compatibility
-// hook from becoming an ordinary public protocol-selection API. New callers
-// should use tcp.Register, udp.Register, or dns.Register as those packages
-// become available.
-func (e *Extension) RegisterCompatibilityModule(key plugin.ModuleKey) error {
-	switch key {
-	case plugin.ModuleUDP:
-		return e.registerUDPModule()
-	case plugin.ModuleTCP:
-		return e.registerTCPModule()
-	case plugin.ModuleDNS:
-		return e.registerDNSModule()
-	default:
-		return plugin.ErrInvalidModule
-	}
-}
-
-func (e *Extension) registerAllProtocols() error {
-	for _, register := range []func() error{
-		e.registerUDPModule,
-		e.registerTCPModule,
-		e.registerDNSModule,
-	} {
-		if err := register(); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-func (e *Extension) registerUDPModule() error {
-	return e.RegisterModule(udpCompatibilityDescriptor())
-}
-
-func (e *Extension) registerTCPModule() error {
-	return e.RegisterModule(tcpCompatibilityDescriptor())
-}
-
-func (e *Extension) registerDNSModule() error {
-	return e.RegisterModule(dnsCompatibilityDescriptor())
-}
-
 // Info returns extension metadata loaded from wago.json.
 func (e *Extension) Info() wago.ExtensionInfo { return extensionInfo }
 
@@ -321,7 +265,7 @@ func (e *Extension) Register(reg *wago.Registry) error {
 // Instantiate path. Resource-owning protocol imports require the Runtime
 // extension path so per-instance lifecycle state can be attached and cleaned.
 func Imports(config Config) wago.Imports {
-	ext := Init(config)
+	ext := New(WithConfig(config))
 	imports := make(wago.Imports)
 	for _, binding := range ext.bindings() {
 		imports[Module+"."+binding.name] = binding.fn
