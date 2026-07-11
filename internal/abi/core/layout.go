@@ -4,7 +4,7 @@ import (
 	"encoding/binary"
 	"net/netip"
 
-	"github.com/wago-org/net/internal/namespace"
+	nscore "github.com/wago-org/net/internal/namespace/core"
 	"github.com/wago-org/net/internal/readiness"
 	"github.com/wago-org/net/internal/resource"
 )
@@ -61,10 +61,10 @@ func Elements(memory []byte, ptr, count, size uint32) ([]byte, bool) {
 }
 
 // DecodeEndpointV1 decodes one address into the backend-neutral endpoint form.
-func DecodeEndpointV1(memory []byte, ptr uint32) (namespace.Endpoint, bool) {
+func DecodeEndpointV1(memory []byte, ptr uint32) (nscore.Endpoint, bool) {
 	address, ok := DecodeAddressV1(memory, ptr)
 	if !ok {
-		return namespace.Endpoint{}, false
+		return nscore.Endpoint{}, false
 	}
 	var ip netip.Addr
 	switch address.Family {
@@ -73,14 +73,14 @@ func DecodeEndpointV1(memory []byte, ptr uint32) (namespace.Endpoint, bool) {
 	case AddressFamilyIPv6:
 		ip = netip.AddrFrom16(address.Address)
 	default:
-		return namespace.Endpoint{}, false
+		return nscore.Endpoint{}, false
 	}
-	endpoint := namespace.Endpoint{Address: ip, Port: address.Port, ScopeID: address.ScopeID, FlowInfo: address.FlowInfo}
+	endpoint := nscore.Endpoint{Address: ip, Port: address.Port, ScopeID: address.ScopeID, FlowInfo: address.FlowInfo}
 	return endpoint, endpoint.Valid()
 }
 
 // EncodeEndpointV1 validates the endpoint and complete output before mutation.
-func EncodeEndpointV1(memory []byte, ptr uint32, endpoint namespace.Endpoint) bool {
+func EncodeEndpointV1(memory []byte, ptr uint32, endpoint nscore.Endpoint) bool {
 	if !endpoint.Valid() {
 		return false
 	}
@@ -119,7 +119,7 @@ func DecodePollBudgetV1(memory []byte, ptr uint32) (readiness.Budget, bool) {
 		Scans:           binary.LittleEndian.Uint32(b[0:4]),
 		Events:          binary.LittleEndian.Uint32(b[4:8]),
 		ServiceAttempts: binary.LittleEndian.Uint32(b[8:12]),
-		Service: namespace.ServiceBudget{
+		Service: nscore.ServiceBudget{
 			Packets:    binary.LittleEndian.Uint32(b[12:16]),
 			Bytes:      binary.LittleEndian.Uint32(b[16:20]),
 			Operations: binary.LittleEndian.Uint32(b[20:24]),

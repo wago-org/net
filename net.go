@@ -14,7 +14,7 @@ import (
 
 	lnetobackend "github.com/wago-org/net/internal/backend/lneto"
 	instancestate "github.com/wago-org/net/internal/instance/core"
-	"github.com/wago-org/net/internal/namespace"
+	nscore "github.com/wago-org/net/internal/namespace/core"
 	"github.com/wago-org/net/internal/packetlink"
 	"github.com/wago-org/net/internal/plugin"
 	"github.com/wago-org/net/internal/policy"
@@ -212,7 +212,7 @@ func newExtension(config Config) *Extension {
 		if err := lnetobackend.ValidateConfig(backendConfig); err != nil {
 			return &Extension{config: config, configErr: err}
 		}
-		managerConfig.NamespaceFactory = func(compiled *policy.Policy, account *quota.Account) (namespace.Namespace, error) {
+		managerConfig.NamespaceFactory = func(compiled *policy.Policy, account *quota.Account) (nscore.Namespace, error) {
 			instanceConfig := backendConfig
 			instanceConfig.Policy = compiled
 			instanceConfig.Quotas = account

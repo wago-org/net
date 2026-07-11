@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"sync"
 
-	"github.com/wago-org/net/internal/namespace"
+	nscore "github.com/wago-org/net/internal/namespace/core"
 	"github.com/wago-org/net/internal/policy"
 	"github.com/wago-org/net/internal/quota"
 	"github.com/wago-org/net/internal/readiness"
@@ -25,7 +25,7 @@ var (
 // The returned value must not be shared with another instance. Policy and quota
 // pointers belong to that exact state and let backend resources enforce common
 // authority and accounting without exposing backend types above this layer.
-type NamespaceFactory func(*policy.Policy, *quota.Account) (namespace.Namespace, error)
+type NamespaceFactory func(*policy.Policy, *quota.Account) (nscore.Namespace, error)
 
 // Config fixes immutable policy, finite accounting, readiness storage, and an
 // optional namespace factory for every state attached by a Manager.
@@ -267,14 +267,14 @@ func (s *State) createNamespace(factory NamespaceFactory) (resource.Handle, erro
 // LookupNamespace resolves one exact namespace handle to its backend-neutral
 // implementation while serializing the lookup against teardown. It is intended
 // for trusted host-side link/service integration, never direct guest retention.
-func (s *State) LookupNamespace(namespaceHandle resource.Handle) (namespace.Namespace, error) {
+func (s *State) LookupNamespace(namespaceHandle resource.Handle) (nscore.Namespace, error) {
 	if s == nil {
 		return nil, ErrInvalidConfig
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.closed || s.resources == nil {
-		return nil, namespace.Fail(namespace.FailureClosed, resource.ErrClosed)
+		return nil, nscore.Fail(nscore.FailureClosed, resource.ErrClosed)
 	}
 	value, err := s.resources.Lookup(namespaceHandle, resource.KindNamespace)
 	if err != nil {
@@ -283,9 +283,9 @@ func (s *State) LookupNamespace(namespaceHandle resource.Handle) (namespace.Name
 	if owned, ok := value.(*ownedNamespace); ok && owned.Namespace != nil {
 		return owned.Namespace, nil
 	}
-	backend, ok := value.(namespace.Namespace)
+	backend, ok := value.(nscore.Namespace)
 	if !ok {
-		return nil, namespace.Fail(namespace.FailureIO, ErrInvalidBackendResult)
+		return nil, nscore.Fail(nscore.FailureIO, ErrInvalidBackendResult)
 	}
 	return backend, nil
 }
@@ -305,26 +305,26 @@ func (s *State) WithLock(operation func(LockedState) error) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.closed || s.resources == nil || s.readiness == nil {
-		return namespace.Fail(namespace.FailureClosed, resource.ErrClosed)
+		return nscore.Fail(nscore.FailureClosed, resource.ErrClosed)
 	}
 	return operation(LockedState{Resources: s.resources, Readiness: s.readiness})
 }
 
 // PollVisitor receives one bounded readiness result while State still owns its
 // reusable event storage and lifecycle lock. The callback must not retain events.
-type PollVisitor func(events []readiness.Event, report readiness.Report, progress namespace.Progress) error
+type PollVisitor func(events []readiness.Event, report readiness.Report, progress nscore.Progress) error
 
 // Poll performs one bounded nonblocking coordinator pass using per-instance
 // scratch storage. The visitor runs before the lifecycle lock is released so no
 // concurrent poll or teardown can overwrite or invalidate the result.
-func (s *State) Poll(budget readiness.Budget, visit PollVisitor) (readiness.Report, namespace.Progress, error) {
+func (s *State) Poll(budget readiness.Budget, visit PollVisitor) (readiness.Report, nscore.Progress, error) {
 	if s == nil {
 		return readiness.Report{}, 0, ErrInvalidConfig
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.closed || s.readiness == nil {
-		return readiness.Report{}, 0, namespace.Fail(namespace.FailureClosed, resource.ErrClosed)
+		return readiness.Report{}, 0, nscore.Fail(nscore.FailureClosed, resource.ErrClosed)
 	}
 	if !budget.Valid() || uint64(budget.Events) > uint64(len(s.pollEvents)) {
 		return readiness.Report{}, 0, readiness.ErrInvalidBudget
@@ -365,8 +365,15 @@ func (s *State) CloseHandle(handle resource.Handle, kind resource.Kind) error {
 }
 
 type ownedNamespace struct {
-	namespace.Namespace
+	nscore.Namespace
 	allocation *quota.Allocation
+}
+
+func (n *ownedNamespace) NamespaceBackend() nscore.Namespace {
+	if n == nil {
+		return nil
+	}
+	return n.Namespace
 }
 
 func (n *ownedNamespace) Close() error {

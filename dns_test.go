@@ -12,6 +12,7 @@ import (
 	abi "github.com/wago-org/net/internal/abi/dns"
 	instance "github.com/wago-org/net/internal/instance/core"
 	"github.com/wago-org/net/internal/namespace"
+	nscore "github.com/wago-org/net/internal/namespace/core"
 	"github.com/wago-org/net/internal/packetlink"
 	"github.com/wago-org/net/internal/policy"
 	"github.com/wago-org/net/internal/quota"
@@ -533,7 +534,7 @@ func newGuestDNSHarness(t testing.TB, queries ...*guestDNSQuery) (*Extension, *i
 	manager, err := instance.NewManagerConfigured(instance.Config{
 		Limits:    quota.DefaultLimits(),
 		Readiness: instance.DefaultConfig().Readiness,
-		NamespaceFactory: func(*policy.Policy, *quota.Account) (namespace.Namespace, error) {
+		NamespaceFactory: func(*policy.Policy, *quota.Account) (nscore.Namespace, error) {
 			return backend, nil
 		},
 	})

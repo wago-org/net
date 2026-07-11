@@ -6,7 +6,7 @@ import (
 	"errors"
 	"sync"
 
-	"github.com/wago-org/net/internal/namespace"
+	nscore "github.com/wago-org/net/internal/namespace/core"
 	"github.com/wago-org/net/internal/resource"
 )
 
@@ -37,7 +37,7 @@ type Budget struct {
 	Scans           uint32
 	Events          uint32
 	ServiceAttempts uint32
-	Service         namespace.ServiceBudget
+	Service         nscore.ServiceBudget
 }
 
 // Valid reports whether every enabled dimension has a finite usable bound.
@@ -48,7 +48,7 @@ func (b Budget) Valid() bool {
 // Event is one level-triggered readiness snapshot for a live resource.
 type Event struct {
 	Handle    resource.Handle
-	Readiness namespace.Readiness
+	Readiness nscore.Readiness
 }
 
 // Valid reports whether the event names a live-form handle and known bits.
@@ -99,7 +99,7 @@ type registration struct {
 }
 
 type serviceable interface {
-	TryService(namespace.ServiceBudget) (namespace.ServiceReport, namespace.Progress, error)
+	TryService(nscore.ServiceBudget) (nscore.ServiceReport, nscore.Progress, error)
 }
 
 // New creates an empty coordinator for table.
@@ -139,7 +139,7 @@ func (c *Coordinator) Register(handle resource.Handle, kind resource.Kind) error
 	if err != nil {
 		return err
 	}
-	if _, ok := value.(namespace.Pollable); !ok {
+	if _, ok := value.(nscore.Pollable); !ok {
 		return ErrInvalidRegistration
 	}
 	c.index[handle] = len(c.regs)
@@ -170,7 +170,7 @@ func (c *Coordinator) Unregister(handle resource.Handle) bool {
 // writes level-triggered snapshots without sleeping. At most one full pass over
 // the registrations present at call entry is made, and every output, scan, and
 // backend service attempt is independently bounded.
-func (c *Coordinator) TryPoll(events []Event, budget Budget) (Report, namespace.Progress, error) {
+func (c *Coordinator) TryPoll(events []Event, budget Budget) (Report, nscore.Progress, error) {
 	if c == nil {
 		return Report{}, 0, ErrClosed
 	}
@@ -184,7 +184,7 @@ func (c *Coordinator) TryPoll(events []Event, budget Budget) (Report, namespace.
 	}
 	clear(events[:budget.Events])
 	if len(c.regs) == 0 {
-		return Report{}, namespace.ProgressWouldBlock, nil
+		return Report{}, nscore.ProgressWouldBlock, nil
 	}
 
 	scanLimit := budget.Scans
@@ -207,7 +207,7 @@ func (c *Coordinator) TryPoll(events []Event, budget Budget) (Report, namespace.
 		if err != nil {
 			return report, pollProgress(report), err
 		}
-		pollable, ok := value.(namespace.Pollable)
+		pollable, ok := value.(nscore.Pollable)
 		if !ok {
 			c.removeStaleAtCursor()
 			report.StaleRegistrations++
@@ -221,12 +221,12 @@ func (c *Coordinator) TryPoll(events []Event, budget Budget) (Report, namespace.
 				stopAfterCurrent = report.ServiceAttempts == budget.ServiceAttempts
 				serviceReport, progress, serviceErr := service.TryService(budget.Service)
 				if serviceErr != nil {
-					if failure, ok := namespace.FailureOf(serviceErr); !ok || failure != namespace.FailureClosed {
+					if failure, ok := nscore.FailureOf(serviceErr); !ok || failure != nscore.FailureClosed {
 						return report, pollProgress(report), serviceErr
 					}
 				} else if !serviceReport.ValidResult(budget.Service, progress) {
-					return report, pollProgress(report), namespace.Fail(namespace.FailureIO, ErrInvalidServiceResult)
-				} else if progress == namespace.ProgressDone {
+					return report, pollProgress(report), nscore.Fail(nscore.FailureIO, ErrInvalidServiceResult)
+				} else if progress == nscore.ProgressDone {
 					report.ServiceCompleted++
 				}
 			}
@@ -234,13 +234,13 @@ func (c *Coordinator) TryPoll(events []Event, budget Budget) (Report, namespace.
 
 		ready := pollable.Readiness()
 		if !ready.Valid() {
-			return report, pollProgress(report), namespace.Fail(namespace.FailureIO, ErrInvalidRegistration)
+			return report, pollProgress(report), nscore.Fail(nscore.FailureIO, ErrInvalidRegistration)
 		}
 		c.advanceCursor()
 		if ready != 0 {
 			event := Event{Handle: reg.handle, Readiness: ready}
 			if !event.Valid() {
-				return report, pollProgress(report), namespace.Fail(namespace.FailureIO, ErrInvalidRegistration)
+				return report, pollProgress(report), nscore.Fail(nscore.FailureIO, ErrInvalidRegistration)
 			}
 			events[report.Events] = event
 			report.Events++
@@ -310,9 +310,9 @@ func (c *Coordinator) advanceCursor() {
 	}
 }
 
-func pollProgress(report Report) namespace.Progress {
+func pollProgress(report Report) nscore.Progress {
 	if report.Events != 0 || report.ServiceCompleted != 0 || report.StaleRegistrations != 0 {
-		return namespace.ProgressDone
+		return nscore.ProgressDone
 	}
-	return namespace.ProgressWouldBlock
+	return nscore.ProgressWouldBlock
 }

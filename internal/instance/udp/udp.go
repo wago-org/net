@@ -4,6 +4,7 @@ package udp
 import (
 	core "github.com/wago-org/net/internal/instance/core"
 	"github.com/wago-org/net/internal/namespace"
+	nscore "github.com/wago-org/net/internal/namespace/core"
 	"github.com/wago-org/net/internal/resource"
 )
 
@@ -13,6 +14,9 @@ func Bind(state *core.State, namespaceHandle resource.Handle, local namespace.En
 		value, lookupErr := locked.Resources.Lookup(namespaceHandle, resource.KindNamespace)
 		if lookupErr != nil {
 			return lookupErr
+		}
+		if carrier, ok := value.(nscore.NamespaceCarrier); ok {
+			value = carrier.NamespaceBackend()
 		}
 		backend, ok := value.(namespace.Namespace)
 		if !ok {

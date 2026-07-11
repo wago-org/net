@@ -6,6 +6,7 @@ import (
 	"errors"
 
 	"github.com/wago-org/net/internal/namespace"
+	nscore "github.com/wago-org/net/internal/namespace/core"
 	"github.com/wago-org/net/internal/quota"
 	"github.com/wago-org/net/internal/readiness"
 	"github.com/wago-org/net/internal/resource"
@@ -44,13 +45,13 @@ const (
 )
 
 // FromProgress maps valid nonblocking progress onto the stable guest taxonomy.
-func FromProgress(progress namespace.Progress) Status {
+func FromProgress(progress nscore.Progress) Status {
 	switch progress {
-	case namespace.ProgressDone:
+	case nscore.ProgressDone:
 		return StatusOK
-	case namespace.ProgressWouldBlock:
+	case nscore.ProgressWouldBlock:
 		return StatusAgain
-	case namespace.ProgressInProgress:
+	case nscore.ProgressInProgress:
 		return StatusInProgress
 	default:
 		return StatusOther
@@ -59,16 +60,16 @@ func FromProgress(progress namespace.Progress) Status {
 
 // FromIOResult maps one validated nonblocking stream result. Callers write
 // output bytes only for StatusOK, so AGAIN and EOF preserve guest outputs.
-func FromIOResult(result namespace.IOResult, bufferSize int) Status {
+func FromIOResult(result nscore.IOResult, bufferSize int) Status {
 	if !result.Valid(bufferSize) {
 		return StatusOther
 	}
 	switch result.State {
-	case namespace.IOReady:
+	case nscore.IOReady:
 		return StatusOK
-	case namespace.IOWouldBlock:
+	case nscore.IOWouldBlock:
 		return StatusAgain
-	case namespace.IOEOF:
+	case nscore.IOEOF:
 		return StatusEOF
 	default:
 		return StatusOther
@@ -95,45 +96,45 @@ func FromError(err error) Status {
 	if err == nil {
 		return StatusOK
 	}
-	if failure, ok := namespace.FailureOf(err); ok {
+	if failure, ok := nscore.FailureOf(err); ok {
 		switch failure {
-		case namespace.FailureInvalidArgument:
+		case nscore.FailureInvalidArgument:
 			return StatusInvalidArgument
-		case namespace.FailureInvalidState, namespace.FailureClosed:
+		case nscore.FailureInvalidState, nscore.FailureClosed:
 			return StatusInvalidState
-		case namespace.FailureNotSupported:
+		case nscore.FailureNotSupported:
 			return StatusNotSupported
-		case namespace.FailureNoMemory:
+		case nscore.FailureNoMemory:
 			return StatusNoMemory
-		case namespace.FailureResourceLimit:
+		case nscore.FailureResourceLimit:
 			return StatusResourceLimit
-		case namespace.FailureAddressInUse:
+		case nscore.FailureAddressInUse:
 			return StatusAddressInUse
-		case namespace.FailureAddressUnavailable:
+		case nscore.FailureAddressUnavailable:
 			return StatusAddressNotAvailable
-		case namespace.FailureRemoteUnreachable:
+		case nscore.FailureRemoteUnreachable:
 			return StatusRemoteUnreachable
-		case namespace.FailureConnectionRefused:
+		case nscore.FailureConnectionRefused:
 			return StatusConnectionRefused
-		case namespace.FailureConnectionReset:
+		case nscore.FailureConnectionReset:
 			return StatusConnectionReset
-		case namespace.FailureConnectionAborted:
+		case nscore.FailureConnectionAborted:
 			return StatusConnectionAborted
-		case namespace.FailureConnectionBroken:
+		case nscore.FailureConnectionBroken:
 			return StatusConnectionBroken
-		case namespace.FailureTimedOut:
+		case nscore.FailureTimedOut:
 			return StatusTimedOut
-		case namespace.FailureMessageTooLarge:
+		case nscore.FailureMessageTooLarge:
 			return StatusMessageTooLarge
-		case namespace.FailureNameNotFound:
+		case nscore.FailureNameNotFound:
 			return StatusNameNotFound
-		case namespace.FailureTemporary:
+		case nscore.FailureTemporary:
 			return StatusTemporaryFailure
-		case namespace.FailureIO:
+		case nscore.FailureIO:
 			return StatusIO
-		case namespace.FailureCanceled:
+		case nscore.FailureCanceled:
 			return StatusCanceled
-		case namespace.FailureAccessDenied:
+		case nscore.FailureAccessDenied:
 			return StatusAccessDenied
 		default:
 			return StatusOther

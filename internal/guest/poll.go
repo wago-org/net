@@ -4,7 +4,7 @@ import (
 	"errors"
 
 	abicore "github.com/wago-org/net/internal/abi/core"
-	"github.com/wago-org/net/internal/namespace"
+	nscore "github.com/wago-org/net/internal/namespace/core"
 	"github.com/wago-org/net/internal/plugin"
 	"github.com/wago-org/net/internal/readiness"
 	wago "github.com/wago-org/wago"
@@ -44,10 +44,10 @@ func Poll(host plugin.Host, module wago.HostModule, params, results []uint64) {
 		SetStatus(results, StatusInvalidState)
 		return
 	}
-	var progress namespace.Progress
+	var progress nscore.Progress
 	var pollErr error
 	err := state.Quotas().WithService(pollWorkUnits(budget), func() {
-		_, progress, pollErr = state.Poll(budget, func(events []readiness.Event, report readiness.Report, _ namespace.Progress) error {
+		_, progress, pollErr = state.Poll(budget, func(events []readiness.Event, report readiness.Report, _ nscore.Progress) error {
 			if !abicore.EncodePollEventsV1(memory, eventsPtr, events) || !abicore.EncodePollResultV1(memory, resultPtr, report, budget) {
 				return errPollEncoding
 			}

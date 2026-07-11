@@ -13,6 +13,7 @@ import (
 	abi "github.com/wago-org/net/internal/abi/core"
 	instance "github.com/wago-org/net/internal/instance/core"
 	"github.com/wago-org/net/internal/namespace"
+	nscore "github.com/wago-org/net/internal/namespace/core"
 	"github.com/wago-org/net/internal/policy"
 	"github.com/wago-org/net/internal/quota"
 	"github.com/wago-org/net/internal/readiness"
@@ -285,7 +286,7 @@ func TestGuestTCPConnectRollsBackInvalidBackendDescriptor(t *testing.T) {
 	manager, err := instance.NewManagerConfigured(instance.Config{
 		Limits:    quota.Limits{Resources: 3, TCPResources: 2},
 		Readiness: readiness.Config{MaxRegistrations: 3},
-		NamespaceFactory: func(*policy.Policy, *quota.Account) (namespace.Namespace, error) {
+		NamespaceFactory: func(*policy.Policy, *quota.Account) (nscore.Namespace, error) {
 			return backend, nil
 		},
 	})
@@ -465,7 +466,7 @@ func TestGuestTCPAcceptRollsBackInvalidDescriptor(t *testing.T) {
 	manager, err := instance.NewManagerConfigured(instance.Config{
 		Limits:           quota.Limits{Resources: 4, TCPResources: 2},
 		Readiness:        readiness.Config{MaxRegistrations: 4},
-		NamespaceFactory: func(*policy.Policy, *quota.Account) (namespace.Namespace, error) { return backend, nil },
+		NamespaceFactory: func(*policy.Policy, *quota.Account) (nscore.Namespace, error) { return backend, nil },
 	})
 	if err != nil {
 		t.Fatalf("manager: %v", err)

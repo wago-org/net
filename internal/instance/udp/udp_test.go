@@ -8,6 +8,7 @@ import (
 
 	core "github.com/wago-org/net/internal/instance/core"
 	"github.com/wago-org/net/internal/namespace"
+	nscore "github.com/wago-org/net/internal/namespace/core"
 	"github.com/wago-org/net/internal/policy"
 	"github.com/wago-org/net/internal/quota"
 	"github.com/wago-org/net/internal/readiness"
@@ -91,7 +92,7 @@ func attachState(t testing.TB, backend namespace.Namespace, maxRegistrations int
 	config := core.DefaultConfig()
 	config.Limits = quota.DefaultLimits()
 	config.Readiness = readiness.Config{MaxRegistrations: maxRegistrations}
-	config.NamespaceFactory = func(*policy.Policy, *quota.Account) (namespace.Namespace, error) { return backend, nil }
+	config.NamespaceFactory = func(*policy.Policy, *quota.Account) (nscore.Namespace, error) { return backend, nil }
 	manager, err := core.NewManagerConfigured(config)
 	if err != nil {
 		t.Fatal(err)

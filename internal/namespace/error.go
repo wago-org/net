@@ -1,80 +1,33 @@
 package namespace
 
-import (
-	"errors"
-	"fmt"
-)
+import nscore "github.com/wago-org/net/internal/namespace/core"
 
-// Failure is a backend-neutral semantic error category. Protocol adapters map
-// these categories to stable guest statuses; backend error text is diagnostic
-// only and never crosses the guest ABI.
-type Failure uint8
+type Failure = nscore.Failure
 
 const (
-	FailureInvalidArgument Failure = iota + 1
-	FailureInvalidState
-	FailureNotSupported
-	FailureNoMemory
-	FailureResourceLimit
-	FailureAddressInUse
-	FailureAddressUnavailable
-	FailureRemoteUnreachable
-	FailureConnectionRefused
-	FailureConnectionReset
-	FailureConnectionAborted
-	FailureConnectionBroken
-	FailureTimedOut
-	FailureMessageTooLarge
-	FailureNameNotFound
-	FailureTemporary
-	FailureIO
-	FailureCanceled
-	FailureClosed
-	FailureAccessDenied
+	FailureInvalidArgument    = nscore.FailureInvalidArgument
+	FailureInvalidState       = nscore.FailureInvalidState
+	FailureNotSupported       = nscore.FailureNotSupported
+	FailureNoMemory           = nscore.FailureNoMemory
+	FailureResourceLimit      = nscore.FailureResourceLimit
+	FailureAddressInUse       = nscore.FailureAddressInUse
+	FailureAddressUnavailable = nscore.FailureAddressUnavailable
+	FailureRemoteUnreachable  = nscore.FailureRemoteUnreachable
+	FailureConnectionRefused  = nscore.FailureConnectionRefused
+	FailureConnectionReset    = nscore.FailureConnectionReset
+	FailureConnectionAborted  = nscore.FailureConnectionAborted
+	FailureConnectionBroken   = nscore.FailureConnectionBroken
+	FailureTimedOut           = nscore.FailureTimedOut
+	FailureMessageTooLarge    = nscore.FailureMessageTooLarge
+	FailureNameNotFound       = nscore.FailureNameNotFound
+	FailureTemporary          = nscore.FailureTemporary
+	FailureIO                 = nscore.FailureIO
+	FailureCanceled           = nscore.FailureCanceled
+	FailureClosed             = nscore.FailureClosed
+	FailureAccessDenied       = nscore.FailureAccessDenied
 )
 
-// Valid reports whether failure is a defined category.
-func (f Failure) Valid() bool {
-	return f >= FailureInvalidArgument && f <= FailureAccessDenied
-}
+type Error = nscore.Error
 
-// Error wraps a backend cause with a stable semantic category.
-type Error struct {
-	Failure Failure
-	Cause   error
-}
-
-func (e *Error) Error() string {
-	if e == nil {
-		return "net: namespace failure"
-	}
-	if e.Cause == nil {
-		return fmt.Sprintf("net: namespace failure %d", e.Failure)
-	}
-	return fmt.Sprintf("net: namespace failure %d: %v", e.Failure, e.Cause)
-}
-
-func (e *Error) Unwrap() error {
-	if e == nil {
-		return nil
-	}
-	return e.Cause
-}
-
-// Fail constructs a categorized error. Invalid categories are converted to IO
-// so an implementation cannot accidentally expose an uncategorized success.
-func Fail(failure Failure, cause error) error {
-	if !failure.Valid() {
-		failure = FailureIO
-	}
-	return &Error{Failure: failure, Cause: cause}
-}
-
-// FailureOf extracts a semantic category through wrapped errors.
-func FailureOf(err error) (Failure, bool) {
-	var namespaceError *Error
-	if !errors.As(err, &namespaceError) || namespaceError == nil || !namespaceError.Failure.Valid() {
-		return 0, false
-	}
-	return namespaceError.Failure, true
-}
+func Fail(failure Failure, cause error) error { return nscore.Fail(failure, cause) }
+func FailureOf(err error) (Failure, bool)     { return nscore.FailureOf(err) }

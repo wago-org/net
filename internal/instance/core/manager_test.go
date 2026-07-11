@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/wago-org/net/internal/namespace"
+	nscore "github.com/wago-org/net/internal/namespace/core"
 	"github.com/wago-org/net/internal/policy"
 	"github.com/wago-org/net/internal/quota"
 	"github.com/wago-org/net/internal/readiness"
@@ -220,7 +221,7 @@ func TestConfiguredNamespacesAreQuotaOwnedIsolatedAndGenerationSafe(t *testing.T
 	config := DefaultConfig()
 	config.Limits.Resources = 1
 	var created []*fakeNamespace
-	config.NamespaceFactory = func(*policy.Policy, *quota.Account) (namespace.Namespace, error) {
+	config.NamespaceFactory = func(*policy.Policy, *quota.Account) (nscore.Namespace, error) {
 		backend := new(fakeNamespace)
 		created = append(created, backend)
 		return backend, nil
@@ -273,7 +274,7 @@ func TestNamespaceCreationRollsBackEveryOwnedStage(t *testing.T) {
 		config := DefaultConfig()
 		config.Limits.Resources = 0
 		var calls atomic.Int32
-		config.NamespaceFactory = func(*policy.Policy, *quota.Account) (namespace.Namespace, error) {
+		config.NamespaceFactory = func(*policy.Policy, *quota.Account) (nscore.Namespace, error) {
 			calls.Add(1)
 			return new(fakeNamespace), nil
 		}
@@ -293,7 +294,7 @@ func TestNamespaceCreationRollsBackEveryOwnedStage(t *testing.T) {
 		factoryErr := errors.New("backend setup failed")
 		config := DefaultConfig()
 		config.Limits.Resources = 1
-		config.NamespaceFactory = func(*policy.Policy, *quota.Account) (namespace.Namespace, error) { return nil, factoryErr }
+		config.NamespaceFactory = func(*policy.Policy, *quota.Account) (nscore.Namespace, error) { return nil, factoryErr }
 		manager, err := NewManagerConfigured(config)
 		if err != nil {
 			t.Fatal(err)
@@ -329,7 +330,7 @@ func TestNamespaceCreationRollsBackEveryOwnedStage(t *testing.T) {
 		}
 		state := &State{resources: table, readiness: poller, quotas: account, policy: compiled}
 		backend := new(fakeNamespace)
-		if _, err := state.createNamespace(func(*policy.Policy, *quota.Account) (namespace.Namespace, error) { return backend, nil }); !errors.Is(err, readiness.ErrLimit) {
+		if _, err := state.createNamespace(func(*policy.Policy, *quota.Account) (nscore.Namespace, error) { return backend, nil }); !errors.Is(err, readiness.ErrLimit) {
 			t.Fatalf("registration failure = %v", err)
 		}
 		usage, closed := account.Snapshot()
