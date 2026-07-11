@@ -177,6 +177,7 @@ type Extension struct {
 
 	stateOnce sync.Once
 	instances *instancestate.Manager
+	stateErr  error
 }
 
 // Network is the shared builder passed to protocol registration packages.
@@ -199,18 +200,35 @@ func New(options ...Option) *Network {
 }
 
 func newExtension(config Config) *Extension {
+	return &Extension{config: config}
+}
+
+func (e *Extension) initialize(modules []plugin.Module) (*instancestate.Manager, error) {
+	if e == nil {
+		return nil, instancestate.ErrInvalidConfig
+	}
+	e.stateOnce.Do(func() {
+		if e.instances != nil {
+			return
+		}
+		e.instances, e.stateErr = e.buildManager(modules)
+	})
+	return e.instances, e.stateErr
+}
+
+func (e *Extension) buildManager(_ []plugin.Module) (*instancestate.Manager, error) {
 	managerConfig := instancestate.DefaultConfig()
-	managerConfig.Policy = config.Policy
-	if config.Limits != nil {
-		managerConfig.Limits = *config.Limits
+	managerConfig.Policy = e.config.Policy
+	if e.config.Limits != nil {
+		managerConfig.Limits = *e.config.Limits
 	}
-	if config.Readiness != nil {
-		managerConfig.Readiness = *config.Readiness
+	if e.config.Readiness != nil {
+		managerConfig.Readiness = *e.config.Readiness
 	}
-	if config.StaticIPv4 != nil {
-		backendConfig := lnetoConfig(*config.StaticIPv4)
+	if e.config.StaticIPv4 != nil {
+		backendConfig := lnetoConfig(*e.config.StaticIPv4)
 		if err := lnetobackend.ValidateConfig(backendConfig); err != nil {
-			return &Extension{config: config, configErr: err}
+			return nil, err
 		}
 		managerConfig.NamespaceFactory = func(compiled *policy.Policy, account *quota.Account) (nscore.Namespace, error) {
 			instanceConfig := backendConfig
@@ -219,8 +237,7 @@ func newExtension(config Config) *Extension {
 			return lnetobackend.New(instanceConfig)
 		}
 	}
-	manager, err := instancestate.NewManagerConfigured(managerConfig)
-	return &Extension{config: config, configErr: err, instances: manager}
+	return instancestate.NewManagerConfigured(managerConfig)
 }
 
 // RegisterModule installs one opaque protocol descriptor. The internal type in
@@ -244,8 +261,11 @@ func (e *Extension) Register(reg *wago.Registry) error {
 		}
 		return e.configErr
 	}
-	instances := e.instanceManager()
 	modules := e.modules.Freeze()
+	instances, err := e.initialize(modules)
+	if err != nil {
+		return err
+	}
 	reg.RequireReinstantiation()
 	reg.Hooks().AfterInstantiate(instances.AfterInstantiate)
 	reg.Hooks().BeforeClose(instances.BeforeClose)
@@ -309,15 +329,14 @@ func abiVersion(_ wago.HostModule, _ []uint64, results []uint64) {
 }
 
 func (e *Extension) instanceManager() *instancestate.Manager {
-	if e == nil {
+	if e == nil || e.configErr != nil {
 		return nil
 	}
-	e.stateOnce.Do(func() {
-		if e.instances == nil && e.configErr == nil {
-			e.instances = instancestate.NewManager()
-		}
-	})
-	return e.instances
+	if e.instances != nil {
+		return e.instances
+	}
+	manager, _ := e.initialize(e.modules.Freeze())
+	return manager
 }
 
 func lnetoConfig(config StaticIPv4Config) lnetobackend.Config {
