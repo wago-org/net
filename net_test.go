@@ -24,12 +24,12 @@ func TestExtensionMetadataAndABIBinding(t *testing.T) {
 	if err := rt.Use(ext); err != nil {
 		t.Fatalf("Use: %v", err)
 	}
-	if got := rt.Capabilities(); !reflect.DeepEqual(got, []wago.Capability{CapInfo, CapTCP, CapUDP}) {
+	if got := rt.Capabilities(); !reflect.DeepEqual(got, []wago.Capability{CapDNS, CapInfo, CapTCP, CapUDP}) {
 		t.Fatalf("Capabilities = %v", got)
 	}
 	imports := rt.ProvidedImports()
-	if len(imports) != 18 {
-		t.Fatalf("ProvidedImports length = %d, want 18", len(imports))
+	if len(imports) != 24 {
+		t.Fatalf("ProvidedImports length = %d, want 24", len(imports))
 	}
 	got := imports[0]
 	if got.Module != Module || got.Name != "abi_version" || !got.HasCapability || got.Capability != CapInfo {
@@ -45,6 +45,14 @@ func TestExtensionMetadataAndABIBinding(t *testing.T) {
 		"poll":              {wago.ValI32, wago.ValI32, wago.ValI32, wago.ValI32},
 		"receive":           {wago.ValI64, wago.ValI32, wago.ValI32, wago.ValI32},
 		"send":              {wago.ValI64, wago.ValI32, wago.ValI32, wago.ValI32},
+	}
+	wantDNS := map[string][]wago.ValType{
+		"cancel":            {wago.ValI64},
+		"close":             {wago.ValI64},
+		"namespace_default": {wago.ValI32},
+		"next":              {wago.ValI64, wago.ValI32},
+		"poll":              {wago.ValI32, wago.ValI32, wago.ValI32, wago.ValI32},
+		"resolve":           {wago.ValI64, wago.ValI32, wago.ValI32},
 	}
 	wantTCP := map[string][]wago.ValType{
 		"accept":            {wago.ValI64, wago.ValI32},
@@ -63,6 +71,10 @@ func TestExtensionMetadataAndABIBinding(t *testing.T) {
 		var params []wago.ValType
 		var capability wago.Capability
 		switch spec.Module {
+		case DNSModule:
+			params = wantDNS[spec.Name]
+			capability = CapDNS
+			delete(wantDNS, spec.Name)
 		case UDPModule:
 			params = wantUDP[spec.Name]
 			capability = CapUDP
@@ -78,8 +90,8 @@ func TestExtensionMetadataAndABIBinding(t *testing.T) {
 			t.Fatalf("protocol import metadata = %+v", spec)
 		}
 	}
-	if len(wantUDP) != 0 || len(wantTCP) != 0 {
-		t.Fatalf("missing protocol imports: UDP=%v TCP=%v", wantUDP, wantTCP)
+	if len(wantDNS) != 0 || len(wantUDP) != 0 || len(wantTCP) != 0 {
+		t.Fatalf("missing protocol imports: DNS=%v UDP=%v TCP=%v", wantDNS, wantUDP, wantTCP)
 	}
 
 	fn, ok := rt.HostImports()[Module+".abi_version"].(wago.HostFunc)
@@ -93,7 +105,7 @@ func TestExtensionMetadataAndABIBinding(t *testing.T) {
 	}
 }
 
-func TestTCPConfigurationAdvertisesCompleteGuestSurface(t *testing.T) {
+func TestProtocolConfigurationAdvertisesCompleteGuestSurface(t *testing.T) {
 	extension := Init(Config{StaticIPv4: &StaticIPv4Config{
 		Hostname:               "tcp1",
 		RandSeed:               1,
@@ -111,20 +123,20 @@ func TestTCPConfigurationAdvertisesCompleteGuestSurface(t *testing.T) {
 	if err := runtime.Use(extension); err != nil {
 		t.Fatalf("Use TCP-configured extension: %v", err)
 	}
-	if got := runtime.Capabilities(); !reflect.DeepEqual(got, []wago.Capability{CapInfo, CapTCP, CapUDP}) {
-		t.Fatalf("TCP capabilities = %v", got)
+	if got := runtime.Capabilities(); !reflect.DeepEqual(got, []wago.Capability{CapDNS, CapInfo, CapTCP, CapUDP}) {
+		t.Fatalf("protocol capabilities = %v", got)
 	}
-	var tcpImports int
+	var dnsImports, tcpImports int
 	for _, spec := range runtime.ProvidedImports() {
 		if spec.Module == TCPModule {
 			tcpImports++
 		}
-		if spec.Module == "wago_net_dns" {
-			t.Fatalf("unsupported DNS import advertised: %+v", spec)
+		if spec.Module == DNSModule {
+			dnsImports++
 		}
 	}
-	if tcpImports != 11 {
-		t.Fatalf("TCP import count = %d, want 11", tcpImports)
+	if dnsImports != 6 || tcpImports != 11 {
+		t.Fatalf("protocol import counts = DNS %d/6 TCP %d/11", dnsImports, tcpImports)
 	}
 }
 

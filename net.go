@@ -1,7 +1,7 @@
 // Package net provides the core of Wago's capability-gated networking plugin
 // suite. The guest ABI is backend-neutral; lneto is the first backend and is
-// not part of the public contract. UDP/TCP are registered; the complete checked
-// DNS table remains withheld pending end-to-end hardening. Runtime registration requires physical
+// not part of the public contract. Complete UDP, TCP, and bounded DNS modules
+// are independently capability-gated. Runtime registration requires physical
 // reinstantiation between class leases so instance-owned network state cannot
 // survive an in-place Wasm memory reset.
 package net
@@ -29,8 +29,7 @@ const (
 	UDPModule = "wago_net_udp"
 	// TCPModule owns the complete guest TCP operation surface.
 	TCPModule = "wago_net_tcp"
-	// DNSModule is reserved for the checked DNS surface. It is intentionally not
-	// registered until end-to-end DNS integration is complete.
+	// DNSModule owns the complete checked bounded DNS surface.
 	DNSModule = "wago_net_dns"
 
 	// ABIVersion1 encodes ABI version 1.0 as major in the upper 16 bits and minor
@@ -43,7 +42,7 @@ const (
 	CapUDP wago.Capability = "net.udp"
 	// CapTCP permits checked nonblocking TCP listener, stream, and poll access.
 	CapTCP wago.Capability = "net.tcp"
-	// CapDNS is reserved for checked nonblocking DNS queries and is not yet advertised.
+	// CapDNS permits checked nonblocking bounded DNS queries and poll access.
 	CapDNS wago.Capability = "net.dns"
 )
 
@@ -102,8 +101,8 @@ type TCPConfig struct {
 }
 
 // DNSConfig fixes one static IPv4 recursive resolver plus finite query,
-// response, retry, and record-retention bounds. Zero MaxQueries disables DNS;
-// the guest DNS module remains unregistered until its complete ABI is ready.
+// response, retry, and record-retention bounds. Zero MaxQueries disables DNS
+// operations truthfully while leaving the capability-gated module inspectable.
 type DNSConfig struct {
 	Server               netip.Addr
 	MaxQueries           uint16
@@ -192,9 +191,11 @@ func (e *Extension) Register(reg *wago.Registry) error {
 	reg.Capability(CapInfo, wago.CapabilityDocs("inspect the Wago networking ABI and interfaces"))
 	reg.Capability(CapUDP, wago.CapabilityDocs("use checked nonblocking UDP networking for the exact calling instance"))
 	reg.Capability(CapTCP, wago.CapabilityDocs("use checked nonblocking TCP networking for the exact calling instance"))
+	reg.Capability(CapDNS, wago.CapabilityDocs("use checked bounded DNS queries for the exact calling instance"))
 	registerBindings(reg.ImportModule(Module), e.bindings())
 	registerBindings(reg.ImportModule(UDPModule), e.udpBindings())
 	registerBindings(reg.ImportModule(TCPModule), e.tcpBindings())
+	registerBindings(reg.ImportModule(DNSModule), e.dnsBindings())
 	return nil
 }
 

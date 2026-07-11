@@ -1,4 +1,4 @@
-// Package register self-registers the complete Wago core/UDP/TCP networking
+// Package register self-registers the complete Wago core/UDP/TCP/DNS networking
 // extension for custom binaries built by `wago pkg build`.
 package register
 

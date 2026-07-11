@@ -173,12 +173,12 @@ supplied buffer length. The structure is written only on `OK`. Would-block and
 EOF are represented by status values and leave it unchanged, avoiding ambiguous
 zero-byte progress.
 
-## DNS layouts and unregistered bindings
+## DNS module, signatures, and layouts
 
-The complete checked DNS host-function table is implemented but intentionally
-not registered yet. Consequently, `wago_net_dns` and `net.dns` do not appear in
-runtime inspection and guests cannot import these functions in this revision.
-The reserved table is:
+The complete checked DNS ABI is independently gated in the `wago_net_dns`
+module by the narrow `net.dns` capability. Every resource call requires exact
+Runtime instance identity; no DNS resource import is exposed by the low-level
+stateless `Imports` bundle. The table is:
 
 ```text
 namespace_default(out_handle_ptr: i32) -> i32
@@ -222,6 +222,18 @@ and copies it atomically. `next` validates the complete output before consuming
 a record; `AGAIN`, `EOF`, and failures leave output unchanged. Cancel makes an
 unfinished query terminal with `CANCELED` but does not retire its handle; `close`
 performs generation retirement and deterministic quota/storage cleanup.
+
+The configured backend sends bounded UDP queries to one static IPv4 recursive
+resolver. A response is accepted only from that resolver and only when its UDP
+port, destination port, transaction ID, IPv4/UDP integrity, nonfragmented shape,
+and complete echoed question names/classes/types match the request. Successful
+answers preserve the first unique reachable CNAME chain in chain order, followed
+by unique requested A/AAAA records at the terminal name. Irrelevant records,
+unrequested address types, and semantic duplicates are ignored. Conflicting
+CNAME targets, CNAME loops, malformed compression, malformed resources, and
+retention-limit overflow fail closed. A successful response may contain no
+relevant records, in which case `next` returns `EOF`. Truncated UDP responses
+return `TEMPORARY_FAILURE`; ABI v1 does not implement DNS-over-TCP fallback.
 
 ## Bounded poll layouts
 

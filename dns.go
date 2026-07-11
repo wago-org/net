@@ -6,8 +6,7 @@ import (
 	wago "github.com/wago-org/wago"
 )
 
-// dnsBindings is the complete checked DNS table, kept deliberately unregistered
-// until registered end-to-end integration and inspection signoff are complete.
+// dnsBindings is the complete checked capability-gated DNS table.
 func (e *Extension) dnsBindings() []binding {
 	return []binding{
 		{

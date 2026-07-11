@@ -4,10 +4,12 @@ Capability-gated networking plugins for the [Wago](https://github.com/wago-org/w
 WebAssembly runtime, backed initially by [lneto](https://github.com/soypat/lneto).
 
 The repository exposes the experimental `wago_net.abi_version` core import plus
-separately capability-gated `wago_net_udp` and `wago_net_tcp` modules. UDP covers
-configured-namespace discovery, bind, send, receive, close, and bounded poll. TCP
-covers discovery, listen, nonblocking connect completion, accept, partial
-read/write, write-half shutdown, kind-specific close, and its own bounded poll.
+separately capability-gated `wago_net_udp`, `wago_net_tcp`, and `wago_net_dns`
+modules. UDP covers configured-namespace discovery, bind, send, receive, close,
+and bounded poll. TCP covers discovery, listen, nonblocking connect completion,
+accept, partial read/write, write-half shutdown, kind-specific close, and its own
+bounded poll. DNS covers configured resolver discovery, bounded A/AAAA queries,
+copied A/AAAA/CNAME iteration, cancellation, close, and bounded poll.
 The stable numeric status taxonomy and fixed v1 address/result layouts use central
 checked guest memory; exact instance identity, generation/kind-checked handles,
 immutable endpoint policy, finite quotas, and deterministic lifecycle cleanup
@@ -16,13 +18,14 @@ fixed UDP queues, immediate frame codecs, and immediate TCP handler primitives;
 no host-facing path uses its blocking/backoff wrappers. Protocol polling is
 level-triggered and bounded independently by scans, event outputs, namespace
 service attempts, and per-attempt packet/byte/operation budgets, with finite
-per-instance service-work accounting. A bounded lneto-backed DNS query engine
-now exists behind the backend-neutral namespace boundary and uses generation-
-safe per-instance query handles with readiness, cancellation, timeout, quota,
-and lifecycle cleanup. Fixed checked DNS name/query/record layouts and a complete
-six-function host table are implemented and fuzzed, but `wago_net_dns` and
-`net.dns` remain absent pending registered end-to-end integration and inspection
-signoff. Privileged packet access remains absent and unsupported.
+per-instance service-work accounting. The bounded lneto-backed DNS engine uses
+generation-safe per-instance query handles with readiness, cancellation, timeout,
+quota, and lifecycle cleanup. It correlates exact echoed questions, emits only a
+unique reachable CNAME chain plus requested terminal A/AAAA records, rejects
+conflicting chains and loops, and directly fuzzes compressed wire parsing. DNS is
+UDP-only: truncated responses return `TEMPORARY_FAILURE` because DNS-over-TCP
+fallback is not implemented. Privileged packet access remains absent and
+unsupported.
 
 ```go
 rt := wago.NewRuntime()
@@ -38,8 +41,8 @@ if err := rt.Use(wagonet.Init(wagonet.Config{})); err != nil {
 
 The extension declares that networking state requires physical reinstantiation.
 Wago therefore downgrades `ResetMemorySnapshot` and other in-place class reset
-requests to `ResetReinstantiate`; UDP/TCP handles, queues, policy state, and quota
-accounts cannot cross leases even when callers request snapshot reuse.
+requests to `ResetReinstantiate`; UDP/TCP/DNS handles, queues, policy state, and
+quota accounts cannot cross leases even when callers request snapshot reuse.
 
 Custom Wago binaries can include the plugin through its self-registering package:
 

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/binary"
+	"errors"
 	"net/netip"
 	"testing"
 
@@ -15,6 +16,8 @@ import (
 	"github.com/wago-org/net/internal/quota"
 	"github.com/wago-org/net/internal/resource"
 	wago "github.com/wago-org/wago"
+	"github.com/wago-org/wago/src/core/compiler/wasm"
+	"github.com/wago-org/wago/testutil/wasmtest"
 )
 
 type guestDNSNamespace struct {
@@ -98,26 +101,100 @@ func (q *guestDNSQuery) TryNext() (namespace.DNSRecord, namespace.DNSNext, error
 	return record, namespace.DNSNextReady, nil
 }
 
-func TestDNSBindingsRemainCompleteButUnregistered(t *testing.T) {
+func TestDNSBindingsAreRegisteredOnlyAsCompleteTable(t *testing.T) {
 	extension := Init(Config{})
 	runtime := runtimeForExtension(t, extension)
 	if got := len(extension.dnsBindings()); got != 6 {
 		t.Fatalf("checked DNS bindings = %d, want 6", got)
 	}
 	for _, binding := range extension.dnsBindings() {
-		if _, exists := runtime.HostImports()[DNSModule+"."+binding.name]; exists {
-			t.Fatalf("incomplete DNS binding %q was registered", binding.name)
+		if _, ok := runtime.HostImports()[DNSModule+"."+binding.name].(wago.HostFunc); !ok {
+			t.Fatalf("registered DNS binding %q missing", binding.name)
 		}
 	}
+	foundCapability := false
 	for _, capability := range runtime.Capabilities() {
-		if capability == CapDNS {
-			t.Fatal("incomplete DNS capability was advertised")
-		}
+		foundCapability = foundCapability || capability == CapDNS
+	}
+	if !foundCapability {
+		t.Fatal("complete DNS capability was not advertised")
 	}
 	for name := range Imports(Config{}) {
 		if len(name) >= len(DNSModule)+1 && name[:len(DNSModule)+1] == DNSModule+"." {
-			t.Fatalf("low-level imports exposed DNS function %q", name)
+			t.Fatalf("low-level stateless imports exposed DNS resource function %q", name)
 		}
+	}
+}
+
+func TestGuestDNSUnavailableNamespaceAndCapabilityGate(t *testing.T) {
+	extension := Init(Config{})
+	runtime := runtimeForExtension(t, extension)
+	instance, err := runtime.Instantiate(context.Background(), emptyModule(t, runtime))
+	if err != nil {
+		t.Fatalf("instantiate empty DNS guest: %v", err)
+	}
+	host := udpHostModule{instance: instance, memory: bytes.Repeat([]byte{0x5a}, 16)}
+	before := append([]byte(nil), host.memory...)
+	if got := callRegisteredDNS(t, runtime, "namespace_default", host, 0); got != StatusNotSupported {
+		t.Fatalf("DNS namespace without configuration = %v", got)
+	}
+	if !bytes.Equal(host.memory, before) {
+		t.Fatal("unavailable DNS namespace mutated output")
+	}
+	_ = instance.Close()
+
+	importEntry := append(append(wasmtest.Name(DNSModule), wasmtest.Name("namespace_default")...), 0x00, 0x00)
+	wasmBytes := wasmtest.Module(
+		wasmtest.Section(1, wasmtest.Vec(wasmtest.FuncType([]wasm.ValType{wasm.I32}, []wasm.ValType{wasm.I32}))),
+		wasmtest.Section(2, wasmtest.Vec(importEntry)),
+	)
+	module, err := runtime.Compile(wasmBytes)
+	if err != nil {
+		t.Fatalf("compile DNS capability module: %v", err)
+	}
+	if _, err := runtime.Instantiate(context.Background(), module, wago.WithPolicy(wago.Policy{DeniedCapabilities: []wago.Capability{CapDNS}})); !errors.Is(err, wago.ErrPermissionDenied) {
+		t.Fatalf("denied DNS capability instantiate = %v", err)
+	}
+	allowed, err := runtime.Instantiate(context.Background(), module, wago.WithPolicy(wago.Policy{AllowedCapabilities: []wago.Capability{CapDNS}}))
+	if err != nil {
+		t.Fatalf("allowed DNS capability instantiate: %v", err)
+	}
+	_ = allowed.Close()
+}
+
+func TestRegisteredGuestDNSActualBackendSmoke(t *testing.T) {
+	extension := Init(actualGuestDNSConfig(103))
+	runtime := runtimeForExtension(t, extension)
+	module, err := runtime.Compile([]byte{0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00})
+	if err != nil {
+		t.Fatal(err)
+	}
+	instance, err := runtime.Instantiate(context.Background(), module)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer instance.Close()
+	host := udpHostModule{instance: instance, memory: make([]byte, 1024)}
+	if got := callRegisteredDNS(t, runtime, "namespace_default", host, 300); got != StatusOK {
+		t.Fatalf("registered DNS namespace = %v", got)
+	}
+	namespaceHandle := resource.Handle(binary.LittleEndian.Uint64(host.memory[300:308]))
+	request := namespace.DNSRequest{Name: "example.com", Types: namespace.DNSRecordsA}
+	if !abi.EncodeDNSQueryV1(host.memory, 0, request) {
+		t.Fatal("encode registered DNS request")
+	}
+	if got := callRegisteredDNS(t, runtime, "resolve", host, uint64(namespaceHandle), 0, 320); got != StatusInProgress {
+		t.Fatalf("registered DNS resolve = %v", got)
+	}
+	query := resource.Handle(binary.LittleEndian.Uint64(host.memory[320:328]))
+	if got := callRegisteredDNS(t, runtime, "cancel", host, uint64(query)); got != StatusOK {
+		t.Fatalf("registered DNS cancel = %v", got)
+	}
+	if got := callRegisteredDNS(t, runtime, "next", host, uint64(query), 400); got != StatusCanceled {
+		t.Fatalf("registered canceled DNS next = %v", got)
+	}
+	if got := callRegisteredDNS(t, runtime, "close", host, uint64(query)); got != StatusOK {
+		t.Fatalf("registered DNS close = %v", got)
 	}
 }
 
@@ -478,6 +555,15 @@ func callDNS(function wago.HostFunc, host udpHostModule, params ...uint64) Statu
 	var results [1]uint64
 	function(host, params, results[:])
 	return Status(int32(results[0]))
+}
+
+func callRegisteredDNS(t testing.TB, runtime *wago.Runtime, name string, host udpHostModule, params ...uint64) Status {
+	t.Helper()
+	fn, ok := runtime.HostImports()[DNSModule+"."+name].(wago.HostFunc)
+	if !ok {
+		t.Fatalf("registered DNS binding %q missing", name)
+	}
+	return callDNS(fn, host, params...)
 }
 
 func callDNSNamed(t testing.TB, extension *Extension, name string, host udpHostModule, params ...uint64) Status {

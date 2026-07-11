@@ -35,16 +35,15 @@ protocol modules; no process-global state or placeholder protocol module is used
 
 ## Current implementation
 
-The root extension owns three distinct import modules: `wago_net` declares
+The root extension owns four distinct import modules: `wago_net` declares
 `net.info` and exposes `abi_version`; `wago_net_udp` declares narrow `net.udp`
-authority; and `wago_net_tcp` declares narrow `net.tcp` authority. UDP and TCP
-each expose complete configured-namespace discovery, protocol operations,
-kind-safe close, and independently capability-gated bounded poll. The low-level
-`Imports` bundle remains core-only because protocol resources require Runtime
-lifecycle identity. Registration and implementation share binding tables so
-inspection metadata, TinyGo-compatible slot shapes, and actual host functions do
-not drift. A six-function DNS table now exists but is deliberately not passed to
-Wago registration, so inspection remains limited to core, UDP, and TCP.
+authority; `wago_net_tcp` declares narrow `net.tcp` authority; and
+`wago_net_dns` declares narrow `net.dns` authority. UDP, TCP, and DNS each expose
+complete configured-namespace discovery, protocol operations, kind-safe close,
+and independently capability-gated bounded poll. The low-level `Imports` bundle
+remains core-only because protocol resources require Runtime lifecycle identity.
+Registration and implementation share complete binding tables so inspection
+metadata, TinyGo-compatible slot shapes, and actual host functions do not drift.
 `internal/abi` provides allocation-free checked ranges, fixed-width endpoint,
 UDP receive, TCP stream/I/O, inline DNS query/name/record layouts, disjoint
 multi-output validation, and bounded poll codecs without exposing lneto types.
@@ -98,11 +97,16 @@ primitives under the namespace lifecycle lock; it never calls `tcp.Conn`'s
 backoff-based `Read`, `Write`, or `Flush` wrappers. Fixed listener pools and
 outbound streams have bounded receive/transmit storage, partial I/O, connect and
 accept progress, half-close, level readiness, endpoint policy, quota ownership,
-port reuse, and deterministic abort cleanup. DNS now has an unregistered backend
-foundation: adapter-owned immediate IPv4 UDP queries use lneto DNS codecs,
-finite query/record/response bounds, policy and quota ownership, deterministic
-service-attempt retransmission and timeout, semantic RCode mapping, and copied
-A/AAAA/CNAME records. No DNS guest module or capability is advertised yet.
+port reuse, and deterministic abort cleanup. DNS uses adapter-owned immediate
+IPv4 UDP queries plus lneto DNS codecs, finite query/record/response bounds,
+policy and quota ownership, deterministic service-attempt retransmission and
+timeout, semantic RCode mapping, and copied A/AAAA/CNAME records. Responses must
+echo the exact requested names/classes/types. Only a unique CNAME chain reachable
+from the requested name and requested A/AAAA records at its terminal name are
+emitted; irrelevant and duplicate answers are ignored, while conflicts and loops
+fail closed. Compressed names and resource framing have direct fuzz coverage.
+Truncated UDP responses map to temporary failure because DNS-over-TCP fallback is
+not implemented.
 
 `internal/readiness` attaches a finite coordinator to each instance resource
 table. Registrations retain opaque handle plus exact kind, level-triggered polls
@@ -114,19 +118,19 @@ storage, and transactionally accounts `scans + events + service_attempts` agains
 finite service-work quota for the duration of each call.
 
 Each `Extension` owns one private instance-state manager shared by its core, UDP,
-and TCP module bindings. Runtime instantiation attaches one resource table,
+TCP, and DNS module bindings. Runtime instantiation attaches one resource table,
 readiness coordinator, immutable policy, and finite quota ledger to the exact
 `*wago.Instance`. Optional static
 IPv4 configuration transactionally reserves namespace quota, constructs the
 backend, inserts a generation-safe handle, and registers bounded readiness before
-the state is published. UDP, TCP, and unregistered DNS creation repeat that
-transaction for exact socket, listener, stream, or query handles and poll
-registration; every failed stage closes the backend resource and releases
-accounting. DNS handles support copied record iteration, explicit cancellation,
-backend service-attempt timeout, stale/wrong-kind/cross-instance rejection, and
-deterministic lifecycle close without exposing a guest module. The unregistered
-DNS host bindings prevalidate complete fixed query, handle, and record outputs;
-record encoding is atomic and AGAIN/EOF/error paths do not mutate output. TCP guest bindings prevalidate all complete
+the state is published. UDP, TCP, and DNS creation repeat that transaction for
+exact socket, listener, stream, or query handles and poll registration; every
+failed stage closes the backend resource and releases accounting. DNS handles
+support copied record iteration, explicit cancellation, backend service-attempt
+timeout, stale/wrong-kind/cross-instance rejection, and deterministic lifecycle
+close. DNS host bindings prevalidate complete fixed query, handle, record, event,
+and poll outputs; record encoding is atomic and AGAIN/EOF/error paths do not
+mutate output. TCP guest bindings prevalidate all complete
 endpoint, descriptor, payload, result, event, and poll ranges before backend
 work. Connect and accept roll back newly owned handles if descriptor encoding
 cannot complete; AGAIN and EOF stream results leave guest outputs unchanged.
