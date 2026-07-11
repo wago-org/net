@@ -183,8 +183,14 @@ and the next lease receives fresh parent and worker identities.
 
 `scripts/release-signoff.sh` is the single reproducible local/CI entry point. It
 pins the merged Wago branch and the lneto/WASI audits, runs standard Go, race,
-bounded fuzz, benchmarks, TinyGo, cross-build, custom CLI inspection, source
-boundary scans, companion repository tests, and final clean-tree checks. Exact
-inputs, CI tiers, artifacts, and the narrowly accepted known WASI preview-1 native
-SIGSEGV are documented in `docs/release-signoff.md`. Hosted CI remains blocked
-until the merged Wago prerequisite is published at a fetchable immutable ref.
+bounded fuzz, benchmarks, TinyGo, a distinct package cross-build, optional
+bounded native/QEMU arm64 execution, custom CLI inspection, source-boundary and
+plugin-plan compatibility audits, companion repository tests, and final clean
+checks. It then emits a timestamp-free deterministic provenance manifest with
+exact revisions/trees/toolchains, named check outcomes, inspection facts,
+accepted exceptions, truthful skipped-execution limitations, and sorted SHA-256
+evidence. Exact inputs, CI tiers, artifacts, and the narrowly accepted known WASI
+preview-1 native SIGSEGV are documented in `docs/release-signoff.md`. Hosted CI
+remains blocked until the merged Wago prerequisite is published at a fetchable
+immutable ref; the reviewed newer plugin-plan snapshot requires a separate
+identity/cleanup/worker migration and is not a substitute pin.

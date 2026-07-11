@@ -24,7 +24,7 @@ and lneto as the first backend.
 - Wago merged lifecycle/worker branch: `97e6f91e6c822491577faa86f3c30aa5a8fff1e8` on `net/instance-close-hooks`, with parents `54499ba5135f69a062e23a7255f4a408d6cecf8c` and `ffd5ef4b122cbd019897eeea3503789ab5860e4a`.
 - Wago reviewed worker parent: `ffd5ef4b122cbd019897eeea3503789ab5860e4a`; fetched `origin/plugin-improvements` moved to merge `07a70b58ff26d2c8c49b5f879e7733cb375ec13f` on 2026-07-11 and still contains the reviewed worker parent, but not the networking merge.
 - lneto main: `ab1a0c735a8b534a1d6322a3e245bc11a09431e7` (2026-07-10).
-- WASI audit: `3df6c766ad00e83b314da799dbf9a77b409ad19d`.
+- WASI audit: `3df6c766ad00e83b314da799dbf9a77b409ad19d`; fetched `origin/main` moved to `1a7eeb215229e05bcb0f09d5cb3280d231739def` on 2026-07-11 and remains unreviewed/unpinned.
 
 ## Current architecture
 
@@ -252,34 +252,48 @@ worker/class tests now prove UDP/TCP/DNS child state cannot cross leases.
 - `b3c0d13` — makes lneto accepted-slot reclamation visible as one charged bounded
   egress maintenance operation while preserving immediate resource-quota release,
   private accepted-list safety, no-frame progress truth, and actual slot reuse.
-- `HEAD` (`net: reduce guest poll accounting allocations`) — replaces temporary
-  guest-poll reservation/allocation tokens with panic-safe scoped service
-  accounting and removes the benchmark's value-to-interface boxing artifact,
-  reducing complete pointer-backed UDP/TCP poll calls from three allocations to
-  zero without changing ABI results or work accounting.
+- `b6e08dc` — replaces temporary guest-poll reservation/allocation tokens with
+  panic-safe scoped service accounting and removes the benchmark's
+  value-to-interface boxing artifact, reducing complete pointer-backed UDP/TCP
+  poll calls from three allocations to zero without changing ABI results or work
+  accounting.
+- `1749ae1` — pins executable evidence for the current Wago plugin-plan redesign,
+  proving that lifecycle concepts remain but public exact identity, reset/class
+  safety, reviewed workers, and panic-isolated close cleanup require a separate
+  migration rather than a networking pin replacement.
+- `ca88e01` — adds a separately cross-compiled linux/arm64 protocol smoke binary,
+  native/QEMU runner detection, bounded execution, required/auto/disabled modes,
+  checksummed artifacts, and truthful skipped-no-runner status distinct from the
+  package cross-build.
+- `HEAD` (`net: emit deterministic release provenance`) — records every release
+  check, emits a timestamp-free machine-readable manifest for exact revisions,
+  trees, toolchains, inspection, targets, evidence, exceptions, and limitations,
+  and verifies sorted evidence and manifest SHA-256 files before success.
 
 ## Active work
 
-Recursion 13 is complete with exactly three bounded commits in the plugin
-repository. The exact Wago merge topology is now independently auditable against
-current remote refs, which moved after recursion 12 but still do not publish the
-networking merge. Accepted-stream quota remains immediate while the backend's
-necessary listener bookkeeping is reclaimed and reported during one charged
-bounded service probe. UDP/TCP/DNS guest polls preserve transactional
-`scans + events + service_attempts` limits without heap-backed quota tokens and
-benchmark at zero allocations with pointer-backed host modules.
+Recursion 14 is complete with exactly three bounded commits in the plugin
+repository. The fetched Wago plugin-plan snapshot is now classified by executable
+evidence as a migration target, not a drop-in networking prerequisite: it retains
+managed lifecycle/caller concepts but removes or weakens required identity,
+reset/worker, and panic-isolated cleanup contracts. Linux/arm64 has a bounded
+executable protocol smoke with truthful native/QEMU/skip outcomes; this host has
+no runner, so only cross-build execution preparation is claimed. The complete
+release gate now emits and verifies deterministic checksummed provenance instead
+of leaving its test, fuzz, benchmark, inspection, target, and exception results
+only in human logs.
 
 ## Ordered backlog
 
 1. Upstream the merged Wago lifecycle/reset/identity/worker branch at an immutable
    fetchable ref without rewriting Wago main or the worker parent history.
-2. Activate hosted CI from `scripts/release-signoff.sh` once that Wago ref is
-   published, add native linux/arm64 execution, and remove the WASI exception if
-   its pinned native preview-1 crash is fixed.
-3. Re-audit the materially changed current Wago plugin-plan/managed-instance
-   architecture against the exact lifecycle/reset/identity/worker contracts before
-   deciding whether a later integration merge is needed; do not substitute it for
-   immutable publication of the already reviewed two-parent merge.
+2. Build a separately reviewed plugin-plan migration that restores least-authority
+   exact caller identity, panic-isolated deterministic close, and managed/direct
+   lifecycle tests without requesting instance-management power solely for host
+   identity; do not substitute it for publication of the existing merge.
+3. Activate hosted CI from `scripts/release-signoff.sh` only after that Wago ref is
+   fetchable, require executed linux/arm64 smoke on an arm64/QEMU tier, and remove
+   the WASI exception only after reviewing and pinning an upstream fix.
 
 ## Blockers and discovered prerequisites
 
@@ -289,11 +303,16 @@ benchmark at zero allocations with pointer-backed host modules.
   removed after checks. Fetched `origin/main` at `7794acc` no longer references
   `trapCode`, so this remains a historical pinned-line defect, not networking code.
 - Wago's reviewed worker parent `ffd5ef4b` remains based on the older `0d4f4a4`
-  line. Current `origin/plugin-improvements` moved to `07a70b5`, contains that
+  line. Current `origin/plugin-improvements` remains `07a70b5`, contains that
   parent plus current main and a broader plugin-plan redesign, but does not contain
-  `97e6f91`. The local merge preserves the reviewed worker and lifecycle/reset
-  parents explicitly; hosted CI and downstream release reproducibility still
-  require publishing this exact merge object at an immutable upstream ref.
+  `97e6f91`. Executable source evidence now confirms the redesign retains managed
+  origin, lifecycle hooks, scoped caller resolution, and plugin planning, while
+  removing the public `InstanceHostModule`, `RequireReinstantiation`, classes,
+  and reviewed workers. Its direct close-hook loop also lacks the reviewed
+  panic-isolated runner. The networking source cannot compile unchanged, and a
+  mere API adaptation would not restore deterministic cleanup. The local merge
+  preserves both reviewed parents; hosted CI and downstream reproducibility still
+  require publishing that exact object at an immutable upstream ref.
 - Reset eligibility is no longer a blocker locally. Wago transactionally commits
   `Registry.RequireReinstantiation`, dynamically downgrades existing and future
   classes, and the networking extension declares the requirement. Snapshot pool
@@ -320,13 +339,22 @@ benchmark at zero allocations with pointer-backed host modules.
   because `EgressEthernet` requires a full MTU-sized destination before examining
   pending work. Such calls fail closed as would-block without consuming output.
 - lneto declares Go 1.24. TinyGo 0.41.1 is now installed; TinyGo tests with
-  `GOWORK=off` and a TinyGo custom Wago CLI build both pass for this repository. This is
-  a validated local toolchain result, not a claim that every lneto platform or
-  upstream TinyGo issue is resolved.
+  `GOWORK=off` and a TinyGo custom Wago CLI build both pass for this repository.
+  This is a validated local toolchain result, not a claim that every lneto
+  platform or upstream TinyGo issue is resolved.
+- The arm64 signoff now cross-compiles a bounded root test binary covering
+  metadata plus real UDP/TCP/DNS paths and can execute it natively or through
+  `qemu-aarch64`. This linux/amd64 host exposes neither runner, so the committed
+  gate truthfully records `skipped-no-runner`; `ARM64_EXECUTION=required` is the
+  fatal mode for a real arm64/QEMU tier.
+- WASI `origin/main` moved from the pinned `3df6c76` to `1a7eeb2` after fetch.
+  The new commits have not been audited for the native preview-1 crash or other
+  compatibility, so the release pin and narrow accepted exception remain
+  unchanged.
 
 ## Verification
 
-Latest outcomes after recursion 13, from the committed post-commit
+Latest outcomes after recursion 14, from the committed post-commit
 `scripts/release-signoff.sh` gate:
 
 - Plugin `go test ./... -count=1`, `GOWORK=off go test ./... -count=1`,
@@ -348,15 +376,13 @@ Latest outcomes after recursion 13, from the committed post-commit
   lneto success/NXDOMAIN/server-failure/timeout/truncation paths, bounded poll
   readiness/service, policy/quota/kind/isolation, cancel/close, cleanup, and
   fuzz-safe malformed memory.
-- Two final 3-second release gates around the ledger-only amendment passed.
-  Executions ranged 128,508–174,888 with corpus up to 71 for
-  `FuzzDNSWireResponse`, 1,123,142–1,246,324/corpus up to 66 for
-  `FuzzDNSV1Layouts`, 78,933–79,920/corpus up to 14 for `FuzzGuestDNSMemory`,
-  and 1,050,055–1,181,580/corpus 23 for shared `FuzzV1Layouts`.
-- Those release-gate benchmarks ranged 117.1–119.8 ns/op for guest UDP poll,
-  119.6–119.9 ns/op for guest TCP poll, and 20.00–20.24 ns/op for the UDP queue.
-  All three report 0 B/op and 0 allocs/op. Five focused pre-gate poll runs ranged
-  120.9–122.1 ns/op for UDP and 119.9–124.6 ns/op for TCP, also allocation-free.
+- The committed pre-ledger-amend 3-second recursion-14 gate executed 69,463
+  inputs/corpus 78 for `FuzzDNSWireResponse`, 1,246,189/corpus 91 for
+  `FuzzDNSV1Layouts`, 111,134/corpus 18 for `FuzzGuestDNSMemory`, and
+  1,122,799/corpus 23 for shared `FuzzV1Layouts`; all passed.
+- That gate measured 120.2 ns/op for guest UDP poll, 120.1 ns/op for guest TCP
+  poll, and 20.52 ns/op for the UDP queue. All three report 0 B/op and
+  0 allocs/op; timing remains informational rather than a release threshold.
 - Accepted-stream maintenance tests prove close releases quota immediately while
   retaining lneto's private accepted entry, one operation-bounded no-frame egress
   service reclaims it, and a second actual connection reuses the sole pool slot.
@@ -381,14 +407,21 @@ Latest outcomes after recursion 13, from the committed post-commit
 - `GOWORK=off tinygo test ./...` passes; the linked native-JIT worker lifecycle
   integration remains standard-Go/race-only under `!tinygo`, while the complete
   production plugin is included in the TinyGo custom CLI build. A standard-Go
-  `linux/arm64` cross-build also passes.
+  `linux/arm64` package cross-build and arm64 smoke test-binary cross-compile pass.
+  No native/QEMU runner is installed on this host, so execution is recorded as
+  `skipped-no-runner`, not as arm64 runtime validation.
 - WASI `GOWORK=off go test ./... -count=1` still reaches the known native `p1`
   SIGSEGV under Go 1.24.4 after other packages pass; the gate accepted only that
   documented signature and would fail any other WASI error.
 - The complete release script passed from clean tracked trees, removed its
-  temporary Wago helper, retained inspection/fuzz/benchmark logs only under the
-  ignored `.wago/release-signoff`, and left plugin, Wago, lneto, and WASI clean.
-  `.audit` again contains only the three pinned repositories.
+  temporary Wago helper, retained inspection/fuzz/benchmark/target evidence only
+  under the ignored `.wago/release-signoff`, and left plugin, Wago, lneto, and
+  WASI clean. It emitted schema-v1 `provenance.json`, sorted `evidence.sha256`,
+  and `provenance.sha256`; both checksum files verify. The manifest records exact
+  revisions/trees and Wago parents, toolchains, 4 capabilities/24 imports,
+  named checks, target truth, the WASI exception, and the arm64 skip limitation
+  without timestamps, absolute paths, or hosted-CI claims. `.audit` again
+  contains only the three pinned repositories.
 
 ## Performance baselines
 
@@ -399,15 +432,14 @@ Focused resource-table baselines on linux/amd64, Ryzen 7 8845HS, Go 1.24.4:
 - close 64 live resources: 3.289 us/op;
 - close 1024 live resources: 45.556 us/op.
 
-The fixed UDP queue round trip remains allocation-free and measured
-20.00–20.24 ns/op in the final recursion-13 release runs. The complete
+The fixed UDP queue round trip remains allocation-free and measured 20.52 ns/op
+in the committed recursion-14 pre-ledger-amend release run. The complete
 pointer-backed guest poll paths, including checked memory, scoped service quota,
-coordinator scan, and event/result encoding, measured 117.1–119.8 ns/op for UDP
-and 119.6–119.9 ns/op for TCP, both at 0 B/op and 0 allocs/op. The old two
-heap-backed quota tokens are gone;
-the benchmark also avoids value-to-interface boxing that was not intrinsic to a
-pointer-backed runtime host module. Timing remains load-sensitive and is not a
-release threshold.
+coordinator scan, and event/result encoding, measured 120.2 ns/op for UDP and
+120.1 ns/op for TCP, both at 0 B/op and 0 allocs/op. The old two heap-backed quota
+tokens are gone; the benchmark also avoids value-to-interface boxing that was not
+intrinsic to a pointer-backed runtime host module. Timing remains load-sensitive
+and is not a release threshold.
 
 ## Security review
 
@@ -439,29 +471,32 @@ pointers, and is unregistered
 before explicit handle retirement.
 
 Remaining risks are publishing the exact merged Wago commit without rewriting
-its two parent histories, reconciling that reviewed contract with Wago's newer
-plugin-plan/managed-instance redesign, lneto lacking a public immediate accepted-
-entry detach API so safe pool reuse remains one explicitly charged service probe
-after close, the intentionally unsupported DNS-over-TCP fallback for truncated
-responses, and extending the successful local TinyGo validation to native arm64
-and hosted CI. The release gate documents and narrowly checks the unchanged WASI
-native preview-1 exception rather than hiding it.
+its two parent histories; restoring least-authority identity and panic-safe close
+semantics in Wago's newer plugin-plan/managed-instance design; lneto lacking a
+public immediate accepted-entry detach API so safe pool reuse remains one
+explicitly charged service probe after close; the intentionally unsupported
+DNS-over-TCP fallback for truncated responses; and obtaining a real arm64/QEMU
+runner plus hosted CI after the immutable Wago prerequisite is fetchable. The
+release gate documents, machine-records, and narrowly checks the unchanged WASI
+native preview-1 exception rather than hiding it; fetched newer WASI commits are
+not trusted until separately audited.
 
 ## Next recursion
 
-1. `wago: audit current plugin-plan compatibility with networking lifecycle`
-   - Scope: compare fetched `origin/main`/`origin/plugin-improvements` against the
-     exact `97e6f91` lifecycle/reset/identity/worker contract and add focused,
-     reviewable compatibility evidence without rewriting or replacing the pinned
-     merge object.
-2. `net: add native arm64 execution signoff plumbing`
-   - Scope: add a bounded executable smoke target and runner detection suitable
-     for native arm64 or QEMU, while keeping cross-build truth distinct from
-     successfully executed native/translated validation.
-3. `net: emit deterministic release provenance`
-   - Scope: make the release gate produce a checksummed machine-readable manifest
-     for revisions, toolchains, inspection, tests, fuzz, benchmarks, and accepted
-     exceptions without advertising unavailable hosted CI.
+1. `wasi: audit current upstream preview-1 status`
+   - Scope: inspect fetched `origin/main` at `1a7eeb2` against pinned `3df6c76`,
+     run the full native suite from an isolated temporary checkout, and update the
+     release pin only if the crash is fixed and all changes are reviewable; retain
+     the narrow exception otherwise.
+2. `wago: prototype plugin-plan networking lifecycle compatibility`
+   - Scope: on a separate review branch/worktree from `07a70b5`, restore a public
+     least-authority exact-caller resolver and panic-isolated close cleanup, then
+     add focused direct/managed lifecycle tests. Do not move networking's Wago pin
+     or request `instance.manage` solely for caller identity.
+3. `net: add standalone provenance verification and bundle export`
+   - Scope: let downstream reviewers verify schema, revisions, inspection facts,
+     sorted evidence hashes, and accepted limitations without rerunning the gate;
+     export a deterministic review bundle without claiming hosted CI publication.
 
 After those exactly three commits, run the committed release gate, update this
 ledger, and recurse again if the long-term completion criteria remain unmet.

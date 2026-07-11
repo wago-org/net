@@ -50,7 +50,9 @@ The gate performs, in order:
 10. the complete pinned lneto test suite;
 11. the pinned WASI suite, accepting only the documented native preview-1
     SIGSEGV signature if it remains; and
-12. final clean-tree checks for all four repositories.
+12. final clean-tree checks for all four repositories; and
+13. deterministic machine-readable provenance plus SHA-256 verification of every
+    retained evidence artifact and the manifest itself.
 
 `scripts/arm64-execution-signoff.sh` always cross-compiles a `CGO_ENABLED=0`
 arm64 test binary before runner selection. `ARM64_EXECUTION=auto` (the release default)
@@ -72,6 +74,32 @@ revision drift, module-file change, generated artifact, or dirty tree fails the
 gate. Set `RUN_WASI=0` only for a deliberately shortened PR job; release runs
 must leave it enabled. `ALLOW_DIRTY=1` exists only for developing the signoff
 scripts themselves and is not a release setting.
+
+## Provenance artifacts
+
+A passing gate writes `provenance.json` using schema
+`github.com/wago-org/net/release-provenance/v1`. The manifest contains:
+
+- the exact plugin revision/tree and Wago, lneto, and WASI revisions/trees,
+  including Wago's ordered merge parents;
+- exact Go and TinyGo version strings;
+- every named test, race, vet, tidy, fuzz, benchmark, source-boundary, TinyGo,
+  cross-build, arm64-execution, inspection, audit-repository, and clean-tree
+  result from `checks.tsv`;
+- the byte-identical Go/TinyGo inspection hash, exact capability list, total
+  import count, and imports grouped by module;
+- the cross-build target separately from the arm64 execution status, runner, and
+  compiled smoke-binary checksum;
+- sorted paths, sizes, kinds, and SHA-256 hashes for all retained logs, generated
+  inspection inputs/binaries, inventories, and status files; and
+- narrowly accepted exceptions and truthful skipped-execution limitations.
+
+`evidence.sha256` covers every retained artifact that existed before provenance
+emission. `provenance.sha256` covers the canonical indented JSON manifest. The
+release script verifies both checksum files before reporting success. The
+manifest deliberately has no wall-clock timestamp, hostname, absolute checkout
+path, or hosted-CI assertion; identical inputs and evidence produce identical
+JSON.
 
 ## CI tiers
 
