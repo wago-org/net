@@ -19,9 +19,10 @@ service attempts, and per-attempt packet/byte/operation budgets, with finite
 per-instance service-work accounting. A bounded lneto-backed DNS query engine
 now exists behind the backend-neutral namespace boundary and uses generation-
 safe per-instance query handles with readiness, cancellation, timeout, quota,
-and lifecycle cleanup. `wago_net_dns` and `net.dns` remain absent until the
-complete checked guest surface is finished. Privileged packet access remains
-absent and unsupported.
+and lifecycle cleanup. Fixed checked DNS name/query/record layouts and a complete
+six-function host table are implemented and fuzzed, but `wago_net_dns` and
+`net.dns` remain absent pending registered end-to-end integration and inspection
+signoff. Privileged packet access remains absent and unsupported.
 
 ```go
 rt := wago.NewRuntime()

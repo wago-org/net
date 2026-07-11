@@ -34,10 +34,13 @@ to an entire module. `wago_net` exposes `abi_version` under `net.info`;
 close, and bounded poll under narrow `net.udp`; and `wago_net_tcp` exposes the
 complete listener/stream surface plus its own bounded poll under narrow
 `net.tcp`. DNS remains absent. `internal/abi` provides uint64-checked guest
-ranges, disjoint multi-output validation, fixed v1 endpoint/UDP/TCP/poll layouts,
-and atomic encoders without exposing lneto types. The 72-byte TCP stream layout
-contains handle/local/remote endpoints; the 8-byte partial-I/O result is written
-only for ready progress, while AGAIN/EOF leave it unchanged.
+ranges, disjoint multi-output validation, fixed v1 endpoint/UDP/TCP/DNS/poll
+layouts, and atomic encoders without exposing lneto types. The 72-byte TCP stream
+layout contains handle/local/remote endpoints; the 8-byte partial-I/O result is
+written only for ready progress, while AGAIN/EOF leave it unchanged. DNS now has
+260-byte inline normalized names, 268-byte fixed queries, and 560-byte atomic
+A/AAAA/CNAME records; its complete six-function binding table remains
+unregistered and absent from inspection.
 
 `internal/resource` provides O(1), kind-checked, generation-safe opaque handles
 with never-reused table identities, safe slot retirement before generation wrap,
@@ -48,7 +51,10 @@ quota account to each exact Runtime-created `*wago.Instance`. Optional static IP
 configuration transactionally creates a namespace handle and readiness entry;
 UDP handles use the same rollback-safe path. Host callers resolve through optional
 `wago.InstanceHostModule`, and `BeforeClose` removes state before poller, resource,
-and quota teardown. The map is extension-local, not process-global.
+and quota teardown. The map is extension-local, not process-global. DNS queries use the same
+transactional generation-safe table and readiness registration as UDP/TCP,
+including copied iteration, cancellation, timeout/error readiness, rollback,
+wrong-kind/stale/cross-instance rejection, and reverse-order lifecycle cleanup.
 
 `internal/policy` compiles immutable allow/deny rules for transport, direction,
 IP prefixes, port ranges, and normalized DNS suffixes. Deny always wins, unmatched
@@ -88,7 +94,11 @@ but host-facing operations call only immediate `tcp.Handler` state/buffer method
 under the namespace lock; `tcp.Conn.Read`, `Write`, and `Flush` remain absent.
 Connect/accept, partial I/O, EOF/reset semantics, half-close, policy, exact
 resource/retained-storage quota, bounded readiness, port reuse, and abort cleanup
-are covered. DNS remains truthfully not-supported.
+are covered. DNS now uses adapter-owned immediate IPv4 UDP packets plus lneto DNS
+codecs, finite concurrent queries, response/record/name retention, deterministic
+service-attempt retries and timeout, A/AAAA/CNAME parsing, semantic RCode mapping,
+policy and quota ownership, and synchronous close. Truncated responses fail
+truthfully as temporary because TCP fallback is not implemented.
 
 `internal/readiness` provides a finite coordinator per instance resource table.
 Registrations preserve exact handle kind, polls are level-triggered and bounded
@@ -190,34 +200,46 @@ cross class leases.
 - `54499ba` (Wago) — adds transactional extension reset eligibility and dynamic
   class reset downgrading while preserving the 776-byte `Instance` size, minimal
   interfaces, low-level APIs, and `HostFunc` slot shape.
-- `HEAD` (`net: require reinstantiation for networking instances`) — declares the
-  networking reset requirement, proves snapshot-configured classes physically
-  replace instances and retire UDP/TCP state between leases, and updates package,
-  architecture, ABI, and ledger documentation.
+- `50d0694` — declares the networking reset requirement, proves snapshot-configured
+  classes physically replace instances and retire UDP/TCP state between leases,
+  and updates package, architecture, ABI, and ledger documentation.
+- `f00adac` — adds bounded immediate lneto-backed DNS query resources with static
+  resolver authority, finite response/record/retry bounds, deterministic timeout,
+  semantic failures, copied A/AAAA/CNAME results, quota ownership, and race tests.
+- `01aa36d` — owns DNS queries as generation-safe per-instance handles with
+  readiness registration, cancellation, rollback, stale/wrong-kind/cross-instance
+  rejection, deterministic cleanup, and race coverage.
+- `HEAD` (`net: define the checked guest DNS ABI`) — adds fixed inline DNS
+  name/query/record layouts, atomic codecs, stable iteration status mapping,
+  malformed-memory fuzzing, and a complete but deliberately unregistered checked
+  host-function table.
 
 ## Active work
 
-Recursion 9 is complete with exactly three bounded commits: two Wago commits and
-one networking commit. Lifecycle semantics are reconciled locally with
-`origin/plugin-improvements`, reset eligibility is engine-enforced, and the
-networking extension now forces physical reinstantiation between class leases.
-Snapshot-configured pool tests create UDP and TCP resources, release the lease,
-prove the retired state is closed and its handles are invalid in the fresh table,
-and rebind the same ports in the replacement state. Standard Go, race, TinyGo,
-package, benchmark, and custom-inspection checks pass. DNS remains absent and
-unsupported; upstream branch integration and complete DNS are the major remaining
-production tasks.
+Recursion 10 is complete with exactly three bounded networking commits. The
+lneto backend now owns finite immediate DNS queries with deterministic retries,
+timeout, copied A/AAAA/CNAME records, semantic failures, and quota cleanup;
+instance state owns generation-safe DNS handles with readiness and cancellation;
+and the checked fixed-width DNS ABI plus complete six-function host table exists.
+The table is intentionally not registered, so inspection remains exactly core,
+UDP, and TCP while DNS hardening and registered end-to-end integration remain.
+Standard Go, race, fuzz, TinyGo, package, benchmark, source-boundary, and custom
+inspection checks pass across the plugin and pinned audit repositories except for
+the unchanged unrelated WASI native p1 SIGSEGV.
 
 ## Ordered backlog
 
-1. Implement bounded lneto DNS query ownership and semantic mapping without
-   advertising a guest module.
-2. Add generation-safe instance DNS handles, readiness, policy, quotas, and
-   deterministic close/timeout/cancel behavior.
-3. Define checked guest DNS layouts/imports, then advertise `net.dns` only after
-   complete registered integration, fuzz/race/TinyGo/package signoff.
-4. Rebase or upstream the local Wago lifecycle/reset commits alongside the final
+1. Harden DNS response correlation and parsing: verify echoed questions and
+   requested type coverage, fuzz compressed-name/resource parsing directly, and
+   define explicit behavior for irrelevant/duplicate/CNAME-chain records.
+2. Register `wago_net_dns` under `net.dns` only with complete actual-backend guest
+   resolve/next/cancel/close/poll tests, capability denial, timeout and RCode
+   integration, TinyGo/package/inspection signoff, and truthful TCP-truncation
+   status.
+3. Rebase or upstream the local Wago lifecycle/reset commits alongside the final
    form of PR #232 without dropping its worker lifecycle work.
+4. Finish release/CI documentation and cross-platform deterministic signoff,
+   including the remaining fuzz/race/bench/package matrix.
 
 ## Blockers and discovered prerequisites
 
@@ -233,6 +255,11 @@ production tasks.
   `Registry.RequireReinstantiation`, dynamically downgrades existing and future
   classes, and the networking extension declares the requirement. Snapshot pool
   tests prove old UDP/TCP state is closed before a fresh lease is published.
+- DNS is finite and nonblocking but not yet advertised. Responses are source,
+  destination-port, transaction-ID, checksum, fragmentation, size, RCode, and
+  record bounded; direct parser fuzzing and echoed-question/type correlation are
+  still required before capability registration. UDP truncation currently maps
+  to temporary failure because DNS-over-TCP fallback is not implemented.
 - lneto's high-level TCP/UDP `Read`, `Write`, `ReadFrom`, and `WriteTo` use backoff
   loops and may block. The concrete namespace imports none of them. UDP uses
   adapter-owned bounded queues and lneto frame codecs. TCP is safely serialized
@@ -253,25 +280,29 @@ production tasks.
 
 ## Verification
 
-Latest outcomes after recursion 9:
+Latest outcomes after recursion 10:
 
 - Plugin `go test ./... -count=1`, `GOWORK=off go test ./... -count=1`,
   `go test -race ./... -count=1`, `go vet ./...`, and `go list ./...` — pass.
-  `go mod tidy` produces no module-file changes.
-- The new pool test requests `ResetMemorySnapshot`, observes effective
-  `ResetReinstantiate`, creates live UDP and TCP listener handles, releases the
-  lease, verifies the retired resource table/quota account are closed, rejects
-  both handles in the fresh table, and rebinds the same ports in fresh state.
-- Existing TCP guest coverage still proves namespace truthfulness, capability
-  denial, exact metadata, policy/quota/kind/isolation checks, checked memory,
-  rollback, partial I/O, AGAIN/EOF non-mutation, half-close, bounded poll, close
-  races, and registered two-namespace request/reply/FIN exchange.
-- Prior post-commit fuzz results remain: `FuzzV1Layouts` for 3 seconds passed
-  758,966 executions with corpus 23; `FuzzGuestTCPStreamMemory` passed 210,916
-  executions with corpus 8. This slice changed lifecycle declaration, not layouts.
-- Current benchmarks: `BenchmarkGuestUDPPoll` 172.0 ns/op, 120 B/op,
-  3 allocs/op; `BenchmarkGuestTCPPoll` 167.6 ns/op, 120 B/op, 3 allocs/op; and
-  `BenchmarkUDPDatagramQueueRoundTrip` 20.04 ns/op, 0 B/op, 0 allocs/op.
+  `go mod tidy` produces no module-file changes. `GOWORK=off tinygo test ./...`
+  also passes with TinyGo 0.41.1.
+- Backend DNS tests prove finite A/AAAA/CNAME query/result ownership, exact
+  resource/queued-byte/work accounting, deterministic service-budget retries and
+  timeout, policy denial, RCode and truncation mapping, record bounds, port reuse,
+  cancellation, close races, and namespace cleanup.
+- Instance DNS tests prove transactional table/readiness rollback, copied record
+  validation, cancellation, generation retirement, stale/wrong-kind/cross-instance
+  rejection, lifecycle cleanup, and concurrent close safety.
+- Checked DNS host tests prove the complete six-function table while confirming
+  it remains unregistered, exact-instance resolution, fixed query/record encoding,
+  output non-mutation on EOF/errors, pre-work range/overlap/reserved-byte rejection,
+  wrong-kind handling, cancel/close, and fuzz-safe malformed memory.
+- Post-commit fuzzing: `FuzzDNSV1Layouts` passed 615,034 executions with corpus
+  10; `FuzzGuestDNSMemory` passed 18,232 executions with corpus 4; and the shared
+  `FuzzV1Layouts` passed 1,168,617 executions with corpus 23, each for 3 seconds.
+- Current benchmarks: `BenchmarkGuestUDPPoll` 169.9 ns/op, 120 B/op,
+  3 allocs/op; `BenchmarkGuestTCPPoll` 170.7 ns/op, 120 B/op, 3 allocs/op; and
+  `BenchmarkUDPDatagramQueueRoundTrip` 20.05 ns/op, 0 B/op, 0 allocs/op.
 - Source scan confirms lneto imports remain confined to `internal/backend/lneto`;
   guest-facing layers expose no lneto types. The source guard remains the only
   textual match for forbidden `tcp.Conn.Read`/`Write`/`Flush`, `StackBlocking`,
@@ -284,10 +315,9 @@ Latest outcomes after recursion 9:
   the reconciled context/origin contracts remain compatible with that design.
 - lneto `GOWORK=off go test ./... -count=1` — pass.
 - Standard-Go and TinyGo 0.41.1 custom Wago CLIs blank-importing
-  `github.com/wago-org/net/register` build. Inspection reports exactly
+  `github.com/wago-org/net/register` build. Inspection still reports exactly
   capabilities `net.info`, `net.tcp`, `net.udp` and 18 imports: one core, six
-  UDP, eleven TCP; no DNS module or capability. `GOWORK=off tinygo test ./...`
-  also passes.
+  UDP, eleven TCP; no DNS module or capability despite the unregistered table.
 - WASI `GOWORK=off go test ./... -count=1` still reaches the known native `p1`
   SIGSEGV under Go 1.24.4 after other packages pass; this remains unrelated.
 - Plugin, Wago, lneto, WASI, and temporary inspection worktrees are clean after
@@ -303,16 +333,19 @@ Focused resource-table baselines on linux/amd64, Ryzen 7 8845HS, Go 1.24.4:
 - close 64 live resources: 3.289 us/op;
 - close 1024 live resources: 45.556 us/op.
 
-The fixed UDP queue round trip remains allocation-free and measured 20.04 ns/op.
+The fixed UDP queue round trip remains allocation-free and measured 20.05 ns/op.
 The complete guest poll paths, including checked memory, quota tokens,
-coordinator scan, and event/result encoding, measured 172.0 ns/op for UDP and
-167.6 ns/op for TCP, both at 120 B/op and 3 allocs/op. Reducing quota-token
+coordinator scan, and event/result encoding, measured 169.9 ns/op for UDP and
+170.7 ns/op for TCP, both at 120 B/op and 3 allocs/op. Reducing quota-token
 allocations is an optimization opportunity, not a correctness blocker.
 
 ## Security review
 
 Guest-visible UDP and TCP expose only opaque handles, checked endpoint/result/
-event layouts, and stable statuses. TCP was advertised only after its complete
+event layouts, and stable statuses. DNS remains guest-invisible, but its reserved
+surface already uses fixed inline normalized names, disjoint checked creation,
+atomic type-tagged records, stable statuses, and output non-mutation on
+AGAIN/EOF/error. TCP was advertised only after its complete
 binding table, rollback paths, kind-specific closes, and independent capability
 were tested together. Every call resolves exact instance identity; stale, wrong-
 kind, cross-instance, zero, or forged handles fail closed. Policy
@@ -337,26 +370,26 @@ before explicit handle retirement.
 
 Remaining risks are upstreaming the local Wago lifecycle/reset commits without
 losing PR #232's worker work, lneto listener-slot reuse occurring on bounded
-listener maintenance after accepted-stream close, ensuring DNS repeats every
-policy/quota/lifecycle invariant, reducing guest poll quota-token allocations,
-and extending the successful local TinyGo validation to release/CI platforms.
+listener maintenance after accepted-stream close, DNS echoed-question/type
+correlation and direct compressed-parser fuzzing before registration, the lack of
+DNS-over-TCP fallback for truncated responses, reducing guest poll quota-token
+allocations, and extending the successful local TinyGo validation to release/CI
+platforms.
 
 ## Next recursion
 
-1. `net: add bounded lneto DNS query resources`
-   - Scope: inspect lneto DNS internals and implement immediate, finite query
-     ownership behind the neutral namespace contract without guest registration;
-     map semantic failures, bound retained records/work, and test service/close
-     races and deterministic two-namespace behavior where possible.
-2. `net: own DNS handles per instance`
-   - Scope: add policy/quota-backed generation-safe DNS query handles and
-     readiness registration, with exact timeout/cancel/close semantics, rollback,
-     stale/wrong-kind/cross-instance rejection, and lifecycle cleanup.
-3. `net: define the checked guest DNS ABI`
-   - Scope: add fixed checked name/result layouts, stable status mapping, malformed
-     memory fuzzing, and unregistered host bindings. Keep `wago_net_dns` and
-     `net.dns` absent until a later slice completes the full registered table and
-     integration signoff.
+1. `net: correlate and fuzz DNS responses`
+   - Scope: require echoed question names/classes/types to match the exact request,
+     define duplicate/irrelevant/CNAME-chain handling, and directly fuzz the
+     compressed-name/resource parser under the configured response bound.
+2. `net: integrate registered DNS guest queries`
+   - Scope: add actual-backend guest resolve/next/cancel/close/poll tests covering
+     success, NXDOMAIN, timeout, truncation, checked output, policy/quota/kinds,
+     and deterministic cleanup while still withholding registration.
+3. `net: expose the complete DNS capability`
+   - Scope: register the existing six-function table under narrow `net.dns`, add
+     capability denial and custom-inspection/package/TinyGo signoff, and update
+     public docs only if every complete DNS path passes together.
 
 After those exactly three commits, run combined verification, update this ledger,
 and recurse again if the long-term completion criteria remain unmet.

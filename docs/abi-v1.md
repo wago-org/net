@@ -173,6 +173,56 @@ supplied buffer length. The structure is written only on `OK`. Would-block and
 EOF are represented by status values and leave it unchanged, avoiding ambiguous
 zero-byte progress.
 
+## DNS layouts and unregistered bindings
+
+The complete checked DNS host-function table is implemented but intentionally
+not registered yet. Consequently, `wago_net_dns` and `net.dns` do not appear in
+runtime inspection and guests cannot import these functions in this revision.
+The reserved table is:
+
+```text
+namespace_default(out_handle_ptr: i32) -> i32
+resolve(namespace: i64, query_ptr: i32, out_query_ptr: i32) -> i32
+next(query: i64, out_record_ptr: i32) -> i32
+cancel(query: i64) -> i32
+close(query: i64) -> i32
+poll(events_ptr: i32, event_capacity: i32, budget_ptr: i32, out_result_ptr: i32) -> i32
+```
+
+`wago_net_dns_name_v1` is 260 bytes: a little-endian `uint16_t length`, a zero
+`uint16_t reserved`, 253 inline normalized lowercase ASCII name bytes, and three
+zero padding bytes. Length is 1..253. Unused bytes must be zero on input and are
+zeroed on output. Numeric IP literals, trailing dots, wildcard or empty labels,
+non-ASCII bytes, uppercase bytes, and labels outside the DNS limits are rejected.
+
+`wago_net_dns_query_v1` is 268 bytes: an inline DNS name at offset 0, a
+little-endian `uint32_t record_types` at offset 260, and zero `uint32_t reserved`
+at offset 264. Record-type bit `1` requests A and bit `2` requests AAAA; at least
+one bit is required and no other bits are accepted. `resolve` checks the complete
+query and handle output and requires them to be disjoint before policy, quota, or
+backend work. It writes the handle only on `OK` or `IN_PROGRESS`.
+
+`wago_net_dns_record_v1` is 560 bytes:
+
+```c
+struct wago_net_dns_record_v1 {
+    struct wago_net_dns_name_v1 name;       // offset 0
+    uint32_t type;                          // offset 260
+    uint32_t ttl_seconds;                   // offset 264
+    struct wago_net_addr_v1 address;        // offset 268
+    struct wago_net_dns_name_v1 canonical;  // offset 300
+};
+```
+
+Type `1` is A, `2` is AAAA, and `3` is CNAME. A/AAAA populate only `address`
+with a zero port and leave `canonical` all zero. CNAME populates only
+`canonical` and leaves `address` all zero. The encoder validates the complete
+backend-neutral record and output range, builds a zeroed temporary structure,
+and copies it atomically. `next` validates the complete output before consuming
+a record; `AGAIN`, `EOF`, and failures leave output unchanged. Cancel makes an
+unfinished query terminal with `CANCELED` but does not retire its handle; `close`
+performs generation retirement and deterministic quota/storage cleanup.
+
 ## Bounded poll layouts
 
 `wago_net_poll_budget_v1` is 24 bytes, containing six consecutive `uint32_t`

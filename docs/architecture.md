@@ -43,9 +43,11 @@ kind-safe close, and independently capability-gated bounded poll. The low-level
 `Imports` bundle remains core-only because protocol resources require Runtime
 lifecycle identity. Registration and implementation share binding tables so
 inspection metadata, TinyGo-compatible slot shapes, and actual host functions do
-not drift. `internal/abi` provides allocation-free checked ranges, fixed-width
-endpoint, UDP receive, TCP stream/I/O layouts, disjoint multi-output validation,
-and bounded poll codecs without exposing lneto types.
+not drift. A six-function DNS table now exists but is deliberately not passed to
+Wago registration, so inspection remains limited to core, UDP, and TCP.
+`internal/abi` provides allocation-free checked ranges, fixed-width endpoint,
+UDP receive, TCP stream/I/O, inline DNS query/name/record layouts, disjoint
+multi-output validation, and bounded poll codecs without exposing lneto types.
 `internal/resource` provides O(1) opaque-handle lookup with exact kind checks,
 never-reused table identities, per-slot generations, rollover retirement, and
 reverse-creation O(live) cleanup. The table exists independently of protocol
@@ -122,7 +124,9 @@ transaction for exact socket, listener, stream, or query handles and poll
 registration; every failed stage closes the backend resource and releases
 accounting. DNS handles support copied record iteration, explicit cancellation,
 backend service-attempt timeout, stale/wrong-kind/cross-instance rejection, and
-deterministic lifecycle close without exposing a guest module. TCP guest bindings prevalidate all complete
+deterministic lifecycle close without exposing a guest module. The unregistered
+DNS host bindings prevalidate complete fixed query, handle, and record outputs;
+record encoding is atomic and AGAIN/EOF/error paths do not mutate output. TCP guest bindings prevalidate all complete
 endpoint, descriptor, payload, result, event, and poll ranges before backend
 work. Connect and accept roll back newly owned handles if descriptor encoding
 cannot complete; AGAIN and EOF stream results leave guest outputs unchanged.

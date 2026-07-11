@@ -45,6 +45,22 @@ func TestStatusFromIOResult(t *testing.T) {
 	}
 }
 
+func TestStatusFromDNSNext(t *testing.T) {
+	for _, test := range []struct {
+		next namespace.DNSNext
+		want Status
+	}{
+		{namespace.DNSNextReady, StatusOK},
+		{namespace.DNSNextWouldBlock, StatusAgain},
+		{namespace.DNSNextEOF, StatusEOF},
+		{0, StatusOther},
+	} {
+		if got := statusFromDNSNext(test.next); got != test.want {
+			t.Fatalf("statusFromDNSNext(%d) = %v, want %v", test.next, got, test.want)
+		}
+	}
+}
+
 func TestStatusFromError(t *testing.T) {
 	failures := []struct {
 		failure namespace.Failure

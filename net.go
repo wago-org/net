@@ -1,6 +1,7 @@
 // Package net provides the core of Wago's capability-gated networking plugin
 // suite. The guest ABI is backend-neutral; lneto is the first backend and is
-// not part of the public contract. Runtime registration requires physical
+// not part of the public contract. UDP/TCP are registered; the complete checked
+// DNS table remains withheld pending end-to-end hardening. Runtime registration requires physical
 // reinstantiation between class leases so instance-owned network state cannot
 // survive an in-place Wasm memory reset.
 package net
@@ -26,8 +27,11 @@ const (
 	Module = "wago_net"
 	// UDPModule independently owns the complete guest UDP operation surface.
 	UDPModule = "wago_net_udp"
-	// TCPModule is reserved for the complete guest TCP operation surface.
+	// TCPModule owns the complete guest TCP operation surface.
 	TCPModule = "wago_net_tcp"
+	// DNSModule is reserved for the checked DNS surface. It is intentionally not
+	// registered until end-to-end DNS integration is complete.
+	DNSModule = "wago_net_dns"
 
 	// ABIVersion1 encodes ABI version 1.0 as major in the upper 16 bits and minor
 	// in the lower 16 bits.
@@ -37,8 +41,10 @@ const (
 	CapInfo wago.Capability = "net.info"
 	// CapUDP permits checked nonblocking UDP namespace, socket, and poll access.
 	CapUDP wago.Capability = "net.udp"
-	// CapTCP is reserved for checked nonblocking TCP listener, stream, and poll access.
+	// CapTCP permits checked nonblocking TCP listener, stream, and poll access.
 	CapTCP wago.Capability = "net.tcp"
+	// CapDNS is reserved for checked nonblocking DNS queries and is not yet advertised.
+	CapDNS wago.Capability = "net.dns"
 )
 
 // PolicyConfig and related aliases expose the backend-neutral authority model

@@ -76,6 +76,20 @@ func statusFromIOResult(result namespace.IOResult, bufferSize int) Status {
 	}
 }
 
+// statusFromDNSNext maps one validated nonblocking DNS record iteration state.
+func statusFromDNSNext(next namespace.DNSNext) Status {
+	switch next {
+	case namespace.DNSNextReady:
+		return StatusOK
+	case namespace.DNSNextWouldBlock:
+		return StatusAgain
+	case namespace.DNSNextEOF:
+		return StatusEOF
+	default:
+		return StatusOther
+	}
+}
+
 // statusFromError maps backend-neutral failures and ownership/accounting errors
 // to stable guest values. Error text and backend-specific causes never cross the
 // ABI. Access denial is mapped explicitly without changing existing numbers.
