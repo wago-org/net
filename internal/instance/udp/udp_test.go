@@ -20,7 +20,7 @@ type fakeNamespace struct{ socket namespace.UDPSocket }
 
 func (*fakeNamespace) Close() error                   { return nil }
 func (*fakeNamespace) Readiness() namespace.Readiness { return namespace.ReadyWritable }
-func (n *fakeNamespace) TryBindUDP(namespace.Endpoint) (namespace.UDPSocket, namespace.Progress, error) {
+func (n *fakeNamespace) TryBindUDP(namespace.Endpoint) (nscore.Resource, namespace.Progress, error) {
 	return n.socket, namespace.ProgressDone, nil
 }
 func (*fakeNamespace) TryListenTCP(namespace.Endpoint) (namespace.TCPListener, namespace.Progress, error) {

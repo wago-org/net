@@ -45,6 +45,19 @@ func TestStatusFromIOResult(t *testing.T) {
 	}
 }
 
+func statusFromDNSNext(next namespace.DNSNext) Status {
+	switch next {
+	case namespace.DNSNextReady:
+		return StatusOK
+	case namespace.DNSNextWouldBlock:
+		return StatusAgain
+	case namespace.DNSNextEOF:
+		return StatusEOF
+	default:
+		return StatusOther
+	}
+}
+
 func TestStatusFromDNSNext(t *testing.T) {
 	for _, test := range []struct {
 		next namespace.DNSNext

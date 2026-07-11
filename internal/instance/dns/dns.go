@@ -3,13 +3,13 @@ package dns
 
 import (
 	core "github.com/wago-org/net/internal/instance/core"
-	"github.com/wago-org/net/internal/namespace"
 	nscore "github.com/wago-org/net/internal/namespace/core"
+	dnsns "github.com/wago-org/net/internal/namespace/dns"
 	"github.com/wago-org/net/internal/resource"
 )
 
 // Resolve owns and poll-registers one immediate or in-progress DNS query.
-func Resolve(state *core.State, namespaceHandle resource.Handle, request namespace.DNSRequest) (handle resource.Handle, progress namespace.Progress, err error) {
+func Resolve(state *core.State, namespaceHandle resource.Handle, request dnsns.Request) (handle resource.Handle, progress nscore.Progress, err error) {
 	err = state.WithLock(func(locked core.LockedState) error {
 		value, lookupErr := locked.Resources.Lookup(namespaceHandle, resource.KindNamespace)
 		if lookupErr != nil {
@@ -18,23 +18,29 @@ func Resolve(state *core.State, namespaceHandle resource.Handle, request namespa
 		if carrier, ok := value.(nscore.NamespaceCarrier); ok {
 			value = carrier.NamespaceBackend()
 		}
-		backend, ok := value.(namespace.Namespace)
+		backend, ok := value.(dnsns.Namespace)
 		if !ok {
-			return namespace.Fail(namespace.FailureIO, core.ErrInvalidBackendResult)
+			return nscore.Fail(nscore.FailureIO, core.ErrInvalidBackendResult)
 		}
 		query, backendProgress, backendErr := backend.TryResolve(request)
 		progress = backendProgress
 		if backendErr != nil {
 			return backendErr
 		}
-		if (progress != namespace.ProgressDone && progress != namespace.ProgressInProgress) || query == nil {
+		if (progress != nscore.ProgressDone && progress != nscore.ProgressInProgress) || query == nil {
 			if query != nil {
 				_ = query.Close()
 			}
 			progress = 0
-			return namespace.Fail(namespace.FailureIO, core.ErrInvalidBackendResult)
+			return nscore.Fail(nscore.FailureIO, core.ErrInvalidBackendResult)
 		}
-		handle, err = locked.Resources.Add(resource.KindDNSQuery, query)
+		typedQuery, ok := query.(dnsns.Query)
+		if !ok {
+			_ = query.Close()
+			progress = 0
+			return nscore.Fail(nscore.FailureIO, core.ErrInvalidBackendResult)
+		}
+		handle, err = locked.Resources.Add(resource.KindDNSQuery, typedQuery)
 		if err != nil {
 			_ = query.Close()
 			return err
@@ -51,20 +57,20 @@ func Resolve(state *core.State, namespaceHandle resource.Handle, request namespa
 }
 
 // Next performs one nonblocking copied-record read from an exact live query.
-func Next(state *core.State, handle resource.Handle) (record namespace.DNSRecord, next namespace.DNSNext, err error) {
+func Next(state *core.State, handle resource.Handle) (record dnsns.Record, next dnsns.Next, err error) {
 	err = state.WithLock(func(locked core.LockedState) error {
 		query, lookupErr := lookupQuery(locked, handle)
 		if lookupErr != nil {
 			return lookupErr
 		}
 		record, next, err = query.TryNext()
-		if err == nil && next == namespace.DNSNextReady && !record.Valid() {
-			record, next = namespace.DNSRecord{}, 0
-			return namespace.Fail(namespace.FailureIO, core.ErrInvalidBackendResult)
+		if err == nil && next == dnsns.NextReady && !record.Valid() {
+			record, next = dnsns.Record{}, 0
+			return nscore.Fail(nscore.FailureIO, core.ErrInvalidBackendResult)
 		}
-		if err == nil && next != namespace.DNSNextReady && next != namespace.DNSNextWouldBlock && next != namespace.DNSNextEOF {
-			record, next = namespace.DNSRecord{}, 0
-			return namespace.Fail(namespace.FailureIO, core.ErrInvalidBackendResult)
+		if err == nil && next != dnsns.NextReady && next != dnsns.NextWouldBlock && next != dnsns.NextEOF {
+			record, next = dnsns.Record{}, 0
+			return nscore.Fail(nscore.FailureIO, core.ErrInvalidBackendResult)
 		}
 		return err
 	})
@@ -82,14 +88,14 @@ func Cancel(state *core.State, handle resource.Handle) (err error) {
 	})
 }
 
-func lookupQuery(locked core.LockedState, handle resource.Handle) (namespace.DNSQuery, error) {
+func lookupQuery(locked core.LockedState, handle resource.Handle) (dnsns.Query, error) {
 	value, err := locked.Resources.Lookup(handle, resource.KindDNSQuery)
 	if err != nil {
 		return nil, err
 	}
-	query, ok := value.(namespace.DNSQuery)
+	query, ok := value.(dnsns.Query)
 	if !ok {
-		return nil, namespace.Fail(namespace.FailureIO, core.ErrInvalidBackendResult)
+		return nil, nscore.Fail(nscore.FailureIO, core.ErrInvalidBackendResult)
 	}
 	return query, nil
 }

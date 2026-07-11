@@ -5,7 +5,7 @@ import (
 	"encoding/binary"
 
 	abicore "github.com/wago-org/net/internal/abi/core"
-	"github.com/wago-org/net/internal/namespace"
+	udpns "github.com/wago-org/net/internal/namespace/udp"
 )
 
 const (
@@ -18,7 +18,7 @@ const (
 
 // EncodeReceiveResultV1 writes source, exact copied/original lengths, and
 // truncation metadata after validating the result and complete output range.
-func EncodeReceiveResultV1(memory []byte, ptr uint32, result namespace.DatagramResult, bufferSize int) bool {
+func EncodeReceiveResultV1(memory []byte, ptr uint32, result udpns.DatagramResult, bufferSize int) bool {
 	if !result.Valid(bufferSize) || !result.Ready || uint64(result.Copied) > uint64(^uint32(0)) || uint64(result.DatagramBytes) > uint64(^uint32(0)) {
 		return false
 	}

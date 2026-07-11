@@ -5,7 +5,6 @@ package guest
 import (
 	"errors"
 
-	"github.com/wago-org/net/internal/namespace"
 	nscore "github.com/wago-org/net/internal/namespace/core"
 	"github.com/wago-org/net/internal/quota"
 	"github.com/wago-org/net/internal/readiness"
@@ -70,20 +69,6 @@ func FromIOResult(result nscore.IOResult, bufferSize int) Status {
 	case nscore.IOWouldBlock:
 		return StatusAgain
 	case nscore.IOEOF:
-		return StatusEOF
-	default:
-		return StatusOther
-	}
-}
-
-// FromDNSNext maps one validated nonblocking DNS iteration state.
-func FromDNSNext(next namespace.DNSNext) Status {
-	switch next {
-	case namespace.DNSNextReady:
-		return StatusOK
-	case namespace.DNSNextWouldBlock:
-		return StatusAgain
-	case namespace.DNSNextEOF:
 		return StatusEOF
 	default:
 		return StatusOther

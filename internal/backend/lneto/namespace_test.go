@@ -757,7 +757,7 @@ func FuzzUDPOperationSequence(f *testing.F) {
 				if socket.Readiness() == namespace.ReadyClosed {
 					candidate, progress, err := ns.TryBindUDP(local)
 					if err == nil && progress == namespace.ProgressDone {
-						socket = candidate
+						socket = candidate.(namespace.UDPSocket)
 					}
 				}
 			}
@@ -880,7 +880,7 @@ func bindUDP(t testing.TB, ns *Namespace, local namespace.Endpoint) namespace.UD
 	if err != nil || progress != namespace.ProgressDone || socket == nil {
 		t.Fatalf("bind UDP %v = %T, %v, %v", local, socket, progress, err)
 	}
-	return socket
+	return socket.(namespace.UDPSocket)
 }
 
 func serviceTransfer(t testing.TB, from, to *Namespace) {

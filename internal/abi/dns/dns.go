@@ -5,7 +5,8 @@ import (
 	"encoding/binary"
 
 	abicore "github.com/wago-org/net/internal/abi/core"
-	"github.com/wago-org/net/internal/namespace"
+	nscore "github.com/wago-org/net/internal/namespace/core"
+	dnsns "github.com/wago-org/net/internal/namespace/dns"
 )
 
 const (
@@ -54,7 +55,7 @@ func DecodeDNSNameV1(memory []byte, ptr uint32) (string, bool) {
 		}
 	}
 	name := string(b[dnsNameBytesOffset : dnsNameBytesOffset+length])
-	if !(namespace.DNSRequest{Name: name, Types: namespace.DNSRecordsA}).Valid() {
+	if !(dnsns.Request{Name: name, Types: dnsns.RecordsA}).Valid() {
 		return "", false
 	}
 	return name, true
@@ -62,7 +63,7 @@ func DecodeDNSNameV1(memory []byte, ptr uint32) (string, bool) {
 
 // EncodeDNSNameV1 atomically writes one normalized name with zero padding.
 func EncodeDNSNameV1(memory []byte, ptr uint32, name string) bool {
-	if !(namespace.DNSRequest{Name: name, Types: namespace.DNSRecordsA}).Valid() {
+	if !(dnsns.Request{Name: name, Types: dnsns.RecordsA}).Valid() {
 		return false
 	}
 	output, ok := abicore.Slice(memory, ptr, DNSNameV1Size)
@@ -78,26 +79,26 @@ func EncodeDNSNameV1(memory []byte, ptr uint32, name string) bool {
 
 // DecodeDNSQueryV1 validates the complete fixed-width query and returns the
 // backend-neutral request.
-func DecodeDNSQueryV1(memory []byte, ptr uint32) (namespace.DNSRequest, bool) {
+func DecodeDNSQueryV1(memory []byte, ptr uint32) (dnsns.Request, bool) {
 	b, ok := abicore.Slice(memory, ptr, DNSQueryV1Size)
 	if !ok {
-		return namespace.DNSRequest{}, false
+		return dnsns.Request{}, false
 	}
 	name, ok := DecodeDNSNameV1(memory, ptr)
 	if !ok || binary.LittleEndian.Uint32(b[dnsQueryReserved:dnsQueryReserved+4]) != 0 {
-		return namespace.DNSRequest{}, false
+		return dnsns.Request{}, false
 	}
 	types := binary.LittleEndian.Uint32(b[dnsQueryTypesOffset : dnsQueryTypesOffset+4])
 	if types == 0 || types&^dnsRecordTypesMask != 0 {
-		return namespace.DNSRequest{}, false
+		return dnsns.Request{}, false
 	}
-	request := namespace.DNSRequest{Name: name, Types: namespace.DNSRecordTypes(types)}
+	request := dnsns.Request{Name: name, Types: dnsns.RecordTypes(types)}
 	return request, request.Valid()
 }
 
 // EncodeDNSQueryV1 is used by host tooling and tests to construct one canonical
 // fixed query. Guest decoders do not depend on this helper.
-func EncodeDNSQueryV1(memory []byte, ptr uint32, request namespace.DNSRequest) bool {
+func EncodeDNSQueryV1(memory []byte, ptr uint32, request dnsns.Request) bool {
 	if !request.Valid() {
 		return false
 	}
@@ -125,7 +126,7 @@ func CheckDNSResolveV1(memory []byte, queryPtr, handlePtr uint32) bool {
 
 // EncodeDNSRecordV1 atomically writes a type-tagged record. Address bytes are
 // populated only for A/AAAA; canonical name is populated only for CNAME.
-func EncodeDNSRecordV1(memory []byte, ptr uint32, record namespace.DNSRecord) bool {
+func EncodeDNSRecordV1(memory []byte, ptr uint32, record dnsns.Record) bool {
 	if !record.Valid() {
 		return false
 	}
@@ -139,17 +140,17 @@ func EncodeDNSRecordV1(memory []byte, ptr uint32, record namespace.DNSRecord) bo
 	}
 	binary.LittleEndian.PutUint32(encoded[dnsRecordTTLOffset:dnsRecordTTLOffset+4], record.TTLSeconds)
 	switch record.Type {
-	case namespace.DNSRecordA:
+	case dnsns.RecordA:
 		binary.LittleEndian.PutUint32(encoded[dnsRecordTypeOffset:dnsRecordTypeOffset+4], DNSRecordTypeA)
-		if !abicore.EncodeEndpointV1(encoded[:], dnsRecordAddress, namespace.Endpoint{Address: record.Address}) {
+		if !abicore.EncodeEndpointV1(encoded[:], dnsRecordAddress, nscore.Endpoint{Address: record.Address}) {
 			return false
 		}
-	case namespace.DNSRecordAAAA:
+	case dnsns.RecordAAAA:
 		binary.LittleEndian.PutUint32(encoded[dnsRecordTypeOffset:dnsRecordTypeOffset+4], DNSRecordTypeAAAA)
-		if !abicore.EncodeEndpointV1(encoded[:], dnsRecordAddress, namespace.Endpoint{Address: record.Address}) {
+		if !abicore.EncodeEndpointV1(encoded[:], dnsRecordAddress, nscore.Endpoint{Address: record.Address}) {
 			return false
 		}
-	case namespace.DNSRecordCNAME:
+	case dnsns.RecordCNAME:
 		binary.LittleEndian.PutUint32(encoded[dnsRecordTypeOffset:dnsRecordTypeOffset+4], DNSRecordTypeCNAME)
 		if !EncodeDNSNameV1(encoded[:], dnsRecordCanonical, record.CanonicalName) {
 			return false

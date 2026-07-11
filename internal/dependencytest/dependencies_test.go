@@ -15,12 +15,13 @@ type protocolDependency struct {
 	binding   string
 	operation string
 	abi       string
+	namespace string
 }
 
 var protocolDependencies = map[string]protocolDependency{
-	"tcp": {public: modulePath + "/tcp", binding: modulePath + "/internal/binding/tcp", operation: modulePath + "/internal/instance/tcp", abi: modulePath + "/internal/abi/tcp"},
-	"udp": {public: modulePath + "/udp", binding: modulePath + "/internal/binding/udp", operation: modulePath + "/internal/instance/udp", abi: modulePath + "/internal/abi/udp"},
-	"dns": {public: modulePath + "/dns", binding: modulePath + "/internal/binding/dns", operation: modulePath + "/internal/instance/dns", abi: modulePath + "/internal/abi/dns"},
+	"tcp": {public: modulePath + "/tcp", binding: modulePath + "/internal/binding/tcp", operation: modulePath + "/internal/instance/tcp", abi: modulePath + "/internal/abi/tcp", namespace: modulePath + "/internal/namespace/tcp"},
+	"udp": {public: modulePath + "/udp", binding: modulePath + "/internal/binding/udp", operation: modulePath + "/internal/instance/udp", abi: modulePath + "/internal/abi/udp", namespace: modulePath + "/internal/namespace/udp"},
+	"dns": {public: modulePath + "/dns", binding: modulePath + "/internal/binding/dns", operation: modulePath + "/internal/instance/dns", abi: modulePath + "/internal/abi/dns", namespace: modulePath + "/internal/namespace/dns"},
 }
 
 func TestFixtureDependencyBoundaries(t *testing.T) {
@@ -45,6 +46,7 @@ func TestFixtureDependencyBoundaries(t *testing.T) {
 				modulePath,
 				modulePath + "/internal/abi/core",
 				modulePath + "/internal/instance/core",
+				modulePath + "/internal/namespace/core",
 				modulePath + "/internal/backend/lneto",
 			} {
 				if !dependencies[required] {
@@ -53,14 +55,23 @@ func TestFixtureDependencyBoundaries(t *testing.T) {
 			}
 			for protocol, dependency := range protocolDependencies {
 				if test.selected[protocol] {
-					if !dependencies[dependency.public] || !dependencies[dependency.binding] || (dependency.operation != "" && !dependencies[dependency.operation]) || (dependency.abi != "" && !dependencies[dependency.abi]) {
-						t.Fatalf("selected %s dependencies absent: public=%v binding=%v operation=%v ABI=%v", protocol, dependencies[dependency.public], dependencies[dependency.binding], dependencies[dependency.operation], dependencies[dependency.abi])
+					if !dependencies[dependency.public] || !dependencies[dependency.binding] || !dependencies[dependency.operation] || !dependencies[dependency.abi] || !dependencies[dependency.namespace] {
+						t.Fatalf("selected %s dependencies absent: public=%v binding=%v operation=%v ABI=%v namespace=%v", protocol, dependencies[dependency.public], dependencies[dependency.binding], dependencies[dependency.operation], dependencies[dependency.abi], dependencies[dependency.namespace])
 					}
 					continue
 				}
-				if dependencies[dependency.public] || dependencies[dependency.binding] || (dependency.operation != "" && dependencies[dependency.operation]) || (dependency.abi != "" && dependencies[dependency.abi]) {
+				if dependencies[dependency.public] || dependencies[dependency.binding] || dependencies[dependency.operation] || dependencies[dependency.abi] {
 					t.Fatalf("unselected %s compiled: public=%v binding=%v operation=%v ABI=%v", protocol, dependencies[dependency.public], dependencies[dependency.binding], dependencies[dependency.operation], dependencies[dependency.abi])
 				}
+				// TCP contracts are already structurally implemented by the unified
+				// backend without importing the facet. UDP and DNS remain adapter-
+				// coupled until internal/backend/lneto is split in the next stage.
+				if protocol == "tcp" && dependencies[dependency.namespace] {
+					t.Fatalf("unselected TCP namespace facet compiled")
+				}
+			}
+			if dependencies[modulePath+"/internal/namespace"] {
+				t.Fatal("production graph reached the temporary aggregate namespace compatibility package")
 			}
 			for _, aggregate := range []string{modulePath + "/compat", modulePath + "/register"} {
 				if dependencies[aggregate] {

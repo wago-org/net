@@ -9,12 +9,13 @@ import (
 	"github.com/soypat/lneto/ethernet"
 	"github.com/soypat/lneto/ipv4"
 	lnetoudp "github.com/soypat/lneto/udp"
-	"github.com/wago-org/net/internal/namespace"
+	nscore "github.com/wago-org/net/internal/namespace/core"
+	udpns "github.com/wago-org/net/internal/namespace/udp"
 	"github.com/wago-org/net/internal/policy"
 	"github.com/wago-org/net/internal/quota"
 )
 
-var _ namespace.UDPSocket = (*udpSocket)(nil)
+var _ udpns.Socket = (*udpSocket)(nil)
 
 var errPolicyDenied = errors.New("net: endpoint policy denied operation")
 
@@ -23,7 +24,7 @@ var errPolicyDenied = errors.New("net: endpoint policy denied operation")
 // Packet encoding and validation still use lneto's Ethernet/IPv4/UDP codecs.
 type udpSocket struct {
 	owner *Namespace
-	local namespace.Endpoint
+	local nscore.Endpoint
 	rx    datagramQueue
 	tx    datagramQueue
 
@@ -35,7 +36,7 @@ type udpSocket struct {
 type datagramQueue struct {
 	storage    []byte
 	lengths    []int
-	endpoints  []namespace.Endpoint
+	endpoints  []nscore.Endpoint
 	maxPayload int
 	head       int
 	count      int
@@ -47,13 +48,13 @@ func newDatagramQueue(datagrams, maxPayload, byteLimit int) datagramQueue {
 	return datagramQueue{
 		storage:    make([]byte, datagrams*maxPayload),
 		lengths:    make([]int, datagrams),
-		endpoints:  make([]namespace.Endpoint, datagrams),
+		endpoints:  make([]nscore.Endpoint, datagrams),
 		maxPayload: maxPayload,
 		byteLimit:  byteLimit,
 	}
 }
 
-func (q *datagramQueue) push(payload []byte, endpoint namespace.Endpoint) bool {
+func (q *datagramQueue) push(payload []byte, endpoint nscore.Endpoint) bool {
 	if q.count == len(q.lengths) || len(payload) > q.maxPayload || len(payload) > q.byteLimit-q.bytes {
 		return false
 	}
@@ -71,9 +72,9 @@ func (q *datagramQueue) push(payload []byte, endpoint namespace.Endpoint) bool {
 	return true
 }
 
-func (q *datagramQueue) peek() ([]byte, namespace.Endpoint, bool) {
+func (q *datagramQueue) peek() ([]byte, nscore.Endpoint, bool) {
 	if q.count == 0 {
-		return nil, namespace.Endpoint{}, false
+		return nil, nscore.Endpoint{}, false
 	}
 	length := q.lengths[q.head]
 	if q.maxPayload == 0 {
@@ -82,15 +83,15 @@ func (q *datagramQueue) peek() ([]byte, namespace.Endpoint, bool) {
 	return q.slot(q.head)[:length], q.endpoints[q.head], true
 }
 
-func (q *datagramQueue) pop(dst []byte) (namespace.DatagramResult, bool) {
+func (q *datagramQueue) pop(dst []byte) (udpns.DatagramResult, bool) {
 	payload, endpoint, ok := q.peek()
 	if !ok {
-		return namespace.DatagramResult{}, false
+		return udpns.DatagramResult{}, false
 	}
 	length := q.lengths[q.head]
 	copied := copy(dst, payload)
 	q.discardHead()
-	return namespace.DatagramResult{
+	return udpns.DatagramResult{
 		Copied:        copied,
 		DatagramBytes: length,
 		Source:        endpoint,
@@ -105,7 +106,7 @@ func (q *datagramQueue) discardHead() {
 		clear(q.slot(q.head))
 	}
 	q.lengths[q.head] = 0
-	q.endpoints[q.head] = namespace.Endpoint{}
+	q.endpoints[q.head] = nscore.Endpoint{}
 	q.head++
 	if q.head == len(q.lengths) {
 		q.head = 0
@@ -131,35 +132,35 @@ func (q *datagramQueue) clear() {
 	q.bytes = 0
 }
 
-func (n *Namespace) tryBindUDP(local namespace.Endpoint) (namespace.UDPSocket, namespace.Progress, error) {
+func (n *Namespace) tryBindUDP(local nscore.Endpoint) (nscore.Resource, nscore.Progress, error) {
 	if n == nil {
-		return nil, 0, namespace.Fail(namespace.FailureClosed, net.ErrClosed)
+		return nil, 0, nscore.Fail(nscore.FailureClosed, net.ErrClosed)
 	}
 	n.mu.Lock()
 	defer n.mu.Unlock()
 	if n.closed || n.stack == nil {
-		return nil, 0, namespace.Fail(namespace.FailureClosed, net.ErrClosed)
+		return nil, 0, nscore.Fail(nscore.FailureClosed, net.ErrClosed)
 	}
 	if !local.Valid() || !local.Address.Is4() || local.Port == 0 {
-		return nil, 0, namespace.Fail(namespace.FailureInvalidArgument, lneto.ErrInvalidAddr)
+		return nil, 0, nscore.Fail(nscore.FailureInvalidArgument, lneto.ErrInvalidAddr)
 	}
 	if n.udpConfig.MaxSockets == 0 {
-		return nil, 0, namespace.Fail(namespace.FailureNotSupported, lneto.ErrUnsupported)
+		return nil, 0, nscore.Fail(nscore.FailureNotSupported, lneto.ErrUnsupported)
 	}
 	if !local.Address.IsUnspecified() && local.Address != n.ipv4Address {
-		return nil, 0, namespace.Fail(namespace.FailureAddressUnavailable, lneto.ErrInvalidAddr)
+		return nil, 0, nscore.Fail(nscore.FailureAddressUnavailable, lneto.ErrInvalidAddr)
 	}
 	if !n.policy.CheckEndpoint(policy.OperationUDPBind, local.Address, local.Port) {
-		return nil, 0, namespace.Fail(namespace.FailureAccessDenied, errPolicyDenied)
+		return nil, 0, nscore.Fail(nscore.FailureAccessDenied, errPolicyDenied)
 	}
 	if len(n.udpOrder) == int(n.udpConfig.MaxSockets) {
-		return nil, 0, namespace.Fail(namespace.FailureResourceLimit, lneto.ErrExhausted)
+		return nil, 0, nscore.Fail(nscore.FailureResourceLimit, lneto.ErrExhausted)
 	}
 	if socket := n.udpByPort[local.Port]; socket != nil && !socket.closed {
-		return nil, 0, namespace.Fail(namespace.FailureAddressInUse, lneto.ErrAlreadyRegistered)
+		return nil, 0, nscore.Fail(nscore.FailureAddressInUse, lneto.ErrAlreadyRegistered)
 	}
 	if query := n.dnsByPort[local.Port]; query != nil && query.state != dnsQueryClosed {
-		return nil, 0, namespace.Fail(namespace.FailureAddressInUse, lneto.ErrAlreadyRegistered)
+		return nil, 0, nscore.Fail(nscore.FailureAddressInUse, lneto.ErrAlreadyRegistered)
 	}
 
 	resourceReservation, err := n.quotas.ReserveResource(quota.ResourceUDP, 1)
@@ -175,12 +176,12 @@ func (n *Namespace) tryBindUDP(local namespace.Endpoint) (namespace.UDPSocket, n
 	resourceAllocation, ok := resourceReservation.Commit()
 	if !ok {
 		queuedReservation.Rollback()
-		return nil, 0, namespace.Fail(namespace.FailureClosed, quota.ErrClosed)
+		return nil, 0, nscore.Fail(nscore.FailureClosed, quota.ErrClosed)
 	}
 	queuedAllocation, ok := queuedReservation.Commit()
 	if !ok {
 		resourceAllocation.Release()
-		return nil, 0, namespace.Fail(namespace.FailureClosed, quota.ErrClosed)
+		return nil, 0, nscore.Fail(nscore.FailureClosed, quota.ErrClosed)
 	}
 	socket := &udpSocket{
 		owner:    n,
@@ -192,76 +193,76 @@ func (n *Namespace) tryBindUDP(local namespace.Endpoint) (namespace.UDPSocket, n
 	}
 	n.udpByPort[local.Port] = socket
 	n.udpOrder = append(n.udpOrder, socket)
-	return socket, namespace.ProgressDone, nil
+	return socket, nscore.ProgressDone, nil
 }
 
-func (s *udpSocket) LocalEndpoint() namespace.Endpoint {
+func (s *udpSocket) LocalEndpoint() nscore.Endpoint {
 	if s == nil {
-		return namespace.Endpoint{}
+		return nscore.Endpoint{}
 	}
 	return s.local
 }
 
-func (s *udpSocket) Readiness() namespace.Readiness {
+func (s *udpSocket) Readiness() nscore.Readiness {
 	if s == nil || s.owner == nil {
-		return namespace.ReadyClosed
+		return nscore.ReadyClosed
 	}
 	s.owner.mu.Lock()
 	defer s.owner.mu.Unlock()
 	if s.closed || s.owner.closed {
-		return namespace.ReadyClosed
+		return nscore.ReadyClosed
 	}
-	var ready namespace.Readiness
+	var ready nscore.Readiness
 	if s.rx.count > 0 {
-		ready |= namespace.ReadyReadable
+		ready |= nscore.ReadyReadable
 	}
 	if s.tx.count < len(s.tx.lengths) {
-		ready |= namespace.ReadyWritable
+		ready |= nscore.ReadyWritable
 	}
 	return ready
 }
 
-func (s *udpSocket) TryReceive(dst []byte) (namespace.DatagramResult, error) {
+func (s *udpSocket) TryReceive(dst []byte) (udpns.DatagramResult, error) {
 	if s == nil || s.owner == nil {
-		return namespace.DatagramResult{}, namespace.Fail(namespace.FailureClosed, net.ErrClosed)
+		return udpns.DatagramResult{}, nscore.Fail(nscore.FailureClosed, net.ErrClosed)
 	}
 	s.owner.mu.Lock()
 	defer s.owner.mu.Unlock()
 	if s.closed || s.owner.closed {
-		return namespace.DatagramResult{}, namespace.Fail(namespace.FailureClosed, net.ErrClosed)
+		return udpns.DatagramResult{}, nscore.Fail(nscore.FailureClosed, net.ErrClosed)
 	}
 	result, ok := s.rx.pop(dst)
 	if !ok {
-		return namespace.DatagramResult{}, nil
+		return udpns.DatagramResult{}, nil
 	}
 	if !result.Valid(len(dst)) {
-		return namespace.DatagramResult{}, namespace.Fail(namespace.FailureIO, lneto.ErrBadState)
+		return udpns.DatagramResult{}, nscore.Fail(nscore.FailureIO, lneto.ErrBadState)
 	}
 	return result, nil
 }
 
-func (s *udpSocket) TrySend(payload []byte, remote namespace.Endpoint) (namespace.Progress, error) {
+func (s *udpSocket) TrySend(payload []byte, remote nscore.Endpoint) (nscore.Progress, error) {
 	if s == nil || s.owner == nil {
-		return 0, namespace.Fail(namespace.FailureClosed, net.ErrClosed)
+		return 0, nscore.Fail(nscore.FailureClosed, net.ErrClosed)
 	}
 	s.owner.mu.Lock()
 	defer s.owner.mu.Unlock()
 	if s.closed || s.owner.closed {
-		return 0, namespace.Fail(namespace.FailureClosed, net.ErrClosed)
+		return 0, nscore.Fail(nscore.FailureClosed, net.ErrClosed)
 	}
 	if !remote.Valid() || !remote.Address.Is4() || remote.Port == 0 {
-		return 0, namespace.Fail(namespace.FailureInvalidArgument, lneto.ErrInvalidAddr)
+		return 0, nscore.Fail(nscore.FailureInvalidArgument, lneto.ErrInvalidAddr)
 	}
 	if !s.owner.policy.CheckEndpoint(policy.OperationUDPSend, remote.Address, remote.Port) {
-		return 0, namespace.Fail(namespace.FailureAccessDenied, errPolicyDenied)
+		return 0, nscore.Fail(nscore.FailureAccessDenied, errPolicyDenied)
 	}
 	if len(payload) > s.owner.udpConfig.MaxPayloadBytes {
-		return 0, namespace.Fail(namespace.FailureMessageTooLarge, lneto.ErrShortBuffer)
+		return 0, nscore.Fail(nscore.FailureMessageTooLarge, lneto.ErrShortBuffer)
 	}
 	if !s.tx.push(payload, remote) {
-		return namespace.ProgressWouldBlock, nil
+		return nscore.ProgressWouldBlock, nil
 	}
-	return namespace.ProgressDone, nil
+	return nscore.ProgressDone, nil
 }
 
 func (s *udpSocket) Close() error {
@@ -419,7 +420,7 @@ func (n *Namespace) ingressUDPLocked(frame []byte) (bool, error) {
 	if selected == nil || selected.closed {
 		return false, nil
 	}
-	source := namespace.Endpoint{Address: netip.AddrFrom4(*ipFrame.SourceAddr()), Port: udpFrame.SourcePort()}
+	source := nscore.Endpoint{Address: netip.AddrFrom4(*ipFrame.SourceAddr()), Port: udpFrame.SourcePort()}
 	if !source.Valid() || source.Port == 0 {
 		return true, lneto.ErrInvalidAddr
 	}

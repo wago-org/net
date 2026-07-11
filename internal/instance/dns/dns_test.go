@@ -30,7 +30,7 @@ func (*fakeNamespace) TryListenTCP(namespace.Endpoint) (namespace.TCPListener, n
 func (*fakeNamespace) TryConnectTCP(namespace.Endpoint) (namespace.TCPStream, namespace.Progress, error) {
 	return nil, 0, namespace.Fail(namespace.FailureNotSupported, nil)
 }
-func (n *fakeNamespace) TryResolve(namespace.DNSRequest) (namespace.DNSQuery, namespace.Progress, error) {
+func (n *fakeNamespace) TryResolve(namespace.DNSRequest) (nscore.Resource, namespace.Progress, error) {
 	return n.query, namespace.ProgressInProgress, nil
 }
 func (*fakeNamespace) TryService(namespace.ServiceBudget) (namespace.ServiceReport, namespace.Progress, error) {

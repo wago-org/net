@@ -2,7 +2,7 @@ package net
 
 import (
 	"github.com/wago-org/net/internal/guest"
-	"github.com/wago-org/net/internal/namespace"
+	nscore "github.com/wago-org/net/internal/namespace/core"
 )
 
 // Status is a stable numeric result returned by networking host imports. Unknown
@@ -40,16 +40,12 @@ const (
 
 // Compatibility wrappers keep existing root-package tests and aggregate
 // bindings on the same shared status implementation used by protocol packages.
-func statusFromProgress(progress namespace.Progress) Status {
+func statusFromProgress(progress nscore.Progress) Status {
 	return guest.FromProgress(progress)
 }
 
-func statusFromIOResult(result namespace.IOResult, bufferSize int) Status {
+func statusFromIOResult(result nscore.IOResult, bufferSize int) Status {
 	return guest.FromIOResult(result, bufferSize)
-}
-
-func statusFromDNSNext(next namespace.DNSNext) Status {
-	return guest.FromDNSNext(next)
 }
 
 func statusFromError(err error) Status {

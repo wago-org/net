@@ -7,7 +7,7 @@ import (
 	"testing"
 
 	abicore "github.com/wago-org/net/internal/abi/core"
-	"github.com/wago-org/net/internal/namespace"
+	dnsns "github.com/wago-org/net/internal/namespace/dns"
 )
 
 func TestDNSV1LayoutConstantsAndQueryRoundTrip(t *testing.T) {
@@ -17,7 +17,7 @@ func TestDNSV1LayoutConstantsAndQueryRoundTrip(t *testing.T) {
 	if DNSRecordTypesA != 1 || DNSRecordTypesAAAA != 2 || DNSRecordTypeA != 1 || DNSRecordTypeAAAA != 2 || DNSRecordTypeCNAME != 3 {
 		t.Fatal("DNS ABI numeric values changed")
 	}
-	request := namespace.DNSRequest{Name: "api.example.com", Types: namespace.DNSRecordsA | namespace.DNSRecordsAAAA}
+	request := dnsns.Request{Name: "api.example.com", Types: dnsns.RecordsA | dnsns.RecordsAAAA}
 	memory := bytes.Repeat([]byte{0x5a}, int(DNSQueryV1Size)+16)
 	if !EncodeDNSQueryV1(memory, 4, request) {
 		t.Fatal("EncodeDNSQueryV1 failed")
@@ -52,12 +52,12 @@ func TestDNSNameV1RejectsNoncanonicalAndReservedBytes(t *testing.T) {
 
 func TestDNSRecordV1AtomicEncoding(t *testing.T) {
 	tests := []struct {
-		record namespace.DNSRecord
+		record dnsns.Record
 		typeID uint32
 	}{
-		{namespace.DNSRecord{Name: "example.com", Type: namespace.DNSRecordA, TTLSeconds: 60, Address: netip.MustParseAddr("192.0.2.1")}, DNSRecordTypeA},
-		{namespace.DNSRecord{Name: "example.com", Type: namespace.DNSRecordAAAA, TTLSeconds: 120, Address: netip.MustParseAddr("2001:db8::1")}, DNSRecordTypeAAAA},
-		{namespace.DNSRecord{Name: "www.example.com", Type: namespace.DNSRecordCNAME, TTLSeconds: 180, CanonicalName: "example.com"}, DNSRecordTypeCNAME},
+		{dnsns.Record{Name: "example.com", Type: dnsns.RecordA, TTLSeconds: 60, Address: netip.MustParseAddr("192.0.2.1")}, DNSRecordTypeA},
+		{dnsns.Record{Name: "example.com", Type: dnsns.RecordAAAA, TTLSeconds: 120, Address: netip.MustParseAddr("2001:db8::1")}, DNSRecordTypeAAAA},
+		{dnsns.Record{Name: "www.example.com", Type: dnsns.RecordCNAME, TTLSeconds: 180, CanonicalName: "example.com"}, DNSRecordTypeCNAME},
 	}
 	for _, test := range tests {
 		memory := bytes.Repeat([]byte{0xa5}, int(DNSRecordV1Size)+2)
@@ -74,7 +74,7 @@ func TestDNSRecordV1AtomicEncoding(t *testing.T) {
 		if got := binary.LittleEndian.Uint32(encoded[264:268]); got != test.record.TTLSeconds {
 			t.Fatalf("record TTL = %d", got)
 		}
-		if test.record.Type == namespace.DNSRecordCNAME {
+		if test.record.Type == dnsns.RecordCNAME {
 			if canonical, ok := DecodeDNSNameV1(encoded, 300); !ok || canonical != test.record.CanonicalName {
 				t.Fatalf("canonical name = %q, %v", canonical, ok)
 			}
@@ -94,7 +94,7 @@ func TestDNSRecordV1AtomicEncoding(t *testing.T) {
 
 	memory := bytes.Repeat([]byte{0x5a}, int(DNSRecordV1Size))
 	before := append([]byte(nil), memory...)
-	if EncodeDNSRecordV1(memory, 1, tests[0].record) || EncodeDNSRecordV1(memory, 0, namespace.DNSRecord{}) {
+	if EncodeDNSRecordV1(memory, 1, tests[0].record) || EncodeDNSRecordV1(memory, 0, dnsns.Record{}) {
 		t.Fatal("invalid DNS record encoding succeeded")
 	}
 	if !bytes.Equal(memory, before) {

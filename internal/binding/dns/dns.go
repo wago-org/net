@@ -7,6 +7,7 @@ import (
 	"github.com/wago-org/net/internal/guest"
 	instance "github.com/wago-org/net/internal/instance/core"
 	dnsinstance "github.com/wago-org/net/internal/instance/dns"
+	dnsns "github.com/wago-org/net/internal/namespace/dns"
 	"github.com/wago-org/net/internal/plugin"
 	"github.com/wago-org/net/internal/resource"
 	wago "github.com/wago-org/wago"
@@ -146,7 +147,7 @@ func Next(host plugin.Host, module wago.HostModule, params, results []uint64) {
 		guest.SetStatus(results, guest.FromError(err))
 		return
 	}
-	status = guest.FromDNSNext(next)
+	status = statusFromNext(next)
 	if status != guest.StatusOK {
 		guest.SetStatus(results, status)
 		return
@@ -156,6 +157,19 @@ func Next(host plugin.Host, module wago.HostModule, params, results []uint64) {
 		return
 	}
 	guest.SetStatus(results, guest.StatusOK)
+}
+
+func statusFromNext(next dnsns.Next) guest.Status {
+	switch next {
+	case dnsns.NextReady:
+		return guest.StatusOK
+	case dnsns.NextWouldBlock:
+		return guest.StatusAgain
+	case dnsns.NextEOF:
+		return guest.StatusEOF
+	default:
+		return guest.StatusOther
+	}
 }
 
 // Cancel implements the checked DNS query cancellation import.

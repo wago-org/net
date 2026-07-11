@@ -44,7 +44,7 @@ func (n *guestDNSNamespace) TryListenTCP(namespace.Endpoint) (namespace.TCPListe
 func (n *guestDNSNamespace) TryConnectTCP(namespace.Endpoint) (namespace.TCPStream, namespace.Progress, error) {
 	return nil, 0, namespace.Fail(namespace.FailureNotSupported, nil)
 }
-func (n *guestDNSNamespace) TryResolve(namespace.DNSRequest) (namespace.DNSQuery, namespace.Progress, error) {
+func (n *guestDNSNamespace) TryResolve(namespace.DNSRequest) (nscore.Resource, namespace.Progress, error) {
 	n.resolveCalls++
 	if len(n.queries) == 0 {
 		return nil, 0, namespace.Fail(namespace.FailureResourceLimit, nil)

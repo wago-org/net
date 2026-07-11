@@ -15,14 +15,14 @@ import (
 	"github.com/soypat/lneto/ethernet"
 	lnetotcp "github.com/soypat/lneto/tcp"
 	"github.com/soypat/lneto/x/xnet"
-	"github.com/wago-org/net/internal/namespace"
 	nscore "github.com/wago-org/net/internal/namespace/core"
+	dnsns "github.com/wago-org/net/internal/namespace/dns"
 	"github.com/wago-org/net/internal/packetlink"
 	"github.com/wago-org/net/internal/policy"
 	"github.com/wago-org/net/internal/quota"
 )
 
-var _ namespace.Namespace = (*Namespace)(nil)
+var _ nscore.Namespace = (*Namespace)(nil)
 
 // UDPConfig fixes all storage allocated for each nonblocking UDP socket. The
 // lneto registration bound is finite and zero disables UDP.
@@ -36,7 +36,7 @@ type UDPConfig struct {
 }
 
 // Config fixes all memory, authority, accounting, and identity used by one
-// static IPv4 lneto namespace.
+// static IPv4 lneto nscore.
 type Config struct {
 	Hostname               string
 	RandSeed               int64
@@ -93,20 +93,20 @@ type Namespace struct {
 // without allocating backend state.
 func ValidateConfig(config Config) error {
 	if !validConfig(config, false) {
-		return namespace.Fail(namespace.FailureInvalidArgument, packetlink.ErrInvalidConfig)
+		return nscore.Fail(nscore.FailureInvalidArgument, packetlink.ErrInvalidConfig)
 	}
 	return nil
 }
 
-// New creates one static IPv4 namespace. Link frame storage must accommodate a
+// New creates one static IPv4 nscore. Link frame storage must accommodate a
 // complete Ethernet frame for the configured MTU.
 func New(config Config) (*Namespace, error) {
 	if !validConfig(config, true) {
-		return nil, namespace.Fail(namespace.FailureInvalidArgument, packetlink.ErrInvalidConfig)
+		return nil, nscore.Fail(nscore.FailureInvalidArgument, packetlink.ErrInvalidConfig)
 	}
 	link, err := packetlink.New(config.Link)
 	if err != nil {
-		return nil, namespace.Fail(namespace.FailureInvalidArgument, err)
+		return nil, nscore.Fail(nscore.FailureInvalidArgument, err)
 	}
 	stack := new(xnet.StackAsync)
 	stackConfig := xnet.StackConfig{
@@ -166,25 +166,25 @@ func (n *Namespace) Link() *packetlink.Link {
 }
 
 // Readiness returns a level-triggered link snapshot without servicing packets.
-func (n *Namespace) Readiness() namespace.Readiness {
+func (n *Namespace) Readiness() nscore.Readiness {
 	if n == nil {
-		return namespace.ReadyClosed
+		return nscore.ReadyClosed
 	}
 	n.mu.Lock()
 	defer n.mu.Unlock()
 	if n.closed || n.link == nil {
-		return namespace.ReadyClosed
+		return nscore.ReadyClosed
 	}
 	snapshot := n.link.Snapshot()
 	if snapshot.Closed {
-		return namespace.ReadyClosed
+		return nscore.ReadyClosed
 	}
-	var ready namespace.Readiness
+	var ready nscore.Readiness
 	if snapshot.EgressFrames > 0 {
-		ready |= namespace.ReadyReadable
+		ready |= nscore.ReadyReadable
 	}
 	if snapshot.IngressFrames < snapshot.IngressCapacity {
-		ready |= namespace.ReadyWritable
+		ready |= nscore.ReadyWritable
 	}
 	return ready
 }
@@ -234,7 +234,7 @@ func (n *Namespace) Close() error {
 	return nil
 }
 
-func (n *Namespace) TryBindUDP(local namespace.Endpoint) (namespace.UDPSocket, namespace.Progress, error) {
+func (n *Namespace) TryBindUDP(local nscore.Endpoint) (nscore.Resource, nscore.Progress, error) {
 	return n.tryBindUDP(local)
 }
 
@@ -246,7 +246,7 @@ func (n *Namespace) TryConnectTCP(remote nscore.Endpoint) (nscore.Resource, nsco
 	return n.tryConnectTCP(remote)
 }
 
-func (n *Namespace) TryResolve(request namespace.DNSRequest) (namespace.DNSQuery, namespace.Progress, error) {
+func (n *Namespace) TryResolve(request dnsns.Request) (nscore.Resource, nscore.Progress, error) {
 	return n.tryResolve(request)
 }
 
@@ -255,20 +255,20 @@ func (n *Namespace) TryResolve(request namespace.DNSRequest) (namespace.DNSQuery
 // Completed packet, accepted-slot reclamation, or DNS state-transition work
 // increments Operations; only frames increment Packets and Bytes. Empty probes
 // remain unreported.
-func (n *Namespace) TryService(budget namespace.ServiceBudget) (namespace.ServiceReport, namespace.Progress, error) {
+func (n *Namespace) TryService(budget nscore.ServiceBudget) (nscore.ServiceReport, nscore.Progress, error) {
 	if n == nil {
-		return namespace.ServiceReport{}, 0, namespace.Fail(namespace.FailureClosed, net.ErrClosed)
+		return nscore.ServiceReport{}, 0, nscore.Fail(nscore.FailureClosed, net.ErrClosed)
 	}
 	n.mu.Lock()
 	defer n.mu.Unlock()
 	if n.closed || n.stack == nil || n.link == nil {
-		return namespace.ServiceReport{}, 0, namespace.Fail(namespace.FailureClosed, net.ErrClosed)
+		return nscore.ServiceReport{}, 0, nscore.Fail(nscore.FailureClosed, net.ErrClosed)
 	}
 	if !budget.Valid() {
-		return namespace.ServiceReport{}, 0, namespace.Fail(namespace.FailureInvalidArgument, lneto.ErrInvalidConfig)
+		return nscore.ServiceReport{}, 0, nscore.Fail(nscore.FailureInvalidArgument, lneto.ErrInvalidConfig)
 	}
 
-	var report namespace.ServiceReport
+	var report nscore.ServiceReport
 	var attempts uint32
 	for report.Packets < budget.Packets && attempts < budget.Operations && report.Bytes <= budget.Bytes {
 		remainingBytes := budget.Bytes - report.Bytes
@@ -291,17 +291,17 @@ func (n *Namespace) TryService(budget namespace.ServiceBudget) (namespace.Servic
 			}
 		}
 		if err != nil {
-			progress := namespace.ProgressWouldBlock
-			if report != (namespace.ServiceReport{}) {
-				progress = namespace.ProgressDone
+			progress := nscore.ProgressWouldBlock
+			if report != (nscore.ServiceReport{}) {
+				progress = nscore.ProgressDone
 			}
 			return report, progress, err
 		}
 	}
-	if report == (namespace.ServiceReport{}) {
-		return report, namespace.ProgressWouldBlock, nil
+	if report == (nscore.ServiceReport{}) {
+		return report, nscore.ProgressWouldBlock, nil
 	}
-	return report, namespace.ProgressDone, nil
+	return report, nscore.ProgressDone, nil
 }
 
 func (n *Namespace) tryIngress(remainingBytes uint32) (bool, bool, int, error) {
@@ -404,17 +404,17 @@ func (n *Namespace) tryEgress(remainingBytes uint32) (bool, bool, int, error) {
 	return true, true, result.FrameBytes, nil
 }
 
-func (n *Namespace) checkEndpoint(endpoint namespace.Endpoint) error {
+func (n *Namespace) checkEndpoint(endpoint nscore.Endpoint) error {
 	if n == nil {
-		return namespace.Fail(namespace.FailureClosed, net.ErrClosed)
+		return nscore.Fail(nscore.FailureClosed, net.ErrClosed)
 	}
 	n.mu.Lock()
 	defer n.mu.Unlock()
 	if n.closed {
-		return namespace.Fail(namespace.FailureClosed, net.ErrClosed)
+		return nscore.Fail(nscore.FailureClosed, net.ErrClosed)
 	}
 	if !endpoint.Valid() {
-		return namespace.Fail(namespace.FailureInvalidArgument, lneto.ErrInvalidAddr)
+		return nscore.Fail(nscore.FailureInvalidArgument, lneto.ErrInvalidAddr)
 	}
 	return nil
 }
@@ -472,33 +472,33 @@ func mapError(err error) error {
 	if err == nil {
 		return nil
 	}
-	failure := namespace.FailureIO
+	failure := nscore.FailureIO
 	switch {
 	case errors.Is(err, net.ErrClosed), errors.Is(err, packetlink.ErrClosed), errors.Is(err, quota.ErrClosed):
-		failure = namespace.FailureClosed
+		failure = nscore.FailureClosed
 	case errors.Is(err, context.Canceled):
-		failure = namespace.FailureCanceled
+		failure = nscore.FailureCanceled
 	case errors.Is(err, context.DeadlineExceeded), errors.Is(err, os.ErrDeadlineExceeded):
-		failure = namespace.FailureTimedOut
+		failure = nscore.FailureTimedOut
 	case errors.Is(err, lneto.ErrUnsupported):
-		failure = namespace.FailureNotSupported
+		failure = nscore.FailureNotSupported
 	case errors.Is(err, lneto.ErrExhausted), errors.Is(err, lneto.ErrBufferFull), errors.Is(err, packetlink.ErrQueueFull), errors.Is(err, quota.ErrLimit):
-		failure = namespace.FailureResourceLimit
+		failure = nscore.FailureResourceLimit
 	case errors.Is(err, lneto.ErrAlreadyRegistered):
-		failure = namespace.FailureAddressInUse
+		failure = nscore.FailureAddressInUse
 	case errors.Is(err, lneto.ErrBadState):
-		failure = namespace.FailureInvalidState
+		failure = nscore.FailureInvalidState
 	case errors.Is(err, lneto.ErrShortBuffer), errors.Is(err, io.ErrShortBuffer), errors.Is(err, packetlink.ErrFrameTooLarge):
-		failure = namespace.FailureMessageTooLarge
+		failure = nscore.FailureMessageTooLarge
 	case errors.Is(err, lneto.ErrInvalidAddr), errors.Is(err, lneto.ErrInvalidConfig),
 		errors.Is(err, lneto.ErrInvalidField), errors.Is(err, lneto.ErrInvalidLengthField),
 		errors.Is(err, lneto.ErrMismatchLen), errors.Is(err, lneto.ErrTruncatedFrame),
 		errors.Is(err, lneto.ErrZeroSource), errors.Is(err, lneto.ErrZeroDestination),
 		errors.Is(err, lneto.ErrBadCRC), errors.Is(err, packetlink.ErrInvalidQueue),
 		errors.Is(err, packetlink.ErrInvalidFill), errors.Is(err, packetlink.ErrFrameBudget), errors.Is(err, quota.ErrInvalidUnits):
-		failure = namespace.FailureInvalidArgument
+		failure = nscore.FailureInvalidArgument
 	case errors.Is(err, lneto.ErrPacketDrop), errors.Is(err, lneto.ErrMismatch):
-		failure = namespace.FailureTemporary
+		failure = nscore.FailureTemporary
 	}
-	return namespace.Fail(failure, err)
+	return nscore.Fail(failure, err)
 }

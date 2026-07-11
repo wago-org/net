@@ -123,10 +123,11 @@ func TestDNSRetryTimeoutPolicyLimitsAndReuse(t *testing.T) {
 	if err := query.Close(); err != nil {
 		t.Fatal(err)
 	}
-	reused, progress, err := ns.TryResolve(request)
-	if err != nil || progress != namespace.ProgressInProgress || reused == query {
-		t.Fatalf("query reuse = %T, %v, %v", reused, progress, err)
+	reusedResource, progress, err := ns.TryResolve(request)
+	if err != nil || progress != namespace.ProgressInProgress || reusedResource == query {
+		t.Fatalf("query reuse = %T, %v, %v", reusedResource, progress, err)
 	}
+	reused := reusedResource.(*dnsQuery)
 	if err := reused.Cancel(); err != nil {
 		t.Fatal(err)
 	}

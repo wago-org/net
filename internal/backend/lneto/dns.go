@@ -12,12 +12,13 @@ import (
 	"github.com/soypat/lneto/ethernet"
 	"github.com/soypat/lneto/ipv4"
 	lnetoudp "github.com/soypat/lneto/udp"
-	"github.com/wago-org/net/internal/namespace"
+	nscore "github.com/wago-org/net/internal/namespace/core"
+	dnsns "github.com/wago-org/net/internal/namespace/dns"
 	"github.com/wago-org/net/internal/policy"
 	"github.com/wago-org/net/internal/quota"
 )
 
-var _ namespace.DNSQuery = (*dnsQuery)(nil)
+var _ dnsns.Query = (*dnsQuery)(nil)
 
 const firstEphemeralDNSPort uint16 = 53000
 
@@ -44,11 +45,11 @@ const (
 
 type dnsQuery struct {
 	owner     *Namespace
-	request   namespace.DNSRequest
+	request   dnsns.Request
 	localPort uint16
 	txid      uint16
 	packet    []byte
-	records   []namespace.DNSRecord
+	records   []dnsns.Record
 	cursor    int
 	attempts  uint16
 	retry     uint16
@@ -60,30 +61,30 @@ type dnsQuery struct {
 	work     *quota.Allocation
 }
 
-func (n *Namespace) tryResolve(request namespace.DNSRequest) (namespace.DNSQuery, namespace.Progress, error) {
+func (n *Namespace) tryResolve(request dnsns.Request) (nscore.Resource, nscore.Progress, error) {
 	if n == nil {
-		return nil, 0, namespace.Fail(namespace.FailureClosed, net.ErrClosed)
+		return nil, 0, nscore.Fail(nscore.FailureClosed, net.ErrClosed)
 	}
 	n.mu.Lock()
 	defer n.mu.Unlock()
 	if n.closed || n.stack == nil {
-		return nil, 0, namespace.Fail(namespace.FailureClosed, net.ErrClosed)
+		return nil, 0, nscore.Fail(nscore.FailureClosed, net.ErrClosed)
 	}
 	if !request.Valid() {
-		return nil, 0, namespace.Fail(namespace.FailureInvalidArgument, lneto.ErrInvalidAddr)
+		return nil, 0, nscore.Fail(nscore.FailureInvalidArgument, lneto.ErrInvalidAddr)
 	}
 	if n.dnsConfig.MaxQueries == 0 {
-		return nil, 0, namespace.Fail(namespace.FailureNotSupported, lneto.ErrUnsupported)
+		return nil, 0, nscore.Fail(nscore.FailureNotSupported, lneto.ErrUnsupported)
 	}
 	if !n.policy.CheckDNS(policy.OperationDNSResolve, request.Name) {
-		return nil, 0, namespace.Fail(namespace.FailureAccessDenied, errPolicyDenied)
+		return nil, 0, nscore.Fail(nscore.FailureAccessDenied, errPolicyDenied)
 	}
 	if len(n.dnsQueries) == int(n.dnsConfig.MaxQueries) {
-		return nil, 0, namespace.Fail(namespace.FailureResourceLimit, lneto.ErrExhausted)
+		return nil, 0, nscore.Fail(nscore.FailureResourceLimit, lneto.ErrExhausted)
 	}
 	localPort, ok := n.allocateDNSPortLocked()
 	if !ok {
-		return nil, 0, namespace.Fail(namespace.FailureResourceLimit, lneto.ErrExhausted)
+		return nil, 0, nscore.Fail(nscore.FailureResourceLimit, lneto.ErrExhausted)
 	}
 	packet, err := buildDNSQueryPacket(request, n.nextDNSTxID, n.dnsConfig.MaxResponseBytes)
 	if err != nil {
@@ -101,7 +102,7 @@ func (n *Namespace) tryResolve(request namespace.DNSRequest) (namespace.DNSQuery
 		return nil, 0, mapError(err)
 	}
 	workUnits := uint64(1)
-	if request.Types == namespace.DNSRecordsA|namespace.DNSRecordsAAAA {
+	if request.Types == dnsns.RecordsA|dnsns.RecordsAAAA {
 		workUnits = 2
 	}
 	workReservation, err := n.quotas.ReserveDNSWork(workUnits)
@@ -114,24 +115,24 @@ func (n *Namespace) tryResolve(request namespace.DNSRequest) (namespace.DNSQuery
 	if !ok {
 		workReservation.Rollback()
 		queuedReservation.Rollback()
-		return nil, 0, namespace.Fail(namespace.FailureClosed, quota.ErrClosed)
+		return nil, 0, nscore.Fail(nscore.FailureClosed, quota.ErrClosed)
 	}
 	queuedAllocation, ok := queuedReservation.Commit()
 	if !ok {
 		workReservation.Rollback()
 		resourceAllocation.Release()
-		return nil, 0, namespace.Fail(namespace.FailureClosed, quota.ErrClosed)
+		return nil, 0, nscore.Fail(nscore.FailureClosed, quota.ErrClosed)
 	}
 	workAllocation, ok := workReservation.Commit()
 	if !ok {
 		queuedAllocation.Release()
 		resourceAllocation.Release()
-		return nil, 0, namespace.Fail(namespace.FailureClosed, quota.ErrClosed)
+		return nil, 0, nscore.Fail(nscore.FailureClosed, quota.ErrClosed)
 	}
 
 	query := &dnsQuery{
 		owner: n, request: request, localPort: localPort, txid: n.nextDNSTxID,
-		packet: packet, records: make([]namespace.DNSRecord, 0, n.dnsConfig.MaxRecords),
+		packet: packet, records: make([]dnsns.Record, 0, n.dnsConfig.MaxRecords),
 		state: dnsQueryPending, resource: resourceAllocation, queued: queuedAllocation, work: workAllocation,
 	}
 	n.nextDNSTxID++
@@ -140,66 +141,66 @@ func (n *Namespace) tryResolve(request namespace.DNSRequest) (namespace.DNSQuery
 	}
 	n.dnsByPort[localPort] = query
 	n.dnsQueries = append(n.dnsQueries, query)
-	return query, namespace.ProgressInProgress, nil
+	return query, nscore.ProgressInProgress, nil
 }
 
-func (q *dnsQuery) Readiness() namespace.Readiness {
+func (q *dnsQuery) Readiness() nscore.Readiness {
 	if q == nil || q.owner == nil {
-		return namespace.ReadyClosed
+		return nscore.ReadyClosed
 	}
 	q.owner.mu.Lock()
 	defer q.owner.mu.Unlock()
 	if q.state == dnsQueryClosed || q.owner.closed {
-		return namespace.ReadyClosed
+		return nscore.ReadyClosed
 	}
 	if q.state == dnsQueryFailed {
-		return namespace.ReadyError
+		return nscore.ReadyError
 	}
 	if q.state == dnsQueryDone {
-		return namespace.ReadyDNSResult
+		return nscore.ReadyDNSResult
 	}
 	return 0
 }
 
-func (q *dnsQuery) TryNext() (namespace.DNSRecord, namespace.DNSNext, error) {
+func (q *dnsQuery) TryNext() (dnsns.Record, dnsns.Next, error) {
 	if q == nil || q.owner == nil {
-		return namespace.DNSRecord{}, 0, namespace.Fail(namespace.FailureClosed, net.ErrClosed)
+		return dnsns.Record{}, 0, nscore.Fail(nscore.FailureClosed, net.ErrClosed)
 	}
 	q.owner.mu.Lock()
 	defer q.owner.mu.Unlock()
 	if q.state == dnsQueryClosed || q.owner.closed {
-		return namespace.DNSRecord{}, 0, namespace.Fail(namespace.FailureClosed, net.ErrClosed)
+		return dnsns.Record{}, 0, nscore.Fail(nscore.FailureClosed, net.ErrClosed)
 	}
 	if q.state == dnsQueryFailed {
-		return namespace.DNSRecord{}, 0, q.failure
+		return dnsns.Record{}, 0, q.failure
 	}
 	if q.cursor < len(q.records) {
 		record := q.records[q.cursor]
 		q.cursor++
 		if !record.Valid() {
-			return namespace.DNSRecord{}, 0, namespace.Fail(namespace.FailureIO, lneto.ErrBadState)
+			return dnsns.Record{}, 0, nscore.Fail(nscore.FailureIO, lneto.ErrBadState)
 		}
-		return record, namespace.DNSNextReady, nil
+		return record, dnsns.NextReady, nil
 	}
 	if q.state == dnsQueryDone {
-		return namespace.DNSRecord{}, namespace.DNSNextEOF, nil
+		return dnsns.Record{}, dnsns.NextEOF, nil
 	}
-	return namespace.DNSRecord{}, namespace.DNSNextWouldBlock, nil
+	return dnsns.Record{}, dnsns.NextWouldBlock, nil
 }
 
 func (q *dnsQuery) Cancel() error {
 	if q == nil || q.owner == nil {
-		return namespace.Fail(namespace.FailureClosed, net.ErrClosed)
+		return nscore.Fail(nscore.FailureClosed, net.ErrClosed)
 	}
 	q.owner.mu.Lock()
 	defer q.owner.mu.Unlock()
 	if q.state == dnsQueryClosed || q.owner.closed {
-		return namespace.Fail(namespace.FailureClosed, net.ErrClosed)
+		return nscore.Fail(nscore.FailureClosed, net.ErrClosed)
 	}
 	if q.state == dnsQueryDone || q.state == dnsQueryFailed {
-		return namespace.Fail(namespace.FailureInvalidState, lneto.ErrBadState)
+		return nscore.Fail(nscore.FailureInvalidState, lneto.ErrBadState)
 	}
-	q.failLocked(namespace.FailureCanceled, errors.New("DNS query canceled"))
+	q.failLocked(nscore.FailureCanceled, errors.New("DNS query canceled"))
 	return nil
 }
 
@@ -224,25 +225,25 @@ func (q *dnsQuery) closeLocked() error {
 	clear(q.packet)
 	q.packet = nil
 	for i := range q.records {
-		q.records[i] = namespace.DNSRecord{}
+		q.records[i] = dnsns.Record{}
 	}
 	q.records = nil
-	q.request = namespace.DNSRequest{}
+	q.request = dnsns.Request{}
 	q.failure = nil
 	q.releaseQuotaLocked()
 	return nil
 }
 
-func (q *dnsQuery) failLocked(failure namespace.Failure, cause error) {
+func (q *dnsQuery) failLocked(failure nscore.Failure, cause error) {
 	if q.state == dnsQueryClosed || q.state == dnsQueryDone || q.state == dnsQueryFailed {
 		return
 	}
 	q.state = dnsQueryFailed
-	q.failure = namespace.Fail(failure, cause)
+	q.failure = nscore.Fail(failure, cause)
 	q.releaseWorkLocked()
 }
 
-func (q *dnsQuery) completeLocked(records []namespace.DNSRecord) {
+func (q *dnsQuery) completeLocked(records []dnsns.Record) {
 	if q.state == dnsQueryClosed || q.state == dnsQueryDone || q.state == dnsQueryFailed {
 		return
 	}
@@ -305,7 +306,7 @@ func (n *Namespace) egressDNSLocked(dst []byte) (written int, worked bool, err e
 				return 0, true, nil
 			}
 			if query.attempts >= n.dnsConfig.MaxAttempts {
-				query.failLocked(namespace.FailureTimedOut, errors.New("DNS response service-attempt limit reached"))
+				query.failLocked(nscore.FailureTimedOut, errors.New("DNS response service-attempt limit reached"))
 				return 0, true, nil
 			}
 			query.state = dnsQueryPending
@@ -374,16 +375,16 @@ func (n *Namespace) ingressDNSLocked(frame []byte) (bool, error) {
 	var validator lneto.Validator
 	ipFrame.ValidateExceptCRC(&validator)
 	if err := validator.ErrPop(); err != nil {
-		query.failLocked(namespace.FailureIO, err)
+		query.failLocked(nscore.FailureIO, err)
 		return true, nil
 	}
 	if ipFrame.CalculateHeaderCRC() != 0 || ipFrame.Flags().MoreFragments() || ipFrame.Flags().FragmentOffset() != 0 {
-		query.failLocked(namespace.FailureIO, lneto.ErrBadCRC)
+		query.failLocked(nscore.FailureIO, lneto.ErrBadCRC)
 		return true, nil
 	}
 	udpFrame.ValidateSize(&validator)
 	if err := validator.ErrPop(); err != nil {
-		query.failLocked(namespace.FailureIO, err)
+		query.failLocked(nscore.FailureIO, err)
 		return true, nil
 	}
 	udpLength := udpFrame.Length()
@@ -391,13 +392,13 @@ func (n *Namespace) ingressDNSLocked(frame []byte) (bool, error) {
 		var checksum lneto.CRC791
 		ipFrame.CRCWriteUDPPseudo(&checksum, udpLength)
 		if checksum.PayloadSum16(udpFrame.RawData()[:udpLength]) != 0 {
-			query.failLocked(namespace.FailureIO, lneto.ErrBadCRC)
+			query.failLocked(nscore.FailureIO, lneto.ErrBadCRC)
 			return true, nil
 		}
 	}
 	payload := udpFrame.RawData()[8:udpLength]
 	if len(payload) > n.dnsConfig.MaxResponseBytes {
-		query.failLocked(namespace.FailureMessageTooLarge, lneto.ErrShortBuffer)
+		query.failLocked(nscore.FailureMessageTooLarge, lneto.ErrShortBuffer)
 		return true, nil
 	}
 	records, response, failure, err := parseDNSResponse(payload, query.txid, query.request, int(n.dnsConfig.MaxRecords))
@@ -412,16 +413,16 @@ func (n *Namespace) ingressDNSLocked(frame []byte) (bool, error) {
 	return true, nil
 }
 
-func buildDNSQueryPacket(request namespace.DNSRequest, txid uint16, maxResponseBytes int) ([]byte, error) {
+func buildDNSQueryPacket(request dnsns.Request, txid uint16, maxResponseBytes int) ([]byte, error) {
 	name, err := lnetodns.NewName(request.Name)
 	if err != nil {
 		return nil, err
 	}
 	questions := make([]lnetodns.Question, 0, 2)
-	if request.Types&namespace.DNSRecordsA != 0 {
+	if request.Types&dnsns.RecordsA != 0 {
 		questions = append(questions, lnetodns.Question{Name: name, Type: lnetodns.TypeA, Class: lnetodns.ClassINET})
 	}
-	if request.Types&namespace.DNSRecordsAAAA != 0 {
+	if request.Types&dnsns.RecordsAAAA != 0 {
 		questions = append(questions, lnetodns.Question{Name: name, Type: lnetodns.TypeAAAA, Class: lnetodns.ClassINET})
 	}
 	var edns lnetodns.Resource
@@ -430,47 +431,47 @@ func buildDNSQueryPacket(request namespace.DNSRequest, txid uint16, maxResponseB
 	return message.AppendTo(make([]byte, 0, message.Len()), txid, lnetodns.NewClientHeaderFlags(lnetodns.OpCodeQuery, true))
 }
 
-func parseDNSResponse(payload []byte, txid uint16, request namespace.DNSRequest, maxRecords int) ([]namespace.DNSRecord, bool, namespace.Failure, error) {
+func parseDNSResponse(payload []byte, txid uint16, request dnsns.Request, maxRecords int) ([]dnsns.Record, bool, nscore.Failure, error) {
 	frame, err := lnetodns.NewFrame(payload)
 	if err != nil {
-		return nil, true, namespace.FailureIO, err
+		return nil, true, nscore.FailureIO, err
 	}
 	flags := frame.Flags()
 	if frame.TxID() != txid || !flags.IsResponse() {
 		return nil, false, 0, nil
 	}
 	if flags.OpCode() != lnetodns.OpCodeQuery {
-		return nil, true, namespace.FailureIO, lneto.ErrInvalidField
+		return nil, true, nscore.FailureIO, lneto.ErrInvalidField
 	}
 	offset, err := validateDNSQuestions(payload, lnetodns.SizeHeader, frame.QDCount(), request)
 	if err != nil {
-		return nil, true, namespace.FailureIO, err
+		return nil, true, nscore.FailureIO, err
 	}
 	if flags.IsTruncated() {
-		return nil, true, namespace.FailureTemporary, lneto.ErrTruncatedFrame
+		return nil, true, nscore.FailureTemporary, lneto.ErrTruncatedFrame
 	}
 	if rcode := flags.ResponseCode(); rcode != lnetodns.RCodeSuccess {
-		failure := namespace.FailureTemporary
+		failure := nscore.FailureTemporary
 		switch rcode {
 		case lnetodns.RCodeNameError:
-			failure = namespace.FailureNameNotFound
+			failure = nscore.FailureNameNotFound
 		case lnetodns.RCodeFormatError:
-			failure = namespace.FailureInvalidArgument
+			failure = nscore.FailureInvalidArgument
 		case lnetodns.RCodeNotImplemented:
-			failure = namespace.FailureNotSupported
+			failure = nscore.FailureNotSupported
 		case lnetodns.RCodeRefused:
-			failure = namespace.FailureAccessDenied
+			failure = nscore.FailureAccessDenied
 		}
 		return nil, true, failure, rcode
 	}
 
-	candidates := make([]namespace.DNSRecord, 0, min(int(frame.ANCount()), len(payload)/11))
+	candidates := make([]dnsns.Record, 0, min(int(frame.ANCount()), len(payload)/11))
 	for range int(frame.ANCount()) {
-		var record namespace.DNSRecord
+		var record dnsns.Record
 		var recognized bool
 		record, recognized, offset, err = decodeDNSAnswer(payload, offset, request.Types)
 		if err != nil {
-			return nil, true, namespace.FailureIO, err
+			return nil, true, nscore.FailureIO, err
 		}
 		if recognized {
 			candidates = append(candidates, record)
@@ -479,11 +480,11 @@ func parseDNSResponse(payload []byte, txid uint16, request namespace.DNSRequest,
 	for range int(frame.NSCount()) + int(frame.ARCount()) {
 		offset, err = skipDNSResource(payload, offset)
 		if err != nil {
-			return nil, true, namespace.FailureIO, err
+			return nil, true, nscore.FailureIO, err
 		}
 	}
 	if offset != len(payload) {
-		return nil, true, namespace.FailureIO, lneto.ErrInvalidLengthField
+		return nil, true, nscore.FailureIO, lneto.ErrInvalidLengthField
 	}
 	records, failure, err := selectDNSAnswers(candidates, request, maxRecords)
 	if err != nil {
@@ -492,12 +493,12 @@ func parseDNSResponse(payload []byte, txid uint16, request namespace.DNSRequest,
 	return records, true, 0, nil
 }
 
-func validateDNSQuestions(payload []byte, offset int, count uint16, request namespace.DNSRequest) (int, error) {
+func validateDNSQuestions(payload []byte, offset int, count uint16, request dnsns.Request) (int, error) {
 	types := make([]lnetodns.Type, 0, 2)
-	if request.Types&namespace.DNSRecordsA != 0 {
+	if request.Types&dnsns.RecordsA != 0 {
 		types = append(types, lnetodns.TypeA)
 	}
-	if request.Types&namespace.DNSRecordsAAAA != 0 {
+	if request.Types&dnsns.RecordsAAAA != 0 {
 		types = append(types, lnetodns.TypeAAAA)
 	}
 	if int(count) != len(types) {
@@ -521,7 +522,7 @@ func validateDNSQuestions(payload []byte, offset int, count uint16, request name
 	return offset, nil
 }
 
-func decodeDNSAnswer(payload []byte, offset int, requested namespace.DNSRecordTypes) (record namespace.DNSRecord, recognized bool, nextOffset int, err error) {
+func decodeDNSAnswer(payload []byte, offset int, requested dnsns.RecordTypes) (record dnsns.Record, recognized bool, nextOffset int, err error) {
 	name, next, err := decodeDNSName(payload, offset)
 	if err != nil || next+10 > len(payload) {
 		if err == nil {
@@ -546,18 +547,18 @@ func decodeDNSAnswer(payload []byte, offset int, requested namespace.DNSRecordTy
 		if length != 4 {
 			return record, false, offset, lneto.ErrInvalidLengthField
 		}
-		if requested&namespace.DNSRecordsA == 0 {
+		if requested&dnsns.RecordsA == 0 {
 			return record, false, dataEnd, nil
 		}
-		record = namespace.DNSRecord{Name: name, Type: namespace.DNSRecordA, TTLSeconds: ttl, Address: netip.AddrFrom4([4]byte(payload[dataStart:dataEnd]))}
+		record = dnsns.Record{Name: name, Type: dnsns.RecordA, TTLSeconds: ttl, Address: netip.AddrFrom4([4]byte(payload[dataStart:dataEnd]))}
 	case lnetodns.TypeAAAA:
 		if length != 16 {
 			return record, false, offset, lneto.ErrInvalidLengthField
 		}
-		if requested&namespace.DNSRecordsAAAA == 0 {
+		if requested&dnsns.RecordsAAAA == 0 {
 			return record, false, dataEnd, nil
 		}
-		record = namespace.DNSRecord{Name: name, Type: namespace.DNSRecordAAAA, TTLSeconds: ttl, Address: netip.AddrFrom16([16]byte(payload[dataStart:dataEnd]))}
+		record = dnsns.Record{Name: name, Type: dnsns.RecordAAAA, TTLSeconds: ttl, Address: netip.AddrFrom16([16]byte(payload[dataStart:dataEnd]))}
 	case lnetodns.TypeCNAME:
 		canonical, consumed, err := decodeDNSName(payload, dataStart)
 		if err != nil || consumed != dataEnd {
@@ -566,7 +567,7 @@ func decodeDNSAnswer(payload []byte, offset int, requested namespace.DNSRecordTy
 			}
 			return record, false, offset, err
 		}
-		record = namespace.DNSRecord{Name: name, Type: namespace.DNSRecordCNAME, TTLSeconds: ttl, CanonicalName: canonical}
+		record = dnsns.Record{Name: name, Type: dnsns.RecordCNAME, TTLSeconds: ttl, CanonicalName: canonical}
 	default:
 		return record, false, dataEnd, nil
 	}
@@ -588,29 +589,29 @@ func skipDNSResource(payload []byte, offset int) (int, error) {
 	return dataEnd, nil
 }
 
-func selectDNSAnswers(candidates []namespace.DNSRecord, request namespace.DNSRequest, maxRecords int) ([]namespace.DNSRecord, namespace.Failure, error) {
-	records := make([]namespace.DNSRecord, 0, min(maxRecords, len(candidates)))
+func selectDNSAnswers(candidates []dnsns.Record, request dnsns.Request, maxRecords int) ([]dnsns.Record, nscore.Failure, error) {
+	records := make([]dnsns.Record, 0, min(maxRecords, len(candidates)))
 	current := request.Name
 	visited := make(map[string]struct{}, len(candidates)+1)
 	for {
 		if _, exists := visited[current]; exists {
-			return nil, namespace.FailureIO, lneto.ErrInvalidField
+			return nil, nscore.FailureIO, lneto.ErrInvalidField
 		}
 		visited[current] = struct{}{}
-		var cname namespace.DNSRecord
+		var cname dnsns.Record
 		for _, candidate := range candidates {
-			if candidate.Type != namespace.DNSRecordCNAME || candidate.Name != current {
+			if candidate.Type != dnsns.RecordCNAME || candidate.Name != current {
 				continue
 			}
 			if !candidate.Valid() {
-				return nil, namespace.FailureIO, lneto.ErrInvalidField
+				return nil, nscore.FailureIO, lneto.ErrInvalidField
 			}
 			if cname.Type == 0 {
 				cname = candidate
 				continue
 			}
 			if cname.CanonicalName != candidate.CanonicalName {
-				return nil, namespace.FailureIO, lneto.ErrInvalidField
+				return nil, nscore.FailureIO, lneto.ErrInvalidField
 			}
 		}
 		if cname.Type == 0 {
@@ -619,27 +620,27 @@ func selectDNSAnswers(candidates []namespace.DNSRecord, request namespace.DNSReq
 		var err error
 		records, err = appendUniqueDNSRecord(records, cname, maxRecords)
 		if err != nil {
-			return nil, namespace.FailureResourceLimit, err
+			return nil, nscore.FailureResourceLimit, err
 		}
 		current = cname.CanonicalName
 	}
 	for _, candidate := range candidates {
-		if candidate.Name != current || candidate.Type == namespace.DNSRecordCNAME {
+		if candidate.Name != current || candidate.Type == dnsns.RecordCNAME {
 			continue
 		}
 		if !candidate.Valid() {
-			return nil, namespace.FailureIO, lneto.ErrInvalidField
+			return nil, nscore.FailureIO, lneto.ErrInvalidField
 		}
 		var err error
 		records, err = appendUniqueDNSRecord(records, candidate, maxRecords)
 		if err != nil {
-			return nil, namespace.FailureResourceLimit, err
+			return nil, nscore.FailureResourceLimit, err
 		}
 	}
 	return records, 0, nil
 }
 
-func appendUniqueDNSRecord(records []namespace.DNSRecord, record namespace.DNSRecord, maxRecords int) ([]namespace.DNSRecord, error) {
+func appendUniqueDNSRecord(records []dnsns.Record, record dnsns.Record, maxRecords int) ([]dnsns.Record, error) {
 	for _, existing := range records {
 		if existing.Name == record.Name && existing.Type == record.Type && existing.Address == record.Address && existing.CanonicalName == record.CanonicalName {
 			return records, nil

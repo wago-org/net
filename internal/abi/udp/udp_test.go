@@ -6,16 +6,17 @@ import (
 	"net/netip"
 	"testing"
 
-	"github.com/wago-org/net/internal/namespace"
+	nscore "github.com/wago-org/net/internal/namespace/core"
+	udpns "github.com/wago-org/net/internal/namespace/udp"
 )
 
 func TestReceiveResultV1AtomicEncoding(t *testing.T) {
 	if ReceiveResultV1Size != 48 || ReceiveFlagTruncated != 1 || !ValidReceiveFlagsV1(0) || !ValidReceiveFlagsV1(ReceiveFlagTruncated) || ValidReceiveFlagsV1(2) {
 		t.Fatal("UDP ABI values changed")
 	}
-	result := namespace.DatagramResult{
+	result := udpns.DatagramResult{
 		Copied: 3, DatagramBytes: 5,
-		Source:    namespace.Endpoint{Address: netip.MustParseAddr("192.0.2.2"), Port: 5300},
+		Source:    nscore.Endpoint{Address: netip.MustParseAddr("192.0.2.2"), Port: 5300},
 		Truncated: true, Ready: true,
 	}
 	memory := bytes.Repeat([]byte{0xaa}, int(ReceiveResultV1Size)+2)
@@ -55,9 +56,9 @@ func FuzzReceiveResultV1(f *testing.F) {
 	f.Add([]byte{1, 2, 3}, ^uint32(0), uint32(1), uint32(1))
 	f.Fuzz(func(t *testing.T, memory []byte, ptr, copied, datagramBytes uint32) {
 		before := append([]byte(nil), memory...)
-		result := namespace.DatagramResult{
+		result := udpns.DatagramResult{
 			Copied: int(copied), DatagramBytes: int(datagramBytes),
-			Source: namespace.Endpoint{Address: netip.MustParseAddr("192.0.2.2"), Port: 53},
+			Source: nscore.Endpoint{Address: netip.MustParseAddr("192.0.2.2"), Port: 53},
 			Ready:  true,
 		}
 		ok := EncodeReceiveResultV1(memory, ptr, result, int(copied))
