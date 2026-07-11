@@ -251,15 +251,15 @@ func verifyDirectory(root string, opts VerifyOptions) (*Verification, error) {
 	if err := verifyRevisions(filepath.Join(root, "revisions.txt"), &manifest); err != nil {
 		return nil, err
 	}
-	if err := verifySourceObjects(root, &manifest, opts); err != nil {
+	if err := verifySourceObjects(root, &manifest); err != nil {
 		return nil, err
 	}
 	return &Verification{Manifest: &manifest, ProvenanceSHA256: provenanceHex}, nil
 }
 
 func validateManifest(manifest *Manifest, opts VerifyOptions) error {
-	if manifest.Schema != SchemaV1 {
-		return fmt.Errorf("release provenance: schema %q, want %q", manifest.Schema, SchemaV1)
+	if manifest.Schema != SchemaV2 {
+		return fmt.Errorf("release provenance: schema %q, want %q", manifest.Schema, SchemaV2)
 	}
 	if manifest.Subject.Name != "net" || !validObjectID(manifest.Subject.Revision) || !validObjectID(manifest.Subject.Tree) || len(manifest.Subject.Parents) != 0 {
 		return fmt.Errorf("release provenance: invalid net subject identity")
@@ -280,6 +280,16 @@ func validateManifest(manifest *Manifest, opts VerifyOptions) error {
 		got := manifest.Inputs[i]
 		if got.Name != want.Name || got.Revision != want.Revision || !validObjectID(got.Tree) || !reflect.DeepEqual(got.Parents, want.Parents) {
 			return fmt.Errorf("release provenance: invalid %s input identity or ordered parents", want.Name)
+		}
+	}
+	wantReviewSubjects := expectedReviewSourceRepositories(opts)
+	if len(manifest.ReviewSubjects) != len(wantReviewSubjects) {
+		return fmt.Errorf("release provenance: review subject count %d, want %d", len(manifest.ReviewSubjects), len(wantReviewSubjects))
+	}
+	for i, want := range wantReviewSubjects {
+		got := manifest.ReviewSubjects[i]
+		if !reflect.DeepEqual(got, want) {
+			return fmt.Errorf("release provenance: invalid %s review identity, tree, or ordered parents", want.Name)
 		}
 	}
 	if manifest.Toolchains.Go == "" || manifest.Toolchains.TinyGo == "" {
@@ -428,8 +438,9 @@ func verifyRevisions(file string, manifest *Manifest) error {
 	if err != nil {
 		return err
 	}
-	want := fmt.Sprintf("plugin: %s\nWago: %s\nlneto: %s\nWASI: %s\n",
-		manifest.Subject.Revision, manifest.Inputs[0].Revision, manifest.Inputs[1].Revision, manifest.Inputs[2].Revision)
+	want := fmt.Sprintf("plugin: %s\nWago: %s\nlneto: %s\nWASI: %s\ncurrent net review: %s\ncurrent Wago review: %s\nworkers: %s\n",
+		manifest.Subject.Revision, manifest.Inputs[0].Revision, manifest.Inputs[1].Revision, manifest.Inputs[2].Revision,
+		manifest.ReviewSubjects[0].Revision, manifest.ReviewSubjects[1].Revision, manifest.ReviewSubjects[2].Revision)
 	if string(data) != want {
 		return fmt.Errorf("release provenance: revisions.txt does not match manifest revisions")
 	}

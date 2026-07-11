@@ -95,10 +95,12 @@ scripts themselves and is not a release setting.
 ## Provenance artifacts
 
 A passing gate writes `provenance.json` using schema
-`github.com/wago-org/net/release-provenance/v1`. The manifest contains:
+`github.com/wago-org/net/release-provenance/v2`. The manifest contains:
 
 - the exact plugin revision/tree and Wago, lneto, and WASI revisions/trees,
   including Wago's ordered merge parents;
+- first-class current networking, current Wago, and external workers review
+  subjects with exact revisions, trees, and ordered parent lists;
 - exact Go and TinyGo version strings;
 - every named test, race, vet, tidy, fuzz, benchmark, source-boundary, TinyGo,
   cross-build, arm64-execution, inspection, audit-repository, and clean-tree
@@ -145,8 +147,9 @@ GOWORK=off go run ./internal/cmd/release-review \
 To require a separately obtained expected plugin commit, add
 `-subject <40-hex-commit>`. Verification rejects a different schema; changed or
 unordered evidence; unknown or noncanonical manifest fields; unsafe archive
-paths; wrong exact production or current-review pins, trees, or parent order;
-inconsistent checks, exceptions, limitations, targets, revisions, toolchains, or inspection
+paths; wrong exact production or first-class current-review subjects, trees, or
+parent order; inconsistent checks, exceptions, limitations, targets, revisions,
+toolchains, or inspection
 facts; and any extra or missing artifact. Each Git pack is indexed in an isolated
 bare repository, checked for pack integrity, compared exactly with its canonical
 object inventory, and required to contain no more and no less than the selected

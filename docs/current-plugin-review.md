@@ -13,9 +13,11 @@ silently replacing that production prerequisite:
 
 `scripts/release-source-objects.sh` exports these three exact commit/tree
 closures in addition to the production net/Wago/lneto/WASI evidence. The
-standalone review verifier requires their revisions, trees, and ordered commit
-parents. These packs establish source availability and integrity; they are not
-publisher signatures and do not make an unpublished object an upstream release.
+schema-v2 provenance manifest declares them as first-class `reviewSubjects`, and
+the standalone verifier requires their revisions, trees, and ordered commit
+parents before deriving the same identities from the packs. These declarations
+and packs establish source availability and integrity; they are not publisher
+signatures and do not make an unpublished object an upstream release.
 
 ## Isolated adoption proof
 

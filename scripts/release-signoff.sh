@@ -89,8 +89,9 @@ WASI_DIR="$wasi_dir" WAGO_DIR="$wago_dir" WASI_UPSTREAM_AUDIT_OUT="$out/wasi-ups
 record_check wasi-upstream-preview1-audit accepted-exception 'reviewed docs/CI-only upstream still reaches the native preview-1 SIGSEGV; pin retained'
 printf 'go: %s\n' "$(go version)" | tee "$out/toolchains.txt"
 printf 'tinygo: %s\n' "$(tinygo version | tr '\n' ' ')" | tee -a "$out/toolchains.txt"
-printf 'plugin: %s\nWago: %s\nlneto: %s\nWASI: %s\n' \
+printf 'plugin: %s\nWago: %s\nlneto: %s\nWASI: %s\ncurrent net review: %s\ncurrent Wago review: %s\nworkers: %s\n' \
   "$(repo_head "$root")" "$(repo_head "$wago_dir")" "$(repo_head "$lneto_dir")" "$(repo_head "$wasi_dir")" \
+  "$(repo_head "$current_net_dir")" "$(repo_head "$current_wago_dir")" "$(repo_head "$workers_dir")" \
   | tee "$out/revisions.txt"
 
 log "plugin standard Go, workspace-independent, race, vet, list, and tidy"
@@ -239,6 +240,7 @@ record_check current-plugin-review-signoff pass 'immutable reconstruction; 4 cap
 log "deterministic release provenance"
 GOWORK=off go run ./internal/cmd/release-provenance \
   -out "$out" -plugin "$root" -wago "$wago_dir" -lneto "$lneto_dir" -wasi "$wasi_dir" \
+  -current-net "$current_net_dir" -current-wago "$current_wago_dir" -workers "$workers_dir" \
   -cross-goos "$cross_goos" -cross-goarch "$cross_goarch"
 (
   cd "$out"

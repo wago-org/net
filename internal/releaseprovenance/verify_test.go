@@ -20,7 +20,8 @@ func TestVerifyAndDeterministicBundleExport(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Verify directory: %v", err)
 	}
-	if verified.Manifest.Subject.Revision != opts.ExpectedSubject || len(verified.Manifest.Exceptions) != 2 || len(verified.Manifest.Limitations) != 1 {
+	if verified.Manifest.Subject.Revision != opts.ExpectedSubject || len(verified.Manifest.ReviewSubjects) != 3 ||
+		len(verified.Manifest.Exceptions) != 2 || len(verified.Manifest.Limitations) != 1 {
 		t.Fatalf("verification = %+v", verified)
 	}
 
@@ -120,6 +121,20 @@ func TestVerifyRejectsNoncanonicalOrPolicyDriftedManifest(t *testing.T) {
 	if _, err := Verify(dir, opts); err == nil {
 		t.Fatal("reordered Wago parents unexpectedly accepted")
 	}
+
+	dir, opts = validReviewFixture(t)
+	data, err = os.ReadFile(filepath.Join(dir, "provenance.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(data, &manifest); err != nil {
+		t.Fatal(err)
+	}
+	manifest.ReviewSubjects[2].Parents[0], manifest.ReviewSubjects[2].Parents[1] = manifest.ReviewSubjects[2].Parents[1], manifest.ReviewSubjects[2].Parents[0]
+	writeManifestFixture(t, dir, &manifest)
+	if _, err := Verify(dir, opts); err == nil {
+		t.Fatal("reordered review subject parents unexpectedly accepted")
+	}
 }
 
 func validReviewFixture(t *testing.T) (string, VerifyOptions) {
@@ -167,7 +182,7 @@ func validReviewFixture(t *testing.T) (string, VerifyOptions) {
 	}
 	writeTestFile(t, filepath.Join(dir, "checks.tsv"), checkText.String())
 	writeTestFile(t, filepath.Join(dir, "toolchains.txt"), "go: go version go1.24.4 linux/amd64\ntinygo: tinygo version 0.41.1 linux/amd64\n")
-	writeTestFile(t, filepath.Join(dir, "revisions.txt"), "plugin: "+subject+"\nWago: "+repositories.wago.Revision+"\nlneto: "+repositories.lneto.Revision+"\nWASI: "+repositories.wasi.Revision+"\n")
+	writeTestFile(t, filepath.Join(dir, "revisions.txt"), "plugin: "+subject+"\nWago: "+repositories.wago.Revision+"\nlneto: "+repositories.lneto.Revision+"\nWASI: "+repositories.wasi.Revision+"\ncurrent net review: "+repositories.currentNet.Revision+"\ncurrent Wago review: "+repositories.currentWago.Revision+"\nworkers: "+repositories.workers.Revision+"\n")
 	writeTestFile(t, filepath.Join(dir, "arm64", "status.txt"), "status=skipped-no-runner\n")
 	writeTestFile(t, filepath.Join(dir, "arm64", "runner.txt"), "runner=none\n")
 	binaryHash := strings.Repeat("b", 64)
@@ -202,12 +217,17 @@ func validReviewFixture(t *testing.T) (string, VerifyOptions) {
 		t.Fatal(err)
 	}
 	manifest := &Manifest{
-		Schema:  SchemaV1,
+		Schema:  SchemaV2,
 		Subject: repositories.net.Repository,
 		Inputs: []Repository{
 			repositories.wago.Repository,
 			repositories.lneto.Repository,
 			repositories.wasi.Repository,
+		},
+		ReviewSubjects: []Repository{
+			repositories.currentNet.Repository,
+			repositories.currentWago.Repository,
+			repositories.workers.Repository,
 		},
 		Toolchains: Toolchains{Go: "go version go1.24.4 linux/amd64", TinyGo: "tinygo version 0.41.1 linux/amd64"},
 		Inspection: inspection,

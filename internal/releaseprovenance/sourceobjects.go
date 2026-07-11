@@ -81,7 +81,7 @@ func ExportSourceObjects(outputDir string, sets []SourceObjectSet) error {
 	return nil
 }
 
-func verifySourceObjects(root string, manifest *Manifest, opts VerifyOptions) error {
+func verifySourceObjects(root string, manifest *Manifest) error {
 	sets := []struct {
 		name      string
 		revisions []string
@@ -93,7 +93,7 @@ func verifySourceObjects(root string, manifest *Manifest, opts VerifyOptions) er
 		{name: "lneto", revisions: []string{manifest.Inputs[1].Revision}, tree: manifest.Inputs[1].Tree},
 		{name: "wasi", revisions: []string{manifest.Inputs[2].Revision}, tree: manifest.Inputs[2].Tree},
 	}
-	for _, repository := range expectedReviewSourceRepositories(opts) {
+	for _, repository := range manifest.ReviewSubjects {
 		sets = append(sets, struct {
 			name      string
 			revisions []string

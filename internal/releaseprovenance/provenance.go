@@ -17,29 +17,33 @@ import (
 	"strings"
 )
 
-const SchemaV1 = "github.com/wago-org/net/release-provenance/v1"
+const SchemaV2 = "github.com/wago-org/net/release-provenance/v2"
 
 type Config struct {
-	OutputDir   string
-	PluginDir   string
-	WagoDir     string
-	LnetoDir    string
-	WASIDir     string
-	CrossGOOS   string
-	CrossGOARCH string
+	OutputDir      string
+	PluginDir      string
+	WagoDir        string
+	LnetoDir       string
+	WASIDir        string
+	CurrentNetDir  string
+	CurrentWagoDir string
+	WorkersDir     string
+	CrossGOOS      string
+	CrossGOARCH    string
 }
 
 type Manifest struct {
-	Schema      string       `json:"schema"`
-	Subject     Repository   `json:"subject"`
-	Inputs      []Repository `json:"inputs"`
-	Toolchains  Toolchains   `json:"toolchains"`
-	Inspection  Inspection   `json:"inspection"`
-	Targets     Targets      `json:"targets"`
-	Checks      []Check      `json:"checks"`
-	Artifacts   []Artifact   `json:"artifacts"`
-	Exceptions  []Exception  `json:"acceptedExceptions,omitempty"`
-	Limitations []Limitation `json:"limitations,omitempty"`
+	Schema         string       `json:"schema"`
+	Subject        Repository   `json:"subject"`
+	Inputs         []Repository `json:"inputs"`
+	ReviewSubjects []Repository `json:"reviewSubjects"`
+	Toolchains     Toolchains   `json:"toolchains"`
+	Inspection     Inspection   `json:"inspection"`
+	Targets        Targets      `json:"targets"`
+	Checks         []Check      `json:"checks"`
+	Artifacts      []Artifact   `json:"artifacts"`
+	Exceptions     []Exception  `json:"acceptedExceptions,omitempty"`
+	Limitations    []Limitation `json:"limitations,omitempty"`
 }
 
 type Repository struct {
@@ -106,19 +110,26 @@ func Generate(cfg Config) (*Manifest, error) {
 		return nil, err
 	}
 	manifest := &Manifest{
-		Schema:  SchemaV1,
+		Schema:  SchemaV2,
 		Subject: repo(cfg.PluginDir, "net", false),
 		Inputs: []Repository{
 			repo(cfg.WagoDir, "wago", true),
 			repo(cfg.LnetoDir, "lneto", false),
 			repo(cfg.WASIDir, "wasi", false),
 		},
+		ReviewSubjects: []Repository{
+			repo(cfg.CurrentNetDir, "net-current-review", true),
+			repo(cfg.CurrentWagoDir, "wago-current-review", true),
+			repo(cfg.WorkersDir, "workers-current", true),
+		},
 		Checks: checks,
 		Targets: Targets{
 			CrossBuild: TargetResult{GOOS: cfg.CrossGOOS, GOARCH: cfg.CrossGOARCH, Status: checkStatus(checks, "cross-build")},
 		},
 	}
-	for _, repository := range append([]Repository{manifest.Subject}, manifest.Inputs...) {
+	repositories := append([]Repository{manifest.Subject}, manifest.Inputs...)
+	repositories = append(repositories, manifest.ReviewSubjects...)
+	for _, repository := range repositories {
 		if repository.Revision == "" || repository.Tree == "" {
 			return nil, fmt.Errorf("release provenance: cannot resolve %s repository", repository.Name)
 		}
