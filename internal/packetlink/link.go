@@ -59,11 +59,14 @@ func (r FrameResult) Valid(size int) bool {
 
 // Snapshot is an immutable queue-depth snapshot.
 type Snapshot struct {
-	IngressFrames int
-	IngressBytes  int
-	EgressFrames  int
-	EgressBytes   int
-	Closed        bool
+	MaxFrameBytes   int
+	IngressFrames   int
+	IngressBytes    int
+	IngressCapacity int
+	EgressFrames    int
+	EgressBytes     int
+	EgressCapacity  int
+	Closed          bool
 }
 
 // Link owns fixed ingress and egress frame storage. All methods are safe for
@@ -242,11 +245,14 @@ func (l *Link) Snapshot() Snapshot {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	return Snapshot{
-		IngressFrames: l.ingress.count,
-		IngressBytes:  l.ingress.bytes,
-		EgressFrames:  l.egress.count,
-		EgressBytes:   l.egress.bytes,
-		Closed:        l.closed,
+		MaxFrameBytes:   l.maxFrameBytes,
+		IngressFrames:   l.ingress.count,
+		IngressBytes:    l.ingress.bytes,
+		IngressCapacity: len(l.ingress.lengths),
+		EgressFrames:    l.egress.count,
+		EgressBytes:     l.egress.bytes,
+		EgressCapacity:  len(l.egress.lengths),
+		Closed:          l.closed,
 	}
 }
 
