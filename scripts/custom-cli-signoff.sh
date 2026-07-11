@@ -3,7 +3,7 @@ set -euo pipefail
 
 root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 net_dir=$(realpath "${NET_DIR:-$root}")
-wago_dir=$(realpath "${WAGO_DIR:-$root/.audit/wago}")
+wago_dir=$(realpath "${WAGO_DIR:-$root/.wago/wago-production-97e6f91}")
 lneto_dir=$(realpath "${LNETO_DIR:-$root/.audit/lneto}")
 workers_dir=$(realpath "${WORKERS_DIR:-$root/.wago/workers-plugin}")
 out=$(realpath -m "${SIGNOFF_CUSTOM_DIR:-$root/.wago/release-signoff/custom-cli}")

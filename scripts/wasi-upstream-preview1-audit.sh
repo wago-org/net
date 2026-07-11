@@ -3,7 +3,7 @@ set -euo pipefail
 
 root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 wasi_dir=$(realpath "${WASI_DIR:-$root/.audit/wasi}")
-wago_dir=$(realpath "${WAGO_DIR:-$root/.audit/wago}")
+wago_dir=$(realpath "${WAGO_DIR:-$root/.wago/wago-production-97e6f91}")
 out=${WASI_UPSTREAM_AUDIT_OUT:-$root/.wago/wasi-upstream-audit-evidence}
 require_current=${REQUIRE_CURRENT_WASI:-0}
 

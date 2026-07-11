@@ -2,7 +2,7 @@
 set -euo pipefail
 
 root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
-wago_dir=$(realpath "${WAGO_DIR:-$root/.audit/wago}")
+wago_dir=$(realpath "${WAGO_DIR:-$root/.wago/wago-production-97e6f91}")
 require_current=${REQUIRE_CURRENT_PLUGIN_PLAN:-0}
 
 readonly pinned_merge=97e6f91e6c822491577faa86f3c30aa5a8fff1e8

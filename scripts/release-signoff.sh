@@ -2,7 +2,7 @@
 set -euo pipefail
 
 root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
-wago_dir=$(realpath "${WAGO_DIR:-$root/.audit/wago}")
+wago_dir=$(realpath "${WAGO_DIR:-$root/.wago/wago-production-97e6f91}")
 lneto_dir=$(realpath "${LNETO_DIR:-$root/.audit/lneto}")
 wasi_dir=$(realpath "${WASI_DIR:-$root/.audit/wasi}")
 current_net_dir=$(realpath "${CURRENT_NET_DIR:-$root/.wago/net-current-plugin-registration-18615546}")
@@ -13,9 +13,13 @@ run_wasi=${RUN_WASI:-1}
 allow_dirty=${ALLOW_DIRTY:-0}
 out=${SIGNOFF_DIR:-$root/.wago/release-signoff}
 
-readonly expected_wago=97e6f91e6c822491577faa86f3c30aa5a8fff1e8
-readonly expected_wago_parent_main=54499ba5135f69a062e23a7255f4a408d6cecf8c
-readonly expected_wago_parent_workers=ffd5ef4b122cbd019897eeea3503789ab5860e4a
+# shellcheck source=scripts/lib/production-wago-input.sh
+source "$root/scripts/lib/production-wago-input.sh"
+
+readonly expected_wago=$production_wago_revision
+readonly expected_wago_tree=$production_wago_tree
+readonly expected_wago_parent_main=$production_wago_parent_main
+readonly expected_wago_parent_workers=$production_wago_parent_workers
 readonly expected_lneto=ab1a0c735a8b534a1d6322a3e245bc11a09431e7
 readonly expected_wasi=3df6c766ad00e83b314da799dbf9a77b409ad19d
 readonly expected_current_net=173b38a4d5a0db0e6058544576942a46b9d543df
@@ -46,7 +50,7 @@ assert_clean() {
   fi
 }
 
-for command in git go tinygo grep cmp sed sha256sum; do
+for command in git go tinygo grep cmp mktemp sed sha256sum; do
   command -v "$command" >/dev/null || fail "missing required command: $command"
 done
 for dir in "$root" "$wago_dir" "$lneto_dir" "$wasi_dir" "$current_net_dir" "$current_wago_dir" "$workers_dir"; do
@@ -54,14 +58,13 @@ for dir in "$root" "$wago_dir" "$lneto_dir" "$wasi_dir" "$current_net_dir" "$cur
 done
 
 log "verify pinned audit repositories"
-assert_head "$wago_dir" "$expected_wago" Wago
+production_wago_verify_exact_clean_merge "$wago_dir" Wago "$expected_wago" "$expected_wago_tree" \
+  "$expected_wago_parent_main" "$expected_wago_parent_workers"
 assert_head "$lneto_dir" "$expected_lneto" lneto
 assert_head "$wasi_dir" "$expected_wasi" WASI
 assert_head "$current_net_dir" "$expected_current_net" 'current networking review'
 assert_head "$current_wago_dir" "$expected_current_wago" 'current Wago review'
 assert_head "$workers_dir" "$expected_workers" 'external workers'
-[[ $(git -C "$wago_dir" rev-parse HEAD^1) == "$expected_wago_parent_main" ]] || fail "Wago lifecycle parent drifted"
-[[ $(git -C "$wago_dir" rev-parse HEAD^2) == "$expected_wago_parent_workers" ]] || fail "Wago worker parent drifted"
 if [[ $allow_dirty != 1 ]]; then
   assert_clean "$root" plugin
   assert_clean "$wago_dir" Wago
@@ -71,10 +74,32 @@ if [[ $allow_dirty != 1 ]]; then
   assert_clean "$current_wago_dir" 'current Wago review'
   assert_clean "$workers_dir" 'external workers'
 fi
-[[ $(realpath "$root/../wago") == $(realpath "$wago_dir") ]] || fail "../wago does not resolve to the pinned Wago audit checkout"
 
 rm -rf "$out"
-mkdir -p "$out"
+mkdir -p "$out" "$root/.wago"
+module_input=$(mktemp -d "$root/.wago/release-module-input.XXXXXX")
+helper=
+cleanup() {
+  [[ -z "$helper" ]] || rm -f "$helper"
+  rm -rf "$module_input"
+}
+trap cleanup EXIT
+release_mod="$module_input/net-release.mod"
+release_sum="$module_input/net-release.sum"
+release_work="$module_input/net-release.work"
+cp "$root/go.mod" "$release_mod"
+cp "$root/go.sum" "$release_sum"
+go mod edit -modfile="$release_mod" -replace="github.com/wago-org/wago=$wago_dir"
+go mod edit -modfile="$release_mod" -replace="github.com/soypat/lneto=$lneto_dir"
+cat >"$release_work" <<EOF
+go 1.24.4
+
+use $root
+
+replace github.com/wago-org/wago => $wago_dir
+replace github.com/soypat/lneto => $lneto_dir
+EOF
+release_goflags="${GOFLAGS:+$GOFLAGS }-modfile=$release_mod"
 checks="$out/checks.tsv"
 : >"$checks"
 record_check pinned-revisions pass 'exact audit revisions and ordered Wago parents'
@@ -114,54 +139,59 @@ printf 'plugin: %s\nWago: %s\nlneto: %s\nWASI: %s\ncurrent net review: %s\ncurre
 
 log "plugin standard Go, workspace-independent, race, vet, list, and tidy"
 cd "$root"
-go test ./... -count=1
-record_check go-test-workspace pass
-GOWORK=off go test ./... -count=1
-record_check go-test-module pass
-go test -race ./... -count=1
+GOWORK="$release_work" go test ./... -count=1
+record_check go-test-workspace pass 'isolated workspace selects exact clean production Wago'
+GOWORK=off GOFLAGS="$release_goflags" go test ./... -count=1
+record_check go-test-module pass 'generated modfile selects exact clean production Wago'
+GOWORK="$release_work" go test -race ./... -count=1
 record_check go-test-race pass
-go vet ./...
+GOWORK="$release_work" go vet ./...
 record_check go-vet pass
-go list ./... >"$out/packages.txt"
+GOWORK="$release_work" go list ./... >"$out/packages.txt"
 record_check go-list pass
-GOWORK=off go mod tidy
+GOWORK=off GOFLAGS="$release_goflags" go mod tidy
+cp "$release_mod" "$release_mod.after-tidy"
+cp "$release_sum" "$release_sum.after-tidy"
+GOWORK=off GOFLAGS="$release_goflags" go mod tidy
+cmp "$release_mod.after-tidy" "$release_mod"
+cmp "$release_sum.after-tidy" "$release_sum"
 git diff --exit-code -- go.mod go.sum
-record_check go-mod-tidy pass 'no module-file changes'
+record_check go-mod-tidy pass 'generated release module is idempotent; repository module files unchanged'
 
 log "bounded fuzz corpus smoke ($fuzztime each)"
-go test ./internal/backend/lneto/dns -run '^$' -fuzz '^FuzzDNSWireResponse$' -fuzztime="$fuzztime" | tee "$out/fuzz-dns-wire.txt"
+GOWORK="$release_work" go test ./internal/backend/lneto/dns -run '^$' -fuzz '^FuzzDNSWireResponse$' -fuzztime="$fuzztime" | tee "$out/fuzz-dns-wire.txt"
 record_check fuzz-dns-wire pass "$fuzztime"
-go test ./internal/abi/dns -run '^$' -fuzz '^FuzzDNSV1Layouts$' -fuzztime="$fuzztime" | tee "$out/fuzz-dns-layout.txt"
+GOWORK="$release_work" go test ./internal/abi/dns -run '^$' -fuzz '^FuzzDNSV1Layouts$' -fuzztime="$fuzztime" | tee "$out/fuzz-dns-layout.txt"
 record_check fuzz-dns-layout pass "$fuzztime"
-go test ./internal/abi/tcp -run '^$' -fuzz '^FuzzV1Layouts$' -fuzztime="$fuzztime" | tee "$out/fuzz-tcp-layout.txt"
+GOWORK="$release_work" go test ./internal/abi/tcp -run '^$' -fuzz '^FuzzV1Layouts$' -fuzztime="$fuzztime" | tee "$out/fuzz-tcp-layout.txt"
 record_check fuzz-tcp-layout pass "$fuzztime"
-go test ./internal/abi/udp -run '^$' -fuzz '^FuzzReceiveResultV1$' -fuzztime="$fuzztime" | tee "$out/fuzz-udp-layout.txt"
+GOWORK="$release_work" go test ./internal/abi/udp -run '^$' -fuzz '^FuzzReceiveResultV1$' -fuzztime="$fuzztime" | tee "$out/fuzz-udp-layout.txt"
 record_check fuzz-udp-layout pass "$fuzztime"
-go test ./internal/abi/core -run '^$' -fuzz '^FuzzV1Layouts$' -fuzztime="$fuzztime" | tee "$out/fuzz-shared-layout.txt"
+GOWORK="$release_work" go test ./internal/abi/core -run '^$' -fuzz '^FuzzV1Layouts$' -fuzztime="$fuzztime" | tee "$out/fuzz-shared-layout.txt"
 record_check fuzz-shared-layout pass "$fuzztime"
-go test . -run '^$' -fuzz '^FuzzGuestDNSMemory$' -fuzztime="$fuzztime" | tee "$out/fuzz-dns-guest.txt"
+GOWORK="$release_work" go test . -run '^$' -fuzz '^FuzzGuestDNSMemory$' -fuzztime="$fuzztime" | tee "$out/fuzz-dns-guest.txt"
 record_check fuzz-dns-guest pass "$fuzztime"
-go test . -run '^$' -fuzz '^FuzzGuestTCPStreamMemory$' -fuzztime="$fuzztime" | tee "$out/fuzz-tcp-guest.txt"
+GOWORK="$release_work" go test . -run '^$' -fuzz '^FuzzGuestTCPStreamMemory$' -fuzztime="$fuzztime" | tee "$out/fuzz-tcp-guest.txt"
 record_check fuzz-tcp-guest pass "$fuzztime"
-go test . -run '^$' -fuzz '^FuzzGuestUDPPollMemory$' -fuzztime="$fuzztime" | tee "$out/fuzz-udp-guest.txt"
+GOWORK="$release_work" go test . -run '^$' -fuzz '^FuzzGuestUDPPollMemory$' -fuzztime="$fuzztime" | tee "$out/fuzz-udp-guest.txt"
 record_check fuzz-udp-guest pass "$fuzztime"
 
 log "benchmarks"
-go test . -run '^$' -bench 'BenchmarkGuest(UDP|TCP)Poll$' -benchmem -count=1 | tee "$out/bench-guest-poll.txt"
+GOWORK="$release_work" go test . -run '^$' -bench 'BenchmarkGuest(UDP|TCP)Poll$' -benchmem -count=1 | tee "$out/bench-guest-poll.txt"
 record_check benchmark-guest-poll pass 'benchmem count=1'
-go test ./internal/backend/lneto/udp -run '^$' -bench '^BenchmarkUDPDatagramQueueRoundTrip$' -benchmem -count=1 | tee "$out/bench-udp-queue.txt"
+GOWORK="$release_work" go test ./internal/backend/lneto/udp -run '^$' -bench '^BenchmarkUDPDatagramQueueRoundTrip$' -benchmem -count=1 | tee "$out/bench-udp-queue.txt"
 record_check benchmark-udp-queue pass 'benchmem count=1'
 
 log "TinyGo and cross-compile"
-GOWORK=off tinygo test ./...
+GOWORK=off GOFLAGS="$release_goflags" tinygo test ./...
 record_check tinygo-test pass
 cross_goos=${CROSS_GOOS:-linux}
 cross_goarch=${CROSS_GOARCH:-arm64}
-GOOS=$cross_goos GOARCH=$cross_goarch CGO_ENABLED=0 GOWORK=off go build ./...
+GOOS=$cross_goos GOARCH=$cross_goarch CGO_ENABLED=0 GOWORK=off GOFLAGS="$release_goflags" go build ./...
 record_check cross-build pass "$cross_goos/$cross_goarch CGO_ENABLED=0"
 
 log "bounded linux/arm64 execution smoke"
-ARM64_SIGNOFF_DIR="$out/arm64" "$root/scripts/arm64-execution-signoff.sh"
+GOFLAGS="$release_goflags" ARM64_SIGNOFF_DIR="$out/arm64" "$root/scripts/arm64-execution-signoff.sh"
 arm64_status=$(sed -n 's/^status=//p' "$out/arm64/status.txt")
 [[ -n "$arm64_status" ]] || fail 'arm64 execution status is missing'
 record_check arm64-execution "$arm64_status"
@@ -174,8 +204,6 @@ WAGO_DIR="$wago_dir" LNETO_DIR="$lneto_dir" SIGNOFF_CUSTOM_DIR="$out/custom-cli"
 record_check custom-cli-inspection pass 'Go and TinyGo byte-identical for granular TCP/UDP/DNS and explicit all-protocol bundles'
 
 helper="$wago_dir/src/wago/trap_code_release_signoff_test.go"
-cleanup() { rm -f "$helper"; }
-trap cleanup EXIT
 [[ ! -e "$helper" ]] || fail "temporary Wago trap helper already exists"
 cat >"$helper" <<'EOF'
 package wago
@@ -200,7 +228,8 @@ log "Wago merged lifecycle/worker tests"
     -count=1
 )
 record_check wago-lifecycle-worker-tests pass 'src/wago, genfacade, and focused race suite'
-cleanup
+rm -f "$helper"
+helper=
 
 log "lneto audit suite"
 (
@@ -234,8 +263,6 @@ else
   record_check wasi-test skipped "RUN_WASI=$run_wasi"
 fi
 
-trap - EXIT
-cleanup
 log "final clean-tree verification"
 if [[ $allow_dirty != 1 ]]; then
   assert_clean "$root" plugin
@@ -264,7 +291,7 @@ CURRENT_REVIEW_SOURCE_DIR="$out/source-objects" CURRENT_REVIEW_OUT="$out/current
 record_check current-plugin-review-signoff pass 'immutable reconstruction; initially empty GOMODCACHE; network disabled; exact module and go.sum inventory; granular plus aggregate inspection; linked-child cleanup; TinyGo'
 
 log "deterministic release provenance"
-GOWORK=off go run ./internal/cmd/release-provenance \
+GOWORK=off GOFLAGS="$release_goflags" go run ./internal/cmd/release-provenance \
   -out "$out" -plugin "$root" -wago "$wago_dir" -lneto "$lneto_dir" -wasi "$wasi_dir" \
   -current-net "$current_net_dir" -current-wago "$current_wago_dir" -workers "$workers_dir" \
   -cross-goos "$cross_goos" -cross-goarch "$cross_goarch"
@@ -275,7 +302,9 @@ GOWORK=off go run ./internal/cmd/release-provenance \
 )
 
 log "standalone deterministic review bundle"
-SIGNOFF_DIR="$out" REVIEW_BUNDLE="$out.review.tar.gz" REVIEW_SUBJECT="$(repo_head "$root")" \
+GOFLAGS="$release_goflags" SIGNOFF_DIR="$out" REVIEW_BUNDLE="$out.review.tar.gz" REVIEW_SUBJECT="$(repo_head "$root")" \
   "$root/scripts/release-review-bundle.sh"
 
+trap - EXIT
+cleanup
 echo "release-signoff: PASS (artifacts: $out; provenance: $out/provenance.json; review bundle: $out.review.tar.gz)"

@@ -2,7 +2,7 @@
 set -euo pipefail
 
 root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
-wago_dir=$(realpath "${WAGO_DIR:-$root/.audit/wago}")
+wago_dir=$(realpath "${WAGO_DIR:-$root/.wago/wago-production-97e6f91}")
 lneto_dir=$(realpath "${LNETO_DIR:-$root/.audit/lneto}")
 wasi_dir=$(realpath "${WASI_DIR:-$root/.audit/wasi}")
 current_net_dir=$(realpath "${CURRENT_NET_DIR:-$root/.wago/net-current-plugin-registration-18615546}")
