@@ -93,6 +93,20 @@ Handles from another instance, stale handles, wrong-kind handles, zero, and
 malformed values return `BAD_HANDLE`. Guests must not derive or inspect handle
 bits.
 
+Future endpoint-changing imports are required to enforce immutable instance
+policy on every bind, listen, connect, datagram destination, and DNS request.
+Unmatched or malformed requests are denied. Wildcard binds, loopback, multicast,
+limited IPv4 broadcast, and local bind/listen ports below 1024 require separate
+explicit grants so a broad prefix rule cannot grant them accidentally.
+IPv4-mapped IPv6 addresses are rejected rather than reinterpreted across policy
+families.
+
+Resource creation, retained packet bytes, DNS work, and manual service work are
+also subject to finite per-instance quotas. A failed operation must roll back its
+tentative reservation, and instance teardown clears both committed allocations
+and abandoned reservations. Exact default limits remain implementation policy,
+not ABI constants.
+
 ## Compatibility boundary
 
 This is a Wago-specific core Wasm ABI. It is not a WASI Component Model or WIT

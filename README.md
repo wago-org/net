@@ -3,10 +3,13 @@
 Capability-gated networking plugins for the [Wago](https://github.com/wago-org/wago)
 WebAssembly runtime, backed initially by [lneto](https://github.com/soypat/lneto).
 
-The repository is in its ABI-foundation phase. The implemented surface is the
-experimental `wago_net.abi_version` import and the stable numeric status taxonomy.
-TCP, UDP, DNS, polling, namespace backends, and privileged packet access are not
-yet implemented and are not advertised as available.
+The repository is in its ABI-foundation phase. The implemented guest surface is
+the experimental `wago_net.abi_version` import and the stable numeric status
+taxonomy. Internal foundations now include checked memory, instance-scoped
+handles and cleanup, immutable endpoint policy, finite per-instance quotas, and
+backend-neutral nonblocking namespace contracts. TCP, UDP, DNS, polling,
+namespace backends, and privileged packet access are not yet guest-visible and
+are not advertised as available.
 
 ```go
 rt := wago.NewRuntime()

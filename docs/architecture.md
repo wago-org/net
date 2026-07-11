@@ -46,13 +46,36 @@ reverse-creation O(live) cleanup. The table exists independently of protocol
 resources so its stale, forged, wrong-kind, reuse, and cross-table behavior can
 be hardened before sockets are exposed.
 
+`internal/policy` compiles immutable allow/deny rules over transport, direction,
+IP prefixes, port ranges, and normalized DNS suffixes. Deny matches always win,
+invalid and unmatched requests fail closed, and separate zero-default gates are
+required for wildcard binds, loopback, multicast, limited broadcast, and local
+bind/listen ports below 1024. IPv4-mapped IPv6 values are rejected rather than
+normalized across policy families. Authority-changing operations have explicit
+UDP bind/send, TCP listen/connect, and DNS resolve checks.
+
+`internal/quota` provides finite per-instance total/protocol resource, queued-byte,
+DNS-work, and service-work counters. Tentative reservations must be committed or
+rolled back; committed allocations release exactly once. Closing an instance
+first closes resources and then closes its quota account, which clears abandoned
+reservations and makes late token cleanup harmless.
+
+`internal/namespace` defines the backend-neutral endpoint, UDP, TCP, DNS,
+readiness, semantic-error, and bounded manual-service contracts. Operations that
+may await network progress are single `Try` calls with explicit would-block or
+in-progress results. Result validators make partial stream I/O, datagram
+truncation, DNS record ownership, and service-budget bounds explicit. A
+compile-time fake backend exercises the contracts without importing lneto; no
+lneto type is part of this layer.
+
 Each `Extension` now owns a private instance-state manager. Runtime
 instantiation attaches one resource table to the exact `*wago.Instance`; host
 imports recover that identity through the additive `wago.InstanceHostModule`
 interface, and `BeforeClose` removes the attachment before reverse-creation
-resource cleanup. Failed later setup and `ResetReinstantiate` replacement use the
-same close path. No process-global instance map is used. The low-level `Imports`
-bundle remains suitable only for stateless core imports such as `abi_version`;
+resource cleanup and quota shutdown. Failed later setup and `ResetReinstantiate`
+replacement use the same close path. No process-global instance map is used. The
+low-level `Imports` bundle remains suitable only for stateless core imports such
+as `abi_version`;
 resource-owning protocol extensions require the Runtime lifecycle path.
 
 The companion Wago branch `net/instance-close-hooks` contains the prerequisites:
