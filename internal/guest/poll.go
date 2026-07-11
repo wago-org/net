@@ -1,0 +1,74 @@
+package guest
+
+import (
+	"errors"
+
+	"github.com/wago-org/net/internal/abi"
+	"github.com/wago-org/net/internal/namespace"
+	"github.com/wago-org/net/internal/plugin"
+	"github.com/wago-org/net/internal/readiness"
+	wago "github.com/wago-org/wago"
+)
+
+var errPollEncoding = errors.New("net: failed to encode validated guest poll output")
+
+// Poll performs the shared checked, quota-accounted, bounded readiness pass for
+// an independently registered protocol import.
+func Poll(host plugin.Host, module wago.HostModule, params, results []uint64) {
+	if len(params) != 4 || len(results) != 1 {
+		SetStatus(results, StatusInvalidArgument)
+		return
+	}
+	memory := Memory(module)
+	eventsPtr, eventCapacity := uint32(params[0]), uint32(params[1])
+	budget, ok := abi.DecodePollBudgetV1(memory, uint32(params[2]))
+	if !ok || budget.Events > eventCapacity {
+		SetStatus(results, StatusInvalidArgument)
+		return
+	}
+	eventBytes := uint64(eventCapacity) * uint64(abi.PollEventV1Size)
+	if eventBytes > uint64(^uint32(0)) {
+		SetStatus(results, StatusInvalidArgument)
+		return
+	}
+	resultPtr := uint32(params[3])
+	if !abi.CheckRanges(memory, true,
+		abi.Range{Ptr: eventsPtr, Length: uint32(eventBytes)},
+		abi.Range{Ptr: resultPtr, Length: abi.PollResultV1Size},
+	) {
+		SetStatus(results, StatusInvalidArgument)
+		return
+	}
+	state, ok := host.State(module)
+	if !ok || state == nil {
+		SetStatus(results, StatusInvalidState)
+		return
+	}
+	var progress namespace.Progress
+	var pollErr error
+	err := state.Quotas().WithService(pollWorkUnits(budget), func() {
+		_, progress, pollErr = state.Poll(budget, func(events []readiness.Event, report readiness.Report, _ namespace.Progress) error {
+			if !abi.EncodePollEventsV1(memory, eventsPtr, events) || !abi.EncodePollResultV1(memory, resultPtr, report, budget) {
+				return errPollEncoding
+			}
+			return nil
+		})
+	})
+	if err != nil {
+		SetStatus(results, FromError(err))
+		return
+	}
+	if pollErr != nil {
+		if errors.Is(pollErr, errPollEncoding) {
+			SetStatus(results, StatusIO)
+		} else {
+			SetStatus(results, FromError(pollErr))
+		}
+		return
+	}
+	SetStatus(results, FromProgress(progress))
+}
+
+func pollWorkUnits(budget readiness.Budget) uint64 {
+	return uint64(budget.Scans) + uint64(budget.Events) + uint64(budget.ServiceAttempts)
+}

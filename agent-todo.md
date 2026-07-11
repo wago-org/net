@@ -14,9 +14,10 @@ and lneto as the first backend.
 - Handles are opaque, kind-checked, stale-safe, and never Go pointers.
 - Statuses are stable numeric values; Go error text is not guest ABI.
 - Raw IP, raw Ethernet, and capture authority are denied by default.
+- Protocols are independently selectable at registration and compile time: a TCP-only client exposes and compiles no UDP or DNS plugin module.
 - Endpoint policy is enforced at every authority-changing operation.
 - Instance cleanup is deterministic and never relies on guest destructors or finalizers.
-- Each recursive iteration produces exactly three atomic commits unless the project completes earlier.
+- Each recursive iteration produces exactly four bounded atomic commits unless the project completes earlier.
 
 ## Pinned analysis revisions
 
@@ -26,6 +27,88 @@ and lneto as the first backend.
 - Current networking review: `5b444e9dfbbf1b64e7b1f923f1dc3579a4aaf87e`, parent `29d59163a500e96f9567f14beeb4f3bb04e6351e`, on production base `d582be74d3cd5da844f530ce5f6f16aa803ed258`.
 - lneto main: `ab1a0c735a8b534a1d6322a3e245bc11a09431e7` (2026-07-10).
 - WASI audit: `3df6c766ad00e83b314da799dbf9a77b409ad19d`; reviewed `origin/main` at `1a7eeb215229e05bcb0f09d5cb3280d231739def` changes only README/CI files, has an implementation-tree inventory identical to the pin, and still reaches the native preview-1 SIGSEGV, so the release pin remains unchanged.
+
+## Approved protocol-submodule target
+
+The staged implementation and acceptance plan is maintained in
+[`docs/protocol-submodule-migration.md`](docs/protocol-submodule-migration.md).
+
+The next public API architecture must make protocol adoption simple while keeping
+advanced configuration available. TCP, UDP, and DNS become separate public Go
+packages and separate compilation units. The root package remains a lightweight
+composition and shared-lifecycle layer and must not import any protocol package.
+The intended default path is:
+
+```go
+network := wagonet.New()
+tcp.Register(network)
+return runtime.Use(network)
+```
+
+Additional protocols compose explicitly:
+
+```go
+network := wagonet.New()
+udp.Register(network)
+tcp.Register(network)
+dns.Register(network, dns.Resolver("192.0.2.53"))
+return runtime.Use(network)
+```
+
+Registration must be exact. Registering only TCP advertises only `net.info` and
+`net.tcp`, and provides only `wago_net.abi_version` plus `wago_net_tcp.*`. The
+UDP and DNS capabilities, import modules, bindings, configuration, and backend
+adapters must be absent. A guest requesting an unregistered import fails ordinary
+Wasm import resolution rather than reaching a placeholder that returns
+`NOT_SUPPORTED`. An empty network either registers nothing or fails clearly; the
+first selected protocol may add the shared `wago_net.abi_version` import.
+
+Compile-time isolation is mandatory, not merely linker dead-code elimination or
+conditional calls inside one Go package. The target package graph is:
+
+```text
+github.com/wago-org/net                 shared composition/lifecycle only
+github.com/wago-org/net/tcp             TCP API, defaults, ABI bindings
+github.com/wago-org/net/udp             UDP API, defaults, ABI bindings
+github.com/wago-org/net/dns             DNS API, defaults, ABI bindings
+internal/backend/lneto/core             shared stack/link machinery
+internal/backend/lneto/tcp              TCP backend only
+internal/backend/lneto/udp              UDP backend only
+internal/backend/lneto/dns              DNS backend only
+```
+
+Protocol-specific configuration moves with its package (`tcp.Config`,
+`udp.Config`, and `dns.Config`). The shared network builder owns exactly one
+per-instance namespace, lifecycle attachment, resource identity domain, policy
+composition, quota ledger, and readiness coordinator regardless of how many
+submodules are selected. Subpackages register implementations into that shared
+builder without the root importing them.
+
+Defaults must make ordinary client adoption useful without constructing raw
+policy rules. TCP defaults allow finite outbound client connections with
+nonprivileged ephemeral local ports and bounded buffers, but listeners remain an
+explicit grant. UDP defaults allow finite outbound unicast, ephemeral wildcard
+binding, and replies, while privileged binds, multicast, broadcast, and broad
+server binding remain explicit. DNS defaults allow valid A/AAAA queries through
+an explicitly configured or inherited resolver with finite query, response,
+retry, and record limits. Common restrictions receive ergonomic package options;
+raw policy and quota configuration remain advanced escape hatches. Fully
+permissive behavior is available only through a conspicuous option such as
+`tcp.AllowAll()`, `udp.AllowAll()`, or `dns.AllowAll()`.
+
+Self-registration is also granular: `tcp/register`, `udp/register`, and
+`dns/register` compile and register only their own protocol plus shared core. The
+existing root `register` package may remain as an explicit all-protocol bundle by
+blank-importing those three packages. Existing `Init(Config)` behavior may remain
+as a compatibility/advanced path during migration, but new documentation leads
+with the selective submodule API.
+
+Acceptance checks must inspect both runtime registration and the Go dependency
+graph. TCP-only, UDP-only, DNS-only, and every supported combination must assert
+exact imports and capabilities. A TCP-only fixture must have no dependency on the
+UDP/DNS public packages or lneto adapters; equivalent checks apply to the other
+protocols. The root package must have no protocol-package dependency, and only
+the explicit aggregate registration package may include all protocols.
 
 ## Current architecture
 
@@ -465,6 +548,13 @@ unavailable, and both WASI preview-1 exceptions remain active.
 3. Activate hosted release automation only after the production Wago ref is
    fetchable, require executed linux/arm64 smoke on an arm64/QEMU tier, and remove
    the WASI exception only after reviewing and pinning an upstream fix.
+4. Refactor the networking suite to the approved protocol-submodule target:
+   introduce the shared builder, move TCP/UDP/DNS APIs and bindings into separate
+   public packages, split the lneto backend and instance protocol operations into
+   separate compilation units, register only selected imports/capabilities, add
+   useful finite allow defaults plus explicit customization, provide granular
+   self-registration packages, preserve the advanced compatibility path, and gate
+   every protocol combination with exact runtime and dependency-graph tests.
 
 ## Blockers and discovered prerequisites
 

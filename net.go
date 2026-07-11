@@ -16,6 +16,7 @@ import (
 	instancestate "github.com/wago-org/net/internal/instance"
 	"github.com/wago-org/net/internal/namespace"
 	"github.com/wago-org/net/internal/packetlink"
+	"github.com/wago-org/net/internal/plugin"
 	"github.com/wago-org/net/internal/policy"
 	"github.com/wago-org/net/internal/quota"
 	"github.com/wago-org/net/internal/readiness"
@@ -137,18 +138,79 @@ type Config struct {
 	StaticIPv4 *StaticIPv4Config
 }
 
-// Extension implements the core Wago networking extension.
+var (
+	// ErrInvalidProtocolRegistration reports a protocol descriptor or
+	// compatibility selector without a stable implementation.
+	ErrInvalidProtocolRegistration = plugin.ErrInvalidModule
+	// ErrProtocolRegistrationFrozen reports protocol selection attempted after
+	// Wago registration has frozen the network's authority surface.
+	ErrProtocolRegistrationFrozen = plugin.ErrFrozen
+	// ErrProtocolAlreadyRegistered reports duplicate selection of one protocol.
+	ErrProtocolAlreadyRegistered = plugin.ErrDuplicateModule
+)
+
+// Option configures shared network composition. Protocol-specific options live
+// in the tcp, udp, and dns packages rather than in the root package.
+type Option interface {
+	applyNetwork(*Config) error
+}
+
+type optionFunc func(*Config) error
+
+func (option optionFunc) applyNetwork(config *Config) error { return option(config) }
+
+// WithConfig preserves the aggregate advanced configuration path while the
+// selective protocol packages become the primary API.
+func WithConfig(config Config) Option {
+	return optionFunc(func(target *Config) error {
+		*target = config
+		return nil
+	})
+}
+
+// Extension implements the shared Wago networking composition and lifecycle
+// layer. Network is its selective-API name.
 type Extension struct {
 	config    Config
 	configErr error
+	modules   plugin.Set
 
 	stateOnce sync.Once
 	instances *instancestate.Manager
 }
 
-// Init constructs the core networking extension. Configuration errors are
-// returned by Register so Init remains compatible with Wago extension setup.
+// Network is the shared builder passed to protocol registration packages.
+type Network = Extension
+
+// New constructs an initially protocol-free network. Protocol packages select
+// their exact capability and import surface before the network is passed to
+// Wago. Registration freezes on the first Wago Register call.
+func New(options ...Option) *Network {
+	var config Config
+	for _, option := range options {
+		if option == nil {
+			return &Extension{configErr: instancestate.ErrInvalidConfig}
+		}
+		if err := option.applyNetwork(&config); err != nil {
+			return &Extension{config: config, configErr: err}
+		}
+	}
+	return newExtension(config)
+}
+
+// Init constructs the aggregate compatibility extension with UDP, TCP, and DNS
+// all selected. New code should use New plus protocol-local Register functions.
 func Init(config Config) *Extension {
+	extension := newExtension(config)
+	if extension.configErr == nil {
+		if err := extension.registerAllProtocols(); err != nil {
+			extension.configErr = err
+		}
+	}
+	return extension
+}
+
+func newExtension(config Config) *Extension {
 	managerConfig := instancestate.DefaultConfig()
 	managerConfig.Policy = config.Policy
 	if config.Limits != nil {
@@ -173,6 +235,66 @@ func Init(config Config) *Extension {
 	return &Extension{config: config, configErr: err, instances: manager}
 }
 
+// RegisterModule installs one opaque protocol descriptor. The internal type in
+// this signature deliberately limits direct use to this module's public
+// protocol packages.
+func (e *Extension) RegisterModule(module plugin.Module) error {
+	if e == nil {
+		return instancestate.ErrInvalidConfig
+	}
+	return e.modules.Add(module)
+}
+
+// RegisterCompatibilityModule is a transitional internal-boundary adapter for
+// aggregate and not-yet-extracted protocol paths. The public TCP facade no
+// longer uses it. Its plugin.ModuleKey parameter prevents this compatibility
+// hook from becoming an ordinary public protocol-selection API. New callers
+// should use tcp.Register, udp.Register, or dns.Register as those packages
+// become available.
+func (e *Extension) RegisterCompatibilityModule(key plugin.ModuleKey) error {
+	switch key {
+	case plugin.ModuleUDP:
+		return e.registerUDPModule()
+	case plugin.ModuleTCP:
+		return e.registerTCPModule()
+	case plugin.ModuleDNS:
+		return e.registerDNSModule()
+	default:
+		return plugin.ErrInvalidModule
+	}
+}
+
+func (e *Extension) registerAllProtocols() error {
+	for _, register := range []func() error{
+		e.registerUDPModule,
+		e.registerTCPModule,
+		e.registerDNSModule,
+	} {
+		if err := register(); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (e *Extension) registerUDPModule() error {
+	return e.RegisterModule(plugin.NewModule(plugin.ModuleUDP, func(reg *wago.Registry, _ plugin.Host) {
+		reg.Capability(CapUDP, wago.CapabilityDocs("use checked nonblocking UDP networking for the exact calling instance"))
+		registerBindings(reg.ImportModule(UDPModule), e.udpBindings())
+	}))
+}
+
+func (e *Extension) registerTCPModule() error {
+	return e.RegisterModule(tcpCompatibilityDescriptor())
+}
+
+func (e *Extension) registerDNSModule() error {
+	return e.RegisterModule(plugin.NewModule(plugin.ModuleDNS, func(reg *wago.Registry, _ plugin.Host) {
+		reg.Capability(CapDNS, wago.CapabilityDocs("use checked bounded DNS queries for the exact calling instance"))
+		registerBindings(reg.ImportModule(DNSModule), e.dnsBindings())
+	}))
+}
+
 // Info returns extension metadata loaded from wago.json.
 func (e *Extension) Info() wago.ExtensionInfo { return extensionInfo }
 
@@ -185,17 +307,19 @@ func (e *Extension) Register(reg *wago.Registry) error {
 		return e.configErr
 	}
 	instances := e.instanceManager()
+	modules := e.modules.Freeze()
 	reg.RequireReinstantiation()
 	reg.Hooks().AfterInstantiate(instances.AfterInstantiate)
 	reg.Hooks().BeforeClose(instances.BeforeClose)
+	if len(modules) == 0 {
+		return nil
+	}
 	reg.Capability(CapInfo, wago.CapabilityDocs("inspect the Wago networking ABI and interfaces"))
-	reg.Capability(CapUDP, wago.CapabilityDocs("use checked nonblocking UDP networking for the exact calling instance"))
-	reg.Capability(CapTCP, wago.CapabilityDocs("use checked nonblocking TCP networking for the exact calling instance"))
-	reg.Capability(CapDNS, wago.CapabilityDocs("use checked bounded DNS queries for the exact calling instance"))
 	registerBindings(reg.ImportModule(Module), e.bindings())
-	registerBindings(reg.ImportModule(UDPModule), e.udpBindings())
-	registerBindings(reg.ImportModule(TCPModule), e.tcpBindings())
-	registerBindings(reg.ImportModule(DNSModule), e.dnsBindings())
+	host := plugin.NewHost(instances)
+	for _, module := range modules {
+		module.Install(reg, host)
+	}
 	return nil
 }
 

@@ -293,6 +293,9 @@ func TestGuestTCPConnectRollsBackInvalidBackendDescriptor(t *testing.T) {
 		t.Fatalf("manager: %v", err)
 	}
 	extension := &Extension{instances: manager}
+	if err := extension.registerTCPModule(); err != nil {
+		t.Fatalf("register TCP module: %v", err)
+	}
 	runtime := runtimeForExtension(t, extension)
 	module, err := runtime.Compile([]byte{0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00})
 	if err != nil {
@@ -468,6 +471,9 @@ func TestGuestTCPAcceptRollsBackInvalidDescriptor(t *testing.T) {
 		t.Fatalf("manager: %v", err)
 	}
 	extension := &Extension{instances: manager}
+	if err := extension.registerTCPModule(); err != nil {
+		t.Fatalf("register TCP module: %v", err)
+	}
 	runtime := runtimeForExtension(t, extension)
 	module, err := runtime.Compile([]byte{0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00})
 	if err != nil {

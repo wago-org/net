@@ -27,17 +27,45 @@ UDP-only: truncated responses return `TEMPORARY_FAILURE` because DNS-over-TCP
 fallback is not implemented. Privileged packet access remains absent and
 unsupported.
 
+The primary composition API selects only the protocols a runtime should expose:
+
 ```go
-rt := wago.NewRuntime()
-if err := rt.Use(wagonet.Init(wagonet.Config{})); err != nil {
+network := wagonet.New()
+if err := tcp.Register(network); err != nil {
     return err
 }
 
-// A configured deployment can instead provide immutable policy, finite quota,
-// readiness, packet-link, static IPv4, UDP queue, TCP pool, and bounded DNS
-// resolver settings. Each
-// Runtime instance then receives its own isolated namespace and handles.
+rt := wago.NewRuntime()
+if err := rt.Use(network); err != nil {
+    return err
+}
 ```
+
+This TCP-only registration exposes `net.info` and `net.tcp`, with
+`wago_net.abi_version` and the eleven `wago_net_tcp` imports. UDP and DNS imports
+are absent and fail normal WebAssembly import resolution. The public TCP facade
+now constructs its own opaque descriptor and the eleven checked host bindings
+live in a TCP-only internal binding package. Full compile isolation is not yet
+claimed: the aggregate root compatibility path still imports that binding
+package, and TCP instance operations plus the lneto adapter remain unified.
+Package-local finite client defaults also remain migration work.
+
+The aggregate advanced compatibility path remains available while protocol
+configuration is split into its public packages:
+
+```go
+network := wagonet.Init(wagonet.Config{
+    // Immutable policy, finite quota/readiness, packet-link, static IPv4,
+    // UDP queue, TCP pool, and bounded DNS resolver settings.
+})
+if err := wago.NewRuntime().Use(network); err != nil {
+    return err
+}
+```
+
+Each configured Runtime instance receives its own isolated namespace and
+handles. `Init` explicitly selects UDP, TCP, and DNS; new selective callers
+should prefer `New` plus protocol registration.
 
 The extension declares that networking state requires physical reinstantiation.
 Wago therefore downgrades `ResetMemorySnapshot` and other in-place class reset
