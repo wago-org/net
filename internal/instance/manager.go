@@ -21,8 +21,10 @@ var (
 )
 
 // NamespaceFactory constructs one backend namespace for one exact instance.
-// The returned value must not be shared with another instance.
-type NamespaceFactory func() (namespace.Namespace, error)
+// The returned value must not be shared with another instance. Policy and quota
+// pointers belong to that exact state and let backend resources enforce common
+// authority and accounting without exposing backend types above this layer.
+type NamespaceFactory func(*policy.Policy, *quota.Account) (namespace.Namespace, error)
 
 // Config fixes immutable policy, finite accounting, readiness storage, and an
 // optional namespace factory for every state attached by a Manager.
@@ -218,7 +220,7 @@ func (s *State) createNamespace(factory NamespaceFactory) (resource.Handle, erro
 	if err != nil {
 		return 0, err
 	}
-	backend, err := factory()
+	backend, err := factory(s.policy, s.quotas)
 	if err != nil {
 		reservation.Rollback()
 		return 0, err

@@ -30,11 +30,12 @@ const (
 	FailureIO
 	FailureCanceled
 	FailureClosed
+	FailureAccessDenied
 )
 
 // Valid reports whether failure is a defined category.
 func (f Failure) Valid() bool {
-	return f >= FailureInvalidArgument && f <= FailureClosed
+	return f >= FailureInvalidArgument && f <= FailureAccessDenied
 }
 
 // Error wraps a backend cause with a stable semantic category.

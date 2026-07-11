@@ -16,14 +16,25 @@ import (
 	"github.com/soypat/lneto/x/xnet"
 	"github.com/wago-org/net/internal/namespace"
 	"github.com/wago-org/net/internal/packetlink"
+	"github.com/wago-org/net/internal/policy"
+	"github.com/wago-org/net/internal/quota"
 )
 
 var _ namespace.Namespace = (*Namespace)(nil)
 
-// Config fixes all memory and identity used by one lneto namespace. This first
-// backend slice supports a static IPv4 Ethernet stack only; protocol resource
-// constructors remain truthfully unsupported until their nonblocking adapters
-// and cleanup paths are complete.
+// UDPConfig fixes all storage allocated for each nonblocking UDP socket. The
+// lneto registration bound is finite and zero disables UDP.
+type UDPConfig struct {
+	MaxSockets        uint16
+	ReceiveBytes      int
+	TransmitBytes     int
+	ReceiveDatagrams  int
+	TransmitDatagrams int
+	MaxPayloadBytes   int
+}
+
+// Config fixes all memory, authority, accounting, and identity used by one
+// static IPv4 lneto namespace.
 type Config struct {
 	Hostname               string
 	RandSeed               int64
@@ -32,18 +43,32 @@ type Config struct {
 	IPv4Address            netip.Addr
 	MTU                    uint16
 	Link                   packetlink.Config
+	UDP                    UDPConfig
+	Policy                 *policy.Policy
+	Quotas                 *quota.Account
 }
 
 // Namespace owns exactly one lneto stack and one deterministic packet link.
 type Namespace struct {
 	mu sync.Mutex
 
-	stack              *xnet.StackAsync
-	link               *packetlink.Link
-	scratch            []byte
-	requiredFrameBytes int
-	nextIngress        bool
-	closed             bool
+	stack                  *xnet.StackAsync
+	link                   *packetlink.Link
+	scratch                []byte
+	requiredFrameBytes     int
+	nextIngress            bool
+	nextUDPEgress          bool
+	nextIPv4ID             uint16
+	ipv4Address            netip.Addr
+	hardwareAddress        [6]byte
+	gatewayHardwareAddress [6]byte
+	udpConfig              UDPConfig
+	policy                 *policy.Policy
+	quotas                 *quota.Account
+	udpByPort              map[uint16]*udpSocket
+	udpOrder               []*udpSocket
+	udpCursor              int
+	closed                 bool
 }
 
 // ValidateConfig reports whether config can construct a static IPv4 namespace
@@ -80,11 +105,21 @@ func New(config Config) (*Namespace, error) {
 	stack.SetGatewayHardwareAddr(config.GatewayHardwareAddress)
 	requiredFrameBytes := int(config.MTU) + 14
 	return &Namespace{
-		stack:              stack,
-		link:               link,
-		scratch:            make([]byte, config.Link.MaxFrameBytes),
-		requiredFrameBytes: requiredFrameBytes,
-		nextIngress:        true,
+		stack:                  stack,
+		link:                   link,
+		scratch:                make([]byte, config.Link.MaxFrameBytes),
+		requiredFrameBytes:     requiredFrameBytes,
+		nextIngress:            true,
+		nextUDPEgress:          true,
+		nextIPv4ID:             uint16(config.RandSeed),
+		ipv4Address:            config.IPv4Address,
+		hardwareAddress:        config.HardwareAddress,
+		gatewayHardwareAddress: config.GatewayHardwareAddress,
+		udpConfig:              config.UDP,
+		policy:                 config.Policy,
+		quotas:                 config.Quotas,
+		udpByPort:              make(map[uint16]*udpSocket, config.UDP.MaxSockets),
+		udpOrder:               make([]*udpSocket, 0, config.UDP.MaxSockets),
 	}, nil
 }
 
@@ -135,6 +170,13 @@ func (n *Namespace) Close() error {
 		return nil
 	}
 	n.closed = true
+	for len(n.udpOrder) > 0 {
+		n.udpOrder[len(n.udpOrder)-1].closeLocked()
+	}
+	clear(n.udpByPort)
+	n.udpByPort = nil
+	n.udpOrder = nil
+	n.udpCursor = 0
 	n.stack = nil
 	clear(n.scratch)
 	n.scratch = nil
@@ -145,10 +187,7 @@ func (n *Namespace) Close() error {
 }
 
 func (n *Namespace) TryBindUDP(local namespace.Endpoint) (namespace.UDPSocket, namespace.Progress, error) {
-	if err := n.checkEndpoint(local); err != nil {
-		return nil, 0, err
-	}
-	return nil, 0, namespace.Fail(namespace.FailureNotSupported, lneto.ErrUnsupported)
+	return n.tryBindUDP(local)
 }
 
 func (n *Namespace) TryListenTCP(local namespace.Endpoint) (namespace.TCPListener, namespace.Progress, error) {
@@ -244,7 +283,12 @@ func (n *Namespace) tryIngress(remainingBytes uint32) (bool, int, error) {
 		return false, 0, nil
 	}
 	frame := n.scratch[:result.FrameBytes]
-	err = n.stack.IngressEthernet(frame)
+	handled, udpErr := n.ingressUDPLocked(frame)
+	if handled {
+		err = udpErr
+	} else {
+		err = n.stack.IngressEthernet(frame)
+	}
 	clear(frame)
 	if errors.Is(err, lneto.ErrPacketDrop) {
 		err = nil
@@ -260,7 +304,20 @@ func (n *Namespace) tryEgress(remainingBytes uint32) (bool, int, error) {
 		return false, 0, nil
 	}
 	result, err := n.link.TryFill(packetlink.Egress, func(dst []byte) (int, error) {
-		return n.stack.EgressEthernet(dst[:n.requiredFrameBytes])
+		hasUDP := n.hasUDPEgressLocked()
+		if hasUDP && n.nextUDPEgress {
+			n.nextUDPEgress = false
+			return n.egressUDPLocked(dst[:n.requiredFrameBytes])
+		}
+		written, stackErr := n.stack.EgressEthernet(dst[:n.requiredFrameBytes])
+		if written != 0 || stackErr != nil || !hasUDP {
+			if hasUDP {
+				n.nextUDPEgress = true
+			}
+			return written, stackErr
+		}
+		n.nextUDPEgress = true
+		return n.egressUDPLocked(dst[:n.requiredFrameBytes])
 	})
 	if errors.Is(err, packetlink.ErrQueueFull) {
 		return false, 0, nil
@@ -297,7 +354,25 @@ func validConfig(config Config) bool {
 		return false
 	}
 	requiredFrameBytes := int(config.MTU) + 14
-	return config.Link.MaxFrameBytes >= requiredFrameBytes && config.Link.IngressFrames > 0 && config.Link.EgressFrames > 0
+	if config.Link.MaxFrameBytes < requiredFrameBytes || config.Link.IngressFrames <= 0 || config.Link.EgressFrames <= 0 {
+		return false
+	}
+	return validUDPConfig(config.UDP, int(config.MTU), config.Policy, config.Quotas)
+}
+
+func validUDPConfig(config UDPConfig, mtu int, compiled *policy.Policy, account *quota.Account) bool {
+	if config.MaxSockets == 0 {
+		return config == (UDPConfig{})
+	}
+	if compiled == nil || account == nil || config.ReceiveDatagrams <= 0 || config.TransmitDatagrams <= 0 ||
+		config.MaxPayloadBytes < 0 || config.MaxPayloadBytes > mtu-28 || config.MaxPayloadBytes > int(^uint16(0)) {
+		return false
+	}
+	if config.MaxPayloadBytes != 0 && (config.ReceiveDatagrams > int(^uint(0)>>1)/config.MaxPayloadBytes || config.TransmitDatagrams > int(^uint(0)>>1)/config.MaxPayloadBytes) {
+		return false
+	}
+	return config.ReceiveBytes >= config.ReceiveDatagrams*config.MaxPayloadBytes &&
+		config.TransmitBytes >= config.TransmitDatagrams*config.MaxPayloadBytes
 }
 
 func mapError(err error) error {
@@ -306,7 +381,7 @@ func mapError(err error) error {
 	}
 	failure := namespace.FailureIO
 	switch {
-	case errors.Is(err, net.ErrClosed), errors.Is(err, packetlink.ErrClosed):
+	case errors.Is(err, net.ErrClosed), errors.Is(err, packetlink.ErrClosed), errors.Is(err, quota.ErrClosed):
 		failure = namespace.FailureClosed
 	case errors.Is(err, context.Canceled):
 		failure = namespace.FailureCanceled
@@ -314,7 +389,7 @@ func mapError(err error) error {
 		failure = namespace.FailureTimedOut
 	case errors.Is(err, lneto.ErrUnsupported):
 		failure = namespace.FailureNotSupported
-	case errors.Is(err, lneto.ErrExhausted), errors.Is(err, lneto.ErrBufferFull), errors.Is(err, packetlink.ErrQueueFull):
+	case errors.Is(err, lneto.ErrExhausted), errors.Is(err, lneto.ErrBufferFull), errors.Is(err, packetlink.ErrQueueFull), errors.Is(err, quota.ErrLimit):
 		failure = namespace.FailureResourceLimit
 	case errors.Is(err, lneto.ErrAlreadyRegistered):
 		failure = namespace.FailureAddressInUse
@@ -327,7 +402,7 @@ func mapError(err error) error {
 		errors.Is(err, lneto.ErrMismatchLen), errors.Is(err, lneto.ErrTruncatedFrame),
 		errors.Is(err, lneto.ErrZeroSource), errors.Is(err, lneto.ErrZeroDestination),
 		errors.Is(err, lneto.ErrBadCRC), errors.Is(err, packetlink.ErrInvalidQueue),
-		errors.Is(err, packetlink.ErrInvalidFill), errors.Is(err, packetlink.ErrFrameBudget):
+		errors.Is(err, packetlink.ErrInvalidFill), errors.Is(err, packetlink.ErrFrameBudget), errors.Is(err, quota.ErrInvalidUnits):
 		failure = namespace.FailureInvalidArgument
 	case errors.Is(err, lneto.ErrPacketDrop), errors.Is(err, lneto.ErrMismatch):
 		failure = namespace.FailureTemporary

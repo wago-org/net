@@ -61,6 +61,18 @@ type ReadinessConfig = readiness.Config
 // PacketLinkConfig fixes packet ownership storage for one static namespace.
 type PacketLinkConfig = packetlink.Config
 
+// UDPConfig fixes per-socket buffers, queues, payload size, and the maximum
+// number of lneto registrations available to one namespace. Zero MaxSockets
+// disables UDP truthfully.
+type UDPConfig struct {
+	MaxSockets        uint16
+	ReceiveBytes      int
+	TransmitBytes     int
+	ReceiveDatagrams  int
+	TransmitDatagrams int
+	MaxPayloadBytes   int
+}
+
 // StaticIPv4Config configures one isolated lneto-backed IPv4 namespace per
 // Runtime instance without exposing lneto types in the host configuration.
 type StaticIPv4Config struct {
@@ -71,6 +83,7 @@ type StaticIPv4Config struct {
 	IPv4Address            netip.Addr
 	MTU                    uint16
 	Link                   PacketLinkConfig
+	UDP                    UDPConfig
 }
 
 // Config configures immutable authority and finite instance-owned networking
@@ -108,8 +121,11 @@ func Init(config Config) *Extension {
 		if err := lnetobackend.ValidateConfig(backendConfig); err != nil {
 			return &Extension{config: config, configErr: err}
 		}
-		managerConfig.NamespaceFactory = func() (namespace.Namespace, error) {
-			return lnetobackend.New(backendConfig)
+		managerConfig.NamespaceFactory = func(compiled *policy.Policy, account *quota.Account) (namespace.Namespace, error) {
+			instanceConfig := backendConfig
+			instanceConfig.Policy = compiled
+			instanceConfig.Quotas = account
+			return lnetobackend.New(instanceConfig)
 		}
 	}
 	manager, err := instancestate.NewManagerConfigured(managerConfig)
@@ -200,6 +216,14 @@ func lnetoConfig(config StaticIPv4Config) lnetobackend.Config {
 		IPv4Address:            config.IPv4Address,
 		MTU:                    config.MTU,
 		Link:                   config.Link,
+		UDP: lnetobackend.UDPConfig{
+			MaxSockets:        config.UDP.MaxSockets,
+			ReceiveBytes:      config.UDP.ReceiveBytes,
+			TransmitBytes:     config.UDP.TransmitBytes,
+			ReceiveDatagrams:  config.UDP.ReceiveDatagrams,
+			TransmitDatagrams: config.UDP.TransmitDatagrams,
+			MaxPayloadBytes:   config.UDP.MaxPayloadBytes,
+		},
 	}
 }
 

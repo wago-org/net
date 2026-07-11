@@ -11,6 +11,8 @@ import (
 	"github.com/soypat/lneto/ethernet"
 	"github.com/wago-org/net/internal/namespace"
 	"github.com/wago-org/net/internal/packetlink"
+	"github.com/wago-org/net/internal/policy"
+	"github.com/wago-org/net/internal/quota"
 )
 
 func TestNamespacesExchangePacketsDeterministically(t *testing.T) {
@@ -168,6 +170,129 @@ func TestProtocolConstructorsRemainTruthfullyUnsupported(t *testing.T) {
 	}
 }
 
+func TestUDPNonblockingExchangeEmptyTruncationAndQueueBounds(t *testing.T) {
+	aConfig := udpTestConfig(t, 21)
+	bConfig := udpTestConfig(t, 22)
+	aConfig.GatewayHardwareAddress = bConfig.HardwareAddress
+	bConfig.GatewayHardwareAddress = aConfig.HardwareAddress
+	a := newTestNamespace(t, aConfig)
+	b := newTestNamespace(t, bConfig)
+	t.Cleanup(func() { _ = a.Close() })
+	t.Cleanup(func() { _ = b.Close() })
+
+	aLocal := namespace.Endpoint{Address: aConfig.IPv4Address, Port: 4021}
+	bLocal := namespace.Endpoint{Address: bConfig.IPv4Address, Port: 4022}
+	aSocket := bindUDP(t, a, aLocal)
+	bSocket := bindUDP(t, b, bLocal)
+	if got := aSocket.Readiness(); got != namespace.ReadyWritable {
+		t.Fatalf("initial UDP readiness = %v", got)
+	}
+
+	if progress, err := aSocket.TrySend(nil, bLocal); err != nil || progress != namespace.ProgressDone {
+		t.Fatalf("send empty = %v, %v", progress, err)
+	}
+	if progress, err := aSocket.TrySend([]byte("abcdef"), bLocal); err != nil || progress != namespace.ProgressDone {
+		t.Fatalf("send payload = %v, %v", progress, err)
+	}
+	if progress, err := aSocket.TrySend([]byte("full"), bLocal); err != nil || progress != namespace.ProgressWouldBlock {
+		t.Fatalf("send queue full = %v, %v", progress, err)
+	}
+	if got := aSocket.Readiness(); got != 0 {
+		t.Fatalf("full transmit readiness = %v", got)
+	}
+
+	serviceTransfer(t, a, b)
+	serviceTransfer(t, a, b)
+	if got := bSocket.Readiness(); got != namespace.ReadyReadable|namespace.ReadyWritable {
+		t.Fatalf("received readiness = %v", got)
+	}
+	empty, err := bSocket.TryReceive(nil)
+	if err != nil || !empty.Ready || empty.DatagramBytes != 0 || empty.Copied != 0 || empty.Truncated || empty.Source != aLocal {
+		t.Fatalf("empty receive = %+v, %v", empty, err)
+	}
+	buffer := make([]byte, 3)
+	truncated, err := bSocket.TryReceive(buffer)
+	if err != nil || !truncated.Ready || truncated.DatagramBytes != 6 || truncated.Copied != 3 || !truncated.Truncated || string(buffer) != "abc" || truncated.Source != aLocal {
+		t.Fatalf("truncated receive = %+v %q, %v", truncated, buffer, err)
+	}
+	blocked, err := bSocket.TryReceive(buffer)
+	if err != nil || blocked.Ready {
+		t.Fatalf("empty queue receive = %+v, %v", blocked, err)
+	}
+}
+
+func TestUDPPolicyQuotaCloseAndRegistrationReuse(t *testing.T) {
+	config := udpTestConfig(t, 23)
+	config.UDP.MaxSockets = 2
+	config.UDP.ReceiveBytes = 16
+	config.UDP.TransmitBytes = 16
+	config.UDP.ReceiveDatagrams = 1
+	config.UDP.TransmitDatagrams = 1
+	config.UDP.MaxPayloadBytes = 16
+	config.Quotas = quota.NewAccount(quota.Limits{Resources: 1, UDPResources: 1, QueuedBytes: 32})
+	ns := newTestNamespace(t, config)
+	local := namespace.Endpoint{Address: config.IPv4Address, Port: 4023}
+	socket := bindUDP(t, ns, local)
+	usage, closed := config.Quotas.Snapshot()
+	if closed || usage.Resources != 1 || usage.UDPResources != 1 || usage.QueuedBytes != 32 {
+		t.Fatalf("exact UDP quota = %+v, closed=%v", usage, closed)
+	}
+	other := namespace.Endpoint{Address: config.IPv4Address, Port: 4024}
+	if _, _, err := ns.TryBindUDP(other); requireFailure(t, err) != namespace.FailureResourceLimit {
+		t.Fatalf("second bind quota error = %v", err)
+	}
+	denied := namespace.Endpoint{Address: netip.MustParseAddr("198.51.100.1"), Port: 53}
+	if _, err := socket.TrySend(nil, denied); requireFailure(t, err) != namespace.FailureAccessDenied {
+		t.Fatalf("denied send error = %v", err)
+	}
+	if progress, err := socket.TrySend(make([]byte, config.UDP.MaxPayloadBytes+1), other); progress != 0 || requireFailure(t, err) != namespace.FailureMessageTooLarge {
+		t.Fatalf("oversized send = %v, %v", progress, err)
+	}
+	if err := socket.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if got := socket.Readiness(); got != namespace.ReadyClosed {
+		t.Fatalf("closed socket readiness = %v", got)
+	}
+	if _, err := socket.TrySend(nil, other); requireFailure(t, err) != namespace.FailureClosed {
+		t.Fatalf("closed send error = %v", err)
+	}
+	if usage, _ := config.Quotas.Snapshot(); usage != (quota.Usage{}) {
+		t.Fatalf("quota after close = %+v", usage)
+	}
+	rebound := bindUDP(t, ns, local)
+	if rebound == socket {
+		t.Fatal("rebind reused closed socket object")
+	}
+	if err := rebound.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := ns.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if usage, _ := config.Quotas.Snapshot(); usage != (quota.Usage{}) {
+		t.Fatalf("quota after rebound close = %+v", usage)
+	}
+}
+
+func TestUDPBindDenialAndUnsupportedFamilies(t *testing.T) {
+	config := udpTestConfig(t, 24)
+	ns := newTestNamespace(t, config)
+	t.Cleanup(func() { _ = ns.Close() })
+	denied := namespace.Endpoint{Address: netip.MustParseAddr("198.51.100.24"), Port: 4024}
+	if _, _, err := ns.TryBindUDP(denied); requireFailure(t, err) != namespace.FailureAddressUnavailable {
+		t.Fatalf("unavailable bind error = %v", err)
+	}
+	v6 := namespace.Endpoint{Address: netip.MustParseAddr("2001:db8::1"), Port: 4024}
+	if _, _, err := ns.TryBindUDP(v6); requireFailure(t, err) != namespace.FailureInvalidArgument {
+		t.Fatalf("IPv6 bind error = %v", err)
+	}
+	wildcard := namespace.Endpoint{Address: netip.IPv4Unspecified(), Port: 4024}
+	if _, _, err := ns.TryBindUDP(wildcard); requireFailure(t, err) != namespace.FailureAccessDenied {
+		t.Fatalf("wildcard policy error = %v", err)
+	}
+}
+
 func TestReadinessAndCloseAreLevelTriggeredAndDeterministic(t *testing.T) {
 	ns := newTestNamespace(t, testConfig(7))
 	link := ns.Link()
@@ -298,6 +423,56 @@ func testConfig(id byte) Config {
 			IngressFrames: 4,
 			EgressFrames:  4,
 		},
+	}
+}
+
+func udpTestConfig(t testing.TB, id byte) Config {
+	t.Helper()
+	config := testConfig(id)
+	compiled, err := policy.Compile(policy.Config{Rules: []policy.Rule{{
+		Action:     policy.ActionAllow,
+		Transports: []policy.Transport{policy.TransportUDP},
+		Directions: []policy.Direction{policy.DirectionInbound, policy.DirectionOutbound},
+		Prefixes:   []netip.Prefix{netip.MustParsePrefix("192.0.2.0/24")},
+	}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	config.Policy = compiled
+	config.Quotas = quota.NewAccount(quota.Limits{Resources: 4, UDPResources: 4, QueuedBytes: 512})
+	config.UDP = UDPConfig{
+		MaxSockets:        4,
+		ReceiveBytes:      64,
+		TransmitBytes:     64,
+		ReceiveDatagrams:  2,
+		TransmitDatagrams: 2,
+		MaxPayloadBytes:   32,
+	}
+	return config
+}
+
+func bindUDP(t testing.TB, ns *Namespace, local namespace.Endpoint) namespace.UDPSocket {
+	t.Helper()
+	socket, progress, err := ns.TryBindUDP(local)
+	if err != nil || progress != namespace.ProgressDone || socket == nil {
+		t.Fatalf("bind UDP %v = %T, %v, %v", local, socket, progress, err)
+	}
+	return socket
+}
+
+func serviceTransfer(t testing.TB, from, to *Namespace) {
+	t.Helper()
+	from.nextIngress = false
+	budget := namespace.ServiceBudget{Packets: 1, Bytes: uint32(from.requiredFrameBytes), Operations: 1}
+	report, progress, err := from.TryService(budget)
+	if err != nil || progress != namespace.ProgressDone || report.Packets != 1 {
+		t.Fatalf("UDP egress service = %+v, %v, %v", report, progress, err)
+	}
+	transferOne(t, from.Link(), to.Link())
+	to.nextIngress = true
+	report, progress, err = to.TryService(budget)
+	if err != nil || progress != namespace.ProgressDone || report.Packets != 1 {
+		t.Fatalf("UDP ingress service = %+v, %v, %v", report, progress, err)
 	}
 }
 
