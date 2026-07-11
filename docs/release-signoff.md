@@ -52,9 +52,12 @@ The gate performs, in order:
 11. the pinned WASI suite, accepting only the documented native preview-1
     SIGSEGV signature if it remains; and
 12. final clean-tree checks for all four repositories; and
-13. deterministic machine-readable provenance plus SHA-256 verification of every
+13. deterministic non-thin Git object packs for the exact plugin subject and
+    pinned Wago, lneto, and WASI source trees, including both ordered Wago merge
+    parents;
+14. deterministic machine-readable provenance plus SHA-256 verification of every
     retained evidence artifact and the manifest itself; and
-14. standalone semantic verification and deterministic export of a compressed
+15. standalone semantic verification and deterministic export of a compressed
     downstream review bundle.
 
 `scripts/arm64-execution-signoff.sh` always cross-compiles a `CGO_ENABLED=0`
@@ -94,7 +97,8 @@ A passing gate writes `provenance.json` using schema
 - the cross-build target separately from the arm64 execution status, runner, and
   compiled smoke-binary checksum;
 - sorted paths, sizes, kinds, and SHA-256 hashes for all retained logs, generated
-  inspection inputs/binaries, inventories, and status files; and
+  inspection inputs/binaries, source-object packs/inventories, and status files;
+  and
 - narrowly accepted exceptions and truthful skipped-execution limitations.
 
 `evidence.sha256` covers every retained artifact that existed before provenance
@@ -107,13 +111,18 @@ hosted-CI assertion; identical inputs and evidence produce identical JSON.
 
 A passing gate exports `.wago/release-signoff.review.tar.gz` and its adjacent
 `.sha256` file. The archive contains only the manifest-listed evidence plus
-`evidence.sha256`, `provenance.json`, and `provenance.sha256`. Tar paths are
-sorted; uid/gid, names, modes, and timestamps are normalized; gzip metadata is
-fixed. Byte-identical evidence therefore produces a byte-identical archive.
+`evidence.sha256`, `provenance.json`, and `provenance.sha256`. This includes four
+non-thin packs under `source-objects/` and canonical object inventories. The net
+pack contains the exact release subject's commit and complete source tree; Wago
+contains the merge commit, both ordered parent commits, and all three complete
+source trees; lneto and WASI contain their exact pinned commits and trees. No
+moving remote ref is needed to inspect those snapshots. Tar paths are sorted;
+uid/gid, names, modes, and timestamps are normalized; gzip metadata is fixed.
+Byte-identical evidence therefore produces a byte-identical archive.
 
-A downstream reviewer can validate an extracted signoff directory or the archive
-without the Wago, lneto, WASI, or plugin source checkouts and without rerunning
-tests:
+A downstream reviewer with Git installed can validate an extracted signoff
+directory or the archive without the Wago, lneto, WASI, or plugin source
+checkouts and without rerunning tests:
 
 ```sh
 GOWORK=off go run ./internal/cmd/release-review \
@@ -125,11 +134,24 @@ To require a separately obtained expected plugin commit, add
 unordered evidence; unknown or noncanonical manifest fields; unsafe archive
 paths; wrong exact Wago/lneto/WASI pins or Wago parent order; inconsistent
 checks, exceptions, limitations, targets, revisions, toolchains, or inspection
-facts; and any extra or missing artifact. It requires the complete
-four-capability, 24-import surface and distinguishes cross-build from executed or
-skipped arm64. The verifier checks integrity and release-policy consistency, not
-publisher authenticity: obtain the expected subject commit and archive checksum
-through a trusted release channel. It does not claim hosted CI publication.
+facts; and any extra or missing artifact. Each Git pack is indexed in an isolated
+bare repository, checked for pack integrity, compared exactly with its canonical
+object inventory, and required to contain no more and no less than the selected
+commit objects plus their complete tree/blob closures. The manifest tree IDs and
+ordered Wago parents are then re-derived from the packed objects. Verification
+also requires the complete four-capability, 24-import surface and distinguishes
+cross-build from executed or skipped arm64. Pack and bundle checksums establish
+integrity and source availability, not publisher authenticity: obtain the
+expected subject and archive checksum through a trusted release channel. It does
+not claim hosted CI publication or that the local Wago merge has an upstream ref.
+
+To export the source packs independently before provenance generation:
+
+```sh
+SOURCE_OBJECT_SUBJECT=$(git rev-parse HEAD) \
+SOURCE_OBJECT_DIR=.wago/release-signoff/source-objects \
+  scripts/release-source-objects.sh
+```
 
 To export or reproduce a bundle from an existing passing evidence directory:
 

@@ -186,12 +186,16 @@ pins the merged Wago branch and the lneto/WASI audits, runs standard Go, race,
 bounded fuzz, benchmarks, TinyGo, a distinct package cross-build, optional
 bounded native/QEMU arm64 execution, custom CLI inspection, source-boundary and
 plugin-plan compatibility and reviewed-upstream WASI audits, companion
-repository tests, and final clean checks. It then emits a timestamp-free
-deterministic provenance manifest with exact revisions/trees/toolchains, named
-check outcomes, inspection facts, accepted exceptions, truthful
-skipped-execution limitations, and sorted SHA-256 evidence. A standalone
-semantic verifier rejects policy or evidence drift without rerunning the gate,
-and a normalized deterministic tar.gz exports only the verified review set.
+repository tests, and final clean checks. It then exports deterministic non-thin
+Git packs containing the exact plugin subject and pinned Wago/lneto/WASI commit
+and source-tree objects, including both ordered Wago parents, before emitting a
+timestamp-free deterministic provenance manifest with exact revisions/trees/
+toolchains, named check outcomes, inspection facts, accepted exceptions,
+truthful skipped-execution limitations, and sorted SHA-256 evidence. A standalone
+semantic verifier rejects policy, evidence, pack inventory, tree, or parent-order
+drift without rerunning the gate, and a normalized deterministic tar.gz exports
+only the verified review set. These packs remove moving-ref dependence for source
+review but do not establish publisher authenticity or claim upstream publication.
 Exact inputs, CI tiers, artifacts, bundle verification, and the narrowly accepted
 known WASI preview-1 native SIGSEGV are documented in
 `docs/release-signoff.md`. Hosted CI

@@ -391,6 +391,8 @@ func artifactKind(path string) string {
 		return "exception"
 	case path == "checks.tsv":
 		return "checks"
+	case strings.HasPrefix(path, "source-objects/"):
+		return "source-object"
 	case path == "toolchains.txt" || path == "revisions.txt" || path == "packages.txt":
 		return "inventory"
 	default:

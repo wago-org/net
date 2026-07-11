@@ -206,6 +206,12 @@ else
   record_check final-clean-trees skipped 'ALLOW_DIRTY=1'
 fi
 
+log "immutable source-object review packs"
+WAGO_DIR="$wago_dir" LNETO_DIR="$lneto_dir" WASI_DIR="$wasi_dir" \
+  SOURCE_OBJECT_DIR="$out/source-objects" SOURCE_OBJECT_SUBJECT="$(repo_head "$root")" \
+  "$root/scripts/release-source-objects.sh"
+record_check source-object-packs pass 'exact subject and pinned source trees, including ordered Wago merge parents'
+
 log "deterministic release provenance"
 GOWORK=off go run ./internal/cmd/release-provenance \
   -out "$out" -plugin "$root" -wago "$wago_dir" -lneto "$lneto_dir" -wasi "$wasi_dir" \

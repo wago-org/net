@@ -33,6 +33,10 @@ const (
 
 type VerifyOptions struct {
 	ExpectedSubject string
+
+	// expectedInputs is test-only policy injection. External callers always use
+	// the immutable release pins below because this field is unexported.
+	expectedInputs []Repository
 }
 
 type Verification struct {
@@ -234,6 +238,9 @@ func verifyDirectory(root string, opts VerifyOptions) (*Verification, error) {
 	if err := verifyRevisions(filepath.Join(root, "revisions.txt"), &manifest); err != nil {
 		return nil, err
 	}
+	if err := verifySourceObjects(root, &manifest); err != nil {
+		return nil, err
+	}
 	return &Verification{Manifest: &manifest, ProvenanceSHA256: provenanceHex}, nil
 }
 
@@ -252,22 +259,14 @@ func validateManifest(manifest *Manifest, opts VerifyOptions) error {
 			return fmt.Errorf("release provenance: subject revision %s, want %s", manifest.Subject.Revision, opts.ExpectedSubject)
 		}
 	}
-	wantInputs := []struct {
-		name     string
-		revision string
-		parents  []string
-	}{
-		{"wago", ExpectedWagoRevision, []string{ExpectedWagoParent1, ExpectedWagoParent2}},
-		{"lneto", ExpectedLnetoRevision, nil},
-		{"wasi", ExpectedWASIRevision, nil},
-	}
+	wantInputs := expectedInputRepositories(opts)
 	if len(manifest.Inputs) != len(wantInputs) {
 		return fmt.Errorf("release provenance: input count %d, want %d", len(manifest.Inputs), len(wantInputs))
 	}
 	for i, want := range wantInputs {
 		got := manifest.Inputs[i]
-		if got.Name != want.name || got.Revision != want.revision || !validObjectID(got.Tree) || !reflect.DeepEqual(got.Parents, want.parents) {
-			return fmt.Errorf("release provenance: invalid %s input identity or ordered parents", want.name)
+		if got.Name != want.Name || got.Revision != want.Revision || !validObjectID(got.Tree) || !reflect.DeepEqual(got.Parents, want.Parents) {
+			return fmt.Errorf("release provenance: invalid %s input identity or ordered parents", want.Name)
 		}
 	}
 	if manifest.Toolchains.Go == "" || manifest.Toolchains.TinyGo == "" {
@@ -326,6 +325,17 @@ func validateManifest(manifest *Manifest, opts VerifyOptions) error {
 	return nil
 }
 
+func expectedInputRepositories(opts VerifyOptions) []Repository {
+	if opts.expectedInputs != nil {
+		return opts.expectedInputs
+	}
+	return []Repository{
+		{Name: "wago", Revision: ExpectedWagoRevision, Parents: []string{ExpectedWagoParent1, ExpectedWagoParent2}},
+		{Name: "lneto", Revision: ExpectedLnetoRevision},
+		{Name: "wasi", Revision: ExpectedWASIRevision},
+	}
+}
+
 func validateChecks(checks []Check, arm64Status string) error {
 	requiredPass := []string{
 		"pinned-revisions", "initial-clean-trees", "wago-plugin-plan-compat",
@@ -333,6 +343,7 @@ func validateChecks(checks []Check, arm64Status string) error {
 		"fuzz-dns-wire", "fuzz-dns-layout", "fuzz-dns-guest", "fuzz-shared-layout",
 		"benchmark-guest-poll", "benchmark-udp-queue", "tinygo-test", "cross-build",
 		"source-boundaries", "custom-cli-inspection", "wago-lifecycle-worker-tests", "lneto-test", "final-clean-trees",
+		"source-object-packs",
 	}
 	seen := map[string]Check{}
 	for _, check := range checks {
