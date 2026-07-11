@@ -5,6 +5,7 @@ import (
 	"github.com/wago-org/net/internal/abi"
 	"github.com/wago-org/net/internal/guest"
 	instance "github.com/wago-org/net/internal/instance/core"
+	udpinstance "github.com/wago-org/net/internal/instance/udp"
 	"github.com/wago-org/net/internal/plugin"
 	"github.com/wago-org/net/internal/resource"
 	wago "github.com/wago-org/wago"
@@ -85,7 +86,7 @@ func bind(host plugin.Host, module wago.HostModule, params, results []uint64) {
 		guest.SetStatus(results, status)
 		return
 	}
-	handle, progress, err := state.BindUDP(resource.Handle(params[0]), local)
+	handle, progress, err := udpinstance.Bind(state, resource.Handle(params[0]), local)
 	if err != nil {
 		guest.SetStatus(results, guest.FromError(err))
 		return
@@ -124,7 +125,7 @@ func send(host plugin.Host, module wago.HostModule, params, results []uint64) {
 		guest.SetStatus(results, status)
 		return
 	}
-	progress, err := state.SendUDP(resource.Handle(params[0]), payload, remote)
+	progress, err := udpinstance.Send(state, resource.Handle(params[0]), payload, remote)
 	if err != nil {
 		guest.SetStatus(results, guest.FromError(err))
 		return
@@ -153,7 +154,7 @@ func receive(host plugin.Host, module wago.HostModule, params, results []uint64)
 		guest.SetStatus(results, status)
 		return
 	}
-	result, err := state.ReceiveUDP(resource.Handle(params[0]), payload)
+	result, err := udpinstance.Receive(state, resource.Handle(params[0]), payload)
 	if err != nil {
 		guest.SetStatus(results, guest.FromError(err))
 		return

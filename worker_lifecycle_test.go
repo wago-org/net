@@ -14,7 +14,9 @@ import (
 	"time"
 
 	instancestate "github.com/wago-org/net/internal/instance/core"
+	dnsinstance "github.com/wago-org/net/internal/instance/dns"
 	tcpinstance "github.com/wago-org/net/internal/instance/tcp"
+	udpinstance "github.com/wago-org/net/internal/instance/udp"
 	"github.com/wago-org/net/internal/namespace"
 	"github.com/wago-org/net/internal/quota"
 	"github.com/wago-org/net/internal/resource"
@@ -80,7 +82,7 @@ func (e *workerNetworkExtension) Register(reg *wago.Registry) error {
 		if !ok {
 			return errors.New("worker networking state was not attached first")
 		}
-		udp, progress, err := state.BindUDP(state.NamespaceHandle(), namespace.Endpoint{Address: netip.MustParseAddr("192.0.2.81"), Port: 4381})
+		udp, progress, err := udpinstance.Bind(state, state.NamespaceHandle(), namespace.Endpoint{Address: netip.MustParseAddr("192.0.2.81"), Port: 4381})
 		if err != nil || progress != namespace.ProgressDone {
 			return fmt.Errorf("bind worker UDP: handle=%v progress=%v: %w", udp, progress, err)
 		}
@@ -88,7 +90,7 @@ func (e *workerNetworkExtension) Register(reg *wago.Registry) error {
 		if err != nil || progress != namespace.ProgressDone {
 			return fmt.Errorf("listen worker TCP: handle=%v progress=%v: %w", tcp, progress, err)
 		}
-		dns, progress, err := state.ResolveDNS(state.NamespaceHandle(), namespace.DNSRequest{Name: "example.com", Types: namespace.DNSRecordsA})
+		dns, progress, err := dnsinstance.Resolve(state, state.NamespaceHandle(), namespace.DNSRequest{Name: "example.com", Types: namespace.DNSRecordsA})
 		if err != nil || progress != namespace.ProgressInProgress {
 			return fmt.Errorf("resolve worker DNS: handle=%v progress=%v: %w", dns, progress, err)
 		}

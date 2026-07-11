@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	tcpinstance "github.com/wago-org/net/internal/instance/tcp"
+	udpinstance "github.com/wago-org/net/internal/instance/udp"
 	"github.com/wago-org/net/internal/namespace"
 	"github.com/wago-org/net/internal/quota"
 	"github.com/wago-org/net/internal/readiness"
@@ -204,11 +205,11 @@ func TestConfiguredNamespaceUDPHandlesReadinessAndCleanup(t *testing.T) {
 	first, _ := extension.instanceManager().ForInstance(firstInstance)
 	second, _ := extension.instanceManager().ForInstance(secondInstance)
 	local := namespace.Endpoint{Address: netip.MustParseAddr("192.0.2.1"), Port: 4100}
-	firstUDP, progress, err := first.BindUDP(first.NamespaceHandle(), local)
+	firstUDP, progress, err := udpinstance.Bind(first, first.NamespaceHandle(), local)
 	if err != nil || progress != namespace.ProgressDone || firstUDP == 0 {
 		t.Fatalf("first BindUDP = %v, %v, %v", firstUDP, progress, err)
 	}
-	secondUDP, progress, err := second.BindUDP(second.NamespaceHandle(), local)
+	secondUDP, progress, err := udpinstance.Bind(second, second.NamespaceHandle(), local)
 	if err != nil || progress != namespace.ProgressDone || secondUDP == 0 {
 		t.Fatalf("second BindUDP = %v, %v, %v", secondUDP, progress, err)
 	}
@@ -248,7 +249,7 @@ func TestConfiguredNamespaceUDPHandlesReadinessAndCleanup(t *testing.T) {
 	if usage, closed := first.Quotas().Snapshot(); closed || usage.Resources != 1 || usage.UDPResources != 0 || usage.QueuedBytes != 0 {
 		t.Fatalf("UDP cleanup quota = %+v, closed=%v", usage, closed)
 	}
-	rebound, progress, err := first.BindUDP(first.NamespaceHandle(), local)
+	rebound, progress, err := udpinstance.Bind(first, first.NamespaceHandle(), local)
 	if err != nil || progress != namespace.ProgressDone || rebound == 0 || rebound == firstUDP {
 		t.Fatalf("UDP rebound = %v, %v, %v", rebound, progress, err)
 	}
@@ -431,7 +432,7 @@ func TestNetworkingRequirementReinstantiatesSnapshotClass(t *testing.T) {
 		t.Fatal("old instance state not attached")
 	}
 	localUDP := namespace.Endpoint{Address: netip.MustParseAddr("192.0.2.71"), Port: 4100}
-	udpHandle, progress, err := oldState.BindUDP(oldState.NamespaceHandle(), localUDP)
+	udpHandle, progress, err := udpinstance.Bind(oldState, oldState.NamespaceHandle(), localUDP)
 	if err != nil || progress != namespace.ProgressDone {
 		t.Fatalf("BindUDP = %v, %v, %v", udpHandle, progress, err)
 	}
@@ -474,7 +475,7 @@ func TestNetworkingRequirementReinstantiatesSnapshotClass(t *testing.T) {
 	if usage, closed := freshState.Quotas().Snapshot(); closed || usage.Resources != 1 || usage.UDPResources != 0 || usage.TCPResources != 0 {
 		t.Fatalf("fresh quota before resources = %+v, closed=%v", usage, closed)
 	}
-	if rebound, progress, err := freshState.BindUDP(freshState.NamespaceHandle(), localUDP); err != nil || progress != namespace.ProgressDone || rebound == 0 {
+	if rebound, progress, err := udpinstance.Bind(freshState, freshState.NamespaceHandle(), localUDP); err != nil || progress != namespace.ProgressDone || rebound == 0 {
 		t.Fatalf("fresh BindUDP = %v, %v, %v", rebound, progress, err)
 	}
 	if relistened, progress, err := tcpinstance.Listen(freshState, freshState.NamespaceHandle(), localTCP); err != nil || progress != namespace.ProgressDone || relistened == 0 {

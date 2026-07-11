@@ -140,6 +140,7 @@ func Endpoints(state *core.State, handle resource.Handle) (local, remote namespa
 		}
 		local, remote = stream.LocalEndpoint(), stream.RemoteEndpoint()
 		if !local.Valid() || !remote.Valid() {
+			local, remote = namespace.Endpoint{}, namespace.Endpoint{}
 			return namespace.Fail(namespace.FailureIO, core.ErrInvalidBackendResult)
 		}
 		return nil
@@ -169,6 +170,7 @@ func Read(state *core.State, handle resource.Handle, dst []byte) (result namespa
 		}
 		result, err = stream.TryRead(dst)
 		if err == nil && !result.Valid(len(dst)) {
+			result = namespace.IOResult{}
 			return namespace.Fail(namespace.FailureIO, core.ErrInvalidBackendResult)
 		}
 		return err
@@ -185,6 +187,7 @@ func Write(state *core.State, handle resource.Handle, src []byte) (result namesp
 		}
 		result, err = stream.TryWrite(src)
 		if err == nil && !result.Valid(len(src)) {
+			result = namespace.IOResult{}
 			return namespace.Fail(namespace.FailureIO, core.ErrInvalidBackendResult)
 		}
 		return err

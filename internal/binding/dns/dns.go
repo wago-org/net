@@ -5,6 +5,7 @@ import (
 	"github.com/wago-org/net/internal/abi"
 	"github.com/wago-org/net/internal/guest"
 	instance "github.com/wago-org/net/internal/instance/core"
+	dnsinstance "github.com/wago-org/net/internal/instance/dns"
 	"github.com/wago-org/net/internal/plugin"
 	"github.com/wago-org/net/internal/resource"
 	wago "github.com/wago-org/wago"
@@ -101,7 +102,7 @@ func Resolve(host plugin.Host, module wago.HostModule, params, results []uint64)
 		guest.SetStatus(results, status)
 		return
 	}
-	handle, progress, err := state.ResolveDNS(resource.Handle(params[0]), request)
+	handle, progress, err := dnsinstance.Resolve(state, resource.Handle(params[0]), request)
 	if err != nil {
 		guest.SetStatus(results, guest.FromError(err))
 		return
@@ -139,7 +140,7 @@ func Next(host plugin.Host, module wago.HostModule, params, results []uint64) {
 		guest.SetStatus(results, status)
 		return
 	}
-	record, next, err := state.NextDNS(resource.Handle(params[0]))
+	record, next, err := dnsinstance.Next(state, resource.Handle(params[0]))
 	if err != nil {
 		guest.SetStatus(results, guest.FromError(err))
 		return
@@ -167,7 +168,7 @@ func Cancel(host plugin.Host, module wago.HostModule, params, results []uint64) 
 		guest.SetStatus(results, status)
 		return
 	}
-	guest.SetStatus(results, guest.FromError(state.CancelDNS(resource.Handle(params[0]))))
+	guest.SetStatus(results, guest.FromError(dnsinstance.Cancel(state, resource.Handle(params[0]))))
 }
 
 // Poll implements the shared checked bounded readiness import.
