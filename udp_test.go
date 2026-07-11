@@ -207,7 +207,7 @@ func TestGuestUDPBindValidatesOutputBeforeAllocation(t *testing.T) {
 	}
 }
 
-func newGuestUDPInstance(t *testing.T, localLast, gatewayLast byte) (*Extension, *wago.Runtime, *wago.Instance, udpHostModule) {
+func newGuestUDPInstance(t testing.TB, localLast, gatewayLast byte) (*Extension, *wago.Runtime, *wago.Instance, udpHostModule) {
 	t.Helper()
 	limits := QuotaLimits{Resources: 2, UDPResources: 1, QueuedBytes: 128, ServiceUnits: 32}
 	ready := ReadinessConfig{MaxRegistrations: 2}
@@ -227,14 +227,18 @@ func newGuestUDPInstance(t *testing.T, localLast, gatewayLast byte) (*Extension,
 		},
 	})
 	runtime := runtimeForExtension(t, extension)
-	instance, err := runtime.Instantiate(context.Background(), emptyModule(t, runtime))
+	module, err := runtime.Compile([]byte{0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00})
+	if err != nil {
+		t.Fatalf("Compile empty UDP guest: %v", err)
+	}
+	instance, err := runtime.Instantiate(context.Background(), module)
 	if err != nil {
 		t.Fatalf("Instantiate UDP guest: %v", err)
 	}
 	return extension, runtime, instance, udpHostModule{instance: instance, memory: make([]byte, 512)}
 }
 
-func runtimeForExtension(t *testing.T, extension *Extension) *wago.Runtime {
+func runtimeForExtension(t testing.TB, extension *Extension) *wago.Runtime {
 	t.Helper()
 	runtime := wago.NewRuntime()
 	if err := runtime.Use(extension); err != nil {
@@ -243,7 +247,7 @@ func runtimeForExtension(t *testing.T, extension *Extension) *wago.Runtime {
 	return runtime
 }
 
-func guestNamespace(t *testing.T, runtime *wago.Runtime, host udpHostModule) resource.Handle {
+func guestNamespace(t testing.TB, runtime *wago.Runtime, host udpHostModule) resource.Handle {
 	t.Helper()
 	fn, ok := runtime.HostImports()[UDPModule+".namespace_default"].(wago.HostFunc)
 	if !ok {
@@ -257,7 +261,7 @@ func guestNamespace(t *testing.T, runtime *wago.Runtime, host udpHostModule) res
 	return resource.Handle(binary.LittleEndian.Uint64(host.memory[:8]))
 }
 
-func guestNamespaceFromExtension(t *testing.T, extension *Extension, host udpHostModule) resource.Handle {
+func guestNamespaceFromExtension(t testing.TB, extension *Extension, host udpHostModule) resource.Handle {
 	t.Helper()
 	if got := callUDP(t, extension, "namespace_default", host, 0); got != StatusOK {
 		t.Fatalf("namespace_default = %v", got)
@@ -265,7 +269,7 @@ func guestNamespaceFromExtension(t *testing.T, extension *Extension, host udpHos
 	return resource.Handle(binary.LittleEndian.Uint64(host.memory[:8]))
 }
 
-func guestBind(t *testing.T, extension *Extension, host udpHostModule, namespaceHandle resource.Handle, local namespace.Endpoint, out uint32) resource.Handle {
+func guestBind(t testing.TB, extension *Extension, host udpHostModule, namespaceHandle resource.Handle, local namespace.Endpoint, out uint32) resource.Handle {
 	t.Helper()
 	encodeGuestEndpoint(t, host.memory, 0, local)
 	if got := callUDP(t, extension, "bind", host, uint64(namespaceHandle), 0, uint64(out)); got != StatusOK {
@@ -274,7 +278,7 @@ func guestBind(t *testing.T, extension *Extension, host udpHostModule, namespace
 	return resource.Handle(binary.LittleEndian.Uint64(host.memory[out : out+8]))
 }
 
-func callUDP(t *testing.T, extension *Extension, name string, host udpHostModule, params ...uint64) Status {
+func callUDP(t testing.TB, extension *Extension, name string, host udpHostModule, params ...uint64) Status {
 	t.Helper()
 	var binding wago.HostFunc
 	for _, candidate := range extension.udpBindings() {
@@ -291,7 +295,7 @@ func callUDP(t *testing.T, extension *Extension, name string, host udpHostModule
 	return Status(wago.AsI32(results[0]))
 }
 
-func encodeGuestEndpoint(t *testing.T, memory []byte, ptr uint32, endpoint namespace.Endpoint) {
+func encodeGuestEndpoint(t testing.TB, memory []byte, ptr uint32, endpoint namespace.Endpoint) {
 	t.Helper()
 	if !abi.EncodeEndpointV1(memory, ptr, endpoint) {
 		t.Fatalf("encode endpoint %+v", endpoint)
@@ -302,7 +306,7 @@ func endpointFor(last byte, port uint16) namespace.Endpoint {
 	return namespace.Endpoint{Address: netip.AddrFrom4([4]byte{192, 0, 2, last}), Port: port}
 }
 
-func transferGuestUDP(t *testing.T, fromState, toState *instance.State) {
+func transferGuestUDP(t testing.TB, fromState, toState *instance.State) {
 	t.Helper()
 	from := concreteNamespace(t, fromState)
 	to := concreteNamespace(t, toState)
@@ -330,7 +334,7 @@ type linkedNamespace interface {
 	Link() *packetlink.Link
 }
 
-func concreteNamespace(t *testing.T, state *instance.State) linkedNamespace {
+func concreteNamespace(t testing.TB, state *instance.State) linkedNamespace {
 	t.Helper()
 	value, err := state.LookupNamespace(state.NamespaceHandle())
 	if err != nil {

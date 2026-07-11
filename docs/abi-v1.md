@@ -120,7 +120,11 @@ fields: `events`, `scanned`, `service_attempts`, `service_completed`,
 capacity and result output before service begins. It writes the first `events`
 entries and the result on both `OK` and `AGAIN`; unused event slots are unchanged.
 No call sleeps, scans beyond the supplied bound, emits beyond the event bound, or
-services beyond the supplied attempt and per-attempt budgets.
+services beyond the supplied attempt and per-attempt budgets. Before polling, the
+host transactionally reserves `scans + events + service_attempts` service-work
+units from the exact instance quota and releases them when the call returns. A
+request above the finite limit returns `RESOURCE_LIMIT` without service or output
+mutation.
 
 ## Status values
 

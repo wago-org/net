@@ -95,12 +95,15 @@ queue bytes on close. TCP and DNS constructors remain truthfully unsupported.
 table. Registrations retain opaque handle plus exact kind, level-triggered polls
 scan at most one bounded pass, output only caller-budgeted events, and make only
 bounded namespace service attempts. Stale generation handles are removed during
-the bounded scan; polling never sleeps. Its guest layout is fixed, but the poll
-import remains absent until transactional service-work quota accounting is wired.
+the bounded scan; polling never sleeps. The guest `poll` import validates the
+complete event capacity and result range before work, uses per-instance scratch
+storage, and transactionally accounts `scans + events + service_attempts` against
+finite service-work quota for the duration of each call.
 
 Each `Extension` owns one private instance-state manager shared by its core and
-UDP module bindings. Runtime instantiation attaches one resource table, readiness coordinator, immutable
-policy, and finite quota ledger to the exact `*wago.Instance`. Optional static
+UDP module bindings. Runtime instantiation attaches one resource table, readiness
+coordinator, immutable policy, and finite quota ledger to the exact
+`*wago.Instance`. Optional static
 IPv4 configuration transactionally reserves namespace quota, constructs the
 backend, inserts a generation-safe handle, and registers bounded readiness before
 the state is published. UDP creation repeats that transaction for its socket

@@ -28,12 +28,13 @@ and lneto as the first backend.
 
 ## Current architecture
 
-The external plugin module owns only the core import module `wago_net`. Protocols
-will use independently owned modules such as `wago_net_udp` and `wago_net_tcp`
-because Wago rejects two extensions claiming one import module. The guest-visible
-surface still provides only `abi_version`, `net.info`, the ABI version constant,
-and the common status taxonomy. `internal/abi` provides checked guest-memory
-ranges and the fixed 32-byte IPv4/IPv6 address codec.
+The root extension owns distinct import modules because Wago assigns one owner
+to an entire module. `wago_net` exposes `abi_version` under `net.info`;
+`wago_net_udp` exposes complete namespace discovery plus UDP bind/send/receive,
+close, and bounded poll under the narrow `net.udp` capability. TCP and DNS
+modules remain absent. `internal/abi` provides uint64-checked guest ranges,
+disjoint multi-output validation, fixed v1 endpoint/receive/poll layouts, and
+atomic encoders without exposing lneto types.
 
 `internal/resource` provides O(1), kind-checked, generation-safe opaque handles
 with never-reused table identities, safe slot retirement before generation wrap,
@@ -87,11 +88,12 @@ clearing are covered. TCP and DNS remain truthfully not-supported.
 `internal/readiness` provides a finite coordinator per instance resource table.
 Registrations preserve exact handle kind, polls are level-triggered and bounded
 by scans, event outputs, and namespace service attempts, and stale handles are
-removed within the scan budget. Configured namespace and UDP creation now add
-handles and registrations transactionally; wrong-kind close cannot unregister a
-valid handle, and explicit close removes readiness before generation retirement.
-No poll call sleeps or performs an unbounded registration scan. No guest protocol
-or poll imports exist yet.
+removed within the scan budget. Configured namespace and UDP creation add handles
+and registrations transactionally; wrong-kind close cannot unregister a valid
+handle, and explicit close removes readiness before generation retirement. The
+guest poll validates complete output capacity before work, uses per-instance
+scratch, and reserves `scans + events + service_attempts` service units for the
+call. No poll sleeps or performs an unbounded registration scan.
 
 The companion Wago branch adds `HookRegistry.BeforeClose`, reverse-order
 exactly-once invocation, cleanup on failed post-instantiation setup, class
@@ -137,24 +139,36 @@ host-call instance identity without expanding `HostModule` or changing `HostFunc
   namespace quota, handle, readiness, rollback, isolation, and lifecycle ownership.
 - `af7b021` — added policy/quota-backed nonblocking IPv4 UDP resources with fixed
   queues, empty/truncated datagrams, lneto frame codecs, and deterministic close.
-- `HEAD` (`net: harden UDP readiness and cleanup`) — adds transactional UDP
-  handle/readiness ownership, kind-safe close, lifecycle/race/fuzz/benchmark
-  coverage, and truthful architecture documentation.
+- `4e83723` — added transactional UDP handle/readiness ownership, kind-safe
+  close, lifecycle/race/fuzz/benchmark coverage, and truthful architecture docs.
+- `e0f5a97` — defined the fixed backend-neutral guest UDP/poll ABI, disjoint
+  checked outputs, endpoint/result/event codecs, and complete stable status
+  mapping including access denial.
+- `4926424` — added exact-instance capability-gated UDP discovery, bind, send,
+  receive, and close imports with generation/kind checks, policy/quota enforcement,
+  failed-memory-write rollback, isolation, and deterministic guest tests.
+- `HEAD` (`net: add bounded guest UDP polling`) — adds quota-accounted bounded
+  guest polling, reusable per-instance event scratch, level/service/stale/cleanup
+  tests, malformed-memory fuzzing, benchmark coverage, and package/docs signoff.
 
 ## Active work
 
-Recursion 5 is complete with exactly three bounded commits. Instance-owned static
-namespaces and hardened nonblocking IPv4 UDP resources are now integrated with
-policy, quota, generation-safe handles, readiness, and deterministic cleanup.
-The next recursion should design the checked guest UDP ABI and imports without
-weakening the completed internal ownership model.
+Recursion 6 is complete with exactly three bounded commits. The checked guest UDP
+ABI, narrow capability/module, all complete UDP operations, and bounded poll are
+now wired end to end through exact instance state. TCP and DNS remain absent and
+unsupported; Wago lifecycle reconciliation and reset-policy enforcement remain
+prerequisites for upstream production use.
 
 ## Ordered backlog
 
-1. Reconcile and upstream the Wago close-hook/identity changes against PR #232.
-2. Design and implement the checked backend-neutral guest UDP ABI and capability.
-3. Add bounded guest poll integration and end-to-end malformed-memory/status tests.
-4. Harden nonblocking TCP, then DNS, before advertising either protocol.
+1. Reconcile and upstream the Wago close-hook/identity changes against PR #232,
+   including enforceable reset eligibility for networking extensions.
+2. Inspect and implement safe immediate nonblocking lneto TCP primitives without
+   importing its backoff wrappers into host-facing paths.
+3. Add instance-owned TCP handles/readiness/policy/quota and only then define and
+   expose a checked `wago_net_tcp` guest ABI.
+4. Harden bounded DNS ownership and guest imports before advertising DNS.
+5. Complete TinyGo, package, fuzz/race/benchmark, and release signoff.
 
 ## Blockers and discovered prerequisites
 
@@ -186,43 +200,38 @@ weakening the completed internal ownership model.
 
 ## Verification
 
-Latest outcomes after recursion 5:
+Latest outcomes after recursion 6:
 
-- Plugin `go test ./... -count=1` — pass.
-- Plugin `GOWORK=off go test ./... -count=1` — pass against the pinned fetched
-  lneto pseudo-version and sibling Wago checkout.
-- Plugin `go test -race ./... -count=1` — pass, including configured namespace,
-  UDP operations/close, readiness, quota, handle, and Wago lifecycle races.
+- Plugin `go test ./... -count=1` and `GOWORK=off go test ./... -count=1` — pass.
+- Plugin `go test -race ./... -count=1` — pass, including concurrent guest poll
+  versus instance close, UDP guest operations, readiness, quota, and lifecycle.
 - Plugin `go vet ./...` — pass.
-- `FuzzUDPIngress` for 3 seconds — pass, 53,839 executions and three new cached
-  interesting inputs.
-- `FuzzUDPOperationSequence` for 3 seconds — pass, 229,758 executions and 59 new
-  cached interesting inputs.
-- `BenchmarkUDPDatagramQueueRoundTrip` — 21.53–47.70 ns/op, 0 B/op, 0 allocs/op
-  across three runs on the recorded Ryzen 7 8845HS host.
-- `FuzzSlice` for 3 seconds — pass, 1,223,812 executions.
-- `FuzzDecodeAddressV1` for 3 seconds — pass, 1,313,491 executions and one new
+- `FuzzGuestUDPPollMemory` for 3 seconds — pass, 136,716 executions and one new
   cached interesting input.
-- `FuzzTableHandles` for 3 seconds — pass, 1,158,228 executions.
-- `FuzzPolicyQueries` for 3 seconds — pass, 945,396 executions and nine new
-  cached interesting inputs.
-- `FuzzLinkFrameOwnership` for 3 seconds — pass, 1,282,882 executions.
-- Source scan — lneto imports are confined to `internal/backend/lneto`; neutral,
-  guest-facing, registration, policy, quota, resource, and readiness packages do
-  not expose or import lneto types. No blocking/backoff lneto API is referenced.
+- `FuzzV1Layouts` for 3 seconds — pass, 665,248 executions and one new cached
+  interesting input.
+- `BenchmarkGuestUDPPoll` three-run sample — 171.8–905.8 ns/op, 120 B/op,
+  3 allocs/op on the recorded Ryzen 7 8845HS host. The allocation-free internal
+  UDP queue baseline remains 21.53–47.70 ns/op, 0 B/op, 0 allocs/op.
+- Guest tests prove capability denial, unavailable namespace truthfulness,
+  two-instance/cross-handle isolation, policy denial, exact quota, empty and
+  truncated datagrams, queue full, failed-output rollback, stale close, rebind,
+  level transitions, service bounds, stale poll removal, and cleanup.
+- Source scan — lneto imports remain confined to `internal/backend/lneto`; guest,
+  ABI, instance, policy, quota, resource, and readiness layers expose no lneto
+  types and reference no blocking/backoff lneto wrapper.
 - Wago `GOWORK=off go test ./internal/genfacade -count=1` — pass.
-- Wago `GOWORK=off go test ./src/wago -count=1` with a temporary uncommitted
-  `trapCode` helper — pass; helper removed.
-- Focused Wago lifecycle/identity race tests with the helper — pass; helper removed.
+- Wago `GOWORK=off go test ./src/wago -count=1` and focused lifecycle/identity
+  race tests pass with the temporary missing `trapCode` helper; helper removed.
 - lneto `GOWORK=off go test ./... -count=1` — pass.
-- Generated custom Wago binary blank-importing `github.com/wago-org/net/register`
-  and using local Wago/lneto replacements — build pass; `plugin inspect net
-  --json` truthfully reports only `net.info` and `wago_net.abi_version`.
-- Plugin, Wago, lneto, and WASI working trees are clean after the three commits.
-  The ignored `go.work` intentionally carries local Wago and lneto replacements.
-- WASI native `p1` SIGSEGV under Go 1.24.4 was not rerun in this slice; it remains
-  an unrelated known audit failure from prior recursions.
-- TinyGo — not installed.
+- Generated custom Wago CLI blank-importing `github.com/wago-org/net/register`
+  builds and `plugin inspect net --json` reports exactly `net.info`, `net.udp`,
+  `wago_net.abi_version`, and the six complete `wago_net_udp` imports including
+  bounded `poll`; TCP and DNS remain absent.
+- Plugin, Wago, lneto, and WASI trees are clean after the three commits; ignored
+  `go.work` continues to redirect local Wago and lneto dependencies.
+- TinyGo remains unavailable (`command -v tinygo` produced no path). WASI native
+  `p1` SIGSEGV under Go 1.24.4 was not rerun and remains an unrelated audit issue.
 
 ## Performance baselines
 
@@ -233,21 +242,21 @@ Focused resource-table baselines on linux/amd64, Ryzen 7 8845HS, Go 1.24.4:
 - close 64 live resources: 3.289 us/op;
 - close 1024 live resources: 45.556 us/op.
 
-A concrete manual packet-service and internal UDP path now exists but is not
-guest-visible. The fixed UDP queue round trip is allocation-free at 21.53–47.70
-ns/op in the latest three-run sample. End-to-end service/poll and guest-memory
-benchmarks remain for the guest UDP ABI slice.
+The fixed UDP queue round trip remains allocation-free at 21.53–47.70 ns/op.
+The complete guest poll path, including checked memory, quota tokens, coordinator
+scan, and event/result encoding, measured 171.8–905.8 ns/op with 120 B/op and
+3 allocs/op in the latest concurrent three-run sample. Reducing quota-token
+allocations is an optimization opportunity, not a correctness blocker.
 
 ## Security review
 
-Current guest-visible code still exposes no handles, endpoints, packets, DNS
-names, or protocol operations. Policy defaults deny unmatched requests and all
-privileged endpoint classes; deny rules are order-independent and IPv4-mapped
-IPv6 cannot cross family rules. Quotas have no unlimited sentinel, reject exact
-limit overflow without arithmetic wrap, and clean pending or committed state on
-instance close. Backend contracts prohibit retry/backoff loops inside Try methods,
-return no backend-owned DNS slices, validate service reports against every budget
-dimension, and categorize errors without making backend text guest ABI.
+Guest-visible UDP now exposes only opaque handles, checked endpoint/result/event
+layouts, and stable statuses. Every call resolves exact instance identity, and
+stale, wrong-kind, cross-instance, zero, or forged handles fail closed. Policy
+defaults deny unmatched and privileged endpoint classes; deny rules are order-
+independent and IPv4-mapped IPv6 cannot cross family rules. Quotas have no
+unlimited sentinel, reject exact limit overflow without arithmetic wrap, and
+clean pending or committed state on close. Backend text never becomes guest ABI.
 
 Packet-link and UDP datagram storage are fixed and cleared on close; failed fills,
 full queues, and insufficient budgets do not partially commit frames or payloads.
@@ -260,32 +269,30 @@ before explicit handle retirement.
 
 Remaining risks are engine enforcement of the `ResetMemorySnapshot` prohibition,
 correctly reconciling Wago PR #232, selecting safe immediate TCP integration,
-ensuring future protocol and guest adapters call policy at every endpoint change
-and pair every quota reservation, and designing guest poll cancellation and
-checked memory writes without weakening the bounded coordinator.
+ensuring future protocol adapters repeat policy checks at every endpoint change
+and pair every quota reservation, reducing guest poll quota-token allocations,
+and completing TinyGo validation when the toolchain becomes available.
 
 ## Next recursion
 
-1. `net: define the guest UDP ABI`
-   - Scope: specify stable v1 numeric layouts and statuses for namespace discovery,
-     UDP bind/send/receive/close, endpoint addresses, truncation, and poll events.
-     Keep the ABI backend-neutral and make every output write atomic.
-   - Tests: layout constants, checked-memory overflow/OOB, malformed endpoints,
-     status mapping including access denial, and TinyGo-compatible signatures.
-2. `net: add capability-gated UDP imports`
-   - Scope: add a separately owned `wago_net_udp` module and narrow capability,
-     resolve exact instance state, call generation/kind-checked state operations,
-     and expose only the internally complete UDP operations. Preserve truthful
-     inspection and keep TCP/DNS absent.
-   - Tests: custom Wago binary inspection, two-instance/cross-handle isolation,
-     denied policy, exact quota, empty/truncated guest datagrams, stale close, and
-     failed guest-memory write rollback.
-3. `net: add bounded guest polling for UDP`
-   - Scope: expose bounded poll over checked guest buffers, reserve service work,
-     map level-triggered UDP/namespace readiness, and prove cancellation/cleanup
-     without sleeping or unbounded scans.
-   - Tests: output/scanning/service bounds, stale generation removal, malformed
-     memory fuzzing, lifecycle/race/bench, package build, and docs/signoff updates.
+1. `net: add immediate lneto TCP primitives`
+   - Scope: re-inspect pinned lneto TCP internals and implement or minimally extend
+     only immediate nonblocking listen/connect/accept/read/write/shutdown paths;
+     never call high-level backoff wrappers from the host adapter.
+   - Tests: partial I/O, would-block, connect progress, EOF/reset, bounded queues,
+     deterministic two-namespace exchange, close races, and source scans.
+2. `net: own TCP resources per instance`
+   - Scope: add exact policy/quota-backed listener and stream ownership, generation-
+     safe handles, readiness registration, rollback on every creation stage, and
+     deterministic listener/stream teardown and port reuse.
+   - Tests: stale/wrong-kind/cross-instance handles, exact quotas, denied listen
+     and connect, readiness transitions, concurrent close, and lifecycle cleanup.
+3. `net: define the checked guest TCP ABI`
+   - Scope: fix backend-neutral v1 TCP layouts/status semantics and checked atomic
+     output ordering, but advertise no `wago_net_tcp` imports until every operation
+     is internally complete and bounded.
+   - Tests: malformed memory/endpoint fuzzing, partial read/write metadata, stable
+     status mapping, TinyGo-compatible HostFunc shapes, docs, and package signoff.
 
 After those exactly three commits, run combined verification, update this ledger,
 and recurse again if the long-term completion criteria remain unmet.

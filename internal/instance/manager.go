@@ -46,12 +46,13 @@ func DefaultConfig() Config {
 type State struct {
 	mu sync.Mutex
 
-	resources *resource.Table
-	readiness *readiness.Coordinator
-	quotas    *quota.Account
-	policy    *policy.Policy
-	namespace resource.Handle
-	closed    bool
+	resources  *resource.Table
+	readiness  *readiness.Coordinator
+	quotas     *quota.Account
+	policy     *policy.Policy
+	pollEvents []readiness.Event
+	namespace  resource.Handle
+	closed     bool
 }
 
 // Resources returns the instance's generation-safe resource table.
@@ -120,6 +121,8 @@ func (s *State) Close() error {
 	if s.quotas != nil {
 		s.quotas.Close()
 	}
+	clear(s.pollEvents)
+	s.pollEvents = nil
 	s.namespace = 0
 	return errors.Join(errs...)
 }
@@ -198,10 +201,11 @@ func (m *Manager) Attach(instance *wago.Instance) error {
 		return fmt.Errorf("create readiness coordinator: %w", err)
 	}
 	state := &State{
-		resources: table,
-		readiness: poller,
-		quotas:    quota.NewAccount(m.limits),
-		policy:    m.policy,
+		resources:  table,
+		readiness:  poller,
+		quotas:     quota.NewAccount(m.limits),
+		policy:     m.policy,
+		pollEvents: make([]readiness.Event, m.readiness.MaxRegistrations),
 	}
 	if m.namespaceFactory != nil {
 		if _, err := state.createNamespace(m.namespaceFactory); err != nil {
@@ -381,6 +385,38 @@ func (s *State) ReceiveUDP(handle resource.Handle, dst []byte) (namespace.Datagr
 		return namespace.DatagramResult{}, namespace.Fail(namespace.FailureIO, ErrInvalidBackendResult)
 	}
 	return result, err
+}
+
+// PollVisitor receives one bounded readiness result while State still owns its
+// reusable event storage and lifecycle lock. The callback must not retain events.
+type PollVisitor func(events []readiness.Event, report readiness.Report, progress namespace.Progress) error
+
+// Poll performs one bounded nonblocking coordinator pass using per-instance
+// scratch storage. The visitor runs before the lifecycle lock is released so no
+// concurrent poll or teardown can overwrite or invalidate the result.
+func (s *State) Poll(budget readiness.Budget, visit PollVisitor) (readiness.Report, namespace.Progress, error) {
+	if s == nil {
+		return readiness.Report{}, 0, ErrInvalidConfig
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed || s.readiness == nil {
+		return readiness.Report{}, 0, namespace.Fail(namespace.FailureClosed, resource.ErrClosed)
+	}
+	if !budget.Valid() || uint64(budget.Events) > uint64(len(s.pollEvents)) {
+		return readiness.Report{}, 0, readiness.ErrInvalidBudget
+	}
+	events := s.pollEvents[:budget.Events]
+	report, progress, err := s.readiness.TryPoll(events, budget)
+	if err != nil {
+		return report, progress, err
+	}
+	if visit != nil {
+		if err := visit(events[:report.Events], report, progress); err != nil {
+			return report, progress, err
+		}
+	}
+	return report, progress, nil
 }
 
 // CloseHandle removes readiness before closing one exact kind-checked resource.

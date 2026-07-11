@@ -27,8 +27,8 @@ func TestExtensionMetadataAndABIBinding(t *testing.T) {
 		t.Fatalf("Capabilities = %v", got)
 	}
 	imports := rt.ProvidedImports()
-	if len(imports) != 6 {
-		t.Fatalf("ProvidedImports length = %d, want 6", len(imports))
+	if len(imports) != 7 {
+		t.Fatalf("ProvidedImports length = %d, want 7", len(imports))
 	}
 	got := imports[0]
 	if got.Module != Module || got.Name != "abi_version" || !got.HasCapability || got.Capability != CapInfo {
@@ -41,6 +41,7 @@ func TestExtensionMetadataAndABIBinding(t *testing.T) {
 		"bind":              {wago.ValI64, wago.ValI32, wago.ValI32},
 		"close":             {wago.ValI64},
 		"namespace_default": {wago.ValI32},
+		"poll":              {wago.ValI32, wago.ValI32, wago.ValI32, wago.ValI32},
 		"receive":           {wago.ValI64, wago.ValI32, wago.ValI32, wago.ValI32},
 		"send":              {wago.ValI64, wago.ValI32, wago.ValI32, wago.ValI32},
 	}

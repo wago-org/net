@@ -1,8 +1,12 @@
 package net
 
 import (
+	"errors"
+
 	"github.com/wago-org/net/internal/abi"
 	"github.com/wago-org/net/internal/instance"
+	"github.com/wago-org/net/internal/namespace"
+	"github.com/wago-org/net/internal/readiness"
 	"github.com/wago-org/net/internal/resource"
 	wago "github.com/wago-org/wago"
 )
@@ -48,6 +52,14 @@ func (e *Extension) udpBindings() []binding {
 			results:    []wago.ValType{wago.ValI32},
 			capability: CapUDP,
 			docs:       "close one exact live UDP socket handle",
+		},
+		{
+			name:       "poll",
+			fn:         e.udpPoll,
+			params:     []wago.ValType{wago.ValI32, wago.ValI32, wago.ValI32, wago.ValI32},
+			results:    []wago.ValType{wago.ValI32},
+			capability: CapUDP,
+			docs:       "perform one quota-accounted bounded readiness and namespace-service pass",
 		},
 	}
 }
@@ -192,6 +204,71 @@ func (e *Extension) udpClose(module wago.HostModule, params, results []uint64) {
 		return
 	}
 	setStatus(results, statusFromError(state.CloseHandle(resource.Handle(params[0]), resource.KindUDPSocket)))
+}
+
+var errGuestPollEncoding = errors.New("net: failed to encode validated guest poll output")
+
+func (e *Extension) udpPoll(module wago.HostModule, params, results []uint64) {
+	if len(params) != 4 || len(results) != 1 {
+		setStatus(results, StatusInvalidArgument)
+		return
+	}
+	memory := moduleMemory(module)
+	eventsPtr, eventCapacity := uint32(params[0]), uint32(params[1])
+	budget, ok := abi.DecodePollBudgetV1(memory, uint32(params[2]))
+	if !ok || budget.Events > eventCapacity {
+		setStatus(results, StatusInvalidArgument)
+		return
+	}
+	eventBytes := uint64(eventCapacity) * uint64(abi.PollEventV1Size)
+	if eventBytes > uint64(^uint32(0)) {
+		setStatus(results, StatusInvalidArgument)
+		return
+	}
+	resultPtr := uint32(params[3])
+	if !abi.CheckRanges(memory, true,
+		abi.Range{Ptr: eventsPtr, Length: uint32(eventBytes)},
+		abi.Range{Ptr: resultPtr, Length: abi.PollResultV1Size},
+	) {
+		setStatus(results, StatusInvalidArgument)
+		return
+	}
+	state, status := e.udpState(module)
+	if status != StatusOK {
+		setStatus(results, status)
+		return
+	}
+	reservation, err := state.Quotas().ReserveService(pollWorkUnits(budget))
+	if err != nil {
+		setStatus(results, statusFromError(err))
+		return
+	}
+	allocation, committed := reservation.Commit()
+	if !committed {
+		setStatus(results, StatusInvalidState)
+		return
+	}
+	defer allocation.Release()
+
+	_, progress, err := state.Poll(budget, func(events []readiness.Event, report readiness.Report, _ namespace.Progress) error {
+		if !abi.EncodePollEventsV1(memory, eventsPtr, events) || !abi.EncodePollResultV1(memory, resultPtr, report, budget) {
+			return errGuestPollEncoding
+		}
+		return nil
+	})
+	if err != nil {
+		if errors.Is(err, errGuestPollEncoding) {
+			setStatus(results, StatusIO)
+		} else {
+			setStatus(results, statusFromError(err))
+		}
+		return
+	}
+	setStatus(results, statusFromProgress(progress))
+}
+
+func pollWorkUnits(budget readiness.Budget) uint64 {
+	return uint64(budget.Scans) + uint64(budget.Events) + uint64(budget.ServiceAttempts)
 }
 
 func (e *Extension) udpState(module wago.HostModule) (*instance.State, Status) {

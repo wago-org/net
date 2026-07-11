@@ -11,9 +11,11 @@ checked guest memory; exact instance identity, generation/kind-checked handles,
 immutable endpoint policy, finite quotas, and deterministic lifecycle cleanup
 remain mandatory on every guest operation. The lneto backend uses adapter-owned
 fixed UDP queues and immediate frame codecs, preserving empty and truncated
-datagrams without blocking or backoff. Bounded guest polling is specified but is
-not advertised until its service-work accounting is integrated. TCP, DNS, and
-privileged packet access remain absent and truthfully unsupported.
+datagrams without blocking or backoff. Guest polling is level-triggered and
+bounded independently by scans, event outputs, namespace service attempts, and
+per-attempt packet/byte/operation budgets; each call transactionally reserves and
+releases finite per-instance service-work quota. TCP, DNS, and privileged packet
+access remain absent and truthfully unsupported.
 
 ```go
 rt := wago.NewRuntime()
