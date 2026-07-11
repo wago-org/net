@@ -263,14 +263,20 @@ REVIEW_BUNDLE=/path/to/release-signoff.review.tar.gz \
 DISTRIBUTION_STATEMENT=/path/to/release.distribution.json \
 DISTRIBUTION_SIGNATURE=/trusted-channel/release.distribution.sig \
 DISTRIBUTION_TRUST_POLICY=/operator-config/wago-net-trust-policy.json \
+PRODUCTION_READINESS_RECEIPT=/automation/release.production-readiness.json \
   scripts/release-candidate-readiness.sh
 ```
 
-The command emits a deterministic
-`github.com/wago-org/net/production-readiness/v1` JSON decision and exits nonzero
-when any blocker remains. The currently recorded review state is deliberately
-not production-ready even with a cryptographically valid test signature: its
-exact blockers are `current-plugin-not-adopted`,
+The command atomically replaces the deterministic
+`github.com/wago-org/net/production-readiness/v1` JSON decision and its adjacent
+`.sha256` sidecar before exiting nonzero when any blocker remains. The receipt
+binds the trusted key label, exact plugin subject, statement SHA-256, provenance
+SHA-256, review-bundle SHA-256, readiness boolean, and ordered blockers. A
+verification error emits no new decision; a valid but blocked candidate retains
+a checksummed denial for external automation rather than losing the reason in a
+nonzero process result. The currently recorded review state is deliberately not
+production-ready even with a cryptographically valid test signature: its exact
+blockers are `current-plugin-not-adopted`,
 `production-wago-merge-unpublished`, `linux-arm64-not-executed`, and the two
 accepted WASI exception IDs. The profile does not activate hosted automation;
 it is a prerequisite that must pass before an external publisher may enable it.

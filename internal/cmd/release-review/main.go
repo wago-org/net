@@ -13,7 +13,7 @@ func main() {
 	mode := flag.String("mode", "verify", "operation: verify, export, statement, verify-signed, or verify-production-candidate")
 	source := flag.String("source", "", "extracted release-signoff evidence directory")
 	bundle := flag.String("bundle", "", "review bundle directory or .tar.gz path")
-	out := flag.String("out", "", "destination .tar.gz path for export")
+	out := flag.String("out", "", "mode-specific destination path")
 	subject := flag.String("subject", "", "optional exact net commit required by policy")
 	bundleSHA256 := flag.String("bundle-sha256", "", "optional exact review bundle SHA-256 required by policy")
 	strictDistribution := flag.Bool("strict-distribution", false, "require separately supplied subject and bundle SHA-256")
@@ -82,12 +82,21 @@ func main() {
 			fmt.Fprintln(os.Stderr, err)
 			os.Exit(1)
 		}
-		data, err := json.MarshalIndent(report, "", "  ")
-		if err != nil {
-			fmt.Fprintln(os.Stderr, err)
-			os.Exit(1)
+		if *out == "" {
+			data, err := json.MarshalIndent(report, "", "  ")
+			if err != nil {
+				fmt.Fprintln(os.Stderr, err)
+				os.Exit(1)
+			}
+			fmt.Println(string(data))
+		} else {
+			receiptHash, err := releaseprovenance.WriteProductionReadinessReceipt(*out, report)
+			if err != nil {
+				fmt.Fprintln(os.Stderr, err)
+				os.Exit(1)
+			}
+			fmt.Printf("release-review: wrote production readiness receipt %s\nreadiness_sha256=%s\n", *out, receiptHash)
 		}
-		fmt.Println(string(data))
 		if !report.Ready {
 			os.Exit(1)
 		}

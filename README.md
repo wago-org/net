@@ -76,7 +76,8 @@ statement digest and plugin subject against rollback; publishes public positive
 and negative detached-signature interoperability vectors without a private key
 or publisher claim; keeps production
 activation behind published exact subjects, executed arm64 evidence, and zero
-accepted exceptions; audits unsupported pool topology; runs bounded fuzz smoke, benchmarks, TinyGo,
+accepted exceptions; atomically retains checksummed canonical readiness receipts
+for external automation; audits unsupported pool topology; runs bounded fuzz smoke, benchmarks, TinyGo,
 cross-build, package/custom CLI inspection, and final clean-tree checks; and
 records disposable artifacts under `.wago/release-signoff`:
 

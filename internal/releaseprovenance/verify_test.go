@@ -318,8 +318,41 @@ func TestProductionReadinessProfileReportsExactCurrentBlockers(t *testing.T) {
 		"accepted-exception:wasi-preview1-native-sigsegv",
 	}
 	if report.Ready || report.Schema != ProductionReadinessSchemaV1 || report.TrustedKeyID != fixture.keyID ||
-		!reflect.DeepEqual(got, want) {
+		report.StatementSHA256 != fixture.statementHash || report.ProvenanceSHA256 != trusted.Verification.ProvenanceSHA256 ||
+		report.ReviewBundleSHA256 != fixture.bundleHash || !reflect.DeepEqual(got, want) {
 		t.Fatalf("production readiness = %+v, blocker IDs %v", report, got)
+	}
+
+	receiptPath := filepath.Join(t.TempDir(), "production-readiness.json")
+	receiptHash, err := WriteProductionReadinessReceipt(receiptPath, report)
+	if err != nil {
+		t.Fatal(err)
+	}
+	receiptData, err := os.ReadFile(receiptPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var receipt ProductionReadiness
+	if err := decodeCanonicalJSON(receiptData, &receipt, "production readiness receipt"); err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(&receipt, report) {
+		t.Fatalf("receipt = %+v, want %+v", receipt, report)
+	}
+	receiptSum := sha256.Sum256(receiptData)
+	if got := hex.EncodeToString(receiptSum[:]); got != receiptHash {
+		t.Fatalf("receipt SHA-256 = %s, want %s", got, receiptHash)
+	}
+	checksumData, err := os.ReadFile(receiptPath + ".sha256")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if wantChecksum := receiptHash + "  " + filepath.Base(receiptPath) + "\n"; string(checksumData) != wantChecksum {
+		t.Fatalf("receipt checksum = %q, want %q", checksumData, wantChecksum)
+	}
+	secondHash, err := WriteProductionReadinessReceipt(receiptPath, report)
+	if err != nil || secondHash != receiptHash {
+		t.Fatalf("deterministic receipt rewrite = %q, %v", secondHash, err)
 	}
 
 	trusted.Verification.Manifest.Publication.CurrentPlugin = "adopted"
