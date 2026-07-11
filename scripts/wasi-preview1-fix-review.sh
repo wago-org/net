@@ -2,27 +2,37 @@
 set -euo pipefail
 
 root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
-wago_repo=$(realpath "${WAGO_WASI_FIX_DIR:-$root/.wago/wago-wasi-preview1-regabi-fix-97e6f91}")
+production_wago_repo=$(realpath "${WAGO_WASI_FIX_DIR:-$root/.wago/wago-wasi-preview1-regabi-fix-97e6f91}")
+current_wago_repo=$(realpath "${CURRENT_WAGO_WASI_FIX_DIR:-$root/.wago/wago-current-plugin-lifecycle-18615546}")
 wasi_repo=$(realpath "${WASI_DIR:-$root/.audit/wasi}")
 out=${WASI_FIX_REVIEW_OUT:-$root/.wago/wasi-preview1-fix-review}
 
-readonly fix_revision=5c7f76dba0aa82ca94a1dd644318ed062b03f7cc
-readonly fix_tree=442d6a7506260565bccb01e32e016f6dccc25d6c
+readonly production_fix=5c7f76dba0aa82ca94a1dd644318ed062b03f7cc
+readonly production_fix_tree=442d6a7506260565bccb01e32e016f6dccc25d6c
 readonly production_merge=97e6f91e6c822491577faa86f3c30aa5a8fff1e8
 readonly production_tree=adbba31c51996f1c1d6d3c2069de8ddf0afd94ee
 readonly production_parent1=54499ba5135f69a062e23a7255f4a408d6cecf8c
 readonly production_parent2=ffd5ef4b122cbd019897eeea3503789ab5860e4a
-readonly reviewed_wasi=1a7eeb215229e05bcb0f09d5cb3280d231739def
-readonly reviewed_wasi_tree=9108df32daccfe5a8458e6623d996bcb51f38756
-readonly reviewed_wasi_parent=ab7d597a8517283b0399e09d967b7f02ded1772f
+readonly current_fix=90018dadbc70c8620984bab71f1eace347c29fa8
+readonly current_fix_tree=dedf99c3e614eb6e1e7acc8c75760578d4eea364
+readonly current_lifecycle=8131d967211871936793a4f129164ec0cd928ea9
+readonly current_lifecycle_tree=10d95a09e436f5644ec80736e686a4d33cf454fb
+readonly current_main=18615546584ec09e607856a0da99851656f5be80
+readonly current_main_tree=2b4fc4694dd1eeb56e9f7f788a73a1d6965a365f
+readonly production_wasi=1a7eeb215229e05bcb0f09d5cb3280d231739def
+readonly production_wasi_tree=9108df32daccfe5a8458e6623d996bcb51f38756
+readonly production_wasi_parent=ab7d597a8517283b0399e09d967b7f02ded1772f
+readonly current_wasi=cbdb9b32a3f28c0e63c7ab40d9c59712162367c4
+readonly current_wasi_tree=b77c7e975c29de5bcff9da4464ce50d9b8ad2c65
+readonly current_wasi_parent=1a7eeb215229e05bcb0f09d5cb3280d231739def
 readonly trigger_sha256=3d93d0329b190e98c4956e0abe05039954f8bf61a22f833bf5a40af5798f668d
 
 fail() { echo "wasi-preview1-fix-review: $*" >&2; exit 1; }
 
-for command in awk git go grep mktemp realpath sed sha256sum tar; do
+for command in awk git go grep mktemp paste realpath sed sha256sum sort tar tinygo; do
   command -v "$command" >/dev/null || fail "missing required command: $command"
 done
-for repo in "$wago_repo" "$wasi_repo"; do
+for repo in "$production_wago_repo" "$current_wago_repo" "$wasi_repo"; do
   git -C "$repo" rev-parse --is-inside-work-tree >/dev/null 2>&1 || fail "missing Git repository: $repo"
 done
 
@@ -31,19 +41,65 @@ verify_commit() {
   git -C "$repo" cat-file -e "$revision^{commit}" 2>/dev/null || fail "missing commit $revision in $repo"
   [[ $(git -C "$repo" rev-parse "$revision^{tree}") == "$tree" ]] || fail "tree mismatch for $revision"
 }
-verify_commit "$wago_repo" "$fix_revision" "$fix_tree"
-verify_commit "$wago_repo" "$production_merge" "$production_tree"
-verify_commit "$wasi_repo" "$reviewed_wasi" "$reviewed_wasi_tree"
+verify_commit "$production_wago_repo" "$production_fix" "$production_fix_tree"
+verify_commit "$production_wago_repo" "$production_merge" "$production_tree"
+verify_commit "$current_wago_repo" "$current_fix" "$current_fix_tree"
+verify_commit "$current_wago_repo" "$current_lifecycle" "$current_lifecycle_tree"
+verify_commit "$current_wago_repo" "$current_main" "$current_main_tree"
+verify_commit "$wasi_repo" "$production_wasi" "$production_wasi_tree"
+verify_commit "$wasi_repo" "$current_wasi" "$current_wasi_tree"
 
-[[ $(git -C "$wago_repo" rev-parse HEAD) == "$fix_revision" ]] || fail "Wago fix review worktree is not at $fix_revision"
-[[ -z $(git -C "$wago_repo" status --porcelain) ]] || fail "Wago fix review worktree is dirty"
-mapfile -t fix_parents < <(git -C "$wago_repo" show -s --format=%P "$fix_revision")
-[[ ${#fix_parents[@]} -eq 1 && ${fix_parents[0]} == "$production_merge" ]] || fail "Wago fix review parent mismatch"
-read -r merge_parent1 merge_parent2 extra <<<"$(git -C "$wago_repo" show -s --format=%P "$production_merge")"
+[[ $(git -C "$production_wago_repo" rev-parse HEAD) == "$production_fix" ]] ||
+  fail "production-derived Wago fix review worktree is not at $production_fix"
+[[ $(git -C "$current_wago_repo" rev-parse HEAD) == "$current_fix" ]] ||
+  fail "current-main Wago fix review worktree is not at $current_fix"
+[[ -z $(git -C "$production_wago_repo" status --porcelain --untracked-files=all) ]] ||
+  fail "production-derived Wago fix review worktree is dirty"
+[[ -z $(git -C "$current_wago_repo" status --porcelain --untracked-files=all) ]] ||
+  fail "current-main Wago fix review worktree is dirty"
+[[ $(git -C "$production_wago_repo" show -s --format=%P "$production_fix") == "$production_merge" ]] ||
+  fail "production-derived fix parent mismatch"
+[[ $(git -C "$current_wago_repo" show -s --format=%P "$current_fix") == "$current_lifecycle" ]] ||
+  fail "current-main fix parent mismatch"
+[[ $(git -C "$current_wago_repo" show -s --format=%P "$current_lifecycle") == "$current_main" ]] ||
+  fail "current lifecycle review parent mismatch"
+read -r merge_parent1 merge_parent2 extra <<<"$(git -C "$production_wago_repo" show -s --format=%P "$production_merge")"
 [[ -z ${extra:-} && "$merge_parent1" == "$production_parent1" && "$merge_parent2" == "$production_parent2" ]] ||
   fail "production Wago ordered parents changed"
-[[ $(git -C "$wasi_repo" show -s --format=%P "$reviewed_wasi") == "$reviewed_wasi_parent" ]] ||
-  fail "reviewed WASI parent mismatch"
+[[ $(git -C "$wasi_repo" show -s --format=%P "$production_wasi") == "$production_wasi_parent" ]] ||
+  fail "production-line WASI parent mismatch"
+[[ $(git -C "$wasi_repo" show -s --format=%P "$current_wasi") == "$current_wasi_parent" ]] ||
+  fail "current-line WASI parent mismatch"
+[[ $(git -C "$wasi_repo" rev-parse refs/remotes/origin/main) == "$current_wasi" ]] ||
+  fail "WASI origin/main moved; review the new implementation before changing the current-line input"
+
+patch_id() {
+  git -C "$1" show --pretty=format: --no-ext-diff "$2" | git patch-id --stable | awk 'NR == 1 {print $1}'
+}
+production_patch=$(patch_id "$production_wago_repo" "$production_fix")
+current_patch=$(patch_id "$current_wago_repo" "$current_fix")
+[[ -n "$production_patch" && "$production_patch" == "$current_patch" ]] ||
+  fail "production-derived and current-main fixes are not patch-equivalent"
+expected_paths=$'src/wago/instantiate.go\nsrc/wago/testdata/wasi-preview1-sync-indirect.wasm\nsrc/wago/wasi_preview1_sync_indirect_test.go'
+for spec in "$production_wago_repo:$production_fix" "$current_wago_repo:$current_fix"; do
+  repo=${spec%%:*}
+  revision=${spec##*:}
+  actual_paths=$(git -C "$repo" diff-tree --no-commit-id --name-only -r "$revision" | sort)
+  [[ "$actual_paths" == "$expected_paths" ]] || fail "unexpected paths in fix $revision"
+done
+
+# Refresh publication refs from a clean review checkout. This updates only Git
+# metadata shared by the linked worktrees; it never resets or compiles the dirty
+# user-owned .audit/wago checkout.
+git -C "$current_wago_repo" fetch --prune origin
+[[ $(git -C "$current_wago_repo" rev-parse refs/remotes/origin/main) == "$current_main" ]] ||
+  fail "Wago origin/main moved; replay both reviewed fix lines before changing release inputs"
+wago_remote=$(git -C "$current_wago_repo" ls-remote origin)
+refs_for() { awk -v want="$1" '$1 == want {print $2}' | paste -sd, -; }
+production_fix_refs=$(printf '%s\n' "$wago_remote" | refs_for "$production_fix")
+production_merge_refs=$(printf '%s\n' "$wago_remote" | refs_for "$production_merge")
+current_fix_refs=$(printf '%s\n' "$wago_remote" | refs_for "$current_fix")
+current_lifecycle_refs=$(printf '%s\n' "$wago_remote" | refs_for "$current_lifecycle")
 
 wasi_status_before=$(git -C "$wasi_repo" status --porcelain=v1 --untracked-files=all)
 rm -rf "$out"
@@ -51,13 +107,17 @@ mkdir -p "$out"
 tmp=$(mktemp -d "$out/run.XXXXXX")
 cleanup() { rm -rf "$tmp"; }
 trap cleanup EXIT
-mkdir -p "$tmp/wago" "$tmp/wasi"
-git -C "$wago_repo" archive "$fix_revision" | tar -x -C "$tmp/wago"
-git -C "$wasi_repo" archive "$reviewed_wasi" | tar -x -C "$tmp/wasi"
+mkdir -p "$tmp/production-wago" "$tmp/current-wago" "$tmp/production-wasi" "$tmp/current-wasi"
+git -C "$production_wago_repo" archive "$production_fix" | tar -x -C "$tmp/production-wago"
+git -C "$current_wago_repo" archive "$current_fix" | tar -x -C "$tmp/current-wago"
+git -C "$wasi_repo" archive "$production_wasi" | tar -x -C "$tmp/production-wasi"
+git -C "$wasi_repo" archive "$current_wasi" | tar -x -C "$tmp/current-wasi"
 
-[[ $(sha256sum "$tmp/wago/src/wago/testdata/wasi-preview1-sync-indirect.wasm" | awk '{print $1}') == "$trigger_sha256" ]] ||
-  fail "minimized preview-1 trigger digest mismatch"
-cat >"$tmp/wago/src/wago/trap_code_wasi_fix_review_test.go" <<'EOF_HELPER'
+for directory in "$tmp/production-wago" "$tmp/current-wago"; do
+  [[ $(sha256sum "$directory/src/wago/testdata/wasi-preview1-sync-indirect.wasm" | awk '{print $1}') == "$trigger_sha256" ]] ||
+    fail "minimized preview-1 trigger digest mismatch in $directory"
+done
+cat >"$tmp/production-wago/src/wago/trap_code_wasi_fix_review_test.go" <<'EOF_HELPER'
 package wago
 
 import "errors"
@@ -72,38 +132,78 @@ func trapCode(err error) TrapCode {
 EOF_HELPER
 
 (
-  cd "$tmp/wago"
+  cd "$tmp/production-wago"
   GOWORK=off go test ./src/wago -run '^TestSyncHostLinkedCallIndirectUsesWrapperDescriptors$' -count=1 -v
-) >"$out/wago-regression.txt" 2>&1
+) >"$out/production-wago-regression.txt" 2>&1
+ln -s "$tmp/production-wago" "$tmp/wago"
 (
-  cd "$tmp/wasi"
+  cd "$tmp/production-wasi"
   GOWORK=off go test ./... -count=1 -v
-) >"$out/wasi-test.txt" 2>&1
-sed -i "s#${tmp//\#/\\#}#<isolated-wasi-fix-review>#g" "$out/wago-regression.txt" "$out/wasi-test.txt"
-grep -Fq -- '--- PASS: TestSyncHostLinkedCallIndirectUsesWrapperDescriptors' "$out/wago-regression.txt" ||
-  fail "focused Wago regression did not pass"
-grep -Fq -- '--- PASS: TestWASIApps' "$out/wasi-test.txt" || fail "preview-1 corpus did not pass"
-for case in markdown crcsum blake3sum base64x jsonproc script regexmatch bignum; do
-  grep -Fq -- "--- PASS: TestWASIApps/$case" "$out/wasi-test.txt" || fail "preview-1 case $case did not pass"
+) >"$out/production-wasi-test.txt" 2>&1
+rm "$tmp/wago"
+ln -s "$tmp/current-wago" "$tmp/wago"
+(
+  cd "$tmp/current-wago"
+  GOWORK=off go test ./src/wago -count=1
+) >"$out/current-wago-test.txt" 2>&1
+(
+  cd "$tmp/current-wago"
+  GOWORK=off go test -race ./src/wago -run '^TestSyncHostLinkedCallIndirectUsesWrapperDescriptors$' -count=1 -v
+) >"$out/current-wago-race.txt" 2>&1
+(
+  cd "$tmp/current-wago"
+  GOWORK=off tinygo test ./src/wago
+) >"$out/current-wago-tinygo.txt" 2>&1
+(
+  cd "$tmp/current-wasi"
+  GOWORK=off go test ./... -count=1 -v
+) >"$out/current-wasi-test.txt" 2>&1
+sed -i "s#${tmp//\#/\\#}#<isolated-wasi-fix-review>#g" "$out"/*.txt
+
+for log in production-wago-regression current-wago-race; do
+  grep -Fq -- '--- PASS: TestSyncHostLinkedCallIndirectUsesWrapperDescriptors' "$out/$log.txt" ||
+    fail "$log did not pass the focused regression"
 done
-if grep -Eqi 'SIGSEGV|segmentation violation|fatal error: fault' "$out/wago-regression.txt" "$out/wasi-test.txt"; then
-  fail "fixed review still emitted a native fault"
+for log in production-wasi-test current-wasi-test; do
+  grep -Fq -- '--- PASS: TestWASIApps' "$out/$log.txt" || fail "$log did not pass the preview-1 corpus"
+  for case in markdown crcsum blake3sum base64x jsonproc script regexmatch bignum; do
+    grep -Fq -- "--- PASS: TestWASIApps/$case" "$out/$log.txt" || fail "$log case $case did not pass"
+  done
+done
+if grep -Eqi 'SIGSEGV|segmentation violation|fatal error: fault' "$out"/*.txt; then
+  fail "a fixed review still emitted a native fault"
 fi
 
 wasi_status_after=$(git -C "$wasi_repo" status --porcelain=v1 --untracked-files=all)
 [[ "$wasi_status_after" == "$wasi_status_before" ]] || fail "WASI source worktree status changed"
+cat >"$out/publication.txt" <<EOF_PUBLICATION
+production_fix_refs=${production_fix_refs:-absent}
+production_merge_refs=${production_merge_refs:-absent}
+current_fix_refs=${current_fix_refs:-absent}
+current_lifecycle_refs=${current_lifecycle_refs:-absent}
+EOF_PUBLICATION
 cat >"$out/status.txt" <<EOF_STATUS
-status=preview1-suite-passes-on-wago-fix-review
-wago_fix_revision=$fix_revision
-wago_fix_tree=$fix_tree
-wago_fix_parent=$production_merge
+status=preview1-suite-passes-on-patch-equivalent-production-and-current-wago-fix-reviews
+production_wago_fix_revision=$production_fix
+production_wago_fix_tree=$production_fix_tree
+production_wago_fix_parent=$production_merge
 production_merge=$production_merge
 production_merge_tree=$production_tree
 production_merge_parents=$production_parent1,$production_parent2
-reviewed_wasi=$reviewed_wasi
-reviewed_wasi_tree=$reviewed_wasi_tree
+current_wago_fix_revision=$current_fix
+current_wago_fix_tree=$current_fix_tree
+current_wago_fix_parent=$current_lifecycle
+current_wago_lifecycle_revision=$current_lifecycle
+current_wago_lifecycle_tree=$current_lifecycle_tree
+current_wago_lifecycle_parent=$current_main
+fix_patch_id=$production_patch
+production_wasi=$production_wasi
+production_wasi_tree=$production_wasi_tree
+current_wasi=$current_wasi
+current_wasi_tree=$current_wasi_tree
 trigger_sha256=$trigger_sha256
 EOF_STATUS
 cat "$out/status.txt"
-echo 'decision=Wago register-ABI call_indirect fix is locally validated; production input remains unchanged until the exact fix is reviewed and published'
+cat "$out/publication.txt"
+echo 'decision=two patch-equivalent fix reviews preserve their distinct production-merge and current-main lineages; neither local subject is treated as published'
 echo 'wasi-preview1-fix-review: PASS'
