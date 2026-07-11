@@ -77,8 +77,9 @@ and negative detached-signature interoperability vectors without a private key
 or publisher claim; optionally retains and independently verifies a checksummed
 canonical intermediary receipt binding the exact signature, statement, trust
 policy, provenance, archive, subject, and opaque key label without claiming
-publisher identity or production readiness;
-keeps production activation behind published exact subjects, executed arm64
+publisher identity or production readiness, with public synthetic positive and
+tamper/constraint receipt vectors that store no signature or trust key; keeps
+production activation behind published exact subjects, executed arm64
 evidence, and zero accepted exceptions; atomically retains and independently
 verifies checksummed canonical readiness receipts that bind the exact canonical
 trust-policy digest, with public ready/blocked/tamper/constraint interoperability

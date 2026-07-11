@@ -1,0 +1,82 @@
+{
+  "schema": "github.com/wago-org/net/trusted-distribution-receipt-vectors/v1",
+  "receiptEncoding": "exact-canonical-file-bytes-with-adjacent-sha256",
+  "subject": "1111111111111111111111111111111111111111",
+  "statementSha256": "2222222222222222222222222222222222222222222222222222222222222222",
+  "signatureSha256": "3333333333333333333333333333333333333333333333333333333333333333",
+  "trustPolicySha256": "4444444444444444444444444444444444444444444444444444444444444444",
+  "files": [
+    {
+      "path": "trusted-distribution-tampered.json",
+      "sha256": "22da7065e094aa3bc4b114b931001e08de8bd12ff3a5faf45b690a0a393901b3"
+    },
+    {
+      "path": "trusted-distribution-tampered.json.sha256",
+      "sha256": "0541d70eb0c95c36434a4e748518b4b219b1ad5ce341f9ba0c3a08612839bacb"
+    },
+    {
+      "path": "trusted-distribution.json",
+      "sha256": "fee55bb301e739aa72c16d1c6645960c579824dd48d673164bc4378c1935b20e"
+    },
+    {
+      "path": "trusted-distribution.json.sha256",
+      "sha256": "04f5f10bd4969389be09c90328a9674949fdf3295583cb6b8eae0c66c1daaf86"
+    }
+  ],
+  "cases": [
+    {
+      "name": "trusted distribution receipt",
+      "receipt": "trusted-distribution.json",
+      "subject": "1111111111111111111111111111111111111111",
+      "statementSha256": "2222222222222222222222222222222222222222222222222222222222222222",
+      "signatureSha256": "3333333333333333333333333333333333333333333333333333333333333333",
+      "trustPolicySha256": "4444444444444444444444444444444444444444444444444444444444444444",
+      "result": "valid"
+    },
+    {
+      "name": "tampered receipt",
+      "receipt": "trusted-distribution-tampered.json",
+      "subject": "1111111111111111111111111111111111111111",
+      "statementSha256": "2222222222222222222222222222222222222222222222222222222222222222",
+      "signatureSha256": "3333333333333333333333333333333333333333333333333333333333333333",
+      "trustPolicySha256": "4444444444444444444444444444444444444444444444444444444444444444",
+      "result": "reject"
+    },
+    {
+      "name": "wrong subject constraint",
+      "receipt": "trusted-distribution.json",
+      "subject": "ffffffffffffffffffffffffffffffffffffffff",
+      "statementSha256": "2222222222222222222222222222222222222222222222222222222222222222",
+      "signatureSha256": "3333333333333333333333333333333333333333333333333333333333333333",
+      "trustPolicySha256": "4444444444444444444444444444444444444444444444444444444444444444",
+      "result": "reject"
+    },
+    {
+      "name": "wrong statement constraint",
+      "receipt": "trusted-distribution.json",
+      "subject": "1111111111111111111111111111111111111111",
+      "statementSha256": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "signatureSha256": "3333333333333333333333333333333333333333333333333333333333333333",
+      "trustPolicySha256": "4444444444444444444444444444444444444444444444444444444444444444",
+      "result": "reject"
+    },
+    {
+      "name": "wrong signature constraint",
+      "receipt": "trusted-distribution.json",
+      "subject": "1111111111111111111111111111111111111111",
+      "statementSha256": "2222222222222222222222222222222222222222222222222222222222222222",
+      "signatureSha256": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "trustPolicySha256": "4444444444444444444444444444444444444444444444444444444444444444",
+      "result": "reject"
+    },
+    {
+      "name": "wrong trust policy constraint",
+      "receipt": "trusted-distribution.json",
+      "subject": "1111111111111111111111111111111111111111",
+      "statementSha256": "2222222222222222222222222222222222222222222222222222222222222222",
+      "signatureSha256": "3333333333333333333333333333333333333333333333333333333333333333",
+      "trustPolicySha256": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "result": "reject"
+    }
+  ]
+}

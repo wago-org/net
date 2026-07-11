@@ -422,6 +422,93 @@ func TestDetachedSignatureInteroperabilityVectors(t *testing.T) {
 	}
 }
 
+func TestTrustedDistributionReceiptInteroperabilityVectors(t *testing.T) {
+	dir := filepath.Join("testdata", "trusted-distribution-receipt-v1")
+	vectorData, err := os.ReadFile(filepath.Join(dir, "vectors.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var vectors struct {
+		Schema            string `json:"schema"`
+		ReceiptEncoding   string `json:"receiptEncoding"`
+		Subject           string `json:"subject"`
+		StatementSHA256   string `json:"statementSha256"`
+		SignatureSHA256   string `json:"signatureSha256"`
+		TrustPolicySHA256 string `json:"trustPolicySha256"`
+		Files             []struct {
+			Path   string `json:"path"`
+			SHA256 string `json:"sha256"`
+		} `json:"files"`
+		Cases []struct {
+			Name              string `json:"name"`
+			Receipt           string `json:"receipt"`
+			Subject           string `json:"subject"`
+			StatementSHA256   string `json:"statementSha256"`
+			SignatureSHA256   string `json:"signatureSha256"`
+			TrustPolicySHA256 string `json:"trustPolicySha256"`
+			Result            string `json:"result"`
+		} `json:"cases"`
+	}
+	if err := decodeCanonicalJSON(vectorData, &vectors, "trusted distribution receipt vectors"); err != nil {
+		t.Fatal(err)
+	}
+	if vectors.Schema != "github.com/wago-org/net/trusted-distribution-receipt-vectors/v1" ||
+		vectors.ReceiptEncoding != "exact-canonical-file-bytes-with-adjacent-sha256" ||
+		!validObjectID(vectors.Subject) || !validSHA256(vectors.StatementSHA256) ||
+		!validSHA256(vectors.SignatureSHA256) || !validSHA256(vectors.TrustPolicySHA256) ||
+		len(vectors.Files) != 4 || len(vectors.Cases) != 6 {
+		t.Fatalf("trusted distribution vector metadata = %+v", vectors)
+	}
+
+	fileDigests := make(map[string]string, len(vectors.Files))
+	for _, file := range vectors.Files {
+		data, err := os.ReadFile(filepath.Join(dir, file.Path))
+		if err != nil {
+			t.Fatal(err)
+		}
+		sum := sha256.Sum256(data)
+		if got := hex.EncodeToString(sum[:]); got != file.SHA256 {
+			t.Fatalf("%s SHA-256 = %s, want %s", file.Path, got, file.SHA256)
+		}
+		fileDigests[file.Path] = file.SHA256
+	}
+	receiptData, err := os.ReadFile(filepath.Join(dir, "trusted-distribution.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var receipt TrustedDistributionReceipt
+	if err := decodeCanonicalJSON(receiptData, &receipt, "trusted distribution receipt vector"); err != nil {
+		t.Fatal(err)
+	}
+	if err := validateTrustedDistributionReceipt(&receipt); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, vector := range vectors.Cases {
+		receipt, digest, err := VerifyTrustedDistributionReceipt(filepath.Join(dir, vector.Receipt), TrustedDistributionReceiptVerifyOptions{
+			ExpectedSubject: vector.Subject, ExpectedStatementSHA256: vector.StatementSHA256,
+			ExpectedSignatureSHA256: vector.SignatureSHA256, ExpectedTrustPolicySHA256: vector.TrustPolicySHA256,
+		})
+		switch vector.Result {
+		case "reject":
+			if err == nil {
+				t.Fatalf("%s unexpectedly accepted: %+v, %s", vector.Name, receipt, digest)
+			}
+		case "valid":
+			if err != nil {
+				t.Fatalf("%s: %v", vector.Name, err)
+			}
+			if digest != fileDigests[vector.Receipt] || receipt.Subject != vectors.Subject ||
+				receipt.StatementSHA256 != vectors.StatementSHA256 || receipt.SignatureSHA256 != vectors.SignatureSHA256 ||
+				receipt.TrustPolicySHA256 != vectors.TrustPolicySHA256 {
+				t.Fatalf("%s verification = %+v, %s", vector.Name, receipt, digest)
+			}
+		default:
+			t.Fatalf("%s has unknown result %q", vector.Name, vector.Result)
+		}
+	}
+}
+
 func TestProductionReadinessReceiptInteroperabilityVectors(t *testing.T) {
 	dir := filepath.Join("testdata", "readiness-receipt-v1")
 	vectorData, err := os.ReadFile(filepath.Join(dir, "vectors.json"))

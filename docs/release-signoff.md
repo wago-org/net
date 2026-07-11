@@ -277,6 +277,14 @@ and archive inputs; it does not repeat Ed25519 verification, establish publisher
 identity, or make a production-readiness decision. Activation must still use the
 strict readiness profile below against the original trusted inputs.
 
+Public interoperability vectors live under
+`internal/releaseprovenance/testdata/trusted-distribution-receipt-v1/`. They
+provide one canonical synthetic receipt with its exact sidecar, a
+basename-correct stale checksum for a tampered receipt, and wrong subject,
+statement, signature, and trust-policy constraint cases. No statement, raw
+signature, public key, trust policy, private key, signed release, production
+identity, or readiness decision is stored there.
+
 ## Production release-candidate readiness
 
 `scripts/release-candidate-readiness.sh` is the strict activation profile. It
