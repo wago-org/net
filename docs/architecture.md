@@ -40,6 +40,11 @@ and exposes only `abi_version`. The extension and low-level import bundle are bo
 derived from one binding table so inspection metadata and actual bindings do not
 drift. `internal/abi` provides allocation-free checked memory ranges and the
 fixed-width IPv4/IPv6 address codec for future protocol packages.
+`internal/resource` provides O(1) opaque-handle lookup with exact kind checks,
+never-reused table identities, per-slot generations, rollover retirement, and
+reverse-creation O(live) cleanup. The table exists independently of protocol
+resources so its stale, forged, wrong-kind, reuse, and cross-table behavior can
+be hardened before sockets are exposed.
 
 No networking resources or backend are attached yet. Wago main at revision
 `8ef17eeb3a74f4982ef64d125282c1dab8c8e240` lacks an instance-close hook. The

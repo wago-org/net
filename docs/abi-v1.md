@@ -15,7 +15,7 @@ additional values through checked guest-memory output pointers.
 ## Scalar conventions
 
 - guest pointers and lengths: `i32`, interpreted as unsigned;
-- opaque handles: `i64`;
+- opaque handles: `i64`; zero is invalid, and bit layout is not guest ABI;
 - durations: `i64` nanoseconds;
 - integer structure fields: little-endian;
 - network address bytes: network byte order;
@@ -85,6 +85,13 @@ semantics, and no guest-memory slice may be retained after a host call.
 
 Unknown backend or Go errors map to a stable status, normally `OTHER` or `IO`.
 Unstable Go error strings are not returned to guests.
+
+Resource handles are scoped to one runtime instance and checked against an exact
+resource kind. Closing a resource invalidates its handle before backend cleanup;
+slot reuse advances a generation, and generation exhaustion retires the slot.
+Handles from another instance, stale handles, wrong-kind handles, zero, and
+malformed values return `BAD_HANDLE`. Guests must not derive or inspect handle
+bits.
 
 ## Compatibility boundary
 
