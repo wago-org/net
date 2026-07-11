@@ -175,9 +175,10 @@ type Extension struct {
 	configErr error
 	modules   plugin.Set
 
-	stateOnce sync.Once
-	instances *instancestate.Manager
-	stateErr  error
+	stateOnce   sync.Once
+	instances   *instancestate.Manager
+	stateErr    error
+	testResolve func(wago.HostModule) (*instancestate.State, bool)
 }
 
 // Network is the shared builder passed to protocol registration packages.
@@ -296,17 +297,28 @@ func (e *Extension) Register(reg *wago.Registry) error {
 	if err != nil {
 		return err
 	}
-	reg.RequireReinstantiation()
-	reg.Hooks().AfterInstantiate(instances.AfterInstantiate)
-	reg.Hooks().BeforeClose(instances.BeforeClose)
+	hostImports, err := reg.HostImports()
+	if err != nil {
+		return err
+	}
+	instances.SetCallerResolver(hostImports.CallerResolver())
+	lifecycle, err := reg.InstanceLifecycle()
+	if err != nil {
+		return err
+	}
+	lifecycle.AfterInstantiate(instances.AfterInstantiate)
+	lifecycle.BeforeClose(instances.BeforeClose)
 	if len(modules) == 0 {
 		return nil
 	}
 	reg.Capability(CapInfo, wago.CapabilityDocs("inspect the Wago networking ABI and interfaces"))
-	registerBindings(reg.ImportModule(Module), e.bindings())
-	host := plugin.NewHost(instances)
+	registerBindings(hostImports.Module(Module), e.bindings())
+	protocolHost := plugin.NewHost(instances)
+	if e.testResolve != nil {
+		protocolHost = plugin.NewTestHost(instances, e.testResolve)
+	}
 	for _, module := range modules {
-		module.Install(reg, host)
+		module.Install(reg, protocolHost)
 	}
 	return nil
 }

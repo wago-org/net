@@ -1,2 +1,4 @@
 github.com/soypat/lneto v0.0.0-20260710133615-ab1a0c735a8b h1:qcoYcwWsFVI7zu0SRqhGD+B07R8o+sLFHwZQ/LtsHkM=
 github.com/soypat/lneto v0.0.0-20260710133615-ab1a0c735a8b/go.mod h1:Be5PjwoYukvHFiUXxpYi8+ppH2F/gw/vjGBvFdv+Ti8=
+github.com/wago-org/workers v0.0.0-20260711080606-1e9139756d8a h1:I832KhInH+NdDVyoA18dwCErTrfduemWY7fccozgXSw=
+github.com/wago-org/workers v0.0.0-20260711080606-1e9139756d8a/go.mod h1:lRgtcCNsXr30h+ZovoKMGhKMvk6slR1cwFDZ7HoBo2g=

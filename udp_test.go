@@ -347,5 +347,3 @@ func concreteNamespace(t testing.TB, state *instance.State) linkedNamespace {
 	}
 	return backend
 }
-
-var _ wago.InstanceHostModule = udpHostModule{}

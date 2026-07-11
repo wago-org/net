@@ -5,6 +5,7 @@ go 1.24
 require (
 	github.com/soypat/lneto v0.0.0-20260710133615-ab1a0c735a8b
 	github.com/wago-org/wago v0.1.0
+	github.com/wago-org/workers v0.0.0-20260711080606-1e9139756d8a
 )
 
 // Wago has not published v0.1.0 yet. Keep the plugin checkout beside a Wago

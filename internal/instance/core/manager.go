@@ -130,8 +130,9 @@ func (s *State) Close() error {
 // Manager is an extension-local attachment map. It must be owned by an
 // extension value; it is intentionally not a package-global registry.
 type Manager struct {
-	mu     sync.RWMutex
-	states map[*wago.Instance]*State
+	mu             sync.RWMutex
+	states         map[*wago.Instance]*State
+	callerResolver *wago.CallerResolver
 
 	policy           *policy.Policy
 	limits           quota.Limits
@@ -166,6 +167,17 @@ func NewManagerConfigured(config Config) (*Manager, error) {
 		readiness:        config.Readiness,
 		namespaceFactory: config.NamespaceFactory,
 	}, nil
+}
+
+// SetCallerResolver installs the least-authority resolver committed with this
+// extension's host.imports registration. It does not grant instance management.
+func (m *Manager) SetCallerResolver(resolver *wago.CallerResolver) {
+	if m == nil {
+		return
+	}
+	m.mu.Lock()
+	m.callerResolver = resolver
+	m.mu.Unlock()
 }
 
 // AfterInstantiate is a Wago lifecycle hook that attaches fresh state after a
@@ -419,15 +431,24 @@ func (m *Manager) ForInstance(instance *wago.Instance) (*State, bool) {
 	return state, ok
 }
 
-// FromHost resolves the exact calling instance through Wago's optional host
-// module identity surface. HostModule-only mocks and low-level imports without
-// Runtime lifecycle attachment fail closed.
+// FromHost resolves the exact active caller through Wago's expiring,
+// runtime-scoped host.imports resolver. Retained, forged, cross-runtime, and
+// low-level HostModule values fail closed before state lookup.
 func (m *Manager) FromHost(module wago.HostModule) (*State, bool) {
-	identity, ok := module.(wago.InstanceHostModule)
-	if !ok {
+	if m == nil || module == nil {
 		return nil, false
 	}
-	return m.ForInstance(identity.Instance())
+	m.mu.RLock()
+	resolver := m.callerResolver
+	m.mu.RUnlock()
+	if resolver == nil {
+		return nil, false
+	}
+	instance, err := resolver.Resolve(module)
+	if err != nil {
+		return nil, false
+	}
+	return m.ForInstance(instance)
 }
 
 // Len returns the number of attached live instances.

@@ -74,24 +74,15 @@ func TestSelectiveTCPBindingUsesExactSharedInstanceState(t *testing.T) {
 	if err := runtime.Use(network); err != nil {
 		t.Fatalf("Use: %v", err)
 	}
-	module, err := runtime.Compile([]byte{0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00})
-	if err != nil {
-		t.Fatalf("Compile empty module: %v", err)
-	}
+	module := selectiveTCPModule(t, runtime)
 	instance, err := runtime.Instantiate(context.Background(), module)
 	if err != nil {
 		t.Fatalf("Instantiate: %v", err)
 	}
 	defer instance.Close()
 
-	fn, ok := runtime.HostImports()[wagonet.TCPModule+".namespace_default"].(wago.HostFunc)
-	if !ok {
-		t.Fatal("selective TCP namespace binding missing")
-	}
-	host := exactHost{instance: instance, memory: make([]byte, wagonet.HandleV1Size)}
-	results := []uint64{0}
-	fn(host, []uint64{0}, results)
-	if got := wagonet.Status(wago.AsI32(results[0])); got != wagonet.StatusNotSupported {
+	host := newExactHost(instance)
+	if got := callTCP(t, runtime, host, "namespace_default", 0); got != wagonet.StatusNotSupported {
 		t.Fatalf("namespace_default without configured namespace = %v", got)
 	}
 }
@@ -112,16 +103,13 @@ func TestDefaultTCPAllowsFiniteOutboundAndDeniesListenerSpecialAndCallerDeniedAu
 	if err := runtime.Use(network); err != nil {
 		t.Fatalf("Use: %v", err)
 	}
-	module, err := runtime.Compile([]byte{0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00})
-	if err != nil {
-		t.Fatal(err)
-	}
+	module := selectiveTCPModule(t, runtime)
 	instance, err := runtime.Instantiate(context.Background(), module)
 	if err != nil {
 		t.Fatalf("Instantiate: %v", err)
 	}
 	defer instance.Close()
-	host := exactHost{instance: instance, memory: make([]byte, 256)}
+	host := newExactHost(instance)
 	namespace := callTCP(t, runtime, host, "namespace_default", 0)
 	if namespace != wagonet.StatusOK {
 		t.Fatalf("namespace_default = %v", namespace)
@@ -163,16 +151,13 @@ func TestDefaultTCPStorageFitsSharedDefaultsAndStopsAtEightStreams(t *testing.T)
 	if err := runtime.Use(network); err != nil {
 		t.Fatalf("Use: %v", err)
 	}
-	module, err := runtime.Compile([]byte{0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00})
-	if err != nil {
-		t.Fatal(err)
-	}
+	module := selectiveTCPModule(t, runtime)
 	instance, err := runtime.Instantiate(context.Background(), module)
 	if err != nil {
 		t.Fatalf("Instantiate: %v", err)
 	}
 	defer instance.Close()
-	host := exactHost{instance: instance, memory: make([]byte, 256)}
+	host := newExactHost(instance)
 	if got := callTCP(t, runtime, host, "namespace_default", 0); got != wagonet.StatusOK {
 		t.Fatalf("namespace_default = %v", got)
 	}
@@ -221,15 +206,57 @@ type exactHost struct {
 func (h exactHost) Memory() []byte           { return h.memory }
 func (h exactHost) Instance() *wago.Instance { return h.instance }
 
-func callTCP(t testing.TB, runtime *wago.Runtime, host exactHost, name string, params ...uint64) wagonet.Status {
+func newExactHost(instance *wago.Instance) exactHost {
+	return exactHost{instance: instance, memory: instance.Memory().Bytes()}
+}
+
+func callTCP(t testing.TB, _ *wago.Runtime, host exactHost, name string, params ...uint64) wagonet.Status {
 	t.Helper()
-	fn, ok := runtime.HostImports()[wagonet.TCPModule+"."+name].(wago.HostFunc)
-	if !ok {
-		t.Fatalf("TCP import %q missing", name)
+	var values []wago.Value
+	switch name {
+	case "namespace_default":
+		values = []wago.Value{wago.ValueI32(int32(params[0]))}
+	case "connect", "listen":
+		values = []wago.Value{wago.ValueI64(int64(params[0])), wago.ValueI32(int32(params[1])), wago.ValueI32(int32(params[2]))}
+	default:
+		t.Fatalf("unsupported TCP wrapper %q", name)
 	}
-	results := []uint64{0}
-	fn(host, params, results)
-	return wagonet.Status(wago.AsI32(results[0]))
+	results, err := host.instance.Call(context.Background(), "tcp_"+name, values...)
+	if err != nil || len(results) != 1 {
+		t.Fatalf("TCP %s call = %v, %v", name, results, err)
+	}
+	return wagonet.Status(results[0].I32())
+}
+
+func selectiveTCPModule(t testing.TB, runtime *wago.Runtime) *wago.Module {
+	t.Helper()
+	importEntry := func(name string, typeIndex byte) []byte {
+		return append(append(append(wasmtest.Name(wagonet.TCPModule), wasmtest.Name(name)...), 0x00), typeIndex)
+	}
+	module, err := runtime.Compile(wasmtest.Module(
+		wasmtest.Section(1, wasmtest.Vec(
+			wasmtest.FuncType([]wasm.ValType{wasm.I32}, []wasm.ValType{wasm.I32}),
+			wasmtest.FuncType([]wasm.ValType{wasm.I64, wasm.I32, wasm.I32}, []wasm.ValType{wasm.I32}),
+		)),
+		wasmtest.Section(2, wasmtest.Vec(importEntry("namespace_default", 0), importEntry("connect", 1), importEntry("listen", 1))),
+		wasmtest.Section(3, wasmtest.Vec(wasmtest.ULEB(0), wasmtest.ULEB(1), wasmtest.ULEB(1))),
+		wasmtest.Section(5, wasmtest.Vec([]byte{0x00, 0x01})),
+		wasmtest.Section(7, wasmtest.Vec(
+			wasmtest.ExportEntry("tcp_namespace_default", 0, 3),
+			wasmtest.ExportEntry("tcp_connect", 0, 4),
+			wasmtest.ExportEntry("tcp_listen", 0, 5),
+			wasmtest.ExportEntry("memory", 2, 0),
+		)),
+		wasmtest.Section(10, wasmtest.Vec(
+			wasmtest.Code([]byte{0x20, 0x00, 0x10, 0x00, 0x0b}),
+			wasmtest.Code([]byte{0x20, 0x00, 0x20, 0x01, 0x20, 0x02, 0x10, 0x01, 0x0b}),
+			wasmtest.Code([]byte{0x20, 0x00, 0x20, 0x01, 0x20, 0x02, 0x10, 0x02, 0x0b}),
+		)),
+	))
+	if err != nil {
+		t.Fatalf("Compile selective TCP module: %v", err)
+	}
+	return module
 }
 
 func selectiveStaticIPv4() *wagonet.StaticIPv4Config {

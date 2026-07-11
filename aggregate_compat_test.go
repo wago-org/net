@@ -8,6 +8,7 @@ import (
 	dnsbinding "github.com/wago-org/net/internal/binding/dns"
 	tcpbinding "github.com/wago-org/net/internal/binding/tcp"
 	udpbinding "github.com/wago-org/net/internal/binding/udp"
+	instancestate "github.com/wago-org/net/internal/instance/core"
 	nscore "github.com/wago-org/net/internal/namespace/core"
 	dnsns "github.com/wago-org/net/internal/namespace/dns"
 	tcpns "github.com/wago-org/net/internal/namespace/tcp"
@@ -21,6 +22,13 @@ import (
 // use compat.Init or explicit protocol registration.
 func Init(config Config) *Extension {
 	extension := newExtension(config)
+	extension.testResolve = func(module wago.HostModule) (*instancestate.State, bool) {
+		identity, ok := module.(interface{ Instance() *wago.Instance })
+		if !ok {
+			return nil, false
+		}
+		return extension.instanceManager().ForInstance(identity.Instance())
+	}
 	if extension.configErr == nil {
 		if err := extension.registerAllProtocols(); err != nil {
 			extension.configErr = err
@@ -89,6 +97,21 @@ func aggregateTestDescriptors(config Config) []plugin.Module {
 	}
 }
 
+func aggregateTestHost(extension *Extension) plugin.Host {
+	manager := extension.instanceManager()
+	resolve := extension.testResolve
+	if resolve == nil {
+		resolve = func(module wago.HostModule) (*instancestate.State, bool) {
+			identity, ok := module.(interface{ Instance() *wago.Instance })
+			if !ok {
+				return nil, false
+			}
+			return manager.ForInstance(identity.Instance())
+		}
+	}
+	return plugin.NewTestHost(manager, resolve)
+}
+
 func protocolTestBindings(bindings []plugin.Binding) []binding {
 	converted := make([]binding, len(bindings))
 	for i, protocolBinding := range bindings {
@@ -105,37 +128,37 @@ func protocolTestBindings(bindings []plugin.Binding) []binding {
 }
 
 func (e *Extension) tcpBindings() []binding {
-	return protocolTestBindings(tcpbinding.Bindings(plugin.NewHost(e.instanceManager())))
+	return protocolTestBindings(tcpbinding.Bindings(aggregateTestHost(e)))
 }
 
 func (e *Extension) udpBindings() []binding {
-	return protocolTestBindings(udpbinding.Bindings(plugin.NewHost(e.instanceManager())))
+	return protocolTestBindings(udpbinding.Bindings(aggregateTestHost(e)))
 }
 
 func (e *Extension) dnsBindings() []binding {
-	return protocolTestBindings(dnsbinding.Bindings(plugin.NewHost(e.instanceManager())))
+	return protocolTestBindings(dnsbinding.Bindings(aggregateTestHost(e)))
 }
 
 func (e *Extension) dnsNamespaceDefault(module wago.HostModule, params, results []uint64) {
-	dnsbinding.NamespaceDefault(plugin.NewHost(e.instanceManager()), module, params, results)
+	dnsbinding.NamespaceDefault(aggregateTestHost(e), module, params, results)
 }
 
 func (e *Extension) dnsResolve(module wago.HostModule, params, results []uint64) {
-	dnsbinding.Resolve(plugin.NewHost(e.instanceManager()), module, params, results)
+	dnsbinding.Resolve(aggregateTestHost(e), module, params, results)
 }
 
 func (e *Extension) dnsNext(module wago.HostModule, params, results []uint64) {
-	dnsbinding.Next(plugin.NewHost(e.instanceManager()), module, params, results)
+	dnsbinding.Next(aggregateTestHost(e), module, params, results)
 }
 
 func (e *Extension) dnsCancel(module wago.HostModule, params, results []uint64) {
-	dnsbinding.Cancel(plugin.NewHost(e.instanceManager()), module, params, results)
+	dnsbinding.Cancel(aggregateTestHost(e), module, params, results)
 }
 
 func (e *Extension) dnsClose(module wago.HostModule, params, results []uint64) {
-	dnsbinding.Close(plugin.NewHost(e.instanceManager()), module, params, results)
+	dnsbinding.Close(aggregateTestHost(e), module, params, results)
 }
 
 func (e *Extension) dnsPoll(module wago.HostModule, params, results []uint64) {
-	dnsbinding.Poll(plugin.NewHost(e.instanceManager()), module, params, results)
+	dnsbinding.Poll(aggregateTestHost(e), module, params, results)
 }
