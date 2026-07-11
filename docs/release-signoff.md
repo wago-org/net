@@ -53,7 +53,9 @@ The gate performs, in order:
     SIGSEGV signature if it remains; and
 12. final clean-tree checks for all four repositories; and
 13. deterministic machine-readable provenance plus SHA-256 verification of every
-    retained evidence artifact and the manifest itself.
+    retained evidence artifact and the manifest itself; and
+14. standalone semantic verification and deterministic export of a compressed
+    downstream review bundle.
 
 `scripts/arm64-execution-signoff.sh` always cross-compiles a `CGO_ENABLED=0`
 arm64 test binary before runner selection. `ARM64_EXECUTION=auto` (the release default)
@@ -97,10 +99,45 @@ A passing gate writes `provenance.json` using schema
 
 `evidence.sha256` covers every retained artifact that existed before provenance
 emission. `provenance.sha256` covers the canonical indented JSON manifest. The
-release script verifies both checksum files before reporting success. The
-manifest deliberately has no wall-clock timestamp, hostname, absolute checkout
-path, or hosted-CI assertion; identical inputs and evidence produce identical
-JSON.
+release script verifies both checksum files before packaging. The manifest
+deliberately has no wall-clock timestamp, hostname, absolute checkout path, or
+hosted-CI assertion; identical inputs and evidence produce identical JSON.
+
+## Standalone review verification
+
+A passing gate exports `.wago/release-signoff.review.tar.gz` and its adjacent
+`.sha256` file. The archive contains only the manifest-listed evidence plus
+`evidence.sha256`, `provenance.json`, and `provenance.sha256`. Tar paths are
+sorted; uid/gid, names, modes, and timestamps are normalized; gzip metadata is
+fixed. Byte-identical evidence therefore produces a byte-identical archive.
+
+A downstream reviewer can validate an extracted signoff directory or the archive
+without the Wago, lneto, WASI, or plugin source checkouts and without rerunning
+tests:
+
+```sh
+GOWORK=off go run ./internal/cmd/release-review \
+  -mode verify -bundle /path/to/release-signoff.review.tar.gz
+```
+
+To require a separately obtained expected plugin commit, add
+`-subject <40-hex-commit>`. Verification rejects a different schema; changed or
+unordered evidence; unknown or noncanonical manifest fields; unsafe archive
+paths; wrong exact Wago/lneto/WASI pins or Wago parent order; inconsistent
+checks, exceptions, limitations, targets, revisions, toolchains, or inspection
+facts; and any extra or missing artifact. It requires the complete
+four-capability, 24-import surface and distinguishes cross-build from executed or
+skipped arm64. The verifier checks integrity and release-policy consistency, not
+publisher authenticity: obtain the expected subject commit and archive checksum
+through a trusted release channel. It does not claim hosted CI publication.
+
+To export or reproduce a bundle from an existing passing evidence directory:
+
+```sh
+SIGNOFF_DIR=.wago/release-signoff \
+REVIEW_BUNDLE=.wago/release-signoff.review.tar.gz \
+  scripts/release-review-bundle.sh
+```
 
 ## CI tiers
 

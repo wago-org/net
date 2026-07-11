@@ -387,7 +387,7 @@ func artifactKind(path string) string {
 		return "inspection"
 	case strings.HasPrefix(path, "arm64/"):
 		return "arm64"
-	case path == "wasi-test.txt" || path == "wasi-status.txt":
+	case path == "wasi-test.txt" || path == "wasi-status.txt" || strings.HasPrefix(path, "wasi-upstream/"):
 		return "exception"
 	case path == "checks.tsv":
 		return "checks"

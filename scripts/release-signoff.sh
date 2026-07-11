@@ -216,4 +216,8 @@ GOWORK=off go run ./internal/cmd/release-provenance \
   sha256sum -c provenance.sha256
 )
 
-echo "release-signoff: PASS (artifacts: $out; provenance: $out/provenance.json)"
+log "standalone deterministic review bundle"
+SIGNOFF_DIR="$out" REVIEW_BUNDLE="$out.review.tar.gz" REVIEW_SUBJECT="$(repo_head "$root")" \
+  "$root/scripts/release-review-bundle.sh"
+
+echo "release-signoff: PASS (artifacts: $out; provenance: $out/provenance.json; review bundle: $out.review.tar.gz)"
