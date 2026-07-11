@@ -36,19 +36,30 @@ The gate performs, in order:
 3. bounded fuzz smoke for DNS wire parsing, DNS ABI layouts, checked DNS guest
    memory, and shared ABI layouts (`FUZZTIME=3s` by default);
 4. guest UDP/TCP poll and fixed UDP queue benchmarks with `-benchmem`;
-5. TinyGo tests and a `linux/arm64` standard-Go cross-build;
-6. source-boundary checks proving lneto imports remain in
+5. TinyGo tests and a `linux/arm64` standard-Go package cross-build;
+6. a separately cross-compiled `linux/arm64` test binary and bounded execution
+   smoke when a native arm64 or `qemu-aarch64` runner is available;
+7. source-boundary checks proving lneto imports remain in
    `internal/backend/lneto` and forbidden blocking/backoff APIs remain absent;
-7. standard-Go and TinyGo custom CLI builds that blank-import `register`, compare
+8. standard-Go and TinyGo custom CLI builds that blank-import `register`, compare
    inspection byte-for-byte, and require exactly four capabilities and 24
    imports (1 core, 6 DNS, 11 TCP, 6 UDP);
-8. Wago `src/wago` plus facade tests, and focused lifecycle/worker/class race
+9. Wago `src/wago` plus facade tests, and focused lifecycle/worker/class race
    tests, using a temporary helper only for Wago main's unrelated missing
    `trapCode` test helper;
-9. the complete pinned lneto test suite;
-10. the pinned WASI suite, accepting only the documented native preview-1
+10. the complete pinned lneto test suite;
+11. the pinned WASI suite, accepting only the documented native preview-1
     SIGSEGV signature if it remains; and
-11. final clean-tree checks for all four repositories.
+12. final clean-tree checks for all four repositories.
+
+`scripts/arm64-execution-signoff.sh` always cross-compiles a `CGO_ENABLED=0`
+arm64 test binary before runner selection. `ARM64_EXECUTION=auto` (the release default)
+records `executed-native`, `executed-qemu`, or a truthful `skipped-no-runner`
+status. Use `ARM64_EXECUTION=required` on an arm64/QEMU CI tier so absence of a
+runner is fatal; use `ARM64_EXECUTION=skip` only for an explicitly shortened job.
+The smoke runs metadata plus real UDP, TCP, and DNS backend paths under a two
+minute timeout. This executed result is intentionally distinct from the package
+cross-build and must not be described as native support when skipped.
 
 The linked-worker/class integration test is standard-Go/race-only (`!tinygo`):
 it drives Wago's native JIT worker goroutines and blocking cooperative dispatch.
@@ -73,8 +84,9 @@ Use the same script rather than maintaining a second command matrix:
 - **Release candidate:** the default gate, plus repeated benchmarks on an idle
   pinned runner and the release tag/commit recorded beside `revisions.txt`.
 - **Cross-platform:** native race/TinyGo remain required on `linux/amd64`; the
-  gate also cross-builds standard Go for `linux/arm64`. Add native arm64 execution
-  before claiming arm64 release support.
+  gate also cross-builds standard Go for `linux/arm64`. An arm64 tier must set
+  `ARM64_EXECUTION=required` and retain `arm64/status.txt`, `runner.txt`, the
+  binary checksum, and test log before claiming executed arm64 support.
 
 Hosted CI cannot truthfully fetch the current Wago prerequisite yet: the merged
 commit above exists on the local `net/instance-close-hooks` audit branch and must

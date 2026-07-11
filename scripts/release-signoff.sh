@@ -87,6 +87,9 @@ log "TinyGo and cross-compile"
 GOWORK=off tinygo test ./...
 GOOS=${CROSS_GOOS:-linux} GOARCH=${CROSS_GOARCH:-arm64} CGO_ENABLED=0 GOWORK=off go build ./...
 
+log "bounded linux/arm64 execution smoke"
+ARM64_SIGNOFF_DIR="$out/arm64" "$root/scripts/arm64-execution-signoff.sh"
+
 log "source boundaries and custom package inspection"
 "$root/scripts/check-source-boundaries.sh"
 WAGO_DIR="$wago_dir" LNETO_DIR="$lneto_dir" SIGNOFF_CUSTOM_DIR="$out/custom-cli" \
