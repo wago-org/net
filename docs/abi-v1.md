@@ -50,8 +50,77 @@ not by the structural codec.
 
 Memory ranges are checked with `uint64` pointer-plus-length arithmetic. A
 zero-length range at the exact end of memory is valid. Output helpers validate
-the complete range before mutation. Overlapping writes follow ordinary `copy`
-semantics, and no guest-memory slice may be retained after a host call.
+the complete range before mutation. Multi-output operations reject overlapping
+nonempty output ranges, and no guest-memory slice may be retained after a host
+call.
+
+## UDP module and signatures
+
+Complete UDP operations are defined in the independently capability-gated
+`wago_net_udp` import module. Every function returns one status as `i32`:
+
+```text
+namespace_default(out_handle_ptr: i32) -> i32
+bind(namespace: i64, local_addr_ptr: i32, out_socket_ptr: i32) -> i32
+send(socket: i64, payload_ptr: i32, payload_len: i32, remote_addr_ptr: i32) -> i32
+receive(socket: i64, payload_ptr: i32, payload_len: i32, out_result_ptr: i32) -> i32
+close(socket: i64) -> i32
+poll(events_ptr: i32, event_capacity: i32, budget_ptr: i32, out_result_ptr: i32) -> i32
+```
+
+`namespace_default` discovers the single configured namespace for the exact
+calling instance. It returns `NOT_SUPPORTED` when no namespace is configured.
+The namespace remains host-owned and is not closed by the guest. `bind` writes a
+new socket handle only on `OK`. `send` either accepts the whole datagram and
+returns `OK`, accepts none and returns `AGAIN`, or returns another failure.
+`receive` consumes exactly one datagram only after both output ranges have been
+validated. It writes payload bytes and result metadata only on `OK`; `AGAIN`
+leaves both outputs unchanged. `close` accepts only a live UDP socket handle.
+
+All resource operations require the narrow `net.udp` capability. They resolve
+state through the exact calling Wago instance and do not support the low-level
+stateless import path.
+
+## UDP receive result
+
+`wago_net_udp_receive_result_v1` is 48 bytes:
+
+```c
+struct wago_net_udp_receive_result_v1 {
+    struct wago_net_addr_v1 source; // offset 0
+    uint32_t copied;                // offset 32
+    uint32_t datagram_bytes;        // offset 36
+    uint32_t flags;                 // offset 40
+    uint32_t reserved;              // offset 44
+};
+```
+
+Flag bit `1` is `TRUNCATED`; no other v1 bits are valid. `copied` is the payload
+prefix written to the guest buffer. `datagram_bytes` is the original datagram
+payload size. Truncation consumes and discards the unread suffix. Empty datagrams
+are represented by `OK`, zero lengths, and a valid source endpoint; they are not
+confused with `AGAIN`.
+
+## Bounded poll layouts
+
+`wago_net_poll_budget_v1` is 24 bytes, containing six consecutive `uint32_t`
+fields: `scans`, `events`, `service_attempts`, `service_packets`,
+`service_bytes`, and `service_operations`. `scans` and `events` must be nonzero.
+If `service_attempts` is nonzero, all three per-attempt service bounds must also
+be nonzero. The requested event count must not exceed `event_capacity`.
+
+Each 16-byte `wago_net_poll_event_v1` contains `uint64_t handle`, `uint32_t
+readiness`, and a zero `uint32_t reserved` field. Readiness is level-triggered:
+bit `1` readable, bit `2` writable, bit `4` accept, bit `8` connected, bit `16`
+DNS result, bit `32` error, and bit `64` closed. Unknown bits are invalid.
+
+`wago_net_poll_result_v1` is 24 bytes, containing six consecutive `uint32_t`
+fields: `events`, `scanned`, `service_attempts`, `service_completed`,
+`stale_registrations`, and zero `reserved`. `poll` validates its complete event
+capacity and result output before service begins. It writes the first `events`
+entries and the result on both `OK` and `AGAIN`; unused event slots are unchanged.
+No call sleeps, scans beyond the supplied bound, emits beyond the event bound, or
+services beyond the supplied attempt and per-attempt budgets.
 
 ## Status values
 
