@@ -144,12 +144,15 @@ path as well. No process-global instance map is used. The low-level `Imports` bu
 suitable only for stateless core imports such as `abi_version`; resource-owning
 protocol extensions require the Runtime lifecycle path.
 
-The companion Wago branch `net/instance-close-hooks` contains the prerequisites:
-commit `74e1e32` reconciles deterministic `BeforeClose` cleanup with the broader
-plugin lifecycle design, preserves exact host-call identity, and adds origin/error/
-after-close lifecycle metadata; commit `54499ba` adds transactional extension
-reset eligibility without changing `Instance` size, the low-level APIs, or the
-TinyGo-compatible `HostFunc` shape.
+The companion Wago branch `net/instance-close-hooks` now merges both prerequisite
+histories at `97e6f91`: its first parent preserves lifecycle/reset/identity work
+through `54499ba`, while its second parent preserves the divergent worker plugin
+history at `ffd5ef4b`. Runtime instance metadata carries origin, GC inheritance,
+and an optional expiring worker host-call scope outside `Instance`, so the
+776-byte instance layout and TinyGo-compatible `HostFunc` shape remain unchanged.
+Worker registration is transactional, workers retain finite runtime/queue quotas,
+linked parent close waits for child disposal, hook panics cannot skip network
+cleanup, and direct or worker host calls still expose exact instance identity.
 
 ## Pool reset enforcement
 
@@ -157,6 +160,20 @@ The networking extension declares `Registry.RequireReinstantiation`. A class may
 still request `wago.ResetMemorySnapshot`, but `Class.ResetPolicy` reports and
 `Lease.Release` enforces `wago.ResetReinstantiate` while networking is registered.
 The old physical instance is closed before its fresh replacement is published;
-old UDP/TCP handles become closed in the retired state and fail as cross-table
-handles in the new state. Tests rebind the same UDP and TCP ports on the fresh
-lease to prove backend resources and quotas did not cross the boundary.
+old UDP/TCP/DNS handles become closed in the retired state and fail as
+cross-table handles in the new state. Tests rebind UDP/TCP resources on fresh
+leases and exercise linked workers whose child instances own all three protocol
+kinds. Parent release waits for worker disposal, reverse hooks observe state
+before networking detaches it, an isolated hook panic cannot prevent cleanup,
+failed callback validation retires the child's state and releases worker quota,
+and the next lease receives fresh parent and worker identities.
+
+## Release gate
+
+`scripts/release-signoff.sh` is the single reproducible local/CI entry point. It
+pins the merged Wago branch and the lneto/WASI audits, runs standard Go, race,
+bounded fuzz, benchmarks, TinyGo, cross-build, custom CLI inspection, source
+boundary scans, companion repository tests, and final clean-tree checks. Exact
+inputs, CI tiers, artifacts, and the narrowly accepted known WASI preview-1 native
+SIGSEGV are documented in `docs/release-signoff.md`. Hosted CI remains blocked
+until the merged Wago prerequisite is published at a fetchable immutable ref.

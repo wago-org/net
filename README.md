@@ -55,14 +55,28 @@ but it is not binary-compatible with WASI Component Model resources.
 
 ## Development
 
+Fast local checks:
+
 ```sh
 go test ./...
 go test -race ./...
 go vet ./...
+scripts/check-source-boundaries.sh
 ```
 
-Long-running implementation work follows `.pi/skills/recursive-handoff/SKILL.md`
-and the current durable state in `agent-todo.md`.
+The deterministic release gate additionally pins and verifies the companion Wago,
+lneto, and WASI audit repositories; runs bounded fuzz smoke, benchmarks, TinyGo,
+cross-build, package/custom CLI inspection, and final clean-tree checks; and
+records disposable artifacts under `.wago/release-signoff`:
+
+```sh
+scripts/release-signoff.sh
+```
+
+See [`docs/release-signoff.md`](docs/release-signoff.md) for the exact matrix,
+pinned revisions, CI tiers, and the narrowly accepted known WASI preview-1 native
+SIGSEGV. Long-running implementation work follows
+`.pi/skills/recursive-handoff/SKILL.md` and the durable state in `agent-todo.md`.
 
 ## License
 
