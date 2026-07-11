@@ -127,8 +127,10 @@ hosted-CI assertion; identical inputs and evidence produce identical JSON.
 
 ## Standalone review verification
 
-A passing gate exports `.wago/release-signoff.review.tar.gz` and its adjacent
-`.sha256` file. The archive contains only the manifest-listed evidence plus
+A passing gate exports `.wago/release-signoff.review.tar.gz`, its adjacent
+`.sha256` file, and an unsigned canonical
+`.wago/release-signoff.review.distribution.json` statement with its own checksum.
+The archive contains only the manifest-listed evidence plus
 `evidence.sha256`, `provenance.json`, and `provenance.sha256`. This includes seven
 non-thin packs under `source-objects/` and canonical object inventories. The
 production net pack contains the exact release subject's commit and complete
@@ -172,6 +174,25 @@ production-Wago publication states, `publisher_authentication=external-required`
 and `hosted_release_automation=disabled`. This is hash pinning, not a signature
 scheme or a hosted release activation claim.
 
+The adjacent distribution statement is deterministic canonical JSON using schema
+`github.com/wago-org/net/distribution-statement/v1`. It records only the exact
+plugin subject, provenance SHA-256, review-bundle SHA-256, first-class review
+subjects, and publication status already verified from the archive. It is kept
+outside the archive to avoid a digest cycle and is suitable as the byte-exact
+payload for detached signing by an external publisher system. It deliberately
+contains no signature, key-discovery hint, or publisher identity claim. Recreate
+it explicitly with:
+
+```sh
+GOWORK=off go run ./internal/cmd/release-review \
+  -mode statement \
+  -bundle /path/to/release-signoff.review.tar.gz \
+  -out /path/to/release.distribution.json \
+  -strict-distribution \
+  -subject <40-hex-commit> \
+  -bundle-sha256 <64-hex-sha256>
+```
+
 Verification rejects a different schema; changed or
 unordered evidence; unknown or noncanonical manifest fields; unsafe archive
 paths; wrong exact production or first-class current-review subjects, trees, or
@@ -198,7 +219,7 @@ SOURCE_OBJECT_DIR=.wago/release-signoff/source-objects \
   scripts/release-source-objects.sh
 ```
 
-To export or reproduce a bundle from an existing passing evidence directory:
+To export or reproduce a bundle and its unsigned canonical statement from an existing passing evidence directory:
 
 ```sh
 SIGNOFF_DIR=.wago/release-signoff \

@@ -72,6 +72,40 @@ func TestVerifyAndDeterministicBundleExport(t *testing.T) {
 	if _, err := Verify(dir, strict); err == nil {
 		t.Fatal("strict distribution directory unexpectedly accepted")
 	}
+
+	firstStatement := filepath.Join(t.TempDir(), "distribution.json")
+	secondStatement := filepath.Join(t.TempDir(), "distribution.json")
+	statement, firstStatementHash, err := WriteDistributionStatement(first, firstStatement, strict)
+	if err != nil {
+		t.Fatalf("WriteDistributionStatement first: %v", err)
+	}
+	_, secondStatementHash, err := WriteDistributionStatement(second, secondStatement, strict)
+	if err != nil {
+		t.Fatalf("WriteDistributionStatement second: %v", err)
+	}
+	firstStatementData, err := os.ReadFile(firstStatement)
+	if err != nil {
+		t.Fatal(err)
+	}
+	secondStatementData, err := os.ReadFile(secondStatement)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if firstStatementHash != secondStatementHash || !reflect.DeepEqual(firstStatementData, secondStatementData) {
+		t.Fatalf("deterministic statements differ: %s != %s", firstStatementHash, secondStatementHash)
+	}
+	if statement.Schema != DistributionStatementSchemaV1 || statement.Subject != opts.ExpectedSubject ||
+		statement.ProvenanceSHA256 != verifiedStrict.ProvenanceSHA256 || statement.ReviewBundleSHA256 != firstHash ||
+		!reflect.DeepEqual(statement.ReviewSubjects, verifiedStrict.Manifest.ReviewSubjects) ||
+		statement.Publication != verifiedStrict.Manifest.Publication {
+		t.Fatalf("distribution statement = %+v", statement)
+	}
+	if strings.Contains(string(firstStatementData), "signature") || strings.Contains(string(firstStatementData), "publisherIdentity") {
+		t.Fatalf("unsigned distribution statement contains an authenticity claim: %s", firstStatementData)
+	}
+	if _, _, err := WriteDistributionStatement(dir, filepath.Join(t.TempDir(), "invalid.json"), opts); err == nil {
+		t.Fatal("distribution statement from directory unexpectedly accepted")
+	}
 }
 
 func TestExportSourceObjectsIsDeterministic(t *testing.T) {

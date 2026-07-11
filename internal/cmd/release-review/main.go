@@ -9,7 +9,7 @@ import (
 )
 
 func main() {
-	mode := flag.String("mode", "verify", "operation: verify or export")
+	mode := flag.String("mode", "verify", "operation: verify, export, or statement")
 	source := flag.String("source", "", "extracted release-signoff evidence directory")
 	bundle := flag.String("bundle", "", "review bundle directory or .tar.gz path")
 	out := flag.String("out", "", "destination .tar.gz path for export")
@@ -43,6 +43,19 @@ func main() {
 			os.Exit(1)
 		}
 		printVerification("exported", *out, verified, bundleHash)
+	case "statement":
+		if *bundle == "" || *out == "" {
+			fmt.Fprintln(os.Stderr, "release-review: -bundle and -out are required for statement")
+			os.Exit(2)
+		}
+		statement, statementHash, err := releaseprovenance.WriteDistributionStatement(*bundle, *out, opts)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+		fmt.Printf("release-review: wrote distribution statement %s\n", *out)
+		fmt.Printf("schema=%s\nsubject=%s\nprovenance_sha256=%s\nbundle_sha256=%s\nstatement_sha256=%s\n",
+			statement.Schema, statement.Subject, statement.ProvenanceSHA256, statement.ReviewBundleSHA256, statementHash)
 	default:
 		fmt.Fprintf(os.Stderr, "release-review: unsupported mode %q\n", *mode)
 		os.Exit(2)

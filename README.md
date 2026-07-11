@@ -68,8 +68,9 @@ The deterministic release gate additionally pins and verifies the production
 Wago/lneto/WASI inputs and exact current Wago/networking/workers review objects;
 reconstructs the current plugin workspace from immutable packs with a cold,
 network-disabled module cache; records publication status without claiming
-publisher authentication or hosted activation; audits unsupported pool topology;
-runs bounded fuzz smoke, benchmarks, TinyGo,
+publisher authentication or hosted activation; emits an unsigned canonical
+statement binding the exact subject, provenance, bundle, and review subjects for
+external detached signing; audits unsupported pool topology; runs bounded fuzz smoke, benchmarks, TinyGo,
 cross-build, package/custom CLI inspection, and final clean-tree checks; and
 records disposable artifacts under `.wago/release-signoff`:
 
