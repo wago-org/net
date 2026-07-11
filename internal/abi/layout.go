@@ -143,9 +143,19 @@ func EncodeUDPReceiveResultV1(memory []byte, ptr uint32, result namespace.Datagr
 	return true
 }
 
-// CheckTCPCreateV1 validates a complete endpoint input and stream-result output
-// before a listen/connect implementation changes backend state. Nonempty input
+// CheckTCPListenV1 validates a complete endpoint input and listener-handle
+// output before a listen implementation changes backend state. Nonempty input
 // and output ranges must be disjoint.
+func CheckTCPListenV1(memory []byte, endpointPtr, listenerPtr uint32) bool {
+	return CheckRanges(memory, true,
+		Range{Ptr: endpointPtr, Length: AddressV1Size},
+		Range{Ptr: listenerPtr, Length: HandleV1Size},
+	)
+}
+
+// CheckTCPCreateV1 validates a complete endpoint input and stream-result output
+// before a connect implementation changes backend state. Nonempty input and
+// output ranges must be disjoint.
 func CheckTCPCreateV1(memory []byte, endpointPtr, streamPtr uint32) bool {
 	return CheckRanges(memory, true,
 		Range{Ptr: endpointPtr, Length: AddressV1Size},

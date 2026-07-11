@@ -24,6 +24,8 @@ const (
 	Module = "wago_net"
 	// UDPModule independently owns the complete guest UDP operation surface.
 	UDPModule = "wago_net_udp"
+	// TCPModule is reserved for the complete guest TCP operation surface.
+	TCPModule = "wago_net_tcp"
 
 	// ABIVersion1 encodes ABI version 1.0 as major in the upper 16 bits and minor
 	// in the lower 16 bits.
@@ -33,6 +35,8 @@ const (
 	CapInfo wago.Capability = "net.info"
 	// CapUDP permits checked nonblocking UDP namespace, socket, and poll access.
 	CapUDP wago.Capability = "net.udp"
+	// CapTCP is reserved for checked nonblocking TCP listener, stream, and poll access.
+	CapTCP wago.Capability = "net.tcp"
 )
 
 // PolicyConfig and related aliases expose the backend-neutral authority model

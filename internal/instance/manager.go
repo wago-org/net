@@ -517,6 +517,25 @@ func (s *State) ownTCPStreamLocked(stream namespace.TCPStream) (resource.Handle,
 	return handle, nil
 }
 
+// TCPStreamEndpoints returns backend-neutral local and remote endpoints for one
+// exact live stream without exposing or retaining the backend resource.
+func (s *State) TCPStreamEndpoints(handle resource.Handle) (namespace.Endpoint, namespace.Endpoint, error) {
+	if s == nil {
+		return namespace.Endpoint{}, namespace.Endpoint{}, ErrInvalidConfig
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	stream, err := s.lookupTCPStreamLocked(handle)
+	if err != nil {
+		return namespace.Endpoint{}, namespace.Endpoint{}, err
+	}
+	local, remote := stream.LocalEndpoint(), stream.RemoteEndpoint()
+	if !local.Valid() || !remote.Valid() {
+		return namespace.Endpoint{}, namespace.Endpoint{}, namespace.Fail(namespace.FailureIO, ErrInvalidBackendResult)
+	}
+	return local, remote, nil
+}
+
 // FinishTCPConnect performs one nonblocking connection-completion check.
 func (s *State) FinishTCPConnect(handle resource.Handle) (namespace.Progress, error) {
 	if s == nil {

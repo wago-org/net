@@ -95,6 +95,9 @@ func TestUDPReceiveResultV1AtomicEncoding(t *testing.T) {
 
 func TestTCPV1CheckedRangesAndAtomicCodecs(t *testing.T) {
 	memory := bytes.Repeat([]byte{0x5a}, 160)
+	if !CheckTCPListenV1(memory, 0, 32) || CheckTCPListenV1(memory, 16, 32) || CheckTCPListenV1(memory, 0, 156) {
+		t.Fatal("TCP listen range validation mismatch")
+	}
 	if !CheckTCPCreateV1(memory, 0, 32) || CheckTCPCreateV1(memory, 16, 32) || CheckTCPCreateV1(memory, 0, 100) {
 		t.Fatal("TCP create range validation mismatch")
 	}
@@ -204,6 +207,7 @@ func FuzzV1Layouts(f *testing.F) {
 		}
 		_, _ = DecodeEndpointV1(memory, ptr)
 		_, _ = DecodePollBudgetV1(memory, ptr)
+		_ = CheckTCPListenV1(memory, ptr, count)
 		_ = CheckTCPCreateV1(memory, ptr, count)
 		_ = CheckTCPIOV1(memory, ptr, count, size)
 		_ = EncodeTCPStreamV1(memory, ptr, resource.Handle(1), namespace.Endpoint{}, namespace.Endpoint{})
