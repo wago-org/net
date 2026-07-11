@@ -3,7 +3,7 @@ package guest
 import (
 	"errors"
 
-	"github.com/wago-org/net/internal/abi"
+	abicore "github.com/wago-org/net/internal/abi/core"
 	"github.com/wago-org/net/internal/namespace"
 	"github.com/wago-org/net/internal/plugin"
 	"github.com/wago-org/net/internal/readiness"
@@ -21,20 +21,20 @@ func Poll(host plugin.Host, module wago.HostModule, params, results []uint64) {
 	}
 	memory := Memory(module)
 	eventsPtr, eventCapacity := uint32(params[0]), uint32(params[1])
-	budget, ok := abi.DecodePollBudgetV1(memory, uint32(params[2]))
+	budget, ok := abicore.DecodePollBudgetV1(memory, uint32(params[2]))
 	if !ok || budget.Events > eventCapacity {
 		SetStatus(results, StatusInvalidArgument)
 		return
 	}
-	eventBytes := uint64(eventCapacity) * uint64(abi.PollEventV1Size)
+	eventBytes := uint64(eventCapacity) * uint64(abicore.PollEventV1Size)
 	if eventBytes > uint64(^uint32(0)) {
 		SetStatus(results, StatusInvalidArgument)
 		return
 	}
 	resultPtr := uint32(params[3])
-	if !abi.CheckRanges(memory, true,
-		abi.Range{Ptr: eventsPtr, Length: uint32(eventBytes)},
-		abi.Range{Ptr: resultPtr, Length: abi.PollResultV1Size},
+	if !abicore.CheckRanges(memory, true,
+		abicore.Range{Ptr: eventsPtr, Length: uint32(eventBytes)},
+		abicore.Range{Ptr: resultPtr, Length: abicore.PollResultV1Size},
 	) {
 		SetStatus(results, StatusInvalidArgument)
 		return
@@ -48,7 +48,7 @@ func Poll(host plugin.Host, module wago.HostModule, params, results []uint64) {
 	var pollErr error
 	err := state.Quotas().WithService(pollWorkUnits(budget), func() {
 		_, progress, pollErr = state.Poll(budget, func(events []readiness.Event, report readiness.Report, _ namespace.Progress) error {
-			if !abi.EncodePollEventsV1(memory, eventsPtr, events) || !abi.EncodePollResultV1(memory, resultPtr, report, budget) {
+			if !abicore.EncodePollEventsV1(memory, eventsPtr, events) || !abicore.EncodePollResultV1(memory, resultPtr, report, budget) {
 				return errPollEncoding
 			}
 			return nil
