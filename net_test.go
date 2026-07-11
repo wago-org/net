@@ -4,6 +4,8 @@ import (
 	"reflect"
 	"testing"
 
+	"github.com/wago-org/net/internal/namespace"
+
 	wago "github.com/wago-org/wago"
 )
 
@@ -44,6 +46,19 @@ func TestExtensionMetadataAndABIBinding(t *testing.T) {
 	fn(nil, nil, results)
 	if got := uint32(results[0]); got != ABIVersion1 {
 		t.Fatalf("abi_version = %#x, want %#x", got, ABIVersion1)
+	}
+}
+
+func TestExtensionRejectsInvalidStaticNamespaceBeforeRegistration(t *testing.T) {
+	extension := Init(Config{StaticIPv4: &StaticIPv4Config{}})
+	runtime := wago.NewRuntime()
+	err := runtime.Use(extension)
+	failure, ok := namespace.FailureOf(err)
+	if !ok || failure != namespace.FailureInvalidArgument {
+		t.Fatalf("invalid static namespace error = %v", err)
+	}
+	if extension.instanceManager() != nil {
+		t.Fatal("invalid extension constructed an instance manager")
 	}
 }
 

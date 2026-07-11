@@ -46,11 +46,20 @@ type Namespace struct {
 	closed             bool
 }
 
+// ValidateConfig reports whether config can construct a static IPv4 namespace
+// without allocating backend state.
+func ValidateConfig(config Config) error {
+	if !validConfig(config) {
+		return namespace.Fail(namespace.FailureInvalidArgument, packetlink.ErrInvalidConfig)
+	}
+	return nil
+}
+
 // New creates one static IPv4 namespace. Link frame storage must accommodate a
 // complete Ethernet frame for the configured MTU.
 func New(config Config) (*Namespace, error) {
-	if !validConfig(config) {
-		return nil, namespace.Fail(namespace.FailureInvalidArgument, packetlink.ErrInvalidConfig)
+	if err := ValidateConfig(config); err != nil {
+		return nil, err
 	}
 	link, err := packetlink.New(config.Link)
 	if err != nil {

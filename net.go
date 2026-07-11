@@ -6,9 +6,16 @@ package net
 import (
 	"embed"
 	"encoding/json"
+	"net/netip"
 	"sync"
 
+	lnetobackend "github.com/wago-org/net/internal/backend/lneto"
 	instancestate "github.com/wago-org/net/internal/instance"
+	"github.com/wago-org/net/internal/namespace"
+	"github.com/wago-org/net/internal/packetlink"
+	"github.com/wago-org/net/internal/policy"
+	"github.com/wago-org/net/internal/quota"
+	"github.com/wago-org/net/internal/readiness"
 	wago "github.com/wago-org/wago"
 )
 
@@ -24,21 +31,89 @@ const (
 	CapInfo wago.Capability = "net.info"
 )
 
-// Config configures the core networking extension. It is intentionally empty
-// until a core option has implemented behavior and tests.
-type Config struct{}
+// PolicyConfig and related aliases expose the backend-neutral authority model
+// without making callers import an internal package.
+type PolicyConfig = policy.Config
+type PolicyRule = policy.Rule
+type PolicyAction = policy.Action
+type PolicyTransport = policy.Transport
+type PolicyDirection = policy.Direction
+type PolicyPortRange = policy.PortRange
+
+const (
+	PolicyDeny  = policy.ActionDeny
+	PolicyAllow = policy.ActionAllow
+
+	PolicyTransportUDP = policy.TransportUDP
+	PolicyTransportTCP = policy.TransportTCP
+	PolicyTransportDNS = policy.TransportDNS
+
+	PolicyInbound  = policy.DirectionInbound
+	PolicyOutbound = policy.DirectionOutbound
+)
+
+// QuotaLimits and ReadinessConfig are finite per-instance limits. Zero values
+// deny the corresponding class; pointers in Config distinguish explicit zero
+// limits from the extension defaults.
+type QuotaLimits = quota.Limits
+type ReadinessConfig = readiness.Config
+
+// PacketLinkConfig fixes packet ownership storage for one static namespace.
+type PacketLinkConfig = packetlink.Config
+
+// StaticIPv4Config configures one isolated lneto-backed IPv4 namespace per
+// Runtime instance without exposing lneto types in the host configuration.
+type StaticIPv4Config struct {
+	Hostname               string
+	RandSeed               int64
+	HardwareAddress        [6]byte
+	GatewayHardwareAddress [6]byte
+	IPv4Address            netip.Addr
+	MTU                    uint16
+	Link                   PacketLinkConfig
+}
+
+// Config configures immutable authority and finite instance-owned networking
+// state. A nil StaticIPv4 leaves the extension state-only and guest-visible
+// inspection remains unchanged.
+type Config struct {
+	Policy     PolicyConfig
+	Limits     *QuotaLimits
+	Readiness  *ReadinessConfig
+	StaticIPv4 *StaticIPv4Config
+}
 
 // Extension implements the core Wago networking extension.
 type Extension struct {
-	config Config
+	config    Config
+	configErr error
 
 	stateOnce sync.Once
 	instances *instancestate.Manager
 }
 
-// Init constructs the core networking extension.
+// Init constructs the core networking extension. Configuration errors are
+// returned by Register so Init remains compatible with Wago extension setup.
 func Init(config Config) *Extension {
-	return &Extension{config: config, instances: instancestate.NewManager()}
+	managerConfig := instancestate.DefaultConfig()
+	managerConfig.Policy = config.Policy
+	if config.Limits != nil {
+		managerConfig.Limits = *config.Limits
+	}
+	if config.Readiness != nil {
+		managerConfig.Readiness = *config.Readiness
+	}
+	if config.StaticIPv4 != nil {
+		backendConfig := lnetoConfig(*config.StaticIPv4)
+		if err := lnetobackend.ValidateConfig(backendConfig); err != nil {
+			return &Extension{config: config, configErr: err}
+		}
+		managerConfig.NamespaceFactory = func() (namespace.Namespace, error) {
+			return lnetobackend.New(backendConfig)
+		}
+	}
+	manager, err := instancestate.NewManagerConfigured(managerConfig)
+	return &Extension{config: config, configErr: err, instances: manager}
 }
 
 // Info returns extension metadata loaded from wago.json.
@@ -46,6 +121,12 @@ func (e *Extension) Info() wago.ExtensionInfo { return extensionInfo }
 
 // Register declares the core networking capability and host imports.
 func (e *Extension) Register(reg *wago.Registry) error {
+	if e == nil || e.configErr != nil {
+		if e == nil {
+			return instancestate.ErrInvalidConfig
+		}
+		return e.configErr
+	}
 	instances := e.instanceManager()
 	reg.Hooks().AfterInstantiate(instances.AfterInstantiate)
 	reg.Hooks().BeforeClose(instances.BeforeClose)
@@ -99,12 +180,27 @@ func abiVersion(_ wago.HostModule, _ []uint64, results []uint64) {
 }
 
 func (e *Extension) instanceManager() *instancestate.Manager {
+	if e == nil {
+		return nil
+	}
 	e.stateOnce.Do(func() {
-		if e.instances == nil {
+		if e.instances == nil && e.configErr == nil {
 			e.instances = instancestate.NewManager()
 		}
 	})
 	return e.instances
+}
+
+func lnetoConfig(config StaticIPv4Config) lnetobackend.Config {
+	return lnetobackend.Config{
+		Hostname:               config.Hostname,
+		RandSeed:               config.RandSeed,
+		HardwareAddress:        config.HardwareAddress,
+		GatewayHardwareAddress: config.GatewayHardwareAddress,
+		IPv4Address:            config.IPv4Address,
+		MTU:                    config.MTU,
+		Link:                   config.Link,
+	}
 }
 
 type manifest struct {
