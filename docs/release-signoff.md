@@ -29,8 +29,9 @@ scripts/release-signoff.sh
 
 The gate performs, in order:
 
-1. revision, merge-parent, toolchain, symlink, initial clean-tree, and exact
-   reviewed plugin-plan compatibility-decision checks;
+1. revision, merge-parent, toolchain, symlink, initial clean-tree, exact
+   reviewed plugin-plan compatibility-decision checks, and an isolated audit of
+   the reviewed docs/CI-only WASI upstream snapshot;
 2. workspace and `GOWORK=off` Go tests, race tests, vet, package listing, and a
    no-change `go mod tidy`;
 3. bounded fuzz smoke for DNS wire parsing, DNS ABI layouts, checked DNS guest
@@ -125,7 +126,11 @@ current remote divergence, and immutable-publication requirement.
 `scripts/wago-plugin-plan-compat.sh` and
 `docs/wago-plugin-plan-compatibility.md` separately pin the reviewed redesign
 snapshot and prove why it requires a lifecycle/identity/worker migration rather
-than a silent pin replacement. Once the networking merge is published, CI
+than a silent pin replacement. `scripts/wasi-upstream-preview1-audit.sh` and
+`docs/wasi-upstream-preview1-audit.md` prove that the reviewed newer WASI tree
+changes only documentation and CI, then reproduce the same native preview-1
+SIGSEGV from an isolated exact-object export; the release pin therefore remains
+unchanged. Once the networking merge is published, CI
 should check out the exact pinned Wago, lneto, and WASI
 revisions in the required adjacent layout and invoke this script. Do not replace
 the pin with a moving branch.

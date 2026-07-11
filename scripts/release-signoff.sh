@@ -69,6 +69,9 @@ record_check pinned-revisions pass 'exact audit revisions and ordered Wago paren
 record_check initial-clean-trees pass 'plugin, Wago, lneto, and WASI'
 WAGO_DIR="$wago_dir" "$root/scripts/wago-plugin-plan-compat.sh" | tee "$out/wago-plugin-plan-compat.txt"
 record_check wago-plugin-plan-compat pass 'reviewed redesign requires migration; networking pin unchanged'
+WASI_DIR="$wasi_dir" WAGO_DIR="$wago_dir" WASI_UPSTREAM_AUDIT_OUT="$out/wasi-upstream" \
+  "$root/scripts/wasi-upstream-preview1-audit.sh" | tee "$out/wasi-upstream-preview1-audit.txt"
+record_check wasi-upstream-preview1-audit accepted-exception 'reviewed docs/CI-only upstream still reaches the native preview-1 SIGSEGV; pin retained'
 printf 'go: %s\n' "$(go version)" | tee "$out/toolchains.txt"
 printf 'tinygo: %s\n' "$(tinygo version | tr '\n' ' ')" | tee -a "$out/toolchains.txt"
 printf 'plugin: %s\nWago: %s\nlneto: %s\nWASI: %s\n' \
