@@ -21,12 +21,15 @@ public protocol or protocol binding package. The former root `Init` symbol was
 removed because source compatibility could not override that dependency
 boundary; same-package regression tests use test-only aggregate helpers. Runtime
 and Go dependency fixtures cover none, every single protocol, every pair, and
-all three, rejecting omitted public and binding packages while recording the
-still-unified instance and lneto backend as blockers. Unified instance
-operations and the lneto adapter, protocol-local finite defaults, and granular
+all three, rejecting omitted public, binding, and instance-operation packages.
+`internal/instance/core` now owns only exact attachment, shared resources,
+readiness, quotas, polling, and teardown; TCP, UDP, and DNS operations live in
+independently selected `internal/instance/{tcp,udp,dns}` packages and run under
+the core lifecycle mutex. The combined namespace contracts, ABI codecs, root
+lneto construction, lneto adapter, protocol-local finite defaults, and granular
 register packages remain unsplit; full compile-time isolation is therefore not
-yet claimed. Standard, race, vet, and TinyGo suites pass after the compatibility
-extraction and dependency gates.
+yet claimed. Standard, focused race, and dependency suites pass after the
+instance split.
 
 ## Goal
 
@@ -143,8 +146,10 @@ to `compat.Init`. Full compile isolation is still blocked for these reasons:
   `namespace.go`, `udp.go`, `tcp.go`, and `dns.go`.
 - `internal/backend/lneto.Namespace` stores all protocol configuration and live
   collections in one concrete struct.
-- `internal/instance/manager.go` combines common attachment lifecycle with
-  UDP/TCP/DNS creation and operation methods.
+- `internal/instance/core` is now protocol-neutral, while
+  `internal/instance/{tcp,udp,dns}` contain independently selected operations;
+  all use one core lifecycle lock, resource table, readiness coordinator, quota
+  account, and deterministic close path.
 - `internal/namespace` and `internal/abi` combine common and protocol-specific
   declarations in single packages.
 - `register/register.go` always constructs the aggregate extension.
@@ -223,10 +228,11 @@ Small root, TCP-only, UDP-only, DNS-only, pair, and aggregate fixtures now gate
 exact runtime capability/import sets under standard Go and TinyGo. Their
 standard-Go `go list -deps` gate rejects every omitted public protocol and
 binding package plus accidental aggregate-package dependencies. The fixtures
-currently assert the unified `internal/instance` and `internal/backend/lneto`
-packages remain present so the next split cannot be mistaken for completed
-isolation. Extend the same gate to protocol-specific instance-operation and
-lneto-adapter packages as those packages are extracted.
+require `internal/instance/core` in every graph, require only the selected
+`internal/instance/{tcp,udp,dns}` operation packages, and continue to assert the
+unified `internal/backend/lneto` package remains present so the next split cannot
+be mistaken for completed isolation. Extend the same gate to protocol-specific
+namespace, ABI, and lneto-adapter packages as those packages are extracted.
 
 Run the complete standard, race, vet, fuzz, benchmark, TinyGo, cross-build,
 worker/lifecycle, source-boundary, and release-signoff matrices before declaring

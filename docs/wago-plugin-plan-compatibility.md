@@ -34,7 +34,7 @@ an explicit operation.
 
 The current networking production source depends directly on two APIs absent
 from the redesign: `Registry.RequireReinstantiation` in `net.go` and
-`InstanceHostModule` in `internal/instance/manager.go`. It therefore does not
+`InstanceHostModule` in `internal/instance/core/manager.go`. It therefore does not
 compile unchanged against `07a70b5`. More importantly, source adaptation alone
 would be insufficient because the redesign removed the reviewed worker/class
 model and currently lacks the close-hook panic containment that ensures one

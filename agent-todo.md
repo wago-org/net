@@ -129,7 +129,7 @@ queries, and 560-byte atomic A/AAAA/CNAME records.
 `internal/resource` provides O(1), kind-checked, generation-safe opaque handles
 with never-reused table identities, safe slot retirement before generation wrap,
 reverse-creation O(live) cleanup, fuzz coverage, and focused benchmarks. Each core
-`Extension` owns an `internal/instance.Manager` that attaches one resource table,
+`Extension` owns an `internal/instance/core.Manager` that attaches one resource table,
 one bounded readiness coordinator, one immutable compiled policy, and one finite
 quota account to each exact Runtime-created `*wago.Instance`. Optional static IPv4
 configuration transactionally creates a namespace handle and readiness entry;
@@ -541,40 +541,49 @@ no signature, key, trust root, production decision, or hosted-activation claim.
   retaining the historical same-package regression surface only in test code.
 - `1f97b2b` — gates root, single, pair, and all-protocol fixtures with exact
   runtime inspection plus omitted public/binding dependency rejection.
+- `a49f2bd` — relocates exact-instance ownership beneath
+  `internal/instance/core` and switches the root lifecycle and host bridge to
+  that shared package.
+- `f151744` — extracts TCP listener/stream operations into
+  `internal/instance/tcp`, preserves lifecycle-lock serialization and rollback,
+  and rejects the operation package from non-TCP dependency graphs.
+- `43f1dd9` — extracts UDP and DNS operations into their protocol packages,
+  removes protocol methods from the core, and extends exact dependency gates.
 
 ## Active work
 
 The current protocol-submodule slice is complete with exactly four bounded
-atomic commits. Explicit `compat.Init(Config)` now composes one root network with
-public UDP, TCP, and DNS registration, and the root `register` package uses that
-all-protocol bundle. The production root no longer contains `Init`, aggregate
-registration methods, or TCP/UDP/DNS binding shims and imports no public protocol
-or `internal/binding` package; the historical aggregate host-function regression
-surface remains only in `aggregate_compat_test.go`. Root `Imports(Config)` still
-returns only the stateless `wago_net.abi_version` table without selecting any
-protocol.
+atomic commits. `internal/instance/core` now owns only the extension-local exact
+instance map, one state lifecycle mutex, namespace ownership, one generation-safe
+resource table, one readiness coordinator and poll scratch area, one immutable
+policy, one finite quota account, bounded poll, kind-checked close, and reverse
+teardown. `internal/instance/tcp`, `internal/instance/udp`, and
+`internal/instance/dns` own their protocol operations and execute each operation
+through the core lock, preserving atomic backend/resource/readiness rollback and
+serialization against `State.Close`.
 
-Root, single-protocol, pair, and all-protocol fixtures now prove exact runtime
-capabilities/import counts under standard Go and TinyGo. A standard-Go
-`go list -deps` gate rejects every omitted public protocol and binding package
-and rejects accidental `compat` or root `register` edges. The gate deliberately
-asserts that unified `internal/instance` and `internal/backend/lneto` remain in
-each graph, making the next blockers explicit rather than claiming complete
-isolation. Standard tests, race tests, vet, and `GOWORK=off tinygo test ./...`
-pass after the extraction.
+Root, single-protocol, pair, and all-protocol fixtures continue to prove exact
+runtime capabilities/import counts under standard Go and TinyGo. The standard-Go
+`go list -deps` gate now rejects every omitted public, binding, and
+instance-operation package and rejects accidental `compat` or root `register`
+edges. Every graph intentionally retains only `internal/instance/core` plus the
+selected protocol operation packages; the unified `internal/backend/lneto`
+blocker remains explicit. Standard, race, vet, TinyGo, source-boundary, runtime
+inspection, and dependency validation pass after the split.
 
-Compile isolation is still incomplete because root `Config`/`newExtension`, the
-unified instance manager, namespace contracts, ABI package, and lneto adapter
-compile all protocol operations together. Package-local finite client defaults,
-granular `tcp/register`, `udp/register`, and `dns/register`, and the complete
-release matrix also remain. The next slice should begin splitting
-`internal/instance` into a protocol-neutral lifecycle/attachment core plus
-protocol operation packages while preserving one resource table, readiness
-coordinator, quota account, exact-instance map, and teardown order. The exact
-workers subject remains published, while current Wago/networking reviews and the
-production ordered-parent Wago merge remain unpublished. Pooling remains
-unsupported, native arm64 execution is unavailable, and both WASI preview-1
-exceptions remain active.
+Compile isolation is still incomplete because root `Config`/`newExtension`
+constructs the combined lneto namespace, while `internal/namespace`,
+`internal/abi`, and `internal/backend/lneto` still compile all protocol
+contracts, layouts, and adapters. Package-local finite client defaults, granular
+`tcp/register`, `udp/register`, and `dns/register`, and the complete release
+matrix also remain. The next slice should split protocol ABI codecs and
+namespace contracts into separate packages, extend omitted-package dependency
+gates, and prepare the lneto adapter/root configuration split without moving
+shared resource, readiness, quota, poll, or teardown ownership out of the core.
+The exact workers subject remains published, while current Wago/networking
+reviews and the production ordered-parent Wago merge remain unpublished. Pooling
+remains unsupported, native arm64 execution is unavailable, and both WASI
+preview-1 exceptions remain active.
 
 ## Ordered backlog
 

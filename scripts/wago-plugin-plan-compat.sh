@@ -59,7 +59,7 @@ require_absent "$reviewed_redesign" src/wago/instantiate.go 'func callCloseHook'
 
 # Tie the Wago findings to production networking source, not tests alone.
 grep -q 'reg.RequireReinstantiation()' "$root/net.go" || fail 'networking no longer declares reset safety; update this audit'
-grep -q 'wago.InstanceHostModule' "$root/internal/instance/manager.go" || fail 'networking exact-host identity dependency changed; update this audit'
+grep -q 'wago.InstanceHostModule' "$root/internal/instance/core/manager.go" || fail 'networking exact-host identity dependency changed; update this audit'
 
 plugin_ref=$(git -C "$wago_dir" rev-parse --verify refs/remotes/origin/plugin-improvements 2>/dev/null || true)
 main_ref=$(git -C "$wago_dir" rev-parse --verify refs/remotes/origin/main 2>/dev/null || true)

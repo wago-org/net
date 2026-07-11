@@ -2,8 +2,8 @@
 // capability and import module on a shared networking extension.
 //
 // The public facade constructs its own opaque TCP descriptor and installs the
-// TCP-only binding package. Compile-time isolation is still incomplete until
-// shared instance operations and the lneto adapter are split by protocol.
+// TCP-only binding and instance-operation packages. Compile-time isolation is
+// still incomplete until namespace/ABI contracts and the lneto adapter split.
 package tcp
 
 import (
