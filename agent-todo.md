@@ -513,32 +513,57 @@ no signature, key, trust root, production decision, or hosted-activation claim.
 - `8e60454` — independently verifies both canonical receipt/sidecar pairs and
   their exact linkage under explicit subject, statement, signature, policy, and
   intermediary-receipt constraints while preserving v1 compatibility.
-- `HEAD` (`net: publish release decision chain interoperability cases`) —
+- `39475a0` (`net: publish release decision chain interoperability cases`) —
   publishes deterministic synthetic linked ready/blocked, stale-checksum tamper,
   wrong-link, and wrong-constraint cases without storing signature bytes, a key,
   trust root, private key, signed release, production decision, or activation
   claim.
+- `257658a` — adds the protocol-neutral composition registry, exact-instance host
+  bridge, shared guest status/poll helpers, extracted TCP binding package, and
+  public selective TCP facade with executable registration checks.
+- `b1e5a2c` — extracts the six checked UDP guest bindings into
+  `internal/binding/udp` while retaining a thin aggregate root shim.
+- `3b87c84` — adds public selective UDP registration with exact inspection,
+  unresolved-import, duplicate/freeze, nil, and exact-instance tests.
+- `55ba876` — records the selective UDP migration without claiming compile
+  isolation or finite defaults.
+- `1401710` — extracts the six checked DNS guest bindings into
+  `internal/binding/dns` while preserving the aggregate compatibility tests.
+- `e5dbdf6` — adds public selective DNS registration with exact DNS-only runtime
+  and ordinary unresolved TCP/UDP import tests.
+- `281a6cc` — covers none, every single protocol, every pair, and all three
+  through the public selective registration APIs.
 
 ## Active work
 
 The current protocol-submodule slice is complete with exactly four bounded
-atomic commits. The shared composition registry and TCP extraction were
-executable-validated, including standard and race suites. The six UDP guest
-bindings now live in `internal/binding/udp`, use the protocol-neutral exact-host
-bridge plus shared status/poll helpers, and remain reachable from `Init(Config)`
-through a thin aggregate root shim. Public `udp.Register(network, ...Option)` now
-selects only `net.udp`, `wago_net.abi_version`, and the six UDP imports; external
-tests prove exact inspection, ordinary unresolved TCP/DNS imports, duplicate and
-freeze behavior, nil handling, and an exact-instance host call. Standard tests,
-race tests, and vet pass. Compile isolation is still incomplete because root
-compatibility shims import the TCP and UDP bindings and unified
-`internal/instance` and `internal/backend/lneto` compile all protocol operations.
-DNS extraction, finite client defaults, granular register packages, dependency
-fixtures, TinyGo/release gates, and the final root compatibility move remain.
-The exact workers subject remains published, while current Wago/networking
-reviews and the production ordered-parent Wago merge remain unpublished. Pooling
-remains unsupported, native arm64 execution is unavailable, and both WASI
-preview-1 exceptions remain active.
+atomic commits. The six DNS guest bindings now live in `internal/binding/dns`,
+reuse the protocol-neutral exact-host bridge plus shared status/poll helpers,
+and preserve the checked query rollback, output non-mutation, cancellation,
+polling, and exact-instance behavior covered by the existing root suite. Public
+`dns.Register(network, ...Option)` now selects only `net.dns`,
+`wago_net.abi_version`, and the six DNS imports at runtime; external DNS-only
+tests prove exact inspection, ordinary unresolved TCP/UDP imports, duplicate and
+freeze behavior, nil handling, and an exact-instance host call. A separate
+external public-API matrix now covers no protocol, all three singles, every pair,
+and all three through `tcp.Register`, `udp.Register`, and `dns.Register`, with
+exact capability/import counts and ordinary failure for every omitted protocol
+import. Standard tests, race tests, vet, and `GOWORK=off tinygo test ./...` pass.
+
+Compile isolation is still incomplete. `go list -deps` for each public protocol
+still reaches all three `internal/binding` packages because the imported root
+retains thin aggregate compatibility shims. Each graph also reaches unified
+`internal/instance` and `internal/backend/lneto`, which compile all protocol
+operations. Package-local finite client defaults, granular register packages,
+dependency fixtures, and full release gates remain. The next slice should move
+the aggregate `Init(Config)` compatibility implementation out of the lightweight
+root before beginning the instance/core split: removing the root binding shims
+first gives every selective facade an honest protocol-only binding edge and
+makes subsequent dependency fixtures diagnose the deeper instance/backend
+coupling precisely. The exact workers subject remains published, while current
+Wago/networking reviews and the production ordered-parent Wago merge remain
+unpublished. Pooling remains unsupported, native arm64 execution is unavailable,
+and both WASI preview-1 exceptions remain active.
 
 ## Ordered backlog
 

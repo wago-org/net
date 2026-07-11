@@ -34,8 +34,11 @@ network := wagonet.New()
 if err := tcp.Register(network); err != nil {
     return err
 }
-// Compose another protocol only when the guest needs it.
+// Compose other protocols only when the guest needs them.
 if err := udp.Register(network); err != nil {
+    return err
+}
+if err := dns.Register(network); err != nil {
     return err
 }
 
@@ -48,13 +51,16 @@ if err := rt.Use(network); err != nil {
 Registering only TCP exposes `net.info` and `net.tcp`, with
 `wago_net.abi_version` and the eleven `wago_net_tcp` imports. Registering only
 UDP analogously exposes `net.info`, `net.udp`, the shared ABI import, and the six
-`wago_net_udp` imports. Unregistered protocol imports are absent and fail normal
-WebAssembly import resolution. The public TCP and UDP facades each construct an
-opaque descriptor, and their checked host bindings live in protocol-specific
-internal binding packages. Full compile isolation is not yet claimed: the
-aggregate root compatibility path still imports both binding packages, and the
-shared instance operations plus lneto adapter remain unified. Package-local
-finite client defaults also remain migration work.
+`wago_net_udp` imports. Registering only DNS exposes `net.info`, `net.dns`, the
+shared ABI import, and the six `wago_net_dns` imports. Unregistered protocol
+imports are absent and fail normal WebAssembly import resolution. The public
+TCP, UDP, and DNS facades each construct an opaque descriptor, and all three
+checked host tables live in protocol-specific internal binding packages. An
+external public-API matrix covers no protocol, every single protocol, every
+pair, and all three. Full compile isolation is not yet claimed: the aggregate
+root compatibility path still imports all three binding packages, and the shared
+instance operations plus lneto adapter remain unified. Package-local finite
+client defaults also remain migration work.
 
 The aggregate advanced compatibility path remains available while protocol
 configuration is split into its public packages:
@@ -71,7 +77,8 @@ if err := wago.NewRuntime().Use(network); err != nil {
 
 Each configured Runtime instance receives its own isolated namespace and
 handles. `Init` explicitly selects UDP, TCP, and DNS; new selective callers
-should prefer `New` plus protocol registration.
+should prefer `New` plus `tcp.Register`, `udp.Register`, and `dns.Register` as
+needed.
 
 The extension declares that networking state requires physical reinstantiation.
 Wago therefore downgrades `ResetMemorySnapshot` and other in-place class reset

@@ -5,19 +5,22 @@ implemented: `net.New` creates an empty shared network, protocol descriptors are
 recorded through an implementation-neutral `internal/plugin` registry, Wago
 registration freezes selection, and exact none/single/pair/all inspection tests
 cover capabilities, imports, duplicate selection, freeze behavior, and ordinary
-unregistered-import failure. Public `tcp.Register(network, ...Option)` and
-`udp.Register(network, ...Option)` facades now construct their exact opaque
-protocol descriptors directly. The eleven checked TCP bindings and six checked
-UDP bindings live in `internal/binding/tcp` and `internal/binding/udp`, reached
-through a protocol-neutral exact-instance host bridge and shared guest
-status/poll helpers. UDP-only runtime tests prove exact capability/import
-inspection, unresolved TCP/DNS imports, duplicate/freeze behavior, and direct
-host calls against the root-owned exact instance. `Init(Config)` remains the
-aggregate compatibility path and currently retains thin root TCP and UDP shims,
-so the root still imports both binding packages. Unified instance operations and
-the lneto adapter, the public DNS package, protocol-local finite defaults, and
-granular register packages remain unsplit; compile-time isolation is therefore
-not yet claimed.
+unregistered-import failure. Public `tcp.Register(network, ...Option)`,
+`udp.Register(network, ...Option)`, and `dns.Register(network, ...Option)`
+facades now construct their exact opaque protocol descriptors directly. The
+eleven checked TCP bindings, six checked UDP bindings, and six checked DNS
+bindings live in protocol-specific `internal/binding` packages, reached through
+a protocol-neutral exact-instance host bridge and shared guest status/poll
+helpers. Protocol-local tests prove each single registration's exact
+capability/import surface, unresolved imports for both omitted protocols,
+duplicate/freeze behavior, and direct host calls against the root-owned exact
+instance. An external public-API matrix covers none, each single protocol, every
+pair, and all three. `Init(Config)` remains the aggregate compatibility path and
+currently retains thin root TCP, UDP, and DNS shims, so the root still imports
+all three binding packages. Unified instance operations and the lneto adapter,
+protocol-local finite defaults, and granular register packages remain unsplit;
+compile-time isolation is therefore not yet claimed. Standard, race, vet, and
+TinyGo suites pass after the DNS extraction and public matrix.
 
 ## Goal
 
@@ -127,9 +130,9 @@ layouts; they must not import protocol implementations.
 
 The current root cannot provide compile isolation for these reasons:
 
-- Thin root `udp.go` and `tcp.go` compatibility shims import their extracted
-  binding packages, while root `dns.go` still owns all DNS guest bindings; thus
-  importing the root still compiles every protocol binding.
+- Thin root `udp.go`, `tcp.go`, and `dns.go` compatibility shims import their
+  extracted binding packages; thus importing the root still compiles every
+  protocol binding.
 - `net.go` imports `internal/backend/lneto`, whose single package contains
   `namespace.go`, `udp.go`, `tcp.go`, and `dns.go`.
 - `internal/backend/lneto.Namespace` stores all protocol configuration and live
