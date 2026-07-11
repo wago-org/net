@@ -50,9 +50,13 @@ func main() { wagocli.Main("$key-release-signoff") }
 EOF
 }
 write_cli net github.com/wago-org/net/register
-write_cli net-tcp github.com/wago-org/net/tcp/register
-write_cli net-udp github.com/wago-org/net/udp/register
-write_cli net-dns github.com/wago-org/net/dns/register
+keys=(net)
+if [[ -d "$net_dir/tcp/register" && -d "$net_dir/udp/register" && -d "$net_dir/dns/register" ]]; then
+  write_cli net-tcp github.com/wago-org/net/tcp/register
+  write_cli net-udp github.com/wago-org/net/udp/register
+  write_cli net-dns github.com/wago-org/net/dns/register
+  keys+=(net-tcp net-udp net-dns)
+fi
 
 cat >"$out/cmd/validate/main.go" <<'EOF'
 package main
@@ -127,7 +131,7 @@ EOF
 (
   cd "$out"
   GOWORK=off go mod tidy
-  for key in net net-tcp net-udp net-dns; do
+  for key in "${keys[@]}"; do
     GOWORK=off go build -trimpath -o "wago-$key-go" "./cmd/$key"
     GOWORK=off tinygo build -scheduler=tasks -o "wago-$key-tinygo" "./cmd/$key"
     "./wago-$key-go" plugin inspect "$key" --json >"inspection-$key-go.json"
@@ -135,6 +139,12 @@ EOF
     cmp "inspection-$key-go.json" "inspection-$key-tinygo.json"
     GOWORK=off go run ./cmd/validate "$key" "inspection-$key-go.json"
   done
+  cp inspection-net-go.json inspection-go.json
+  cp inspection-net-tinygo.json inspection-tinygo.json
 )
 
-echo "custom-cli: standard Go and TinyGo inspection match for net, net-tcp, net-udp, and net-dns at $out"
+if ((${#keys[@]} == 4)); then
+  echo "custom-cli: standard Go and TinyGo inspection match for net, net-tcp, net-udp, and net-dns at $out"
+else
+  echo "custom-cli: standard Go and TinyGo aggregate inspection match for historical source without granular bundles at $out"
+fi

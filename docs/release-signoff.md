@@ -42,17 +42,20 @@ The gate performs, in order:
    isolated audit of the reviewed docs/CI-only WASI upstream snapshot;
 2. workspace and `GOWORK=off` Go tests, race tests, vet, package listing, and a
    no-change `go mod tidy`;
-3. bounded fuzz smoke for DNS wire parsing, DNS ABI layouts, checked DNS guest
-   memory, and shared ABI layouts (`FUZZTIME=3s` by default);
+3. bounded fuzz smoke for DNS wire parsing; split DNS, TCP, UDP, and shared-core
+   ABI layouts; and checked DNS, TCP, and UDP guest memory (`FUZZTIME=3s` by
+   default);
 4. guest UDP/TCP poll and fixed UDP queue benchmarks with `-benchmem`;
 5. TinyGo tests and a `linux/arm64` standard-Go package cross-build;
 6. a separately cross-compiled `linux/arm64` test binary and bounded execution
    smoke when a native arm64 or `qemu-aarch64` runner is available;
 7. source-boundary checks proving lneto imports remain in
    `internal/backend/lneto` and forbidden blocking/backoff APIs remain absent;
-8. standard-Go and TinyGo custom CLI builds that blank-import `register`, compare
-   inspection byte-for-byte, and require exactly four capabilities and 24
-   imports (1 core, 6 DNS, 11 TCP, 6 UDP);
+8. standard-Go and TinyGo custom CLI builds for `register`, `tcp/register`,
+   `udp/register`, and `dns/register`; byte-for-byte inspection comparison; and
+   exact aggregate or one-protocol capability/import counts. Historical packed
+   review subjects that predate granular packages retain the aggregate-only
+   inspection path and legacy artifact names;
 9. Wago `src/wago` plus facade tests, and focused lifecycle/worker/class race
    tests, using a temporary helper only for Wago main's unrelated missing
    `trapCode` test helper;
@@ -72,6 +75,26 @@ The gate performs, in order:
     retained evidence artifact and the manifest itself; and
 16. standalone semantic verification and deterministic export of a compressed
     downstream review bundle.
+
+### Protocol-submodule validation on July 11, 2026
+
+The selective architecture passed workspace and `GOWORK=off` tests, race, vet,
+TinyGo, source boundaries, direct and granular dependency fixtures, twentyfold
+focused protocol/core repetitions, eight practical one-second fuzz targets,
+allocation-reporting guest-poll/UDP-queue benchmarks, linux/arm64 package and
+smoke-binary cross-compilation, and standard-Go/TinyGo inspection of `net`,
+`net-tcp`, `net-udp`, and `net-dns`. The pack-only cold-cache reconstruction of
+the pinned historical current-plugin review also passed after the custom CLI
+kept its aggregate-only compatibility mode. Arm64 execution was truthfully
+`skipped-no-runner`.
+
+The complete release script did not pass. Its strict clean-input attempt stopped
+because `.audit/wago/src/wago/bottomref_test.go` was already modified. A shortened
+`ALLOW_DIRTY=1 RUN_WASI=0` attempt then fetched Wago `origin/main` at
+`18615546584ec09e607856a0da99851656f5be80` and stopped because that moving ref is
+newer than the reviewed `7fbc00a57624b26ba8d528d97b419b670e85f64b` base. A new
+compatibility replay/review is required; neither failure weakens or bypasses the
+clean-tree, moving-ref, arm64-execution, publication, or WASI gates.
 
 Protocol-submodule release acceptance also includes
 `internal/dependencytest`'s root/single/pair/all `go list -deps` matrix. Every

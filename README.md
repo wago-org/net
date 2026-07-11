@@ -200,7 +200,8 @@ synthetic linked ready/blocked/tamper/wrong-link interoperability chains without
 signature bytes, trust keys, production identity, or activation claims; audits
 unsupported pool topology; runs bounded
 fuzz smoke, benchmarks, TinyGo,
-cross-build, package/custom CLI inspection, and final clean-tree checks; and
+cross-build, direct/dependency inspection, granular `net-tcp`/`net-udp`/`net-dns`
+and aggregate `net` custom CLI inspection, and final clean-tree checks; and
 records disposable artifacts under `.wago/release-signoff`:
 
 ```sh

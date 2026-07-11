@@ -50,10 +50,13 @@ default suppression, exact storage overrides, and conspicuous `AllowAll` remain
 explicit. Granular `tcp/register`, `udp/register`, and `dns/register` packages
 compile only their protocol, while root `register` is the explicit all-protocol
 bundle. Standard workspace and `GOWORK=off` tests, race, vet, TinyGo,
-source-boundary, exact direct/register dependency fixtures, and repeated focused
-policy/default/core tests pass for this stage. Practical fuzz, benchmarks,
-cross-build/arm64 execution, external reconstruction, and the final heavyweight
-release matrix remain.
+source-boundary, exact direct/register dependency fixtures, repeated focused
+policy/default/core tests, practical protocol/core/guest fuzz smoke,
+allocation-reporting benchmarks, linux/arm64 cross-build, and pack-only external
+reconstruction pass for this stage. The arm64 smoke binary cross-compiles but
+cannot execute on this host because no native or QEMU runner is installed. The
+final heavyweight release matrix remains blocked pending a new Wago moving-ref
+compatibility review and clean audit inputs.
 
 ## Goal
 
@@ -202,8 +205,10 @@ assembler, or protocol lneto adapter package. Aggregate callers move to
 - `register/register.go` intentionally constructs the aggregate extension.
 
 Exact runtime registration, protocol implementation compile isolation, finite
-client defaults, policy composition, and granular register packages are
-implemented. Complete heavyweight release signoff remains.
+client defaults, policy composition, granular register packages, self-register
+factory inspection, granular standard-Go/TinyGo custom CLI inspection, practical
+fuzz/benchmark smoke, cross-build, and pack-only reconstruction are implemented
+and passing. Complete heavyweight release signoff remains externally blocked.
 
 ## Migration sequence
 
@@ -295,9 +300,11 @@ and `internal/backend/lneto/{tcp,udp,dns}` adapters. Every omitted protocol unit
 is rejected, as are the former aggregate namespace package and aggregate lneto
 assembler.
 
-Run the complete standard, race, vet, fuzz, benchmark, TinyGo, cross-build,
-worker/lifecycle, source-boundary, and release-signoff matrices before declaring
-completion.
+The standard, race, vet, fuzz, benchmark, TinyGo, cross-build, lifecycle,
+source-boundary, direct/granular dependency, granular custom CLI, and pack-only
+reconstruction portions pass. Before declaring production completion, rerun the
+complete clean-tree release gate after reviewing Wago `origin/main` movement and
+execute the arm64 smoke on a native or QEMU runner.
 
 ## Exact registration matrix
 
