@@ -1,0 +1,19 @@
+{
+  "schema": "github.com/wago-org/net/production-readiness/v2",
+  "ready": false,
+  "algorithm": "ed25519",
+  "trustedKeyId": "synthetic-release-chain-other",
+  "trustPolicySha256": "3333333333333333333333333333333333333333333333333333333333333333",
+  "subject": "0123456789abcdef0123456789abcdef01234567",
+  "statementSha256": "1111111111111111111111111111111111111111111111111111111111111111",
+  "signatureSha256": "2222222222222222222222222222222222222222222222222222222222222222",
+  "trustedDistributionReceiptSha256": "52bc6fbd468eb3135a6d3645e8de889cfef91bc35933d614d69b69169df8ce8d",
+  "provenanceSha256": "4444444444444444444444444444444444444444444444444444444444444444",
+  "reviewBundleSha256": "5555555555555555555555555555555555555555555555555555555555555555",
+  "blockers": [
+    {
+      "id": "synthetic-not-ready",
+      "detail": "synthetic interoperability evidence is deliberately blocked"
+    }
+  ]
+}

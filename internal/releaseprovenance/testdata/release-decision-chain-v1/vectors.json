@@ -1,0 +1,143 @@
+{
+  "schema": "github.com/wago-org/net/release-decision-chain-vectors/v1",
+  "receiptEncoding": "exact-canonical-file-bytes-with-adjacent-sha256",
+  "subject": "0123456789abcdef0123456789abcdef01234567",
+  "statementSha256": "1111111111111111111111111111111111111111111111111111111111111111",
+  "signatureSha256": "2222222222222222222222222222222222222222222222222222222222222222",
+  "trustPolicySha256": "3333333333333333333333333333333333333333333333333333333333333333",
+  "trustedDistributionReceiptSha256": "52bc6fbd468eb3135a6d3645e8de889cfef91bc35933d614d69b69169df8ce8d",
+  "files": [
+    {
+      "path": "readiness-blocked.json",
+      "sha256": "1eacf2aca2cfe5e71ecfd5f6767455a9785401f161a8fc548219ab628746dcbc"
+    },
+    {
+      "path": "readiness-blocked.json.sha256",
+      "sha256": "a9a49c2391d3f23881e08b831f543286b597388f027e1cf055b62e2d4aff5dc0"
+    },
+    {
+      "path": "readiness-ready.json",
+      "sha256": "c873426b1e36758a3fd51b25c4c171aa736b9d89fc8599a7da13a4f98e9684af"
+    },
+    {
+      "path": "readiness-ready.json.sha256",
+      "sha256": "7f9854df2b8fd62b5548a68ccfa668933431375333a6984028dabbed5400d24a"
+    },
+    {
+      "path": "readiness-tampered.json",
+      "sha256": "4c8021cb02059100ec0aa028b3bb2fd7a9e9b4a8d4ace353114ad83159dadd2c"
+    },
+    {
+      "path": "readiness-tampered.json.sha256",
+      "sha256": "1b2430a130c1c2fd0def4343782c63e96e56e17c989ac889bcfc221d9cfad009"
+    },
+    {
+      "path": "readiness-wrong-link.json",
+      "sha256": "f9c1646aaa1a7c1ce7ed33556b47cc6de227710e31ba5994128447d7b618b680"
+    },
+    {
+      "path": "readiness-wrong-link.json.sha256",
+      "sha256": "5647447ef48ed7e0d4ae34e41cca738301c5a47a7d91d2a4e67d807fd577e50b"
+    },
+    {
+      "path": "trusted-distribution.json",
+      "sha256": "52bc6fbd468eb3135a6d3645e8de889cfef91bc35933d614d69b69169df8ce8d"
+    },
+    {
+      "path": "trusted-distribution.json.sha256",
+      "sha256": "128cbbb88f65a5db212425b59a93d0e0c4c80301fa8cb0302528bcef489b2efc"
+    }
+  ],
+  "cases": [
+    {
+      "name": "linked-ready",
+      "readinessReceipt": "readiness-ready.json",
+      "subject": "0123456789abcdef0123456789abcdef01234567",
+      "statementSha256": "1111111111111111111111111111111111111111111111111111111111111111",
+      "signatureSha256": "2222222222222222222222222222222222222222222222222222222222222222",
+      "trustPolicySha256": "3333333333333333333333333333333333333333333333333333333333333333",
+      "trustedDistributionReceiptSha256": "52bc6fbd468eb3135a6d3645e8de889cfef91bc35933d614d69b69169df8ce8d",
+      "result": "ready"
+    },
+    {
+      "name": "linked-blocked",
+      "readinessReceipt": "readiness-blocked.json",
+      "subject": "0123456789abcdef0123456789abcdef01234567",
+      "statementSha256": "1111111111111111111111111111111111111111111111111111111111111111",
+      "signatureSha256": "2222222222222222222222222222222222222222222222222222222222222222",
+      "trustPolicySha256": "3333333333333333333333333333333333333333333333333333333333333333",
+      "trustedDistributionReceiptSha256": "52bc6fbd468eb3135a6d3645e8de889cfef91bc35933d614d69b69169df8ce8d",
+      "result": "blocked"
+    },
+    {
+      "name": "stale-readiness-checksum",
+      "readinessReceipt": "readiness-tampered.json",
+      "subject": "0123456789abcdef0123456789abcdef01234567",
+      "statementSha256": "1111111111111111111111111111111111111111111111111111111111111111",
+      "signatureSha256": "2222222222222222222222222222222222222222222222222222222222222222",
+      "trustPolicySha256": "3333333333333333333333333333333333333333333333333333333333333333",
+      "trustedDistributionReceiptSha256": "52bc6fbd468eb3135a6d3645e8de889cfef91bc35933d614d69b69169df8ce8d",
+      "result": "reject"
+    },
+    {
+      "name": "wrong-linked-key-label",
+      "readinessReceipt": "readiness-wrong-link.json",
+      "subject": "0123456789abcdef0123456789abcdef01234567",
+      "statementSha256": "1111111111111111111111111111111111111111111111111111111111111111",
+      "signatureSha256": "2222222222222222222222222222222222222222222222222222222222222222",
+      "trustPolicySha256": "3333333333333333333333333333333333333333333333333333333333333333",
+      "trustedDistributionReceiptSha256": "52bc6fbd468eb3135a6d3645e8de889cfef91bc35933d614d69b69169df8ce8d",
+      "result": "reject"
+    },
+    {
+      "name": "wrong-subject-constraint",
+      "readinessReceipt": "readiness-ready.json",
+      "subject": "ffffffffffffffffffffffffffffffffffffffff",
+      "statementSha256": "1111111111111111111111111111111111111111111111111111111111111111",
+      "signatureSha256": "2222222222222222222222222222222222222222222222222222222222222222",
+      "trustPolicySha256": "3333333333333333333333333333333333333333333333333333333333333333",
+      "trustedDistributionReceiptSha256": "52bc6fbd468eb3135a6d3645e8de889cfef91bc35933d614d69b69169df8ce8d",
+      "result": "reject"
+    },
+    {
+      "name": "wrong-statement-constraint",
+      "readinessReceipt": "readiness-ready.json",
+      "subject": "0123456789abcdef0123456789abcdef01234567",
+      "statementSha256": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "signatureSha256": "2222222222222222222222222222222222222222222222222222222222222222",
+      "trustPolicySha256": "3333333333333333333333333333333333333333333333333333333333333333",
+      "trustedDistributionReceiptSha256": "52bc6fbd468eb3135a6d3645e8de889cfef91bc35933d614d69b69169df8ce8d",
+      "result": "reject"
+    },
+    {
+      "name": "wrong-signature-constraint",
+      "readinessReceipt": "readiness-ready.json",
+      "subject": "0123456789abcdef0123456789abcdef01234567",
+      "statementSha256": "1111111111111111111111111111111111111111111111111111111111111111",
+      "signatureSha256": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "trustPolicySha256": "3333333333333333333333333333333333333333333333333333333333333333",
+      "trustedDistributionReceiptSha256": "52bc6fbd468eb3135a6d3645e8de889cfef91bc35933d614d69b69169df8ce8d",
+      "result": "reject"
+    },
+    {
+      "name": "wrong-policy-constraint",
+      "readinessReceipt": "readiness-ready.json",
+      "subject": "0123456789abcdef0123456789abcdef01234567",
+      "statementSha256": "1111111111111111111111111111111111111111111111111111111111111111",
+      "signatureSha256": "2222222222222222222222222222222222222222222222222222222222222222",
+      "trustPolicySha256": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "trustedDistributionReceiptSha256": "52bc6fbd468eb3135a6d3645e8de889cfef91bc35933d614d69b69169df8ce8d",
+      "result": "reject"
+    },
+    {
+      "name": "wrong-intermediary-receipt-constraint",
+      "readinessReceipt": "readiness-ready.json",
+      "subject": "0123456789abcdef0123456789abcdef01234567",
+      "statementSha256": "1111111111111111111111111111111111111111111111111111111111111111",
+      "signatureSha256": "2222222222222222222222222222222222222222222222222222222222222222",
+      "trustPolicySha256": "3333333333333333333333333333333333333333333333333333333333333333",
+      "trustedDistributionReceiptSha256": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "result": "reject"
+    }
+  ]
+}

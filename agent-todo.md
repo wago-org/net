@@ -191,16 +191,18 @@ archive digests. Standalone receipt verification requires independently supplied
 subject, statement, signature, and trust-policy digests; it preserves evidence
 integrity without repeating cryptography, establishing publisher identity, or
 making a readiness decision. Public synthetic positive/tamper/constraint vectors
-store no signature or trust key. A separate strict production-candidate profile
-first requires the original trusted statement, then requires adopted current
-subjects, the published ordered-parent production Wago merge, executed
-linux/arm64 evidence, and zero accepted exceptions. It atomically retains a
-canonical JSON decision plus SHA-256 sidecar even for a valid blocked candidate.
-Standalone readiness verification requires exact subject, statement, and
-trust-policy digests and treats `ready=false` as valid evidence rather than
-corruption. Public synthetic ready/blocked/tamper/constraint vectors exercise the
-readiness receipt contract without making a production decision or enabling
-hosted activation.
+store no signature or trust key. The strict production-candidate profile freshly
+repeats signature/archive verification from the original inputs, independently
+checks that retained intermediary receipt, and requires exact linkage before
+applying adopted-current-subject, published ordered-parent production Wago,
+executed linux/arm64, and zero-exception requirements. It retains a new canonical
+`production-readiness/v2` decision plus exact sidecar binding the signature and
+trusted-distribution receipt digests while preserving v1 compatibility. The
+complete retained chain can be verified independently under explicit subject,
+statement, signature, policy, and intermediary-receipt constraints; both valid
+ready and blocked decisions are evidence, not fresh cryptography or publisher
+identity. Public synthetic linked ready/blocked/tamper/wrong-link vectors store
+no signature, key, trust root, production decision, or hosted-activation claim.
 
 ## Completed work
 
@@ -418,22 +420,34 @@ hosted activation.
 - `4eef20a` — independently verifies trusted-distribution receipt bytes and exact
   sidecars against required subject, statement, signature, and trust-policy
   constraints without treating retained evidence as fresh cryptographic proof.
-- `HEAD` (`net: publish trusted-distribution receipt interoperability cases`) —
-  publishes deterministic synthetic positive, stale-checksum tamper, and four
-  wrong-constraint cases without storing a signature, trust key, private key,
-  signed release, production identity, or readiness decision.
+- `33e53ce` — publishes deterministic synthetic trusted-distribution receipt
+  positive, stale-checksum tamper, and four wrong-constraint cases without
+  storing a signature, trust key, private key, signed release, production
+  identity, or readiness decision.
+- `86f2873` — adds a v2 readiness decision that freshly recomputes strict status
+  from the original signed inputs and binds the exact signature and retained
+  trusted-distribution receipt without mutating the published v1 contract.
+- `8e60454` — independently verifies both canonical receipt/sidecar pairs and
+  their exact linkage under explicit subject, statement, signature, policy, and
+  intermediary-receipt constraints while preserving v1 compatibility.
+- `HEAD` (`net: publish release decision chain interoperability cases`) —
+  publishes deterministic synthetic linked ready/blocked, stale-checksum tamper,
+  wrong-link, and wrong-constraint cases without storing signature bytes, a key,
+  trust root, private key, signed release, production decision, or activation
+  claim.
 
 ## Active work
 
-Recursion 23 is complete with exactly three bounded atomic commits in the
-production networking repository. Successful explicit-policy signed verification
-can now retain a canonical checksummed trusted-distribution receipt binding the
-exact signature, statement, trust policy, provenance, archive, subject, algorithm,
-and opaque key label. That intermediary evidence can be verified independently
-against explicit subject, statement, signature, and policy constraints while
-remaining distinct from production readiness and from fresh cryptographic
-verification. Public synthetic positive/tamper/constraint vectors exercise the
-contract without storing any signature or trust key. No publisher identity,
+Recursion 24 is complete with exactly three bounded atomic commits in the
+production networking repository. The strict readiness path now freshly verifies
+the original archive, statement, detached signature, and explicit policy; checks
+the retained trusted-distribution receipt independently; and emits a new v2
+readiness decision only when both evidence paths match exactly. Complete retained
+chains can be checked later without original cryptographic inputs while remaining
+explicitly distinct from fresh signature/archive verification, publisher
+identity, and a new readiness decision. Public synthetic chain vectors cover
+linked ready and blocked outcomes, stale checksums, a valid but mismatched opaque
+key label, and all five wrong external constraints. No publisher identity,
 signed release, trust-root provisioning, production decision, or hosted
 automation claim was added. The exact workers subject remains published, while
 current Wago/networking reviews and the production ordered-parent Wago merge
@@ -656,6 +670,13 @@ pre-ledger-amend release gate passed at net subject
   reject stale checksums and noncanonical JSON; and validate every listed byte,
   digest, positive outcome, tamper case, and wrong-constraint outcome in the
   public synthetic trusted-distribution receipt vectors.
+- Recursion-24 targeted release-provenance tests freshly recompute v2 readiness
+  from the original signed inputs, require an exact canonical intermediary
+  receipt, preserve deterministic atomic sidecars and all five blockers, verify
+  both retained receipt pairs independently under five explicit constraints,
+  reject stale checksums and individually valid wrong links, preserve v1
+  compatibility, and validate every listed byte and linked ready/blocked/tamper/
+  wrong-link outcome in the public synthetic complete-chain vectors.
 - The complete recursion-22 pre-ledger-amend release gate passed at net subject
   `1fe687af90070065a6e7da3502414b11f4ca001c` after every moving ref was
   refreshed and all production/current/older repositories were clean. Three-second
@@ -752,29 +773,24 @@ selected source trees and proves pack/object/tree/policy consistency; strict mod
 can bind trusted subject and archive hashes. Canonical detached statement
 verification can authenticate a key and enforce exact anti-rollback selection.
 The retained trusted-distribution receipt binds exact verified inputs and supports
-later integrity checks, but it is not a signature, a fresh cryptographic
-verification, a readiness decision, or a publisher-identity assertion. Publisher
-identity, private-key custody, signature publication, trust-policy provisioning,
-and the signed trusted channel remain external.
+later integrity checks, while the linked v2 readiness receipt binds that evidence
+to a recomputed decision. Independent complete-chain verification proves byte
+integrity and exact linkage only; neither receipt is a signature, fresh
+cryptographic/archive verification, publisher identity, or fresh readiness
+assessment. Publisher identity, private-key custody, signature publication,
+trust-policy provisioning, and the signed trusted channel remain external.
 
 ## Next recursion
 
-1. `net: bind readiness decisions to trusted-distribution evidence`
-   - Scope: introduce a new versioned readiness receipt rather than mutating the
-     published v1 contract, binding the exact trusted-distribution receipt and
-     signature digests while still recomputing readiness from the original
-     archive, statement, signature, and explicit policy.
-2. `net: verify complete release decision chains independently`
-   - Scope: verify both canonical receipt/sidecar pairs and their exact linkage
-     under explicit subject, statement, signature, policy, and intermediary
-     receipt constraints without treating retained evidence as fresh cryptography
-     or as publisher identity; preserve v1 verification compatibility.
-3. `net: publish release decision chain interoperability cases`
-   - Scope: add deterministic synthetic linked positive, blocked, tamper, and
-     wrong-link vectors without storing a signature, key, trust root, private key,
-     signed release, production decision, or hosted-activation claim.
+1. Re-fetch Wago, net, workers, lneto, and WASI moving refs and re-run the exact
+   publication topology audit before proposing any repository change.
+2. If the production Wago merge and current Wago/net review subjects have become
+   available at immutable refs, adopt them in bounded atomic pin/topology/signoff
+   commits while preserving ordered merge parents and least authority.
+3. If those external refs remain unavailable and no arm64/WASI prerequisite has
+   changed, do not invent another receipt schema or publisher identity. Record
+   that fewer than three valid repository commits remain, keep all trees clean,
+   and report the external publication/runtime blockers truthfully.
 
-After those exactly three commits, refresh every moving ref, run the complete
-committed release gate, update this ledger, and recurse again if the long-term
-completion criteria remain unmet. Re-plan if a new versioned linkage does not add
-independently useful evidence or external publication changes the priorities.
+After any supportable slice, run the committed release gate and recurse only if a
+new thread can make concrete progress toward the long-term completion criteria.

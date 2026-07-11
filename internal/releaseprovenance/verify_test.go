@@ -596,6 +596,135 @@ func TestProductionReadinessReceiptInteroperabilityVectors(t *testing.T) {
 	}
 }
 
+func TestReleaseDecisionChainInteroperabilityVectors(t *testing.T) {
+	dir := filepath.Join("testdata", "release-decision-chain-v1")
+	vectorData, err := os.ReadFile(filepath.Join(dir, "vectors.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var vectors struct {
+		Schema                           string `json:"schema"`
+		ReceiptEncoding                  string `json:"receiptEncoding"`
+		Subject                          string `json:"subject"`
+		StatementSHA256                  string `json:"statementSha256"`
+		SignatureSHA256                  string `json:"signatureSha256"`
+		TrustPolicySHA256                string `json:"trustPolicySha256"`
+		TrustedDistributionReceiptSHA256 string `json:"trustedDistributionReceiptSha256"`
+		Files                            []struct {
+			Path   string `json:"path"`
+			SHA256 string `json:"sha256"`
+		} `json:"files"`
+		Cases []struct {
+			Name                             string `json:"name"`
+			ReadinessReceipt                 string `json:"readinessReceipt"`
+			Subject                          string `json:"subject"`
+			StatementSHA256                  string `json:"statementSha256"`
+			SignatureSHA256                  string `json:"signatureSha256"`
+			TrustPolicySHA256                string `json:"trustPolicySha256"`
+			TrustedDistributionReceiptSHA256 string `json:"trustedDistributionReceiptSha256"`
+			Result                           string `json:"result"`
+		} `json:"cases"`
+	}
+	if err := decodeCanonicalJSON(vectorData, &vectors, "release decision chain vectors"); err != nil {
+		t.Fatal(err)
+	}
+	if vectors.Schema != "github.com/wago-org/net/release-decision-chain-vectors/v1" ||
+		vectors.ReceiptEncoding != "exact-canonical-file-bytes-with-adjacent-sha256" ||
+		!validObjectID(vectors.Subject) || !validSHA256(vectors.StatementSHA256) ||
+		!validSHA256(vectors.SignatureSHA256) || !validSHA256(vectors.TrustPolicySHA256) ||
+		!validSHA256(vectors.TrustedDistributionReceiptSHA256) || len(vectors.Files) != 10 || len(vectors.Cases) != 9 {
+		t.Fatalf("release decision chain vector metadata = %+v", vectors)
+	}
+
+	allowed := map[string]bool{"README.md": true, "vectors.json": true}
+	fileDigests := make(map[string]string, len(vectors.Files))
+	for _, file := range vectors.Files {
+		data, err := os.ReadFile(filepath.Join(dir, file.Path))
+		if err != nil {
+			t.Fatal(err)
+		}
+		sum := sha256.Sum256(data)
+		if got := hex.EncodeToString(sum[:]); got != file.SHA256 {
+			t.Fatalf("%s SHA-256 = %s, want %s", file.Path, got, file.SHA256)
+		}
+		if fileDigests[file.Path] != "" {
+			t.Fatalf("duplicate vector file %q", file.Path)
+		}
+		fileDigests[file.Path] = file.SHA256
+		allowed[file.Path] = true
+	}
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, entry := range entries {
+		if entry.IsDir() || !allowed[entry.Name()] {
+			t.Fatalf("unexpected release decision chain vector entry %q", entry.Name())
+		}
+	}
+	if len(entries) != len(allowed) {
+		t.Fatalf("release decision chain entries = %d, want %d", len(entries), len(allowed))
+	}
+
+	trustedData, err := os.ReadFile(filepath.Join(dir, "trusted-distribution.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var trustedReceipt TrustedDistributionReceipt
+	if err := decodeCanonicalJSON(trustedData, &trustedReceipt, "release decision chain trusted receipt"); err != nil {
+		t.Fatal(err)
+	}
+	if err := validateTrustedDistributionReceipt(&trustedReceipt); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"readiness-ready.json", "readiness-blocked.json", "readiness-tampered.json", "readiness-wrong-link.json"} {
+		data, err := os.ReadFile(filepath.Join(dir, name))
+		if err != nil {
+			t.Fatal(err)
+		}
+		var report ProductionReadinessV2
+		if err := decodeCanonicalJSON(data, &report, "release decision chain readiness receipt"); err != nil {
+			t.Fatal(err)
+		}
+		if err := validateProductionReadinessV2(&report); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	for _, vector := range vectors.Cases {
+		chain, err := VerifyReleaseDecisionChain(
+			filepath.Join(dir, "trusted-distribution.json"), filepath.Join(dir, vector.ReadinessReceipt),
+			ReleaseDecisionChainVerifyOptions{
+				ExpectedSubject: vector.Subject, ExpectedStatementSHA256: vector.StatementSHA256,
+				ExpectedSignatureSHA256: vector.SignatureSHA256, ExpectedTrustPolicySHA256: vector.TrustPolicySHA256,
+				ExpectedTrustedDistributionReceiptSHA256: vector.TrustedDistributionReceiptSHA256,
+			},
+		)
+		switch vector.Result {
+		case "reject":
+			if err == nil {
+				t.Fatalf("%s unexpectedly accepted: %+v", vector.Name, chain)
+			}
+		case "ready", "blocked":
+			if err != nil {
+				t.Fatalf("%s: %v", vector.Name, err)
+			}
+			wantReady := vector.Result == "ready"
+			if chain.ProductionReadiness.Ready != wantReady ||
+				chain.TrustedDistributionSHA256 != vectors.TrustedDistributionReceiptSHA256 ||
+				chain.ProductionReadinessSHA256 != fileDigests[vector.ReadinessReceipt] ||
+				chain.ProductionReadiness.Subject != vectors.Subject ||
+				chain.ProductionReadiness.StatementSHA256 != vectors.StatementSHA256 ||
+				chain.ProductionReadiness.SignatureSHA256 != vectors.SignatureSHA256 ||
+				chain.ProductionReadiness.TrustPolicySHA256 != vectors.TrustPolicySHA256 {
+				t.Fatalf("%s verification = %+v", vector.Name, chain)
+			}
+		default:
+			t.Fatalf("%s has unknown result %q", vector.Name, vector.Result)
+		}
+	}
+}
+
 func TestProductionReadinessProfileReportsExactCurrentBlockers(t *testing.T) {
 	fixture := newSignedDistributionFixture(t)
 	trusted, err := verifySignedDistribution(fixture.bundle, fixture.statement, fixture.signature, fixture.policy, fixture.opts)

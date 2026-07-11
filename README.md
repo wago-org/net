@@ -86,10 +86,10 @@ trusted-distribution receipt and signature digest; preserves the v1 receipt
 contract for compatibility; independently verifies both canonical receipt/
 sidecar pairs and their exact linkage under explicit subject, statement,
 signature, policy, and intermediary-receipt constraints without treating
-retained evidence as fresh cryptography or publisher identity; keeps public
-ready/blocked/tamper/constraint interoperability vectors for external
-automation; audits unsupported
-pool topology; runs bounded
+retained evidence as fresh cryptography or publisher identity; publishes
+synthetic linked ready/blocked/tamper/wrong-link interoperability chains without
+signature bytes, trust keys, production identity, or activation claims; audits
+unsupported pool topology; runs bounded
 fuzz smoke, benchmarks, TinyGo,
 cross-build, package/custom CLI inspection, and final clean-tree checks; and
 records disposable artifacts under `.wago/release-signoff`:

@@ -381,6 +381,15 @@ make a fresh readiness decision; activation must separately require `ready=true`
 The standalone v1 readiness verifier above remains compatible with previously
 retained receipts.
 
+Public complete-chain interoperability vectors live under
+`internal/releaseprovenance/testdata/release-decision-chain-v1/`. They bind every
+listed fixture byte by SHA-256 and exercise synthetic linked ready and blocked
+chains, a basename-correct stale readiness checksum, an individually valid but
+wrongly linked opaque key label, and wrong subject, statement, signature, policy,
+and intermediary-receipt constraints. No statement, signature bytes, public key,
+trust policy, private key, signed release, production identity, real readiness
+decision, or hosted-activation claim is stored there.
+
 Verification rejects a different schema; changed or
 unordered evidence; unknown or noncanonical manifest fields; unsafe archive
 paths; wrong exact production or first-class current-review subjects, trees, or
