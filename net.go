@@ -286,10 +286,7 @@ func (e *Extension) registerTCPModule() error {
 }
 
 func (e *Extension) registerDNSModule() error {
-	return e.RegisterModule(plugin.NewModule(plugin.ModuleDNS, func(reg *wago.Registry, _ plugin.Host) {
-		reg.Capability(CapDNS, wago.CapabilityDocs("use checked bounded DNS queries for the exact calling instance"))
-		registerBindings(reg.ImportModule(DNSModule), e.dnsBindings())
-	}))
+	return e.RegisterModule(dnsCompatibilityDescriptor())
 }
 
 // Info returns extension metadata loaded from wago.json.

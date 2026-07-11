@@ -2,10 +2,7 @@ package net
 
 import (
 	udpbinding "github.com/wago-org/net/internal/binding/udp"
-	"github.com/wago-org/net/internal/guest"
-	"github.com/wago-org/net/internal/instance"
 	"github.com/wago-org/net/internal/plugin"
-	wago "github.com/wago-org/wago"
 )
 
 // udpCompatibilityDescriptor keeps Init(Config) source-compatible while the
@@ -33,25 +30,4 @@ func (e *Extension) udpBindings() []binding {
 		}
 	}
 	return bindings
-}
-
-// The remaining helpers support the not-yet-extracted aggregate DNS shim.
-func (e *Extension) poll(module wago.HostModule, params, results []uint64) {
-	guest.Poll(plugin.NewHost(e.instanceManager()), module, params, results)
-}
-
-func (e *Extension) udpState(module wago.HostModule) (*instance.State, Status) {
-	state, ok := plugin.NewHost(e.instanceManager()).State(module)
-	if !ok || state == nil {
-		return nil, StatusInvalidState
-	}
-	return state, StatusOK
-}
-
-func moduleMemory(module wago.HostModule) []byte {
-	return guest.Memory(module)
-}
-
-func setStatus(results []uint64, status Status) {
-	guest.SetStatus(results, status)
 }
