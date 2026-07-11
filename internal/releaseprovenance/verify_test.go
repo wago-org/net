@@ -3,7 +3,9 @@
 package releaseprovenance
 
 import (
+	"crypto/ed25519"
 	"crypto/sha256"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"os"
@@ -105,6 +107,78 @@ func TestVerifyAndDeterministicBundleExport(t *testing.T) {
 	}
 	if _, _, err := WriteDistributionStatement(dir, filepath.Join(t.TempDir(), "invalid.json"), opts); err == nil {
 		t.Fatal("distribution statement from directory unexpectedly accepted")
+	}
+}
+
+func TestVerifySignedDistributionRequiresExplicitPolicyAndMatchingSignature(t *testing.T) {
+	dir, opts := validReviewFixture(t)
+	bundle := filepath.Join(t.TempDir(), "review.tar.gz")
+	_, bundleHash, err := ExportBundle(dir, bundle, opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	strict := opts
+	strict.ExpectedBundleSHA256 = bundleHash
+	strict.StrictDistribution = true
+	statementPath := filepath.Join(t.TempDir(), "distribution.json")
+	if _, _, err := WriteDistributionStatement(bundle, statementPath, strict); err != nil {
+		t.Fatal(err)
+	}
+	statementData, err := os.ReadFile(statementPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	seed := sha256.Sum256([]byte("wago net detached signature test key"))
+	privateKey := ed25519.NewKeyFromSeed(seed[:])
+	publicKey := privateKey.Public().(ed25519.PublicKey)
+	policy := DistributionTrustPolicy{
+		Schema: DistributionTrustPolicySchemaV1, KeyID: "release-test-2026", Algorithm: "ed25519",
+		PublicKey: base64.StdEncoding.EncodeToString(publicKey),
+	}
+	policyData, err := json.MarshalIndent(&policy, "", "  ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	policyData = append(policyData, '\n')
+	policyPath := filepath.Join(t.TempDir(), "trust-policy.json")
+	writeTestFile(t, policyPath, string(policyData))
+	signaturePath := filepath.Join(t.TempDir(), "distribution.sig")
+	if err := os.WriteFile(signaturePath, ed25519.Sign(privateKey, statementData), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	trusted, err := verifySignedDistribution(bundle, statementPath, signaturePath, policyPath, opts)
+	if err != nil {
+		t.Fatalf("verify signed distribution: %v", err)
+	}
+	if trusted.KeyID != policy.KeyID || trusted.Statement.Subject != opts.ExpectedSubject || trusted.Verification.BundleSHA256 != bundleHash {
+		t.Fatalf("trusted distribution = %+v", trusted)
+	}
+	if _, err := verifySignedDistribution(bundle, statementPath, signaturePath, "", opts); err == nil {
+		t.Fatal("implicit trust policy discovery unexpectedly accepted")
+	}
+
+	signature, err := os.ReadFile(signaturePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	signature[0] ^= 0xff
+	if err := os.WriteFile(signaturePath, signature, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := verifySignedDistribution(bundle, statementPath, signaturePath, policyPath, opts); err == nil {
+		t.Fatal("wrong detached signature unexpectedly accepted")
+	}
+
+	policy.KeyID = "https://implicit.example/key"
+	policyData, err = json.MarshalIndent(&policy, "", "  ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	policyData = append(policyData, '\n')
+	writeTestFile(t, policyPath, string(policyData))
+	if _, err := verifySignedDistribution(bundle, statementPath, signaturePath, policyPath, opts); err == nil {
+		t.Fatal("discovery-shaped trust policy key ID unexpectedly accepted")
 	}
 }
 

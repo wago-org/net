@@ -193,6 +193,42 @@ GOWORK=off go run ./internal/cmd/release-review \
   -bundle-sha256 <64-hex-sha256>
 ```
 
+An external publisher may sign the exact statement bytes with Ed25519 and
+publish the raw 64-byte detached signature separately. Verification requires an
+operator-supplied canonical trust policy; no repository file, signature field,
+key ID, URL, environment default, or network service is consulted to discover a
+key. The v1 policy has this exact shape, with a canonical padded base64 32-byte
+Ed25519 public key and an opaque local key label:
+
+```json
+{
+  "schema": "github.com/wago-org/net/distribution-trust-policy/v1",
+  "keyId": "publisher-release-2026",
+  "algorithm": "ed25519",
+  "publicKey": "<canonical-base64-public-key>"
+}
+```
+
+Verify a signed statement and bind it back to the archive with:
+
+```sh
+GOWORK=off go run ./internal/cmd/release-review \
+  -mode verify-signed \
+  -bundle /path/to/release-signoff.review.tar.gz \
+  -statement /path/to/release.distribution.json \
+  -signature /trusted-channel/release.distribution.sig \
+  -trust-policy /operator-config/wago-net-trust-policy.json
+```
+
+The verifier checks the detached signature over the exact canonical statement
+bytes, validates the archive digest before extraction, performs the full
+standalone provenance/source-pack verification, and requires the statement's
+subject, provenance digest, review subjects, and publication status to match the
+archive. The trust-policy key ID is reported as an operator label only and cannot
+trigger implicit key discovery. Unsigned `verify` and strict hash-pinned
+verification remain available for review workflows that do not assert publisher
+authentication.
+
 Verification rejects a different schema; changed or
 unordered evidence; unknown or noncanonical manifest fields; unsafe archive
 paths; wrong exact production or first-class current-review subjects, trees, or
