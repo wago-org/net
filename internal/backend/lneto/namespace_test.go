@@ -62,7 +62,7 @@ func TestTryServiceEnforcesEveryBudgetWithoutConsumingBlockedWork(t *testing.T) 
 	if err := a.stack.StartResolveHardwareAddress6(bConfig.IPv4Address); err != nil {
 		t.Fatal(err)
 	}
-	a.nextIngress = false // Exercise the egress byte gate on the first attempt.
+	setNextIngress(a, false) // Exercise the egress byte gate on the first attempt.
 	tooSmall := namespace.ServiceBudget{Packets: 1, Bytes: uint32(a.requiredFrameBytes - 1), Operations: 1}
 	report, progress, err := a.TryService(tooSmall)
 	if err != nil || progress != namespace.ProgressWouldBlock || report != (namespace.ServiceReport{}) {
@@ -104,7 +104,7 @@ func TestTryServiceOperationBudgetBoundsDirectionAttempts(t *testing.T) {
 	if err := ns.Link().TryEnqueue(packetlink.Ingress, []byte{0}); err != nil {
 		t.Fatal(err)
 	}
-	ns.nextIngress = false
+	setNextIngress(ns, false)
 	oneAttempt := namespace.ServiceBudget{Packets: 1, Bytes: 64, Operations: 1}
 	report, progress, err := ns.TryService(oneAttempt)
 	if err != nil || progress != namespace.ProgressWouldBlock || report != (namespace.ServiceReport{}) {
@@ -479,7 +479,7 @@ func TestTCPAcceptedCloseReclaimsPoolSlotAsChargedMaintenance(t *testing.T) {
 		t.Fatalf("lneto released accepted slot outside charged maintenance: in_use=%v stream=%p resource=%p", listener.pool.slots[0].inUse, listener.pool.slots[0].stream, listener.pool.slots[0].resource)
 	}
 
-	server.nextIngress = false
+	setNextIngress(server, false)
 	budget := namespace.ServiceBudget{Packets: 1, Bytes: uint32(server.requiredFrameBytes), Operations: 1}
 	report, progress, err := server.TryService(budget)
 	if err != nil || progress != namespace.ProgressDone || report != (namespace.ServiceReport{Operations: 1}) {
@@ -511,9 +511,9 @@ func TestTCPConnectResetBeforeEstablishment(t *testing.T) {
 		t.Fatalf("connect = %T, %v, %v", streamResource, progress, err)
 	}
 	stream := streamResource.(*tcpStream)
-	ns.mu.Lock()
+	ns.core.Lock()
 	stream.conn.Abort() // Models the terminal state lneto enters after a reset.
-	ns.mu.Unlock()
+	ns.core.Unlock()
 	if progress, err := stream.TryFinishConnect(); progress != 0 || requireFailure(t, err) != namespace.FailureConnectionRefused {
 		t.Fatalf("finish reset connect = %v, %v", progress, err)
 	}
@@ -624,8 +624,8 @@ func TestReadinessAndCloseAreLevelTriggeredAndDeterministic(t *testing.T) {
 	if err := ns.Close(); err != nil {
 		t.Fatal(err)
 	}
-	if ns.stack != nil || ns.scratch != nil {
-		t.Fatal("close retained stack or scratch")
+	if ns.stack != nil {
+		t.Fatal("close retained stack")
 	}
 	if got := ns.Readiness(); got != namespace.ReadyClosed {
 		t.Fatalf("closed readiness = %v", got)
@@ -716,9 +716,9 @@ func FuzzUDPIngress(f *testing.F) {
 		ns := newTestNamespace(t, config)
 		defer ns.Close()
 		bindUDP(t, ns, namespace.Endpoint{Address: config.IPv4Address, Port: 4127})
-		ns.mu.Lock()
+		ns.core.Lock()
 		handled, err := ns.ingressUDPLocked(frame)
-		ns.mu.Unlock()
+		ns.core.Unlock()
 		if err != nil {
 			if failure := requireFailure(t, mapError(err)); !failure.Valid() {
 				t.Fatalf("invalid mapped ingress failure = %v", failure)
@@ -860,14 +860,14 @@ func tcpTestConfig(t testing.TB, id byte) Config {
 
 func tcpTransfer(t testing.TB, from, to *Namespace) {
 	t.Helper()
-	from.nextIngress = false
+	setNextIngress(from, false)
 	budget := namespace.ServiceBudget{Packets: 1, Bytes: uint32(from.requiredFrameBytes), Operations: 1}
 	report, progress, err := from.TryService(budget)
 	if err != nil || progress != namespace.ProgressDone || report.Packets != 1 {
 		t.Fatalf("TCP egress service = %+v, %v, %v", report, progress, err)
 	}
 	transferOne(t, from.Link(), to.Link())
-	to.nextIngress = true
+	setNextIngress(to, true)
 	report, progress, err = to.TryService(budget)
 	if err != nil || progress != namespace.ProgressDone || report.Packets != 1 {
 		t.Fatalf("TCP ingress service = %+v, %v, %v", report, progress, err)
@@ -885,18 +885,24 @@ func bindUDP(t testing.TB, ns *Namespace, local namespace.Endpoint) namespace.UD
 
 func serviceTransfer(t testing.TB, from, to *Namespace) {
 	t.Helper()
-	from.nextIngress = false
+	setNextIngress(from, false)
 	budget := namespace.ServiceBudget{Packets: 1, Bytes: uint32(from.requiredFrameBytes), Operations: 1}
 	report, progress, err := from.TryService(budget)
 	if err != nil || progress != namespace.ProgressDone || report.Packets != 1 {
 		t.Fatalf("UDP egress service = %+v, %v, %v", report, progress, err)
 	}
 	transferOne(t, from.Link(), to.Link())
-	to.nextIngress = true
+	setNextIngress(to, true)
 	report, progress, err = to.TryService(budget)
 	if err != nil || progress != namespace.ProgressDone || report.Packets != 1 {
 		t.Fatalf("UDP ingress service = %+v, %v, %v", report, progress, err)
 	}
+}
+
+func setNextIngress(ns *Namespace, next bool) {
+	ns.core.Lock()
+	ns.core.SetNextIngressLocked(next)
+	ns.core.Unlock()
 }
 
 func newTestNamespace(t testing.TB, config Config) *Namespace {

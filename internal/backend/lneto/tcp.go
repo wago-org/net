@@ -98,7 +98,7 @@ func newTCPPool(owner *Namespace, count uint16, config TCPConfig) (tcpPool, erro
 // run only while the namespace service lock is held. A slot reserves its TCP
 // resource quota before lneto may retain it for an incoming handshake.
 func (p *tcpPool) GetTCP() (*lnetotcp.Conn, any, lnetotcp.Value) {
-	if p == nil || p.owner == nil || p.owner.closed {
+	if p == nil || p.owner == nil || p.owner.core.ClosedLocked() {
 		return nil, nil, 0
 	}
 	for i := range p.slots {
@@ -143,7 +143,7 @@ func (p *tcpPool) PutTCP(conn *lnetotcp.Conn) {
 		slot.stream = nil
 		slot.inUse = false
 		if p.owner != nil {
-			p.owner.tcpMaintenanceEpoch++
+			p.owner.core.MarkMaintenanceLocked()
 		}
 		return
 	}
@@ -175,9 +175,9 @@ func (n *Namespace) tryListenTCP(local nscore.Endpoint) (nscore.Resource, nscore
 	if n == nil {
 		return nil, 0, nscore.Fail(nscore.FailureClosed, net.ErrClosed)
 	}
-	n.mu.Lock()
-	defer n.mu.Unlock()
-	if n.closed || n.stack == nil {
+	n.core.Lock()
+	defer n.core.Unlock()
+	if n.core.ClosedLocked() || n.stack == nil {
 		return nil, 0, nscore.Fail(nscore.FailureClosed, net.ErrClosed)
 	}
 	if !local.Valid() || !local.Address.Is4() || local.Port == 0 {
@@ -254,9 +254,9 @@ func (n *Namespace) tryConnectTCP(remote nscore.Endpoint) (nscore.Resource, nsco
 	if n == nil {
 		return nil, 0, nscore.Fail(nscore.FailureClosed, net.ErrClosed)
 	}
-	n.mu.Lock()
-	defer n.mu.Unlock()
-	if n.closed || n.stack == nil {
+	n.core.Lock()
+	defer n.core.Unlock()
+	if n.core.ClosedLocked() || n.stack == nil {
 		return nil, 0, nscore.Fail(nscore.FailureClosed, net.ErrClosed)
 	}
 	if !remote.Valid() || !remote.Address.Is4() || remote.Address.IsUnspecified() || remote.Port == 0 {
@@ -337,9 +337,9 @@ func (l *tcpListener) Readiness() nscore.Readiness {
 	if l == nil || l.owner == nil {
 		return nscore.ReadyClosed
 	}
-	l.owner.mu.Lock()
-	defer l.owner.mu.Unlock()
-	if l.closed || l.owner.closed {
+	l.owner.core.Lock()
+	defer l.owner.core.Unlock()
+	if l.closed || l.owner.core.ClosedLocked() {
 		return nscore.ReadyClosed
 	}
 	if l.listener.NumberOfReadyToAccept() > 0 {
@@ -352,9 +352,9 @@ func (l *tcpListener) TryAccept() (nscore.Resource, nscore.Progress, error) {
 	if l == nil || l.owner == nil {
 		return nil, 0, nscore.Fail(nscore.FailureClosed, net.ErrClosed)
 	}
-	l.owner.mu.Lock()
-	defer l.owner.mu.Unlock()
-	if l.closed || l.owner.closed {
+	l.owner.core.Lock()
+	defer l.owner.core.Unlock()
+	if l.closed || l.owner.core.ClosedLocked() {
 		return nil, 0, nscore.Fail(nscore.FailureClosed, net.ErrClosed)
 	}
 	conn, userData, err := l.listener.TryAccept()
@@ -392,8 +392,8 @@ func (l *tcpListener) Close() error {
 	if l == nil || l.owner == nil {
 		return nil
 	}
-	l.owner.mu.Lock()
-	defer l.owner.mu.Unlock()
+	l.owner.core.Lock()
+	defer l.owner.core.Unlock()
 	return l.closeLocked()
 }
 
@@ -437,9 +437,9 @@ func (s *tcpStream) Readiness() nscore.Readiness {
 	if s == nil || s.owner == nil {
 		return nscore.ReadyClosed
 	}
-	s.owner.mu.Lock()
-	defer s.owner.mu.Unlock()
-	if s.closed || s.owner.closed || s.terminal || s.conn == nil {
+	s.owner.core.Lock()
+	defer s.owner.core.Unlock()
+	if s.closed || s.owner.core.ClosedLocked() || s.terminal || s.conn == nil {
 		return nscore.ReadyClosed
 	}
 	h := s.conn.InternalHandler()
@@ -467,9 +467,9 @@ func (s *tcpStream) TryFinishConnect() (nscore.Progress, error) {
 	if s == nil || s.owner == nil {
 		return 0, nscore.Fail(nscore.FailureClosed, net.ErrClosed)
 	}
-	s.owner.mu.Lock()
-	defer s.owner.mu.Unlock()
-	if s.closed || s.owner.closed {
+	s.owner.core.Lock()
+	defer s.owner.core.Unlock()
+	if s.closed || s.owner.core.ClosedLocked() {
 		return 0, nscore.Fail(nscore.FailureClosed, net.ErrClosed)
 	}
 	if s.terminal || s.conn == nil {
@@ -493,9 +493,9 @@ func (s *tcpStream) TryRead(dst []byte) (nscore.IOResult, error) {
 	if s == nil || s.owner == nil {
 		return nscore.IOResult{}, nscore.Fail(nscore.FailureClosed, net.ErrClosed)
 	}
-	s.owner.mu.Lock()
-	defer s.owner.mu.Unlock()
-	if s.closed || s.owner.closed {
+	s.owner.core.Lock()
+	defer s.owner.core.Unlock()
+	if s.closed || s.owner.core.ClosedLocked() {
 		return nscore.IOResult{}, nscore.Fail(nscore.FailureClosed, net.ErrClosed)
 	}
 	if len(dst) == 0 {
@@ -527,9 +527,9 @@ func (s *tcpStream) TryWrite(src []byte) (nscore.IOResult, error) {
 	if s == nil || s.owner == nil {
 		return nscore.IOResult{}, nscore.Fail(nscore.FailureClosed, net.ErrClosed)
 	}
-	s.owner.mu.Lock()
-	defer s.owner.mu.Unlock()
-	if s.closed || s.owner.closed {
+	s.owner.core.Lock()
+	defer s.owner.core.Unlock()
+	if s.closed || s.owner.core.ClosedLocked() {
 		return nscore.IOResult{}, nscore.Fail(nscore.FailureClosed, net.ErrClosed)
 	}
 	if s.terminal || s.conn == nil {
@@ -567,9 +567,9 @@ func (s *tcpStream) TryShutdownWrite() (nscore.Progress, error) {
 	if s == nil || s.owner == nil {
 		return 0, nscore.Fail(nscore.FailureClosed, net.ErrClosed)
 	}
-	s.owner.mu.Lock()
-	defer s.owner.mu.Unlock()
-	if s.closed || s.owner.closed {
+	s.owner.core.Lock()
+	defer s.owner.core.Unlock()
+	if s.closed || s.owner.core.ClosedLocked() {
 		return 0, nscore.Fail(nscore.FailureClosed, net.ErrClosed)
 	}
 	if s.terminal || s.conn == nil {
@@ -589,8 +589,8 @@ func (s *tcpStream) Close() error {
 	if s == nil || s.owner == nil {
 		return nil
 	}
-	s.owner.mu.Lock()
-	defer s.owner.mu.Unlock()
+	s.owner.core.Lock()
+	defer s.owner.core.Unlock()
 	return s.closeLocked()
 }
 

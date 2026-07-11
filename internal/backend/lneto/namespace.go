@@ -1,20 +1,15 @@
-// Package lnetobackend adapts one lneto StackAsync to the backend-neutral
-// namespace contract without using lneto's blocking or backoff wrappers.
+// Package lnetobackend composes protocol adapters over one protocol-neutral
+// lneto stack/link owner without using lneto's blocking or backoff wrappers.
 package lnetobackend
 
 import (
-	"context"
-	"errors"
-	"io"
 	"net"
 	"net/netip"
-	"os"
-	"sync"
 
 	lneto "github.com/soypat/lneto"
-	"github.com/soypat/lneto/ethernet"
 	lnetotcp "github.com/soypat/lneto/tcp"
 	"github.com/soypat/lneto/x/xnet"
+	lnetocore "github.com/wago-org/net/internal/backend/lneto/core"
 	nscore "github.com/wago-org/net/internal/namespace/core"
 	dnsns "github.com/wago-org/net/internal/namespace/dns"
 	"github.com/wago-org/net/internal/packetlink"
@@ -23,6 +18,14 @@ import (
 )
 
 var _ nscore.Namespace = (*Namespace)(nil)
+
+const (
+	dnsServiceOrder = 10
+	udpServiceOrder = 20
+	dnsCloseOrder   = 10
+	tcpCloseOrder   = 20
+	udpCloseOrder   = 30
+)
 
 // UDPConfig fixes all storage allocated for each nonblocking UDP socket. The
 // lneto registration bound is finite and zero disables UDP.
@@ -36,7 +39,7 @@ type UDPConfig struct {
 }
 
 // Config fixes all memory, authority, accounting, and identity used by one
-// static IPv4 lneto nscore.
+// static IPv4 lneto namespace.
 type Config struct {
 	Hostname               string
 	RandSeed               int64
@@ -52,41 +55,36 @@ type Config struct {
 	Quotas                 *quota.Account
 }
 
-// Namespace owns exactly one lneto stack and one deterministic packet link.
+// Namespace composes protocol state over exactly one shared core owner. The
+// stack and frame-size aliases are temporary compatibility details for focused
+// same-package tests; ownership remains in core.
 type Namespace struct {
-	mu sync.Mutex
-
+	core                   *lnetocore.Namespace
 	stack                  *xnet.StackAsync
-	link                   *packetlink.Link
-	scratch                []byte
 	requiredFrameBytes     int
-	nextIngress            bool
-	nextUDPEgress          bool
-	nextDNSEgress          bool
-	nextIPv4ID             uint16
 	ipv4Address            netip.Addr
 	hardwareAddress        [6]byte
 	gatewayHardwareAddress [6]byte
-	udpConfig              UDPConfig
-	policy                 *policy.Policy
-	quotas                 *quota.Account
-	udpByPort              map[uint16]*udpSocket
-	udpOrder               []*udpSocket
-	udpCursor              int
-	tcpConfig              TCPConfig
-	tcpListeners           []*tcpListener
-	tcpStreams             []*tcpStream
-	tcpPorts               map[uint16]struct{}
-	tcpMaintenanceEpoch    uint64
-	nextTCPPort            uint16
-	nextTCPISS             lnetotcp.Value
-	dnsConfig              DNSConfig
-	dnsQueries             []*dnsQuery
-	dnsByPort              map[uint16]*dnsQuery
-	dnsCursor              int
-	nextDNSPort            uint16
-	nextDNSTxID            uint16
-	closed                 bool
+
+	udpConfig UDPConfig
+	policy    *policy.Policy
+	quotas    *quota.Account
+	udpByPort map[uint16]*udpSocket
+	udpOrder  []*udpSocket
+	udpCursor int
+
+	tcpConfig    TCPConfig
+	tcpListeners []*tcpListener
+	tcpStreams   []*tcpStream
+	tcpPorts     map[uint16]struct{}
+	nextTCPPort  uint16
+	nextTCPISS   lnetotcp.Value
+	dnsConfig    DNSConfig
+	dnsQueries   []*dnsQuery
+	dnsByPort    map[uint16]*dnsQuery
+	dnsCursor    int
+	nextDNSPort  uint16
+	nextDNSTxID  uint16
 }
 
 // ValidateConfig reports whether config can construct a static IPv4 namespace
@@ -98,40 +96,23 @@ func ValidateConfig(config Config) error {
 	return nil
 }
 
-// New creates one static IPv4 nscore. Link frame storage must accommodate a
-// complete Ethernet frame for the configured MTU.
+// New creates one shared static IPv4 core and installs the aggregate adapters
+// in their historical service and teardown order.
 func New(config Config) (*Namespace, error) {
 	if !validConfig(config, true) {
 		return nil, nscore.Fail(nscore.FailureInvalidArgument, packetlink.ErrInvalidConfig)
 	}
-	link, err := packetlink.New(config.Link)
+	common, err := lnetocore.New(coreConfig(config))
 	if err != nil {
-		return nil, nscore.Fail(nscore.FailureInvalidArgument, err)
+		return nil, err
 	}
-	stack := new(xnet.StackAsync)
-	stackConfig := xnet.StackConfig{
-		HardwareAddress:   config.HardwareAddress,
-		StaticAddress4:    config.IPv4Address.As4(),
-		RandSeed:          config.RandSeed,
-		Hostname:          config.Hostname,
-		MTU:               config.MTU,
-		MaxActiveTCPPorts: config.TCP.MaxListeners + config.TCP.MaxOutboundStreams,
-	}
-	if err := stack.Reset(stackConfig); err != nil {
-		_ = link.Close()
-		return nil, mapError(err)
-	}
-	stack.SetGatewayHardwareAddr(config.GatewayHardwareAddress)
-	requiredFrameBytes := int(config.MTU) + 14
-	return &Namespace{
+	common.Lock()
+	stack := common.StackLocked()
+	common.Unlock()
+	n := &Namespace{
+		core:                   common,
 		stack:                  stack,
-		link:                   link,
-		scratch:                make([]byte, config.Link.MaxFrameBytes),
-		requiredFrameBytes:     requiredFrameBytes,
-		nextIngress:            true,
-		nextUDPEgress:          true,
-		nextDNSEgress:          true,
-		nextIPv4ID:             uint16(config.RandSeed),
+		requiredFrameBytes:     int(config.MTU) + 14,
 		ipv4Address:            config.IPv4Address,
 		hardwareAddress:        config.HardwareAddress,
 		gatewayHardwareAddress: config.GatewayHardwareAddress,
@@ -151,56 +132,84 @@ func New(config Config) (*Namespace, error) {
 		dnsByPort:              make(map[uint16]*dnsQuery, config.DNS.MaxQueries),
 		nextDNSPort:            firstEphemeralDNSPort,
 		nextDNSTxID:            uint16(config.RandSeed) | 1,
-	}, nil
+	}
+	participants := []lnetocore.Participant{
+		{
+			IngressOrder: dnsServiceOrder,
+			Ingress:      n.ingressDNSLocked,
+			EgressOrder:  dnsServiceOrder,
+			HasEgress:    n.hasDNSWorkLocked,
+			Egress:       n.egressDNSLocked,
+			CloseOrder:   dnsCloseOrder,
+			Close:        n.closeDNSLocked,
+		},
+		{
+			CloseOrder: tcpCloseOrder,
+			Close:      n.closeTCPLocked,
+		},
+		{
+			IngressOrder: udpServiceOrder,
+			Ingress:      n.ingressUDPLocked,
+			EgressOrder:  udpServiceOrder,
+			HasEgress:    n.hasUDPEgressLocked,
+			Egress: func(dst []byte) (int, bool, error) {
+				written, err := n.egressUDPLocked(dst)
+				return written, written != 0, err
+			},
+			CloseOrder: udpCloseOrder,
+			Close:      n.closeUDPLocked,
+		},
+	}
+	for _, participant := range participants {
+		if err := common.Install(participant); err != nil {
+			_ = common.Close()
+			return nil, err
+		}
+	}
+	return n, nil
 }
 
-// Link returns the namespace-owned packet link. It remains safe to inspect
-// after namespace close, but all link operations then return packetlink.ErrClosed.
+func coreConfig(config Config) lnetocore.Config {
+	return lnetocore.Config{
+		Hostname:               config.Hostname,
+		RandSeed:               config.RandSeed,
+		HardwareAddress:        config.HardwareAddress,
+		GatewayHardwareAddress: config.GatewayHardwareAddress,
+		IPv4Address:            config.IPv4Address,
+		MTU:                    config.MTU,
+		Link:                   config.Link,
+		MaxActiveTCPPorts:      config.TCP.MaxListeners + config.TCP.MaxOutboundStreams,
+		Policy:                 config.Policy,
+		Quotas:                 config.Quotas,
+	}
+}
+
 func (n *Namespace) Link() *packetlink.Link {
-	if n == nil {
+	if n == nil || n.core == nil {
 		return nil
 	}
-	n.mu.Lock()
-	defer n.mu.Unlock()
-	return n.link
+	return n.core.Link()
 }
 
-// Readiness returns a level-triggered link snapshot without servicing packets.
 func (n *Namespace) Readiness() nscore.Readiness {
-	if n == nil {
+	if n == nil || n.core == nil {
 		return nscore.ReadyClosed
 	}
-	n.mu.Lock()
-	defer n.mu.Unlock()
-	if n.closed || n.link == nil {
-		return nscore.ReadyClosed
-	}
-	snapshot := n.link.Snapshot()
-	if snapshot.Closed {
-		return nscore.ReadyClosed
-	}
-	var ready nscore.Readiness
-	if snapshot.EgressFrames > 0 {
-		ready |= nscore.ReadyReadable
-	}
-	if snapshot.IngressFrames < snapshot.IngressCapacity {
-		ready |= nscore.ReadyWritable
-	}
-	return ready
+	return n.core.Readiness()
 }
 
-// Close immediately detaches the stack, clears service scratch memory, and
-// closes the packet link. It never waits for network progress and is idempotent.
 func (n *Namespace) Close() error {
-	if n == nil {
+	if n == nil || n.core == nil {
 		return nil
 	}
-	n.mu.Lock()
-	defer n.mu.Unlock()
-	if n.closed {
-		return nil
-	}
-	n.closed = true
+	err := n.core.Close()
+	n.core.Lock()
+	n.stack = nil
+	n.core.Unlock()
+	return err
+}
+
+func (n *Namespace) closeDNSLocked() {
 	for len(n.dnsQueries) > 0 {
 		n.dnsQueries[len(n.dnsQueries)-1].closeLocked()
 	}
@@ -208,6 +217,9 @@ func (n *Namespace) Close() error {
 	n.dnsByPort = nil
 	n.dnsQueries = nil
 	n.dnsCursor = 0
+}
+
+func (n *Namespace) closeTCPLocked() {
 	for len(n.tcpListeners) > 0 {
 		n.tcpListeners[len(n.tcpListeners)-1].closeLocked()
 	}
@@ -218,6 +230,9 @@ func (n *Namespace) Close() error {
 	n.tcpPorts = nil
 	n.tcpListeners = nil
 	n.tcpStreams = nil
+}
+
+func (n *Namespace) closeUDPLocked() {
 	for len(n.udpOrder) > 0 {
 		n.udpOrder[len(n.udpOrder)-1].closeLocked()
 	}
@@ -225,13 +240,6 @@ func (n *Namespace) Close() error {
 	n.udpByPort = nil
 	n.udpOrder = nil
 	n.udpCursor = 0
-	n.stack = nil
-	clear(n.scratch)
-	n.scratch = nil
-	if n.link != nil {
-		return n.link.Close()
-	}
-	return nil
 }
 
 func (n *Namespace) TryBindUDP(local nscore.Endpoint) (nscore.Resource, nscore.Progress, error) {
@@ -250,167 +258,20 @@ func (n *Namespace) TryResolve(request dnsns.Request) (nscore.Resource, nscore.P
 	return n.tryResolve(request)
 }
 
-// TryService performs bounded, nonblocking packet transfer plus TCP and DNS
-// maintenance. Each direction probe consumes the private attempt bound.
-// Completed packet, accepted-slot reclamation, or DNS state-transition work
-// increments Operations; only frames increment Packets and Bytes. Empty probes
-// remain unreported.
 func (n *Namespace) TryService(budget nscore.ServiceBudget) (nscore.ServiceReport, nscore.Progress, error) {
-	if n == nil {
+	if n == nil || n.core == nil {
 		return nscore.ServiceReport{}, 0, nscore.Fail(nscore.FailureClosed, net.ErrClosed)
 	}
-	n.mu.Lock()
-	defer n.mu.Unlock()
-	if n.closed || n.stack == nil || n.link == nil {
-		return nscore.ServiceReport{}, 0, nscore.Fail(nscore.FailureClosed, net.ErrClosed)
-	}
-	if !budget.Valid() {
-		return nscore.ServiceReport{}, 0, nscore.Fail(nscore.FailureInvalidArgument, lneto.ErrInvalidConfig)
-	}
-
-	var report nscore.ServiceReport
-	var attempts uint32
-	for report.Packets < budget.Packets && attempts < budget.Operations && report.Bytes <= budget.Bytes {
-		remainingBytes := budget.Bytes - report.Bytes
-		ingress := n.nextIngress
-		n.nextIngress = !n.nextIngress
-		attempts++
-		var worked, packet bool
-		var frameBytes int
-		var err error
-		if ingress {
-			worked, packet, frameBytes, err = n.tryIngress(remainingBytes)
-		} else {
-			worked, packet, frameBytes, err = n.tryEgress(remainingBytes)
-		}
-		if worked {
-			report.Operations++
-			if packet {
-				report.Packets++
-				report.Bytes += uint32(frameBytes)
-			}
-		}
-		if err != nil {
-			progress := nscore.ProgressWouldBlock
-			if report != (nscore.ServiceReport{}) {
-				progress = nscore.ProgressDone
-			}
-			return report, progress, err
-		}
-	}
-	if report == (nscore.ServiceReport{}) {
-		return report, nscore.ProgressWouldBlock, nil
-	}
-	return report, nscore.ProgressDone, nil
-}
-
-func (n *Namespace) tryIngress(remainingBytes uint32) (bool, bool, int, error) {
-	result, err := n.link.TryDequeueWithin(packetlink.Ingress, n.scratch, int(remainingBytes))
-	if errors.Is(err, packetlink.ErrFrameBudget) {
-		return false, false, 0, nil
-	}
-	if err != nil {
-		return false, false, 0, mapError(err)
-	}
-	if !result.Ready {
-		return false, false, 0, nil
-	}
-	frame := n.scratch[:result.FrameBytes]
-	handled, protocolErr := n.ingressDNSLocked(frame)
-	if !handled {
-		handled, protocolErr = n.ingressUDPLocked(frame)
-	}
-	if handled {
-		err = protocolErr
-	} else {
-		err = n.stack.IngressEthernet(frame)
-	}
-	clear(frame)
-	if errors.Is(err, lneto.ErrPacketDrop) {
-		err = nil
-	}
-	if err != nil {
-		return true, true, result.FrameBytes, mapError(err)
-	}
-	return true, true, result.FrameBytes, nil
-}
-
-func (n *Namespace) tryEgress(remainingBytes uint32) (bool, bool, int, error) {
-	if remainingBytes < uint32(n.requiredFrameBytes) {
-		return false, false, 0, nil
-	}
-	var dnsWorked, tcpWorked bool
-	result, err := n.link.TryFill(packetlink.Egress, func(dst []byte) (int, error) {
-		hasDNS := n.hasDNSWorkLocked()
-		if hasDNS && n.nextDNSEgress {
-			n.nextDNSEgress = false
-			written, worked, dnsErr := n.egressDNSLocked(dst[:n.requiredFrameBytes])
-			dnsWorked = worked
-			if written != 0 || worked || dnsErr != nil {
-				return written, dnsErr
-			}
-		}
-
-		hasUDP := n.hasUDPEgressLocked()
-		if hasUDP && n.nextUDPEgress {
-			n.nextUDPEgress = false
-			written, udpErr := n.egressUDPLocked(dst[:n.requiredFrameBytes])
-			if written != 0 || udpErr != nil {
-				if hasDNS {
-					n.nextDNSEgress = true
-				}
-				return written, udpErr
-			}
-		}
-		maintenanceEpoch := n.tcpMaintenanceEpoch
-		written, stackErr := n.stack.EgressEthernet(dst[:n.requiredFrameBytes])
-		tcpWorked = n.tcpMaintenanceEpoch != maintenanceEpoch
-		if written != 0 || stackErr != nil {
-			if hasUDP {
-				n.nextUDPEgress = true
-			}
-			if hasDNS {
-				n.nextDNSEgress = true
-			}
-			return written, stackErr
-		}
-		if hasUDP {
-			n.nextUDPEgress = true
-			written, udpErr := n.egressUDPLocked(dst[:n.requiredFrameBytes])
-			if written != 0 || udpErr != nil {
-				if hasDNS {
-					n.nextDNSEgress = true
-				}
-				return written, udpErr
-			}
-		}
-		if hasDNS {
-			n.nextDNSEgress = true
-			written, worked, dnsErr := n.egressDNSLocked(dst[:n.requiredFrameBytes])
-			dnsWorked = worked
-			return written, dnsErr
-		}
-		return 0, nil
-	})
-	if errors.Is(err, packetlink.ErrQueueFull) {
-		return false, false, 0, nil
-	}
-	if err != nil {
-		return dnsWorked || tcpWorked, false, 0, mapError(err)
-	}
-	if !result.Ready {
-		return dnsWorked || tcpWorked, false, 0, nil
-	}
-	return true, true, result.FrameBytes, nil
+	return n.core.TryService(budget)
 }
 
 func (n *Namespace) checkEndpoint(endpoint nscore.Endpoint) error {
-	if n == nil {
+	if n == nil || n.core == nil {
 		return nscore.Fail(nscore.FailureClosed, net.ErrClosed)
 	}
-	n.mu.Lock()
-	defer n.mu.Unlock()
-	if n.closed {
+	n.core.Lock()
+	defer n.core.Unlock()
+	if n.core.ClosedLocked() {
 		return nscore.Fail(nscore.FailureClosed, net.ErrClosed)
 	}
 	if !endpoint.Valid() {
@@ -420,19 +281,12 @@ func (n *Namespace) checkEndpoint(endpoint nscore.Endpoint) error {
 }
 
 func validConfig(config Config, requireAuthority bool) bool {
-	if config.Hostname == "" || config.RandSeed == 0 || !config.IPv4Address.Is4() || config.IPv4Address.Is4In6() || config.IPv4Address.Zone() != "" {
+	if validTCPConfig(config.TCP, config.Policy, config.Quotas, requireAuthority) == false ||
+		validUDPConfig(config.UDP, int(config.MTU), config.Policy, config.Quotas, requireAuthority) == false ||
+		validDNSConfig(config.DNS, int(config.MTU), config.Policy, config.Quotas, requireAuthority) == false {
 		return false
 	}
-	if config.MTU < ethernet.MinimumMTU || config.MTU > ethernet.MaxMTU {
-		return false
-	}
-	requiredFrameBytes := int(config.MTU) + 14
-	if config.Link.MaxFrameBytes < requiredFrameBytes || config.Link.IngressFrames <= 0 || config.Link.EgressFrames <= 0 {
-		return false
-	}
-	return validUDPConfig(config.UDP, int(config.MTU), config.Policy, config.Quotas, requireAuthority) &&
-		validTCPConfig(config.TCP, config.Policy, config.Quotas, requireAuthority) &&
-		validDNSConfig(config.DNS, int(config.MTU), config.Policy, config.Quotas, requireAuthority)
+	return lnetocore.ValidateConfig(coreConfig(config)) == nil
 }
 
 func validTCPConfig(config TCPConfig, compiled *policy.Policy, account *quota.Account, requireAuthority bool) bool {
@@ -468,37 +322,4 @@ func validUDPConfig(config UDPConfig, mtu int, compiled *policy.Policy, account 
 		config.TransmitBytes >= config.TransmitDatagrams*config.MaxPayloadBytes
 }
 
-func mapError(err error) error {
-	if err == nil {
-		return nil
-	}
-	failure := nscore.FailureIO
-	switch {
-	case errors.Is(err, net.ErrClosed), errors.Is(err, packetlink.ErrClosed), errors.Is(err, quota.ErrClosed):
-		failure = nscore.FailureClosed
-	case errors.Is(err, context.Canceled):
-		failure = nscore.FailureCanceled
-	case errors.Is(err, context.DeadlineExceeded), errors.Is(err, os.ErrDeadlineExceeded):
-		failure = nscore.FailureTimedOut
-	case errors.Is(err, lneto.ErrUnsupported):
-		failure = nscore.FailureNotSupported
-	case errors.Is(err, lneto.ErrExhausted), errors.Is(err, lneto.ErrBufferFull), errors.Is(err, packetlink.ErrQueueFull), errors.Is(err, quota.ErrLimit):
-		failure = nscore.FailureResourceLimit
-	case errors.Is(err, lneto.ErrAlreadyRegistered):
-		failure = nscore.FailureAddressInUse
-	case errors.Is(err, lneto.ErrBadState):
-		failure = nscore.FailureInvalidState
-	case errors.Is(err, lneto.ErrShortBuffer), errors.Is(err, io.ErrShortBuffer), errors.Is(err, packetlink.ErrFrameTooLarge):
-		failure = nscore.FailureMessageTooLarge
-	case errors.Is(err, lneto.ErrInvalidAddr), errors.Is(err, lneto.ErrInvalidConfig),
-		errors.Is(err, lneto.ErrInvalidField), errors.Is(err, lneto.ErrInvalidLengthField),
-		errors.Is(err, lneto.ErrMismatchLen), errors.Is(err, lneto.ErrTruncatedFrame),
-		errors.Is(err, lneto.ErrZeroSource), errors.Is(err, lneto.ErrZeroDestination),
-		errors.Is(err, lneto.ErrBadCRC), errors.Is(err, packetlink.ErrInvalidQueue),
-		errors.Is(err, packetlink.ErrInvalidFill), errors.Is(err, packetlink.ErrFrameBudget), errors.Is(err, quota.ErrInvalidUnits):
-		failure = nscore.FailureInvalidArgument
-	case errors.Is(err, lneto.ErrPacketDrop), errors.Is(err, lneto.ErrMismatch):
-		failure = nscore.FailureTemporary
-	}
-	return nscore.Fail(failure, err)
-}
+func mapError(err error) error { return lnetocore.MapError(err) }

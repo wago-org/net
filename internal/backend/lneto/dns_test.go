@@ -43,7 +43,7 @@ func TestDNSBoundedQueryRecordsAndQuotaLifecycle(t *testing.T) {
 	if err := ns.Link().TryEnqueue(packetlink.Ingress, response); err != nil {
 		t.Fatal(err)
 	}
-	ns.nextIngress = true
+	setNextIngress(ns, true)
 	budget := namespace.ServiceBudget{Packets: 1, Bytes: uint32(ns.requiredFrameBytes), Operations: 1}
 	report, progress, err := ns.TryService(budget)
 	if err != nil || progress != namespace.ProgressDone || report != (namespace.ServiceReport{Packets: 1, Bytes: uint32(len(response)), Operations: 1}) {
@@ -443,7 +443,7 @@ func dnsTestConfig(t testing.TB, id byte) Config {
 
 func serviceDNSPacket(t testing.TB, ns *Namespace) []byte {
 	t.Helper()
-	ns.nextIngress = false
+	setNextIngress(ns, false)
 	budget := namespace.ServiceBudget{Packets: 1, Bytes: uint32(ns.requiredFrameBytes), Operations: 1}
 	report, progress, err := ns.TryService(budget)
 	if err != nil || progress != namespace.ProgressDone || report.Packets != 1 || report.Operations != 1 || report.Bytes == 0 {
@@ -459,7 +459,7 @@ func serviceDNSPacket(t testing.TB, ns *Namespace) []byte {
 
 func serviceDNSMaintenance(t testing.TB, ns *Namespace) namespace.ServiceReport {
 	t.Helper()
-	ns.nextIngress = false
+	setNextIngress(ns, false)
 	budget := namespace.ServiceBudget{Packets: 1, Bytes: uint32(ns.requiredFrameBytes), Operations: 1}
 	report, progress, err := ns.TryService(budget)
 	if err != nil || progress != namespace.ProgressDone || !report.ValidResult(budget, progress) {

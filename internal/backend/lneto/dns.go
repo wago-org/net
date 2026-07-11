@@ -65,9 +65,9 @@ func (n *Namespace) tryResolve(request dnsns.Request) (nscore.Resource, nscore.P
 	if n == nil {
 		return nil, 0, nscore.Fail(nscore.FailureClosed, net.ErrClosed)
 	}
-	n.mu.Lock()
-	defer n.mu.Unlock()
-	if n.closed || n.stack == nil {
+	n.core.Lock()
+	defer n.core.Unlock()
+	if n.core.ClosedLocked() || n.stack == nil {
 		return nil, 0, nscore.Fail(nscore.FailureClosed, net.ErrClosed)
 	}
 	if !request.Valid() {
@@ -148,9 +148,9 @@ func (q *dnsQuery) Readiness() nscore.Readiness {
 	if q == nil || q.owner == nil {
 		return nscore.ReadyClosed
 	}
-	q.owner.mu.Lock()
-	defer q.owner.mu.Unlock()
-	if q.state == dnsQueryClosed || q.owner.closed {
+	q.owner.core.Lock()
+	defer q.owner.core.Unlock()
+	if q.state == dnsQueryClosed || q.owner.core.ClosedLocked() {
 		return nscore.ReadyClosed
 	}
 	if q.state == dnsQueryFailed {
@@ -166,9 +166,9 @@ func (q *dnsQuery) TryNext() (dnsns.Record, dnsns.Next, error) {
 	if q == nil || q.owner == nil {
 		return dnsns.Record{}, 0, nscore.Fail(nscore.FailureClosed, net.ErrClosed)
 	}
-	q.owner.mu.Lock()
-	defer q.owner.mu.Unlock()
-	if q.state == dnsQueryClosed || q.owner.closed {
+	q.owner.core.Lock()
+	defer q.owner.core.Unlock()
+	if q.state == dnsQueryClosed || q.owner.core.ClosedLocked() {
 		return dnsns.Record{}, 0, nscore.Fail(nscore.FailureClosed, net.ErrClosed)
 	}
 	if q.state == dnsQueryFailed {
@@ -192,9 +192,9 @@ func (q *dnsQuery) Cancel() error {
 	if q == nil || q.owner == nil {
 		return nscore.Fail(nscore.FailureClosed, net.ErrClosed)
 	}
-	q.owner.mu.Lock()
-	defer q.owner.mu.Unlock()
-	if q.state == dnsQueryClosed || q.owner.closed {
+	q.owner.core.Lock()
+	defer q.owner.core.Unlock()
+	if q.state == dnsQueryClosed || q.owner.core.ClosedLocked() {
 		return nscore.Fail(nscore.FailureClosed, net.ErrClosed)
 	}
 	if q.state == dnsQueryDone || q.state == dnsQueryFailed {
@@ -208,8 +208,8 @@ func (q *dnsQuery) Close() error {
 	if q == nil || q.owner == nil {
 		return nil
 	}
-	q.owner.mu.Lock()
-	defer q.owner.mu.Unlock()
+	q.owner.core.Lock()
+	defer q.owner.core.Unlock()
 	return q.closeLocked()
 }
 
@@ -325,8 +325,7 @@ func (n *Namespace) egressDNSLocked(dst []byte) (written int, worked bool, err e
 		ipFrame, _ := ipv4.NewFrame(frame[14:])
 		ipFrame.SetVersionAndIHL(4, 5)
 		ipFrame.SetTotalLength(uint16(20 + 8 + len(query.packet)))
-		ipFrame.SetID(n.nextIPv4ID)
-		n.nextIPv4ID++
+		ipFrame.SetID(n.core.NextIPv4IDLocked())
 		ipFrame.SetFlags(0)
 		ipFrame.SetTTL(64)
 		ipFrame.SetProtocol(lneto.IPProtoUDP)

@@ -136,9 +136,9 @@ func (n *Namespace) tryBindUDP(local nscore.Endpoint) (nscore.Resource, nscore.P
 	if n == nil {
 		return nil, 0, nscore.Fail(nscore.FailureClosed, net.ErrClosed)
 	}
-	n.mu.Lock()
-	defer n.mu.Unlock()
-	if n.closed || n.stack == nil {
+	n.core.Lock()
+	defer n.core.Unlock()
+	if n.core.ClosedLocked() || n.stack == nil {
 		return nil, 0, nscore.Fail(nscore.FailureClosed, net.ErrClosed)
 	}
 	if !local.Valid() || !local.Address.Is4() || local.Port == 0 {
@@ -207,9 +207,9 @@ func (s *udpSocket) Readiness() nscore.Readiness {
 	if s == nil || s.owner == nil {
 		return nscore.ReadyClosed
 	}
-	s.owner.mu.Lock()
-	defer s.owner.mu.Unlock()
-	if s.closed || s.owner.closed {
+	s.owner.core.Lock()
+	defer s.owner.core.Unlock()
+	if s.closed || s.owner.core.ClosedLocked() {
 		return nscore.ReadyClosed
 	}
 	var ready nscore.Readiness
@@ -226,9 +226,9 @@ func (s *udpSocket) TryReceive(dst []byte) (udpns.DatagramResult, error) {
 	if s == nil || s.owner == nil {
 		return udpns.DatagramResult{}, nscore.Fail(nscore.FailureClosed, net.ErrClosed)
 	}
-	s.owner.mu.Lock()
-	defer s.owner.mu.Unlock()
-	if s.closed || s.owner.closed {
+	s.owner.core.Lock()
+	defer s.owner.core.Unlock()
+	if s.closed || s.owner.core.ClosedLocked() {
 		return udpns.DatagramResult{}, nscore.Fail(nscore.FailureClosed, net.ErrClosed)
 	}
 	result, ok := s.rx.pop(dst)
@@ -245,9 +245,9 @@ func (s *udpSocket) TrySend(payload []byte, remote nscore.Endpoint) (nscore.Prog
 	if s == nil || s.owner == nil {
 		return 0, nscore.Fail(nscore.FailureClosed, net.ErrClosed)
 	}
-	s.owner.mu.Lock()
-	defer s.owner.mu.Unlock()
-	if s.closed || s.owner.closed {
+	s.owner.core.Lock()
+	defer s.owner.core.Unlock()
+	if s.closed || s.owner.core.ClosedLocked() {
 		return 0, nscore.Fail(nscore.FailureClosed, net.ErrClosed)
 	}
 	if !remote.Valid() || !remote.Address.Is4() || remote.Port == 0 {
@@ -269,8 +269,8 @@ func (s *udpSocket) Close() error {
 	if s == nil || s.owner == nil {
 		return nil
 	}
-	s.owner.mu.Lock()
-	defer s.owner.mu.Unlock()
+	s.owner.core.Lock()
+	defer s.owner.core.Unlock()
 	return s.closeLocked()
 }
 
@@ -357,8 +357,7 @@ func (n *Namespace) egressUDPLocked(dst []byte) (int, error) {
 	ipFrame, _ := ipv4.NewFrame(frame[14:])
 	ipFrame.SetVersionAndIHL(4, 5)
 	ipFrame.SetTotalLength(uint16(20 + 8 + len(payload)))
-	ipFrame.SetID(n.nextIPv4ID)
-	n.nextIPv4ID++
+	ipFrame.SetID(n.core.NextIPv4IDLocked())
 	ipFrame.SetFlags(ipv4.FlagDontFragment)
 	ipFrame.SetTTL(64)
 	ipFrame.SetProtocol(lneto.IPProtoUDP)
