@@ -22,6 +22,37 @@ additional values through checked guest-memory output pointers.
 - reserved input fields must be zero;
 - reserved output fields are written as zero.
 
+## Address structure
+
+`wago_net_addr_v1` is a fixed 32-byte structure:
+
+```c
+struct wago_net_addr_v1 {
+    uint8_t  family;
+    uint8_t  flags;
+    uint16_t port;
+    uint32_t scope_id;
+    uint8_t  address[16];
+    uint32_t flow_info;
+    uint32_t reserved;
+};
+```
+
+Family `1` is IPv4 and family `2` is IPv6. IPv4 uses the first four address
+bytes and requires the remaining twelve bytes, `scope_id`, and `flow_info` to be
+zero. IPv6 flow information is limited to its low 20 bits. A nonzero IPv6 scope
+ID is accepted only for link-local unicast (`fe80::/10`) or multicast addresses.
+IPv4-mapped IPv6 addresses are rejected; callers must select IPv4 explicitly.
+ABI v1 defines no flag bits, so `flags` and `reserved` must be zero on input and
+are zeroed on output. Wildcard, loopback, multicast, and broadcast addresses are
+represented literally; authority to use them is enforced by operation policy,
+not by the structural codec.
+
+Memory ranges are checked with `uint64` pointer-plus-length arithmetic. A
+zero-length range at the exact end of memory is valid. Output helpers validate
+the complete range before mutation. Overlapping writes follow ordinary `copy`
+semantics, and no guest-memory slice may be retained after a host call.
+
 ## Status values
 
 | Value | Name |

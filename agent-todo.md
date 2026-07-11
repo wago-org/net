@@ -31,8 +31,9 @@ The external plugin module owns only the core import module `wago_net`. Protocol
 will use independently owned modules such as `wago_net_udp` and `wago_net_tcp`
 because Wago rejects two extensions claiming one import module. The core currently
 provides `abi_version`, `net.info`, the ABI version constant, and the common status
-taxonomy. No namespace, handle table, policy, poller, protocol, or lneto backend is
-implemented yet.
+taxonomy. `internal/abi` provides checked guest-memory ranges and the fixed 32-byte
+IPv4/IPv6 address codec. No namespace, handle table, policy, poller, protocol, or
+lneto backend is implemented yet.
 
 Wago main has no deterministic per-instance close hook. The companion Wago branch
 adds `HookRegistry.BeforeClose`, reverse-order exactly-once invocation, cleanup on
@@ -44,18 +45,26 @@ isolation, and transactional hook registration without increasing `Instance` siz
 - `dd82ec9a8963463e6516bf803bec58b3a89b89b3` — added deterministic Wago
   instance-close hooks. Targeted tests and race tests pass when a temporary helper
   is supplied for the unrelated missing `trapCode` test helper on Wago main.
+- `eb0b79af59af5402f8d39c436123bbd33c019be7` — scaffolded the external plugin,
+  packaging manifest, self-registration, ABI version/status definitions,
+  architecture documentation, recursive skill, and durable ledger. Standard,
+  race, and vet checks pass.
+- `HEAD` (`net: add checked guest-memory and address codecs`) — added centralized
+  uint64-checked ranges, atomic output helpers, the fixed v1 IPv4/IPv6 codec,
+  unit tests, and fuzz targets.
 
 ## Active work
 
-Recursion 1, commit 2: establish the external plugin manifest, core extension,
-ABI version/status definitions, packaging registration, architecture docs, and
-this durable ledger.
+Recursion 1 is complete. The next recursion should implement resource identity,
+the missing host-call instance identity prerequisite, and per-instance lifecycle
+attachment in three commits.
 
 ## Ordered backlog
 
-1. Add checked guest-memory range helpers and the fixed-width v1 address codec.
-2. Integrate the Wago close-hook change into the plugin's selected Wago revision.
-3. Add generation-safe, kind-safe per-instance resource handles.
+1. Integrate the Wago close-hook change into the plugin's selected Wago revision.
+2. Add generation-safe, kind-safe per-instance resource handles.
+3. Expose optional Runtime instance identity to host imports without expanding the
+   minimal `HostModule` interface.
 4. Add per-instance networking state and close-hook cleanup.
 5. Add endpoint/domain policy and quota primitives.
 6. Define backend-neutral namespace interfaces.
@@ -96,6 +105,13 @@ Latest outcomes:
   `trapCode` in `cross_instance_test.go`.
 - Wago lifecycle tests with temporary baseline helper — pass.
 - Wago lifecycle race tests with temporary baseline helper — pass.
+- `go test ./...` in the plugin — pass.
+- `go test -race ./...` in the plugin — pass.
+- `go vet ./...` in the plugin — pass.
+- `go test ./internal/abi -run '^$' -fuzz '^FuzzSlice$' -fuzztime=3s` — pass,
+  630,644 executions.
+- `go test ./internal/abi -run '^$' -fuzz '^FuzzDecodeAddressV1$' -fuzztime=3s`
+  — pass, 754,480 executions.
 - `go vet ./src/wago` — reports existing unsafe-pointer warnings in
   `instantiate.go`; no new warning is attributable to the lifecycle hook.
 - TinyGo — not installed in this environment.
@@ -104,24 +120,31 @@ Latest outcomes:
 
 No plugin benchmarks exist yet. The Wago lifecycle hook preserves the documented
 776-byte `Instance` footprint and adds no field or allocation to instances when
-no hook is registered. Close-hook timing has not yet been benchmarked.
+no hook is registered. The memory/address helpers are allocation-free by
+inspection and tests, but benchmark baselines have not yet been recorded.
 
 ## Security review
 
-Current guest-visible code exposes no memory pointers, handles, endpoints, or
-packet data. The ABI version and status taxonomy add no network authority. Main
-risks are future per-instance state attachment, lifecycle behavior under snapshot
-pool reuse, guest-memory validation, and preventing blocking lneto wrappers from
-entering host imports.
+Current guest-visible code exposes no handles, endpoints, or packet data. The ABI
+version and status taxonomy add no network authority. Guest-memory ranges use
+uint64 arithmetic, valid zero-length end ranges, and validate full outputs before
+mutation. The address codec rejects reserved bits, family ambiguity, IPv4-mapped
+IPv6, invalid IPv4 tails, and structurally invalid scope/flow fields. Main risks
+are future per-instance state attachment, lifecycle behavior under snapshot pool
+reuse, and preventing blocking lneto wrappers from entering host imports.
 
 ## Next recursion
 
 1. `net: add generation-safe resource handles`
    - Scope: typed kinds, zero invalid, generation rollover, O(1) live tracking.
    - Tests: stale, forged, wrong-kind, reuse, cross-table, repeated close.
-2. `net: attach per-instance lifecycle state`
-   - Scope: one state object per Runtime-created instance and deterministic cleanup.
-   - Tests: normal close, failed setup, class release, concurrent close.
-3. `net: add endpoint policy and quotas`
-   - Scope: IPv4/IPv6 CIDR and port rules plus central resource limits.
-   - Tests: boundaries, wildcard, multicast/broadcast defaults, quota overflow.
+2. `wago: expose optional host-call instance identity`
+   - Scope: an additive interface implemented by Wago's concrete HostModule;
+     preserve existing mocks and the minimal HostModule contract.
+   - Tests: Runtime and low-level host imports see the exact calling instance;
+     existing HostModule-only mocks remain source-compatible.
+3. `net: attach per-instance lifecycle state`
+   - Scope: extension-local instance map, one resource table per instance,
+     deterministic BeforeClose cleanup, no process-global state.
+   - Tests: isolation, failed setup, class release, concurrent close, cross-instance
+     handle rejection.

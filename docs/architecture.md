@@ -38,7 +38,8 @@ created merely as a placeholder.
 The root package is the core extension. It owns `wago_net`, declares `net.info`,
 and exposes only `abi_version`. The extension and low-level import bundle are both
 derived from one binding table so inspection metadata and actual bindings do not
-drift.
+drift. `internal/abi` provides allocation-free checked memory ranges and the
+fixed-width IPv4/IPv6 address codec for future protocol packages.
 
 No networking resources or backend are attached yet. Wago main at revision
 `8ef17eeb3a74f4982ef64d125282c1dab8c8e240` lacks an instance-close hook. The
