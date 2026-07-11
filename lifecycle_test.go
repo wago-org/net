@@ -124,7 +124,7 @@ func TestInstanceStateIsolationHostIdentityAndCrossTableHandles(t *testing.T) {
 
 	firstState, firstOK := manager.ForInstance(first)
 	secondState, secondOK := manager.ForInstance(second)
-	if !firstOK || !secondOK || firstState == secondState || firstState.Resources() == secondState.Resources() {
+	if !firstOK || !secondOK || firstState == secondState || firstState.Resources() == secondState.Resources() || firstState.Readiness() == secondState.Readiness() {
 		t.Fatalf("isolated states = (%p,%v) (%p,%v)", firstState, firstOK, secondState, secondOK)
 	}
 	if got := manager.Len(); got != 2 {
@@ -219,6 +219,10 @@ func TestInstanceStateCleanupClosesQuotaLedger(t *testing.T) {
 	if !ok {
 		t.Fatal("state not attached")
 	}
+	poller := state.Readiness()
+	if poller == nil {
+		t.Fatal("readiness coordinator not attached")
+	}
 	pending, err := state.Quotas().ReserveQueuedBytes(4096)
 	if err != nil {
 		t.Fatalf("ReserveQueuedBytes: %v", err)
@@ -236,6 +240,9 @@ func TestInstanceStateCleanupClosesQuotaLedger(t *testing.T) {
 	}
 	if usage, closed := state.Quotas().Snapshot(); !closed || usage != (quota.Usage{}) {
 		t.Fatalf("quota after instance close = %+v, closed=%v", usage, closed)
+	}
+	if snapshot := poller.Snapshot(); !snapshot.Closed || snapshot.Registrations != 0 {
+		t.Fatalf("readiness after instance close = %+v", snapshot)
 	}
 	if _, err := state.Quotas().ReserveService(1); !errors.Is(err, quota.ErrClosed) {
 		t.Fatalf("reserve after instance close error = %v", err)

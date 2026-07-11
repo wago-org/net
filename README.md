@@ -6,10 +6,13 @@ WebAssembly runtime, backed initially by [lneto](https://github.com/soypat/lneto
 The repository is in its ABI-foundation phase. The implemented guest surface is
 the experimental `wago_net.abi_version` import and the stable numeric status
 taxonomy. Internal foundations now include checked memory, instance-scoped
-handles and cleanup, immutable endpoint policy, finite per-instance quotas, and
-backend-neutral nonblocking namespace contracts. TCP, UDP, DNS, polling,
-namespace backends, and privileged packet access are not yet guest-visible and
-are not advertised as available.
+handles and cleanup, immutable endpoint policy, finite per-instance quotas,
+backend-neutral nonblocking namespace contracts, a deterministic bounded packet
+link, one manually serviced lneto stack per concrete namespace, and bounded
+instance-scoped readiness coordination. TCP, UDP, DNS, polling imports, and
+privileged packet access are not yet guest-visible and are not advertised as
+available; the concrete backend truthfully rejects protocol constructors until
+their nonblocking adapters are hardened.
 
 ```go
 rt := wago.NewRuntime()

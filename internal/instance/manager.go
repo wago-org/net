@@ -7,6 +7,7 @@ import (
 	"sync"
 
 	"github.com/wago-org/net/internal/quota"
+	"github.com/wago-org/net/internal/readiness"
 	"github.com/wago-org/net/internal/resource"
 	wago "github.com/wago-org/wago"
 )
@@ -19,6 +20,7 @@ var (
 // State is the networking ownership root for one exact Wago instance.
 type State struct {
 	resources *resource.Table
+	readiness *readiness.Coordinator
 	quotas    *quota.Account
 }
 
@@ -30,6 +32,14 @@ func (s *State) Resources() *resource.Table {
 	return s.resources
 }
 
+// Readiness returns the instance's bounded poll coordinator.
+func (s *State) Readiness() *readiness.Coordinator {
+	if s == nil {
+		return nil
+	}
+	return s.readiness
+}
+
 // Quotas returns the instance's bounded accounting ledger.
 func (s *State) Quotas() *quota.Account {
 	if s == nil {
@@ -38,21 +48,24 @@ func (s *State) Quotas() *quota.Account {
 	return s.quotas
 }
 
-// Close releases resources first so their accounting allocations can be
-// returned normally, then closes the ledger to discard failed-operation
+// Close stops polling before releasing resources so no readiness lookup can
+// race teardown, then closes the ledger to discard failed-operation
 // reservations that never reached a resource owner.
 func (s *State) Close() error {
 	if s == nil {
 		return nil
 	}
-	var err error
+	var errs []error
+	if s.readiness != nil {
+		errs = append(errs, s.readiness.Close())
+	}
 	if s.resources != nil {
-		err = s.resources.Close()
+		errs = append(errs, s.resources.Close())
 	}
 	if s.quotas != nil {
 		s.quotas.Close()
 	}
-	return err
+	return errors.Join(errs...)
 }
 
 // Manager is an extension-local attachment map. It must be owned by an
@@ -92,7 +105,12 @@ func (m *Manager) Attach(instance *wago.Instance) error {
 	if err != nil {
 		return fmt.Errorf("create resource table: %w", err)
 	}
-	state := &State{resources: table, quotas: quota.NewAccount(quota.DefaultLimits())}
+	poller, err := readiness.New(table, readiness.DefaultConfig())
+	if err != nil {
+		_ = table.Close()
+		return fmt.Errorf("create readiness coordinator: %w", err)
+	}
+	state := &State{resources: table, readiness: poller, quotas: quota.NewAccount(quota.DefaultLimits())}
 
 	m.mu.Lock()
 	if m.states == nil {

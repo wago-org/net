@@ -68,11 +68,32 @@ truncation, DNS record ownership, and service-budget bounds explicit. A
 compile-time fake backend exercises the contracts without importing lneto; no
 lneto type is part of this layer.
 
+`internal/packetlink` owns fixed ingress and egress frame slots. Enqueue copies
+caller data, dequeue has explicit truncation and byte-budget rollback semantics,
+and backend fills commit atomically only after successful immediate production.
+Queue-full and oversized failures retain no caller slices, and close clears all
+retained bytes synchronously.
+
+`internal/backend/lneto` owns one `xnet.StackAsync` and one packet link per
+namespace. Only immediate Ethernet ingress and egress calls enter bounded manual
+service; no lneto blocking, deadline, goroutine, or backoff wrapper is used.
+Service alternates directions under independent packet, byte, and operation
+bounds, maps backend errors to semantic namespace failures, and leaves UDP, TCP,
+and DNS constructors truthfully unsupported. Tests drive deterministic ARP
+exchange between isolated namespaces and prove exact budget and close behavior.
+
+`internal/readiness` attaches a finite coordinator to each instance resource
+table. Registrations retain opaque handle plus exact kind, level-triggered polls
+scan at most one bounded pass, output only caller-budgeted events, and make only
+bounded namespace service attempts. Stale generation handles are removed during
+the bounded scan; polling never sleeps and exposes no guest import yet.
+
 Each `Extension` now owns a private instance-state manager. Runtime
-instantiation attaches one resource table to the exact `*wago.Instance`; host
-imports recover that identity through the additive `wago.InstanceHostModule`
-interface, and `BeforeClose` removes the attachment before reverse-creation
-resource cleanup and quota shutdown. Failed later setup and `ResetReinstantiate`
+instantiation attaches one resource table, readiness coordinator, and finite
+quota ledger to the exact `*wago.Instance`; host imports recover that identity
+through the additive `wago.InstanceHostModule` interface, and `BeforeClose`
+removes the attachment before polling shutdown, reverse-creation resource
+cleanup, and quota shutdown. Failed later setup and `ResetReinstantiate`
 replacement use the same close path. No process-global instance map is used. The
 low-level `Imports` bundle remains suitable only for stateless core imports such
 as `abi_version`;
