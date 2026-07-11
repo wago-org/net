@@ -9,16 +9,19 @@ import (
 )
 
 func main() {
-	var out, plugin, subject, wago, lneto, wasi string
+	var out, plugin, subject, wago, lneto, wasi, currentNet, currentWago, workers string
 	flag.StringVar(&out, "out", "", "output directory")
 	flag.StringVar(&plugin, "plugin", ".", "plugin repository")
 	flag.StringVar(&subject, "subject", "HEAD", "exact plugin subject revision")
-	flag.StringVar(&wago, "wago", "", "Wago repository")
+	flag.StringVar(&wago, "wago", "", "production Wago repository")
 	flag.StringVar(&lneto, "lneto", "", "lneto repository")
 	flag.StringVar(&wasi, "wasi", "", "WASI repository")
+	flag.StringVar(&currentNet, "current-net", "", "current networking review repository")
+	flag.StringVar(&currentWago, "current-wago", "", "current Wago review repository")
+	flag.StringVar(&workers, "workers", "", "external workers repository")
 	flag.Parse()
-	if out == "" || wago == "" || lneto == "" || wasi == "" {
-		fmt.Fprintln(os.Stderr, "release-source-objects: -out, -wago, -lneto, and -wasi are required")
+	if out == "" || wago == "" || lneto == "" || wasi == "" || currentNet == "" || currentWago == "" || workers == "" {
+		fmt.Fprintln(os.Stderr, "release-source-objects: -out, -wago, -lneto, -wasi, -current-net, -current-wago, and -workers are required")
 		os.Exit(2)
 	}
 	err := releaseprovenance.ExportSourceObjects(out, []releaseprovenance.SourceObjectSet{
@@ -30,6 +33,9 @@ func main() {
 		}},
 		{Name: "lneto", Directory: lneto, Revisions: []string{releaseprovenance.ExpectedLnetoRevision}},
 		{Name: "wasi", Directory: wasi, Revisions: []string{releaseprovenance.ExpectedWASIRevision}},
+		{Name: "net-current-review", Directory: currentNet, Revisions: []string{releaseprovenance.ExpectedCurrentNetRevision}},
+		{Name: "wago-current-review", Directory: currentWago, Revisions: []string{releaseprovenance.ExpectedCurrentWagoRevision}},
+		{Name: "workers-current", Directory: workers, Revisions: []string{releaseprovenance.ExpectedWorkersRevision}},
 	})
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)

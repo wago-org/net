@@ -23,6 +23,17 @@ const (
 	ExpectedWagoParent2   = "ffd5ef4b122cbd019897eeea3503789ab5860e4a"
 	ExpectedLnetoRevision = "ab1a0c735a8b534a1d6322a3e245bc11a09431e7"
 	ExpectedWASIRevision  = "3df6c766ad00e83b314da799dbf9a77b409ad19d"
+
+	ExpectedCurrentWagoRevision = "e44b1baa6eabfba07967a4458fdb56983cb054ae"
+	ExpectedCurrentWagoTree     = "826ac3cc506c8ebe1b6631992bf9acb4304ee879"
+	ExpectedCurrentWagoParent   = "7fbc00a57624b26ba8d528d97b419b670e85f64b"
+	ExpectedCurrentNetRevision  = "5b444e9dfbbf1b64e7b1f923f1dc3579a4aaf87e"
+	ExpectedCurrentNetTree      = "2ab621daa95f38878ba7cae1893333cf73d759c3"
+	ExpectedCurrentNetParent    = "29d59163a500e96f9567f14beeb4f3bb04e6351e"
+	ExpectedWorkersRevision     = "1e9139756d8a3c631c59c00b028038c83bfa8341"
+	ExpectedWorkersTree         = "ca79d1fb02f19ae15d7b166ffc179c01f9a7c212"
+	ExpectedWorkersParent1      = "5cb4efff83f0a519311fcf03b63496433f2901f0"
+	ExpectedWorkersParent2      = "08466d04599d7c0da88d4c5cda73a62c775a8dfc"
 )
 
 const (
@@ -34,9 +45,11 @@ const (
 type VerifyOptions struct {
 	ExpectedSubject string
 
-	// expectedInputs is test-only policy injection. External callers always use
-	// the immutable release pins below because this field is unexported.
-	expectedInputs []Repository
+	// expectedInputs and expectedReviewSources are test-only policy injection.
+	// External callers always use the immutable release pins below because these
+	// fields are unexported.
+	expectedInputs        []Repository
+	expectedReviewSources []Repository
 }
 
 type Verification struct {
@@ -238,7 +251,7 @@ func verifyDirectory(root string, opts VerifyOptions) (*Verification, error) {
 	if err := verifyRevisions(filepath.Join(root, "revisions.txt"), &manifest); err != nil {
 		return nil, err
 	}
-	if err := verifySourceObjects(root, &manifest); err != nil {
+	if err := verifySourceObjects(root, &manifest, opts); err != nil {
 		return nil, err
 	}
 	return &Verification{Manifest: &manifest, ProvenanceSHA256: provenanceHex}, nil
@@ -333,6 +346,17 @@ func expectedInputRepositories(opts VerifyOptions) []Repository {
 		{Name: "wago", Revision: ExpectedWagoRevision, Parents: []string{ExpectedWagoParent1, ExpectedWagoParent2}},
 		{Name: "lneto", Revision: ExpectedLnetoRevision},
 		{Name: "wasi", Revision: ExpectedWASIRevision},
+	}
+}
+
+func expectedReviewSourceRepositories(opts VerifyOptions) []Repository {
+	if opts.expectedReviewSources != nil {
+		return opts.expectedReviewSources
+	}
+	return []Repository{
+		{Name: "net-current-review", Revision: ExpectedCurrentNetRevision, Tree: ExpectedCurrentNetTree, Parents: []string{ExpectedCurrentNetParent}},
+		{Name: "wago-current-review", Revision: ExpectedCurrentWagoRevision, Tree: ExpectedCurrentWagoTree, Parents: []string{ExpectedCurrentWagoParent}},
+		{Name: "workers-current", Revision: ExpectedWorkersRevision, Tree: ExpectedWorkersTree, Parents: []string{ExpectedWorkersParent1, ExpectedWorkersParent2}},
 	}
 }
 

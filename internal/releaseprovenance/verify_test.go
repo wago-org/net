@@ -52,12 +52,7 @@ func TestVerifyAndDeterministicBundleExport(t *testing.T) {
 
 func TestExportSourceObjectsIsDeterministic(t *testing.T) {
 	repositories := newSourceObjectFixture(t)
-	sets := []SourceObjectSet{
-		{Name: "net", Directory: repositories.net.Directory, Revisions: []string{repositories.net.Revision}},
-		{Name: "wago", Directory: repositories.wago.Directory, Revisions: append([]string{repositories.wago.Revision}, repositories.wago.Parents...)},
-		{Name: "lneto", Directory: repositories.lneto.Directory, Revisions: []string{repositories.lneto.Revision}},
-		{Name: "wasi", Directory: repositories.wasi.Directory, Revisions: []string{repositories.wasi.Revision}},
-	}
+	sets := fixtureSourceObjectSets(repositories)
 	first, second := filepath.Join(t.TempDir(), "first"), filepath.Join(t.TempDir(), "second")
 	if err := ExportSourceObjects(first, sets); err != nil {
 		t.Fatal(err)
@@ -197,12 +192,7 @@ func validReviewFixture(t *testing.T) (string, VerifyOptions) {
 	if err := readInspection(dir, &inspection); err != nil {
 		t.Fatal(err)
 	}
-	if err := ExportSourceObjects(filepath.Join(dir, "source-objects"), []SourceObjectSet{
-		{Name: "net", Directory: repositories.net.Directory, Revisions: []string{repositories.net.Revision}},
-		{Name: "wago", Directory: repositories.wago.Directory, Revisions: append([]string{repositories.wago.Revision}, repositories.wago.Parents...)},
-		{Name: "lneto", Directory: repositories.lneto.Directory, Revisions: []string{repositories.lneto.Revision}},
-		{Name: "wasi", Directory: repositories.wasi.Directory, Revisions: []string{repositories.wasi.Revision}},
-	}); err != nil {
+	if err := ExportSourceObjects(filepath.Join(dir, "source-objects"), fixtureSourceObjectSets(repositories)); err != nil {
 		t.Fatal(err)
 	}
 	artifacts, err := scanArtifacts(dir)
@@ -247,6 +237,11 @@ func validReviewFixture(t *testing.T) (string, VerifyOptions) {
 			repositories.lneto.Repository,
 			repositories.wasi.Repository,
 		},
+		expectedReviewSources: []Repository{
+			repositories.currentNet.Repository,
+			repositories.currentWago.Repository,
+			repositories.workers.Repository,
+		},
 	}
 }
 
@@ -256,16 +251,31 @@ type testSourceRepository struct {
 }
 
 type testSourceRepositories struct {
-	net, wago, lneto, wasi testSourceRepository
+	net, wago, lneto, wasi, currentNet, currentWago, workers testSourceRepository
 }
 
 func newSourceObjectFixture(t *testing.T) testSourceRepositories {
 	t.Helper()
 	return testSourceRepositories{
-		net:   newLinearSourceRepository(t, "net"),
-		wago:  newMergeSourceRepository(t),
-		lneto: newLinearSourceRepository(t, "lneto"),
-		wasi:  newLinearSourceRepository(t, "wasi"),
+		net:         newLinearSourceRepository(t, "net"),
+		wago:        newMergeSourceRepository(t, "wago"),
+		lneto:       newLinearSourceRepository(t, "lneto"),
+		wasi:        newLinearSourceRepository(t, "wasi"),
+		currentNet:  newReviewSourceRepository(t, "net-current-review"),
+		currentWago: newReviewSourceRepository(t, "wago-current-review"),
+		workers:     newMergeSourceRepository(t, "workers-current"),
+	}
+}
+
+func fixtureSourceObjectSets(repositories testSourceRepositories) []SourceObjectSet {
+	return []SourceObjectSet{
+		{Name: "net", Directory: repositories.net.Directory, Revisions: []string{repositories.net.Revision}},
+		{Name: "wago", Directory: repositories.wago.Directory, Revisions: append([]string{repositories.wago.Revision}, repositories.wago.Parents...)},
+		{Name: "lneto", Directory: repositories.lneto.Directory, Revisions: []string{repositories.lneto.Revision}},
+		{Name: "wasi", Directory: repositories.wasi.Directory, Revisions: []string{repositories.wasi.Revision}},
+		{Name: "net-current-review", Directory: repositories.currentNet.Directory, Revisions: []string{repositories.currentNet.Revision}},
+		{Name: "wago-current-review", Directory: repositories.currentWago.Directory, Revisions: []string{repositories.currentWago.Revision}},
+		{Name: "workers-current", Directory: repositories.workers.Directory, Revisions: []string{repositories.workers.Revision}},
 	}
 }
 
@@ -279,9 +289,23 @@ func newLinearSourceRepository(t *testing.T, name string) testSourceRepository {
 	return testRepositoryIdentity(t, directory, name, nil)
 }
 
-func newMergeSourceRepository(t *testing.T) testSourceRepository {
+func newReviewSourceRepository(t *testing.T, name string) testSourceRepository {
 	t.Helper()
-	directory := filepath.Join(t.TempDir(), "wago")
+	directory := filepath.Join(t.TempDir(), name)
+	runTestGit(t, "", "init", "--quiet", "--initial-branch=main", directory)
+	writeTestFile(t, filepath.Join(directory, "base.txt"), "base\n")
+	runTestGit(t, directory, "add", ".")
+	runTestGit(t, directory, "commit", "--quiet", "-m", "base")
+	parent := testGitText(t, directory, "rev-parse", "HEAD")
+	writeTestFile(t, filepath.Join(directory, name+".txt"), name+" source\n")
+	runTestGit(t, directory, "add", ".")
+	runTestGit(t, directory, "commit", "--quiet", "-m", name+" review")
+	return testRepositoryIdentity(t, directory, name, []string{parent})
+}
+
+func newMergeSourceRepository(t *testing.T, name string) testSourceRepository {
+	t.Helper()
+	directory := filepath.Join(t.TempDir(), name)
 	runTestGit(t, "", "init", "--quiet", "--initial-branch=main", directory)
 	writeTestFile(t, filepath.Join(directory, "base.txt"), "base\n")
 	runTestGit(t, directory, "add", ".")
@@ -301,7 +325,7 @@ func newMergeSourceRepository(t *testing.T) testSourceRepository {
 
 	runTestGit(t, directory, "checkout", "--quiet", "main")
 	runTestGit(t, directory, "merge", "--quiet", "--no-ff", "-m", "merge parents", "workers")
-	return testRepositoryIdentity(t, directory, "wago", []string{parent1, parent2})
+	return testRepositoryIdentity(t, directory, name, []string{parent1, parent2})
 }
 
 func testRepositoryIdentity(t *testing.T, directory, name string, parents []string) testSourceRepository {

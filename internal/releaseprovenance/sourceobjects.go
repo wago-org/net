@@ -81,26 +81,35 @@ func ExportSourceObjects(outputDir string, sets []SourceObjectSet) error {
 	return nil
 }
 
-func verifySourceObjects(root string, manifest *Manifest) error {
+func verifySourceObjects(root string, manifest *Manifest, opts VerifyOptions) error {
 	sets := []struct {
 		name      string
 		revisions []string
 		tree      string
+		parents   []string
 	}{
 		{name: "net", revisions: []string{manifest.Subject.Revision}, tree: manifest.Subject.Tree},
-		{name: "wago", revisions: append([]string{manifest.Inputs[0].Revision}, manifest.Inputs[0].Parents...), tree: manifest.Inputs[0].Tree},
+		{name: "wago", revisions: append([]string{manifest.Inputs[0].Revision}, manifest.Inputs[0].Parents...), tree: manifest.Inputs[0].Tree, parents: manifest.Inputs[0].Parents},
 		{name: "lneto", revisions: []string{manifest.Inputs[1].Revision}, tree: manifest.Inputs[1].Tree},
 		{name: "wasi", revisions: []string{manifest.Inputs[2].Revision}, tree: manifest.Inputs[2].Tree},
 	}
+	for _, repository := range expectedReviewSourceRepositories(opts) {
+		sets = append(sets, struct {
+			name      string
+			revisions []string
+			tree      string
+			parents   []string
+		}{name: repository.Name, revisions: []string{repository.Revision}, tree: repository.Tree, parents: repository.Parents})
+	}
 	for _, set := range sets {
-		if err := verifySourceObjectSet(root, set.name, set.revisions, set.tree); err != nil {
+		if err := verifySourceObjectSet(root, set.name, set.revisions, set.tree, set.parents); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-func verifySourceObjectSet(root, name string, revisions []string, expectedTree string) error {
+func verifySourceObjectSet(root, name string, revisions []string, expectedTree string, expectedParents []string) error {
 	packPath := filepath.Join(root, "source-objects", name+".pack")
 	inventoryPath := filepath.Join(root, "source-objects", name+".objects")
 	inventory, err := os.ReadFile(inventoryPath)
@@ -162,7 +171,7 @@ func verifySourceObjectSet(root, name string, revisions []string, expectedTree s
 	if err != nil || tree != expectedTree {
 		return fmt.Errorf("release provenance: %s source-object tree %q does not match manifest tree %q", name, tree, expectedTree)
 	}
-	if name == "wago" {
+	if expectedParents != nil {
 		commit, err := gitBytes(repository, "cat-file", "-p", revisions[0])
 		if err != nil {
 			return err
@@ -173,8 +182,8 @@ func verifySourceObjectSet(root, name string, revisions []string, expectedTree s
 				parents = append(parents, strings.TrimPrefix(line, "parent "))
 			}
 		}
-		if !equalStringsOrdered(parents, revisions[1:]) {
-			return fmt.Errorf("release provenance: Wago source-object pack has wrong ordered merge parents")
+		if !equalStringsOrdered(parents, expectedParents) {
+			return fmt.Errorf("release provenance: %s source-object pack has wrong ordered parents", name)
 		}
 	}
 	return nil
