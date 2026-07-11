@@ -34,6 +34,10 @@ network := wagonet.New()
 if err := tcp.Register(network); err != nil {
     return err
 }
+// Compose another protocol only when the guest needs it.
+if err := udp.Register(network); err != nil {
+    return err
+}
 
 rt := wago.NewRuntime()
 if err := rt.Use(network); err != nil {
@@ -41,14 +45,16 @@ if err := rt.Use(network); err != nil {
 }
 ```
 
-This TCP-only registration exposes `net.info` and `net.tcp`, with
-`wago_net.abi_version` and the eleven `wago_net_tcp` imports. UDP and DNS imports
-are absent and fail normal WebAssembly import resolution. The public TCP facade
-now constructs its own opaque descriptor and the eleven checked host bindings
-live in a TCP-only internal binding package. Full compile isolation is not yet
-claimed: the aggregate root compatibility path still imports that binding
-package, and TCP instance operations plus the lneto adapter remain unified.
-Package-local finite client defaults also remain migration work.
+Registering only TCP exposes `net.info` and `net.tcp`, with
+`wago_net.abi_version` and the eleven `wago_net_tcp` imports. Registering only
+UDP analogously exposes `net.info`, `net.udp`, the shared ABI import, and the six
+`wago_net_udp` imports. Unregistered protocol imports are absent and fail normal
+WebAssembly import resolution. The public TCP and UDP facades each construct an
+opaque descriptor, and their checked host bindings live in protocol-specific
+internal binding packages. Full compile isolation is not yet claimed: the
+aggregate root compatibility path still imports both binding packages, and the
+shared instance operations plus lneto adapter remain unified. Package-local
+finite client defaults also remain migration work.
 
 The aggregate advanced compatibility path remains available while protocol
 configuration is split into its public packages:

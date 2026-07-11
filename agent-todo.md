@@ -521,21 +521,24 @@ no signature, key, trust root, production decision, or hosted-activation claim.
 
 ## Active work
 
-Recursion 24 is complete with exactly three bounded atomic commits in the
-production networking repository. The strict readiness path now freshly verifies
-the original archive, statement, detached signature, and explicit policy; checks
-the retained trusted-distribution receipt independently; and emits a new v2
-readiness decision only when both evidence paths match exactly. Complete retained
-chains can be checked later without original cryptographic inputs while remaining
-explicitly distinct from fresh signature/archive verification, publisher
-identity, and a new readiness decision. Public synthetic chain vectors cover
-linked ready and blocked outcomes, stale checksums, a valid but mismatched opaque
-key label, and all five wrong external constraints. No publisher identity,
-signed release, trust-root provisioning, production decision, or hosted
-automation claim was added. The exact workers subject remains published, while
-current Wago/networking reviews and the production ordered-parent Wago merge
-remain unpublished. Pooling remains unsupported, native arm64 execution is
-unavailable, and both WASI preview-1 exceptions remain active.
+The current protocol-submodule slice is complete with exactly four bounded
+atomic commits. The shared composition registry and TCP extraction were
+executable-validated, including standard and race suites. The six UDP guest
+bindings now live in `internal/binding/udp`, use the protocol-neutral exact-host
+bridge plus shared status/poll helpers, and remain reachable from `Init(Config)`
+through a thin aggregate root shim. Public `udp.Register(network, ...Option)` now
+selects only `net.udp`, `wago_net.abi_version`, and the six UDP imports; external
+tests prove exact inspection, ordinary unresolved TCP/DNS imports, duplicate and
+freeze behavior, nil handling, and an exact-instance host call. Standard tests,
+race tests, and vet pass. Compile isolation is still incomplete because root
+compatibility shims import the TCP and UDP bindings and unified
+`internal/instance` and `internal/backend/lneto` compile all protocol operations.
+DNS extraction, finite client defaults, granular register packages, dependency
+fixtures, TinyGo/release gates, and the final root compatibility move remain.
+The exact workers subject remains published, while current Wago/networking
+reviews and the production ordered-parent Wago merge remain unpublished. Pooling
+remains unsupported, native arm64 execution is unavailable, and both WASI
+preview-1 exceptions remain active.
 
 ## Ordered backlog
 
@@ -548,11 +551,10 @@ unavailable, and both WASI preview-1 exceptions remain active.
 3. Activate hosted release automation only after the production Wago ref is
    fetchable, require executed linux/arm64 smoke on an arm64/QEMU tier, and remove
    the WASI exception only after reviewing and pinning an upstream fix.
-4. Refactor the networking suite to the approved protocol-submodule target:
-   introduce the shared builder, move TCP/UDP/DNS APIs and bindings into separate
-   public packages, split the lneto backend and instance protocol operations into
-   separate compilation units, register only selected imports/capabilities, add
-   useful finite allow defaults plus explicit customization, provide granular
+4. Continue the approved protocol-submodule refactor: extract DNS into its public
+   and binding packages, split the lneto backend and instance protocol operations
+   into separate compilation units, remove protocol binding imports from the root,
+   add useful finite allow defaults plus explicit customization, provide granular
    self-registration packages, preserve the advanced compatibility path, and gate
    every protocol combination with exact runtime and dependency-graph tests.
 
