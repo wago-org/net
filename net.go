@@ -22,6 +22,8 @@ import (
 const (
 	// Module is the core networking WebAssembly import module.
 	Module = "wago_net"
+	// UDPModule independently owns the complete guest UDP operation surface.
+	UDPModule = "wago_net_udp"
 
 	// ABIVersion1 encodes ABI version 1.0 as major in the upper 16 bits and minor
 	// in the lower 16 bits.
@@ -29,6 +31,8 @@ const (
 
 	// CapInfo permits a guest to inspect the networking ABI and interfaces.
 	CapInfo wago.Capability = "net.info"
+	// CapUDP permits checked nonblocking UDP namespace, socket, and poll access.
+	CapUDP wago.Capability = "net.udp"
 )
 
 // PolicyConfig and related aliases expose the backend-neutral authority model
@@ -147,14 +151,9 @@ func (e *Extension) Register(reg *wago.Registry) error {
 	reg.Hooks().AfterInstantiate(instances.AfterInstantiate)
 	reg.Hooks().BeforeClose(instances.BeforeClose)
 	reg.Capability(CapInfo, wago.CapabilityDocs("inspect the Wago networking ABI and interfaces"))
-	module := reg.ImportModule(Module)
-	for _, binding := range e.bindings() {
-		module.Func(binding.name, binding.fn).
-			Params(binding.params...).
-			Results(binding.results...).
-			Capability(binding.capability).
-			Docs(binding.docs)
-	}
+	reg.Capability(CapUDP, wago.CapabilityDocs("use checked nonblocking UDP networking for the exact calling instance"))
+	registerBindings(reg.ImportModule(Module), e.bindings())
+	registerBindings(reg.ImportModule(UDPModule), e.udpBindings())
 	return nil
 }
 
@@ -168,6 +167,16 @@ func Imports(config Config) wago.Imports {
 		imports[Module+"."+binding.name] = binding.fn
 	}
 	return imports
+}
+
+func registerBindings(module *wago.ImportModuleBuilder, bindings []binding) {
+	for _, binding := range bindings {
+		module.Func(binding.name, binding.fn).
+			Params(binding.params...).
+			Results(binding.results...).
+			Capability(binding.capability).
+			Docs(binding.docs)
+	}
 }
 
 type binding struct {

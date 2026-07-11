@@ -3,18 +3,17 @@
 Capability-gated networking plugins for the [Wago](https://github.com/wago-org/wago)
 WebAssembly runtime, backed initially by [lneto](https://github.com/soypat/lneto).
 
-The repository is in its ABI-foundation phase. The implemented guest surface is
-the experimental `wago_net.abi_version` import and the stable numeric status
-taxonomy. Internal foundations now include checked memory, instance-scoped
-handles and cleanup, immutable endpoint policy, finite per-instance quotas,
-backend-neutral nonblocking namespace contracts, a deterministic bounded packet
-link, one manually serviced lneto stack per concrete namespace, bounded
-instance-scoped readiness coordination, transactional instance-owned namespace
-creation, and hardened internal IPv4 UDP resources. UDP bind/send authority,
-resource and retained-byte quotas, empty/truncated datagrams, fixed queues,
-readiness, and deterministic cleanup are implemented internally. TCP, UDP, DNS,
-polling imports, and privileged packet access are still not guest-visible or
-advertised; TCP and DNS constructors remain truthfully unsupported.
+The repository now exposes the experimental `wago_net.abi_version` core import
+and a separately capability-gated `wago_net_udp` module for discovery of one
+configured namespace plus nonblocking UDP bind, send, receive, and close. The
+stable numeric status taxonomy and fixed v1 address/receive layouts use central
+checked guest memory; exact instance identity, generation/kind-checked handles,
+immutable endpoint policy, finite quotas, and deterministic lifecycle cleanup
+remain mandatory on every guest operation. The lneto backend uses adapter-owned
+fixed UDP queues and immediate frame codecs, preserving empty and truncated
+datagrams without blocking or backoff. Bounded guest polling is specified but is
+not advertised until its service-work accounting is integrated. TCP, DNS, and
+privileged packet access remain absent and truthfully unsupported.
 
 ```go
 rt := wago.NewRuntime()

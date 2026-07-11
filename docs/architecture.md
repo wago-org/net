@@ -28,18 +28,22 @@ The suite therefore uses **protocol import modules**:
 - `wago_net_dns` for DNS;
 - additional modules only when their implementations exist.
 
-This permits selective compilation and narrow capabilities without two extensions
-competing to own `wago_net`. Shared per-instance state will be coordinated by an
-explicit provider object rather than process globals. No protocol package will be
-created merely as a placeholder.
+This permits narrow per-protocol capabilities and independent ABI evolution
+without multiple owners competing for `wago_net`. The current root extension is
+the explicit provider for shared per-instance state across its core and complete
+protocol modules; no process-global state or placeholder protocol module is used.
 
 ## Current implementation
 
-The root package is the core extension. It owns `wago_net`, declares `net.info`,
-and exposes only `abi_version`. The extension and low-level import bundle are both
-derived from one binding table so inspection metadata and actual bindings do not
-drift. `internal/abi` provides allocation-free checked memory ranges and the
-fixed-width IPv4/IPv6 address codec for future protocol packages.
+The root extension owns two distinct import modules: `wago_net` declares
+`net.info` and exposes `abi_version`, while `wago_net_udp` declares the narrow
+`net.udp` capability and exposes only the complete namespace discovery plus UDP
+bind/send/receive/close operations. The low-level `Imports` bundle remains core-
+only because protocol resources require Runtime lifecycle identity. Registration
+and implementation share binding tables so inspection metadata and actual
+bindings do not drift. `internal/abi` provides allocation-free checked ranges,
+fixed-width endpoint/receive layouts, disjoint multi-output validation, and
+bounded poll codecs without exposing lneto types.
 `internal/resource` provides O(1) opaque-handle lookup with exact kind checks,
 never-reused table identities, per-slot generations, rollover retirement, and
 reverse-creation O(live) cleanup. The table exists independently of protocol
@@ -91,10 +95,11 @@ queue bytes on close. TCP and DNS constructors remain truthfully unsupported.
 table. Registrations retain opaque handle plus exact kind, level-triggered polls
 scan at most one bounded pass, output only caller-budgeted events, and make only
 bounded namespace service attempts. Stale generation handles are removed during
-the bounded scan; polling never sleeps and exposes no guest import yet.
+the bounded scan; polling never sleeps. Its guest layout is fixed, but the poll
+import remains absent until transactional service-work quota accounting is wired.
 
-Each `Extension` now owns a private instance-state manager. Runtime
-instantiation attaches one resource table, readiness coordinator, immutable
+Each `Extension` owns one private instance-state manager shared by its core and
+UDP module bindings. Runtime instantiation attaches one resource table, readiness coordinator, immutable
 policy, and finite quota ledger to the exact `*wago.Instance`. Optional static
 IPv4 configuration transactionally reserves namespace quota, constructs the
 backend, inserts a generation-safe handle, and registers bounded readiness before

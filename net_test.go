@@ -23,12 +23,12 @@ func TestExtensionMetadataAndABIBinding(t *testing.T) {
 	if err := rt.Use(ext); err != nil {
 		t.Fatalf("Use: %v", err)
 	}
-	if got := rt.Capabilities(); !reflect.DeepEqual(got, []wago.Capability{CapInfo}) {
+	if got := rt.Capabilities(); !reflect.DeepEqual(got, []wago.Capability{CapInfo, CapUDP}) {
 		t.Fatalf("Capabilities = %v", got)
 	}
 	imports := rt.ProvidedImports()
-	if len(imports) != 1 {
-		t.Fatalf("ProvidedImports length = %d, want 1", len(imports))
+	if len(imports) != 6 {
+		t.Fatalf("ProvidedImports length = %d, want 6", len(imports))
 	}
 	got := imports[0]
 	if got.Module != Module || got.Name != "abi_version" || !got.HasCapability || got.Capability != CapInfo {
@@ -36,6 +36,23 @@ func TestExtensionMetadataAndABIBinding(t *testing.T) {
 	}
 	if len(got.Params) != 0 || !reflect.DeepEqual(got.Results, []wago.ValType{wago.ValI32}) {
 		t.Fatalf("abi_version signature = %v -> %v", got.Params, got.Results)
+	}
+	wantUDP := map[string][]wago.ValType{
+		"bind":              {wago.ValI64, wago.ValI32, wago.ValI32},
+		"close":             {wago.ValI64},
+		"namespace_default": {wago.ValI32},
+		"receive":           {wago.ValI64, wago.ValI32, wago.ValI32, wago.ValI32},
+		"send":              {wago.ValI64, wago.ValI32, wago.ValI32, wago.ValI32},
+	}
+	for _, spec := range imports[1:] {
+		params, ok := wantUDP[spec.Name]
+		if !ok || spec.Module != UDPModule || !spec.HasCapability || spec.Capability != CapUDP || !reflect.DeepEqual(spec.Params, params) || !reflect.DeepEqual(spec.Results, []wago.ValType{wago.ValI32}) {
+			t.Fatalf("UDP import metadata = %+v", spec)
+		}
+		delete(wantUDP, spec.Name)
+	}
+	if len(wantUDP) != 0 {
+		t.Fatalf("missing UDP imports: %v", wantUDP)
 	}
 
 	fn, ok := rt.HostImports()[Module+".abi_version"].(wago.HostFunc)

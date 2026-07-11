@@ -260,6 +260,32 @@ func (s *State) createNamespace(factory NamespaceFactory) (resource.Handle, erro
 	return handle, nil
 }
 
+// LookupNamespace resolves one exact namespace handle to its backend-neutral
+// implementation while serializing the lookup against teardown. It is intended
+// for trusted host-side link/service integration, never direct guest retention.
+func (s *State) LookupNamespace(namespaceHandle resource.Handle) (namespace.Namespace, error) {
+	if s == nil {
+		return nil, ErrInvalidConfig
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed || s.resources == nil {
+		return nil, namespace.Fail(namespace.FailureClosed, resource.ErrClosed)
+	}
+	value, err := s.resources.Lookup(namespaceHandle, resource.KindNamespace)
+	if err != nil {
+		return nil, err
+	}
+	if owned, ok := value.(*ownedNamespace); ok && owned.Namespace != nil {
+		return owned.Namespace, nil
+	}
+	backend, ok := value.(namespace.Namespace)
+	if !ok {
+		return nil, namespace.Fail(namespace.FailureIO, ErrInvalidBackendResult)
+	}
+	return backend, nil
+}
+
 // BindUDP transactionally creates, owns, and poll-registers one backend UDP
 // socket under namespaceHandle. Failed backend, table, and registration stages
 // synchronously close the socket so its quota allocations are released.
@@ -307,6 +333,54 @@ func (s *State) BindUDP(namespaceHandle resource.Handle, local namespace.Endpoin
 		return 0, 0, err
 	}
 	return handle, namespace.ProgressDone, nil
+}
+
+// SendUDP performs one nonblocking datagram send through an exact live UDP
+// handle while serializing the operation against instance teardown.
+func (s *State) SendUDP(handle resource.Handle, payload []byte, remote namespace.Endpoint) (namespace.Progress, error) {
+	if s == nil {
+		return 0, ErrInvalidConfig
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed || s.resources == nil {
+		return 0, namespace.Fail(namespace.FailureClosed, resource.ErrClosed)
+	}
+	value, err := s.resources.Lookup(handle, resource.KindUDPSocket)
+	if err != nil {
+		return 0, err
+	}
+	socket, ok := value.(namespace.UDPSocket)
+	if !ok {
+		return 0, namespace.Fail(namespace.FailureIO, ErrInvalidBackendResult)
+	}
+	return socket.TrySend(payload, remote)
+}
+
+// ReceiveUDP performs one nonblocking datagram receive through an exact live
+// UDP handle while serializing the operation against instance teardown.
+func (s *State) ReceiveUDP(handle resource.Handle, dst []byte) (namespace.DatagramResult, error) {
+	if s == nil {
+		return namespace.DatagramResult{}, ErrInvalidConfig
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed || s.resources == nil {
+		return namespace.DatagramResult{}, namespace.Fail(namespace.FailureClosed, resource.ErrClosed)
+	}
+	value, err := s.resources.Lookup(handle, resource.KindUDPSocket)
+	if err != nil {
+		return namespace.DatagramResult{}, err
+	}
+	socket, ok := value.(namespace.UDPSocket)
+	if !ok {
+		return namespace.DatagramResult{}, namespace.Fail(namespace.FailureIO, ErrInvalidBackendResult)
+	}
+	result, err := socket.TryReceive(dst)
+	if err == nil && !result.Valid(len(dst)) {
+		return namespace.DatagramResult{}, namespace.Fail(namespace.FailureIO, ErrInvalidBackendResult)
+	}
+	return result, err
 }
 
 // CloseHandle removes readiness before closing one exact kind-checked resource.
