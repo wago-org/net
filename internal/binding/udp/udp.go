@@ -2,7 +2,8 @@
 package udp
 
 import (
-	"github.com/wago-org/net/internal/abi"
+	abicore "github.com/wago-org/net/internal/abi/core"
+	udpabi "github.com/wago-org/net/internal/abi/udp"
 	"github.com/wago-org/net/internal/guest"
 	instance "github.com/wago-org/net/internal/instance/core"
 	udpinstance "github.com/wago-org/net/internal/instance/udp"
@@ -48,7 +49,7 @@ func namespaceDefault(host plugin.Host, module wago.HostModule, params, results 
 	}
 	memory := guest.Memory(module)
 	out := uint32(params[0])
-	if !abi.CheckRanges(memory, false, abi.Range{Ptr: out, Length: abi.HandleV1Size}) {
+	if !abicore.CheckRanges(memory, false, abicore.Range{Ptr: out, Length: abicore.HandleV1Size}) {
 		guest.SetStatus(results, guest.StatusInvalidArgument)
 		return
 	}
@@ -62,7 +63,7 @@ func namespaceDefault(host plugin.Host, module wago.HostModule, params, results 
 		guest.SetStatus(results, guest.StatusNotSupported)
 		return
 	}
-	if !abi.EncodeHandleV1(memory, out, handle) {
+	if !abicore.EncodeHandleV1(memory, out, handle) {
 		guest.SetStatus(results, guest.StatusOther)
 		return
 	}
@@ -75,9 +76,9 @@ func bind(host plugin.Host, module wago.HostModule, params, results []uint64) {
 		return
 	}
 	memory := guest.Memory(module)
-	local, ok := abi.DecodeEndpointV1(memory, uint32(params[1]))
+	local, ok := abicore.DecodeEndpointV1(memory, uint32(params[1]))
 	out := uint32(params[2])
-	if !ok || !abi.CheckRanges(memory, false, abi.Range{Ptr: out, Length: abi.HandleV1Size}) {
+	if !ok || !abicore.CheckRanges(memory, false, abicore.Range{Ptr: out, Length: abicore.HandleV1Size}) {
 		guest.SetStatus(results, guest.StatusInvalidArgument)
 		return
 	}
@@ -96,7 +97,7 @@ func bind(host plugin.Host, module wago.HostModule, params, results []uint64) {
 		guest.SetStatus(results, status)
 		return
 	}
-	if !abi.EncodeHandleV1(memory, out, handle) {
+	if !abicore.EncodeHandleV1(memory, out, handle) {
 		_ = state.CloseHandle(handle, resource.KindUDPSocket)
 		guest.SetStatus(results, guest.StatusOther)
 		return
@@ -110,12 +111,12 @@ func send(host plugin.Host, module wago.HostModule, params, results []uint64) {
 		return
 	}
 	memory := guest.Memory(module)
-	payload, ok := abi.Slice(memory, uint32(params[1]), uint32(params[2]))
+	payload, ok := abicore.Slice(memory, uint32(params[1]), uint32(params[2]))
 	if !ok {
 		guest.SetStatus(results, guest.StatusInvalidArgument)
 		return
 	}
-	remote, ok := abi.DecodeEndpointV1(memory, uint32(params[3]))
+	remote, ok := abicore.DecodeEndpointV1(memory, uint32(params[3]))
 	if !ok {
 		guest.SetStatus(results, guest.StatusInvalidArgument)
 		return
@@ -141,14 +142,14 @@ func receive(host plugin.Host, module wago.HostModule, params, results []uint64)
 	memory := guest.Memory(module)
 	payloadPtr, payloadLength := uint32(params[1]), uint32(params[2])
 	resultPtr := uint32(params[3])
-	if !abi.CheckRanges(memory, true,
-		abi.Range{Ptr: payloadPtr, Length: payloadLength},
-		abi.Range{Ptr: resultPtr, Length: abi.UDPReceiveResultV1Size},
+	if !abicore.CheckRanges(memory, true,
+		abicore.Range{Ptr: payloadPtr, Length: payloadLength},
+		abicore.Range{Ptr: resultPtr, Length: udpabi.ReceiveResultV1Size},
 	) {
 		guest.SetStatus(results, guest.StatusInvalidArgument)
 		return
 	}
-	payload, _ := abi.Slice(memory, payloadPtr, payloadLength)
+	payload, _ := abicore.Slice(memory, payloadPtr, payloadLength)
 	state, status := instanceState(host, module)
 	if status != guest.StatusOK {
 		guest.SetStatus(results, status)
@@ -163,7 +164,7 @@ func receive(host plugin.Host, module wago.HostModule, params, results []uint64)
 		guest.SetStatus(results, guest.StatusAgain)
 		return
 	}
-	if !abi.EncodeUDPReceiveResultV1(memory, resultPtr, result, len(payload)) {
+	if !udpabi.EncodeReceiveResultV1(memory, resultPtr, result, len(payload)) {
 		guest.SetStatus(results, guest.StatusIO)
 		return
 	}

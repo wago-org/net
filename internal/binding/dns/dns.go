@@ -2,7 +2,8 @@
 package dns
 
 import (
-	"github.com/wago-org/net/internal/abi"
+	abicore "github.com/wago-org/net/internal/abi/core"
+	dnsabi "github.com/wago-org/net/internal/abi/dns"
 	"github.com/wago-org/net/internal/guest"
 	instance "github.com/wago-org/net/internal/instance/core"
 	dnsinstance "github.com/wago-org/net/internal/instance/dns"
@@ -59,7 +60,7 @@ func NamespaceDefault(host plugin.Host, module wago.HostModule, params, results 
 	}
 	memory := guest.Memory(module)
 	out := uint32(params[0])
-	if !abi.CheckRanges(memory, false, abi.Range{Ptr: out, Length: abi.HandleV1Size}) {
+	if !abicore.CheckRanges(memory, false, abicore.Range{Ptr: out, Length: abicore.HandleV1Size}) {
 		guest.SetStatus(results, guest.StatusInvalidArgument)
 		return
 	}
@@ -73,7 +74,7 @@ func NamespaceDefault(host plugin.Host, module wago.HostModule, params, results 
 		guest.SetStatus(results, guest.StatusNotSupported)
 		return
 	}
-	if !abi.EncodeHandleV1(memory, out, handle) {
+	if !abicore.EncodeHandleV1(memory, out, handle) {
 		guest.SetStatus(results, guest.StatusOther)
 		return
 	}
@@ -88,11 +89,11 @@ func Resolve(host plugin.Host, module wago.HostModule, params, results []uint64)
 	}
 	memory := guest.Memory(module)
 	queryPtr, out := uint32(params[1]), uint32(params[2])
-	if !abi.CheckDNSResolveV1(memory, queryPtr, out) {
+	if !dnsabi.CheckDNSResolveV1(memory, queryPtr, out) {
 		guest.SetStatus(results, guest.StatusInvalidArgument)
 		return
 	}
-	request, ok := abi.DecodeDNSQueryV1(memory, queryPtr)
+	request, ok := dnsabi.DecodeDNSQueryV1(memory, queryPtr)
 	if !ok {
 		guest.SetStatus(results, guest.StatusInvalidArgument)
 		return
@@ -115,7 +116,7 @@ func Resolve(host plugin.Host, module wago.HostModule, params, results []uint64)
 		guest.SetStatus(results, guest.StatusOther)
 		return
 	}
-	if !abi.EncodeHandleV1(memory, out, handle) {
+	if !abicore.EncodeHandleV1(memory, out, handle) {
 		_ = state.CloseHandle(handle, resource.KindDNSQuery)
 		guest.SetStatus(results, guest.StatusOther)
 		return
@@ -131,7 +132,7 @@ func Next(host plugin.Host, module wago.HostModule, params, results []uint64) {
 	}
 	memory := guest.Memory(module)
 	out := uint32(params[1])
-	if !abi.CheckRanges(memory, false, abi.Range{Ptr: out, Length: abi.DNSRecordV1Size}) {
+	if !abicore.CheckRanges(memory, false, abicore.Range{Ptr: out, Length: dnsabi.DNSRecordV1Size}) {
 		guest.SetStatus(results, guest.StatusInvalidArgument)
 		return
 	}
@@ -150,7 +151,7 @@ func Next(host plugin.Host, module wago.HostModule, params, results []uint64) {
 		guest.SetStatus(results, status)
 		return
 	}
-	if !abi.EncodeDNSRecordV1(memory, out, record) {
+	if !dnsabi.EncodeDNSRecordV1(memory, out, record) {
 		guest.SetStatus(results, guest.StatusIO)
 		return
 	}

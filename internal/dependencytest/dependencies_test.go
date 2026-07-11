@@ -19,8 +19,8 @@ type protocolDependency struct {
 
 var protocolDependencies = map[string]protocolDependency{
 	"tcp": {public: modulePath + "/tcp", binding: modulePath + "/internal/binding/tcp", operation: modulePath + "/internal/instance/tcp", abi: modulePath + "/internal/abi/tcp"},
-	"udp": {public: modulePath + "/udp", binding: modulePath + "/internal/binding/udp", operation: modulePath + "/internal/instance/udp"},
-	"dns": {public: modulePath + "/dns", binding: modulePath + "/internal/binding/dns", operation: modulePath + "/internal/instance/dns"},
+	"udp": {public: modulePath + "/udp", binding: modulePath + "/internal/binding/udp", operation: modulePath + "/internal/instance/udp", abi: modulePath + "/internal/abi/udp"},
+	"dns": {public: modulePath + "/dns", binding: modulePath + "/internal/binding/dns", operation: modulePath + "/internal/instance/dns", abi: modulePath + "/internal/abi/dns"},
 }
 
 func TestFixtureDependencyBoundaries(t *testing.T) {

@@ -1,4 +1,4 @@
-package abi
+package dns
 
 import (
 	"bytes"
@@ -6,6 +6,7 @@ import (
 	"net/netip"
 	"testing"
 
+	abicore "github.com/wago-org/net/internal/abi/core"
 	"github.com/wago-org/net/internal/namespace"
 )
 
@@ -81,7 +82,7 @@ func TestDNSRecordV1AtomicEncoding(t *testing.T) {
 				t.Fatal("CNAME encoded an address")
 			}
 		} else {
-			endpoint, ok := DecodeEndpointV1(encoded, 268)
+			endpoint, ok := abicore.DecodeEndpointV1(encoded, 268)
 			if !ok || endpoint.Address != test.record.Address || endpoint.Port != 0 {
 				t.Fatalf("record address = %+v, %v", endpoint, ok)
 			}

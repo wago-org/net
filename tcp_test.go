@@ -10,7 +10,7 @@ import (
 	"sync/atomic"
 	"testing"
 
-	"github.com/wago-org/net/internal/abi"
+	abi "github.com/wago-org/net/internal/abi/core"
 	instance "github.com/wago-org/net/internal/instance/core"
 	"github.com/wago-org/net/internal/namespace"
 	"github.com/wago-org/net/internal/policy"

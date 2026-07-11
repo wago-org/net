@@ -1,8 +1,10 @@
-package abi
+// Package dns contains the fixed-width DNS guest ABI codecs.
+package dns
 
 import (
 	"encoding/binary"
 
+	abicore "github.com/wago-org/net/internal/abi/core"
 	"github.com/wago-org/net/internal/namespace"
 )
 
@@ -38,7 +40,7 @@ const (
 // DecodeDNSNameV1 decodes a lowercase normalized ASCII name and rejects all
 // nonzero reserved or unused bytes.
 func DecodeDNSNameV1(memory []byte, ptr uint32) (string, bool) {
-	b, ok := Slice(memory, ptr, DNSNameV1Size)
+	b, ok := abicore.Slice(memory, ptr, DNSNameV1Size)
 	if !ok {
 		return "", false
 	}
@@ -63,7 +65,7 @@ func EncodeDNSNameV1(memory []byte, ptr uint32, name string) bool {
 	if !(namespace.DNSRequest{Name: name, Types: namespace.DNSRecordsA}).Valid() {
 		return false
 	}
-	output, ok := Slice(memory, ptr, DNSNameV1Size)
+	output, ok := abicore.Slice(memory, ptr, DNSNameV1Size)
 	if !ok {
 		return false
 	}
@@ -77,7 +79,7 @@ func EncodeDNSNameV1(memory []byte, ptr uint32, name string) bool {
 // DecodeDNSQueryV1 validates the complete fixed-width query and returns the
 // backend-neutral request.
 func DecodeDNSQueryV1(memory []byte, ptr uint32) (namespace.DNSRequest, bool) {
-	b, ok := Slice(memory, ptr, DNSQueryV1Size)
+	b, ok := abicore.Slice(memory, ptr, DNSQueryV1Size)
 	if !ok {
 		return namespace.DNSRequest{}, false
 	}
@@ -99,7 +101,7 @@ func EncodeDNSQueryV1(memory []byte, ptr uint32, request namespace.DNSRequest) b
 	if !request.Valid() {
 		return false
 	}
-	output, ok := Slice(memory, ptr, DNSQueryV1Size)
+	output, ok := abicore.Slice(memory, ptr, DNSQueryV1Size)
 	if !ok {
 		return false
 	}
@@ -115,9 +117,9 @@ func EncodeDNSQueryV1(memory []byte, ptr uint32, request namespace.DNSRequest) b
 // CheckDNSResolveV1 validates complete query input and handle output ranges and
 // requires them to be disjoint before resolver state changes.
 func CheckDNSResolveV1(memory []byte, queryPtr, handlePtr uint32) bool {
-	return CheckRanges(memory, true,
-		Range{Ptr: queryPtr, Length: DNSQueryV1Size},
-		Range{Ptr: handlePtr, Length: HandleV1Size},
+	return abicore.CheckRanges(memory, true,
+		abicore.Range{Ptr: queryPtr, Length: DNSQueryV1Size},
+		abicore.Range{Ptr: handlePtr, Length: abicore.HandleV1Size},
 	)
 }
 
@@ -127,7 +129,7 @@ func EncodeDNSRecordV1(memory []byte, ptr uint32, record namespace.DNSRecord) bo
 	if !record.Valid() {
 		return false
 	}
-	output, ok := Slice(memory, ptr, DNSRecordV1Size)
+	output, ok := abicore.Slice(memory, ptr, DNSRecordV1Size)
 	if !ok {
 		return false
 	}
@@ -139,12 +141,12 @@ func EncodeDNSRecordV1(memory []byte, ptr uint32, record namespace.DNSRecord) bo
 	switch record.Type {
 	case namespace.DNSRecordA:
 		binary.LittleEndian.PutUint32(encoded[dnsRecordTypeOffset:dnsRecordTypeOffset+4], DNSRecordTypeA)
-		if !EncodeEndpointV1(encoded[:], dnsRecordAddress, namespace.Endpoint{Address: record.Address}) {
+		if !abicore.EncodeEndpointV1(encoded[:], dnsRecordAddress, namespace.Endpoint{Address: record.Address}) {
 			return false
 		}
 	case namespace.DNSRecordAAAA:
 		binary.LittleEndian.PutUint32(encoded[dnsRecordTypeOffset:dnsRecordTypeOffset+4], DNSRecordTypeAAAA)
-		if !EncodeEndpointV1(encoded[:], dnsRecordAddress, namespace.Endpoint{Address: record.Address}) {
+		if !abicore.EncodeEndpointV1(encoded[:], dnsRecordAddress, namespace.Endpoint{Address: record.Address}) {
 			return false
 		}
 	case namespace.DNSRecordCNAME:

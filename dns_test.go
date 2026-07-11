@@ -8,7 +8,8 @@ import (
 	"net/netip"
 	"testing"
 
-	"github.com/wago-org/net/internal/abi"
+	abicore "github.com/wago-org/net/internal/abi/core"
+	abi "github.com/wago-org/net/internal/abi/dns"
 	instance "github.com/wago-org/net/internal/instance/core"
 	"github.com/wago-org/net/internal/namespace"
 	"github.com/wago-org/net/internal/packetlink"
@@ -237,7 +238,7 @@ func TestCheckedGuestDNSResolveNextCancelAndClose(t *testing.T) {
 	if ttl := binary.LittleEndian.Uint32(host.memory[664:668]); ttl != record.TTLSeconds {
 		t.Fatalf("encoded record TTL = %d", ttl)
 	}
-	if endpoint, ok := abi.DecodeEndpointV1(host.memory, 668); !ok || endpoint.Address != record.Address {
+	if endpoint, ok := abicore.DecodeEndpointV1(host.memory, 668); !ok || endpoint.Address != record.Address {
 		t.Fatalf("encoded record address = %+v, %v", endpoint, ok)
 	}
 	beforeEOF := append([]byte(nil), host.memory[400:960]...)
@@ -517,7 +518,7 @@ func FuzzGuestDNSMemory(f *testing.F) {
 		var results [1]uint64
 		extension.dnsResolve(host, []uint64{uint64(state.NamespaceHandle()), queryPtr, outputPtr}, results[:])
 		if Status(int32(results[0])) == StatusInProgress {
-			handleBytes, ok := abi.Slice(host.memory, uint32(outputPtr), abi.HandleV1Size)
+			handleBytes, ok := abicore.Slice(host.memory, uint32(outputPtr), abicore.HandleV1Size)
 			if ok {
 				handle := binary.LittleEndian.Uint64(handleBytes)
 				extension.dnsNext(host, []uint64{handle, outputPtr}, results[:])
@@ -796,14 +797,14 @@ func decodeGuestDNSRecord(t testing.TB, memory []byte, ptr uint32) namespace.DNS
 	switch typ {
 	case abi.DNSRecordTypeA:
 		record.Type = namespace.DNSRecordA
-		endpoint, ok := abi.DecodeEndpointV1(memory, ptr+268)
+		endpoint, ok := abicore.DecodeEndpointV1(memory, ptr+268)
 		if !ok {
 			t.Fatal("decode guest DNS A address")
 		}
 		record.Address = endpoint.Address
 	case abi.DNSRecordTypeAAAA:
 		record.Type = namespace.DNSRecordAAAA
-		endpoint, ok := abi.DecodeEndpointV1(memory, ptr+268)
+		endpoint, ok := abicore.DecodeEndpointV1(memory, ptr+268)
 		if !ok {
 			t.Fatal("decode guest DNS AAAA address")
 		}
