@@ -15,10 +15,7 @@ func Bind(state *core.State, namespaceHandle resource.Handle, local nscore.Endpo
 		if lookupErr != nil {
 			return lookupErr
 		}
-		if carrier, ok := value.(nscore.NamespaceCarrier); ok {
-			value = carrier.NamespaceBackend()
-		}
-		backend, ok := value.(udpns.Namespace)
+		backend, ok := nscore.ResolveNamespaceService(value, udpns.ServiceKey).(udpns.Namespace)
 		if !ok {
 			return nscore.Fail(nscore.FailureIO, core.ErrInvalidBackendResult)
 		}

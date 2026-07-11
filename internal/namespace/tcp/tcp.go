@@ -4,6 +4,10 @@ package tcp
 
 import nscore "github.com/wago-org/net/internal/namespace/core"
 
+// ServiceKey is the protocol-local key used to attach a TCP adapter to one
+// shared composed namespace.
+const ServiceKey nscore.ServiceKey = "tcp"
+
 // Namespace creates TCP resources on the shared namespace object. Resources are
 // returned through the shared lifetime contract and must satisfy Listener or
 // Stream as appropriate before callers publish them.

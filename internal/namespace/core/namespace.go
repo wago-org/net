@@ -4,7 +4,19 @@
 // retry backoff inside these methods.
 package core
 
-import "net/netip"
+import (
+	"errors"
+	"net/netip"
+)
+
+var (
+	// ErrInvalidNamespaceComposition reports a nil base, empty service key, or
+	// nil service value while assembling one exact namespace.
+	ErrInvalidNamespaceComposition = errors.New("net: invalid namespace composition")
+	// ErrDuplicateNamespaceService reports two selected modules claiming the
+	// same protocol-local service on one namespace.
+	ErrDuplicateNamespaceService = errors.New("net: duplicate namespace service")
+)
 
 // Endpoint is a backend-neutral IP endpoint. ScopeID is the numeric IPv6 zone
 // selected by the host configuration; netip textual zones are not accepted.
@@ -114,9 +126,99 @@ type Namespace interface {
 }
 
 // NamespaceCarrier preserves the concrete namespace behind the quota-owning
-// resource wrapper so protocol operation packages can assert narrow facets.
+// resource wrapper so protocol operation packages can resolve narrow services.
 type NamespaceCarrier interface {
 	NamespaceBackend() Namespace
+}
+
+// ServiceKey identifies one protocol-local namespace service without making
+// shared composition code import that protocol's facet package.
+type ServiceKey string
+
+// Service binds one exact protocol-local service to a composed namespace.
+type Service struct {
+	Key   ServiceKey
+	Value any
+}
+
+// ServiceCarrier exposes immutable protocol-local services from one shared
+// namespace owner. Values are asserted only by the selecting protocol package.
+type ServiceCarrier interface {
+	NamespaceService(ServiceKey) (any, bool)
+}
+
+// ComposeNamespace publishes one immutable namespace over base. The base owns
+// readiness, bounded service, and close; selected protocol adapters remain
+// reachable only through their exact service keys.
+func ComposeNamespace(base Namespace, services ...Service) (Namespace, error) {
+	if base == nil {
+		return nil, ErrInvalidNamespaceComposition
+	}
+	values := make(map[ServiceKey]any, len(services))
+	for _, service := range services {
+		if service.Key == "" || service.Value == nil {
+			return nil, ErrInvalidNamespaceComposition
+		}
+		if _, exists := values[service.Key]; exists {
+			return nil, ErrDuplicateNamespaceService
+		}
+		values[service.Key] = service.Value
+	}
+	return &composedNamespace{base: base, services: values}, nil
+}
+
+// ResolveNamespaceService unwraps the quota-owned namespace resource and
+// resolves key when the namespace is composed. Historical direct facet values
+// remain usable by focused operation tests and backend-neutral fakes.
+func ResolveNamespaceService(value any, key ServiceKey) any {
+	if carrier, ok := value.(NamespaceCarrier); ok {
+		value = carrier.NamespaceBackend()
+	}
+	if carrier, ok := value.(ServiceCarrier); ok {
+		service, exists := carrier.NamespaceService(key)
+		if !exists {
+			return nil
+		}
+		return service
+	}
+	return value
+}
+
+// composedNamespace is immutable after construction. Adapter cleanup is
+// installed on base during assembly, so closing the base tears down every
+// selected service exactly once in deterministic backend order.
+type composedNamespace struct {
+	base     Namespace
+	services map[ServiceKey]any
+}
+
+func (n *composedNamespace) NamespaceService(key ServiceKey) (any, bool) {
+	if n == nil {
+		return nil, false
+	}
+	value, ok := n.services[key]
+	return value, ok
+}
+
+func (n *composedNamespace) Readiness() Readiness {
+	if n == nil || n.base == nil {
+		return ReadyClosed
+	}
+	return n.base.Readiness()
+}
+
+func (n *composedNamespace) TryService(budget ServiceBudget) (ServiceReport, Progress, error) {
+	if n == nil || n.base == nil {
+		return ServiceReport{}, 0, ErrInvalidNamespaceComposition
+	}
+	return n.base.TryService(budget)
+}
+
+func (n *composedNamespace) Close() error {
+	if n == nil || n.base == nil {
+		return nil
+	}
+	return n.base.Close()
 }
 
 // ServiceBudget bounds one manual backend service attempt in every dimension.

@@ -4,6 +4,10 @@ package udp
 
 import nscore "github.com/wago-org/net/internal/namespace/core"
 
+// ServiceKey is the protocol-local key used to attach a UDP adapter to one
+// shared composed namespace.
+const ServiceKey nscore.ServiceKey = "udp"
+
 // Namespace creates UDP sockets on the shared namespace object. The returned
 // shared resource must satisfy Socket before callers publish it.
 type Namespace interface {

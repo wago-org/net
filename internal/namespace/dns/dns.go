@@ -9,6 +9,10 @@ import (
 	nscore "github.com/wago-org/net/internal/namespace/core"
 )
 
+// ServiceKey is the protocol-local key used to attach a DNS adapter to one
+// shared composed namespace.
+const ServiceKey nscore.ServiceKey = "dns"
+
 // Namespace starts bounded asynchronous DNS queries on the shared namespace
 // object. The returned shared resource must satisfy Query before publication.
 type Namespace interface {

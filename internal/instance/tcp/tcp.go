@@ -15,10 +15,7 @@ func Listen(state *core.State, namespaceHandle resource.Handle, local nscore.End
 		if lookupErr != nil {
 			return lookupErr
 		}
-		if carrier, ok := value.(nscore.NamespaceCarrier); ok {
-			value = carrier.NamespaceBackend()
-		}
-		backend, ok := value.(tcpns.Namespace)
+		backend, ok := nscore.ResolveNamespaceService(value, tcpns.ServiceKey).(tcpns.Namespace)
 		if !ok {
 			return nscore.Fail(nscore.FailureIO, core.ErrInvalidBackendResult)
 		}
@@ -63,10 +60,7 @@ func Connect(state *core.State, namespaceHandle resource.Handle, remote nscore.E
 		if lookupErr != nil {
 			return lookupErr
 		}
-		if carrier, ok := value.(nscore.NamespaceCarrier); ok {
-			value = carrier.NamespaceBackend()
-		}
-		backend, ok := value.(tcpns.Namespace)
+		backend, ok := nscore.ResolveNamespaceService(value, tcpns.ServiceKey).(tcpns.Namespace)
 		if !ok {
 			return nscore.Fail(nscore.FailureIO, core.ErrInvalidBackendResult)
 		}

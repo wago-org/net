@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"net/netip"
+	"sync/atomic"
 	"testing"
 )
 
@@ -56,6 +57,116 @@ func TestSharedResultAndServiceContracts(t *testing.T) {
 	}
 	if (ServiceReport{Packets: 3}).ValidFor(budget) || (ServiceReport{Bytes: 129}).ValidFor(budget) || (ServiceReport{Operations: 5}).ValidFor(budget) {
 		t.Fatal("over-budget service report accepted")
+	}
+}
+
+type compositionBase struct {
+	closed atomic.Int32
+}
+
+func (*compositionBase) Readiness() Readiness { return ReadyWritable }
+func (*compositionBase) TryService(ServiceBudget) (ServiceReport, Progress, error) {
+	return ServiceReport{}, ProgressWouldBlock, nil
+}
+func (b *compositionBase) Close() error {
+	b.closed.CompareAndSwap(0, 1)
+	return nil
+}
+
+func TestNamespaceCompositionExactServicesAndLifecycle(t *testing.T) {
+	empty, err := ComposeNamespace(new(compositionBase))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, exists := empty.(ServiceCarrier).NamespaceService("tcp"); exists {
+		t.Fatal("empty composition exposed TCP")
+	}
+
+	singleService := new(int)
+	single, err := ComposeNamespace(new(compositionBase), Service{Key: "tcp", Value: singleService})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, exists := single.(ServiceCarrier).NamespaceService("tcp"); !exists || got != singleService {
+		t.Fatalf("single TCP service = %T %v", got, exists)
+	}
+	if _, exists := single.(ServiceCarrier).NamespaceService("udp"); exists {
+		t.Fatal("single composition exposed UDP")
+	}
+
+	base := new(compositionBase)
+	tcpService := new(int)
+	udpService := new(string)
+	composed, err := ComposeNamespace(base,
+		Service{Key: "tcp", Value: tcpService},
+		Service{Key: "udp", Value: udpService},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	carrier, ok := composed.(ServiceCarrier)
+	if !ok {
+		t.Fatalf("composed namespace type = %T", composed)
+	}
+	if got, exists := carrier.NamespaceService("tcp"); !exists || got != tcpService {
+		t.Fatalf("TCP service = %T %v", got, exists)
+	}
+	if got, exists := carrier.NamespaceService("udp"); !exists || got != udpService {
+		t.Fatalf("UDP service = %T %v", got, exists)
+	}
+	if got, exists := carrier.NamespaceService("dns"); exists || got != nil {
+		t.Fatalf("omitted DNS service = %T %v", got, exists)
+	}
+	if composed.Readiness() != ReadyWritable {
+		t.Fatalf("readiness = %v", composed.Readiness())
+	}
+	if report, progress, err := composed.TryService(ServiceBudget{Packets: 1, Bytes: 1, Operations: 1}); err != nil || report != (ServiceReport{}) || progress != ProgressWouldBlock {
+		t.Fatalf("service = %+v %v %v", report, progress, err)
+	}
+	if err := composed.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := composed.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if base.closed.Load() != 1 {
+		t.Fatalf("base close state = %d, want one closed owner", base.closed.Load())
+	}
+}
+
+func TestNamespaceCompositionRejectsInvalidAndDuplicateServices(t *testing.T) {
+	base := new(compositionBase)
+	for _, test := range []struct {
+		name     string
+		base     Namespace
+		services []Service
+		want     error
+	}{
+		{name: "nil base", want: ErrInvalidNamespaceComposition},
+		{name: "empty key", base: base, services: []Service{{Value: new(int)}}, want: ErrInvalidNamespaceComposition},
+		{name: "nil value", base: base, services: []Service{{Key: "tcp"}}, want: ErrInvalidNamespaceComposition},
+		{name: "duplicate", base: base, services: []Service{{Key: "tcp", Value: new(int)}, {Key: "tcp", Value: new(int)}}, want: ErrDuplicateNamespaceService},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			if _, err := ComposeNamespace(test.base, test.services...); !errors.Is(err, test.want) {
+				t.Fatalf("ComposeNamespace error = %v, want %v", err, test.want)
+			}
+		})
+	}
+
+	direct := new(compositionBase)
+	if got := ResolveNamespaceService(direct, "tcp"); got != direct {
+		t.Fatalf("direct service = %T", got)
+	}
+	composed, err := ComposeNamespace(base, Service{Key: "tcp", Value: direct})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := ResolveNamespaceService(composed, "tcp"); got != direct {
+		t.Fatalf("resolved service = %T", got)
+	}
+	if got := ResolveNamespaceService(composed, "dns"); got != nil {
+		t.Fatalf("omitted service = %T", got)
 	}
 }
 

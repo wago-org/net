@@ -15,10 +15,7 @@ func Resolve(state *core.State, namespaceHandle resource.Handle, request dnsns.R
 		if lookupErr != nil {
 			return lookupErr
 		}
-		if carrier, ok := value.(nscore.NamespaceCarrier); ok {
-			value = carrier.NamespaceBackend()
-		}
-		backend, ok := value.(dnsns.Namespace)
+		backend, ok := nscore.ResolveNamespaceService(value, dnsns.ServiceKey).(dnsns.Namespace)
 		if !ok {
 			return nscore.Fail(nscore.FailureIO, core.ErrInvalidBackendResult)
 		}
