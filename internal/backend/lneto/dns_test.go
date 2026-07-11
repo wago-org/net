@@ -1,6 +1,7 @@
 package lnetobackend
 
 import (
+	"encoding/binary"
 	"net/netip"
 	"sync"
 	"testing"
@@ -172,6 +173,218 @@ func TestDNSResponseFailureMappingAndRecordBound(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestDNSResponseRequiresExactEchoedQuestions(t *testing.T) {
+	request := namespace.DNSRequest{Name: "example.com", Types: namespace.DNSRecordsA | namespace.DNSRecordsAAAA}
+	name := lnetodns.MustNewName(request.Name)
+	valid := []lnetodns.Question{
+		{Name: name, Type: lnetodns.TypeA, Class: lnetodns.ClassINET},
+		{Name: name, Type: lnetodns.TypeAAAA, Class: lnetodns.ClassINET},
+	}
+	other := lnetodns.MustNewName("other.example.com")
+	for _, test := range []struct {
+		name      string
+		questions []lnetodns.Question
+		flags     lnetodns.HeaderFlags
+	}{
+		{name: "missing type", questions: valid[:1], flags: lnetodns.HeaderFlags(1 << 15)},
+		{name: "extra type", questions: append(append([]lnetodns.Question(nil), valid...), valid[0]), flags: lnetodns.HeaderFlags(1 << 15)},
+		{name: "wrong name", questions: []lnetodns.Question{{Name: other, Type: lnetodns.TypeA, Class: lnetodns.ClassINET}, valid[1]}, flags: lnetodns.HeaderFlags(1 << 15)},
+		{name: "wrong order", questions: []lnetodns.Question{valid[1], valid[0]}, flags: lnetodns.HeaderFlags(1 << 15)},
+		{name: "wrong class", questions: []lnetodns.Question{{Name: name, Type: lnetodns.TypeA, Class: lnetodns.ClassCHAOS}, valid[1]}, flags: lnetodns.HeaderFlags(1 << 15)},
+		{name: "wrong opcode", questions: valid, flags: lnetodns.HeaderFlags(1<<15) | lnetodns.HeaderFlags(lnetodns.OpCodeStatus<<11)},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			payload, err := (&lnetodns.Message{Questions: test.questions}).AppendTo(nil, 11, test.flags)
+			if err != nil {
+				t.Fatal(err)
+			}
+			_, response, failure, err := parseDNSResponse(payload, 11, request, 8)
+			if !response || failure != namespace.FailureIO || err == nil {
+				t.Fatalf("parse = response %v, failure %v, err %v", response, failure, err)
+			}
+		})
+	}
+}
+
+func TestDNSResponseSelectsUniqueReachableChainAndRequestedTypes(t *testing.T) {
+	request := namespace.DNSRequest{Name: "example.com", Types: namespace.DNSRecordsA | namespace.DNSRecordsAAAA}
+	name := lnetodns.MustNewName(request.Name)
+	alias := lnetodns.MustNewName("alias.example.com")
+	terminal := lnetodns.MustNewName("terminal.example.com")
+	unrelated := lnetodns.MustNewName("unrelated.example.com")
+	aliasData, _ := alias.AppendTo(nil)
+	terminalData, _ := terminal.AppendTo(nil)
+	message := lnetodns.Message{
+		Questions: []lnetodns.Question{
+			{Name: name, Type: lnetodns.TypeA, Class: lnetodns.ClassINET},
+			{Name: name, Type: lnetodns.TypeAAAA, Class: lnetodns.ClassINET},
+		},
+		Answers: []lnetodns.Resource{
+			lnetodns.NewResource(unrelated, lnetodns.TypeA, lnetodns.ClassINET, 1, []byte{192, 0, 2, 1}),
+			lnetodns.NewResource(name, lnetodns.TypeCNAME, lnetodns.ClassINET, 10, aliasData),
+			lnetodns.NewResource(name, lnetodns.TypeCNAME, lnetodns.ClassINET, 99, aliasData),
+			lnetodns.NewResource(alias, lnetodns.TypeCNAME, lnetodns.ClassINET, 20, terminalData),
+			lnetodns.NewResource(alias, lnetodns.TypeA, lnetodns.ClassINET, 30, []byte{192, 0, 2, 30}),
+			lnetodns.NewResource(terminal, lnetodns.TypeA, lnetodns.ClassINET, 40, []byte{192, 0, 2, 40}),
+			lnetodns.NewResource(terminal, lnetodns.TypeA, lnetodns.ClassINET, 41, []byte{192, 0, 2, 40}),
+			lnetodns.NewResource(terminal, lnetodns.TypeAAAA, lnetodns.ClassINET, 50, netip.MustParseAddr("2001:db8::40").AsSlice()),
+		},
+	}
+	payload, err := message.AppendTo(nil, 12, lnetodns.HeaderFlags(1<<15))
+	if err != nil {
+		t.Fatal(err)
+	}
+	records, response, failure, err := parseDNSResponse(payload, 12, request, 4)
+	if err != nil || !response || failure != 0 {
+		t.Fatalf("parse = response %v, failure %v, err %v", response, failure, err)
+	}
+	want := []namespace.DNSRecord{
+		{Name: request.Name, Type: namespace.DNSRecordCNAME, TTLSeconds: 10, CanonicalName: "alias.example.com"},
+		{Name: "alias.example.com", Type: namespace.DNSRecordCNAME, TTLSeconds: 20, CanonicalName: "terminal.example.com"},
+		{Name: "terminal.example.com", Type: namespace.DNSRecordA, TTLSeconds: 40, Address: netip.MustParseAddr("192.0.2.40")},
+		{Name: "terminal.example.com", Type: namespace.DNSRecordAAAA, TTLSeconds: 50, Address: netip.MustParseAddr("2001:db8::40")},
+	}
+	if len(records) != len(want) {
+		t.Fatalf("records = %+v", records)
+	}
+	for i := range want {
+		if records[i] != want[i] {
+			t.Fatalf("record %d = %+v, want %+v", i, records[i], want[i])
+		}
+	}
+
+	aOnly := namespace.DNSRequest{Name: request.Name, Types: namespace.DNSRecordsA}
+	unrequested, err := (&lnetodns.Message{
+		Questions: []lnetodns.Question{{Name: name, Type: lnetodns.TypeA, Class: lnetodns.ClassINET}},
+		Answers: []lnetodns.Resource{
+			lnetodns.NewResource(name, lnetodns.TypeAAAA, lnetodns.ClassINET, 1, netip.MustParseAddr("2001:db8::1").AsSlice()),
+			lnetodns.NewResource(unrelated, lnetodns.TypeA, lnetodns.ClassINET, 1, []byte{192, 0, 2, 1}),
+		},
+	}).AppendTo(nil, 16, lnetodns.HeaderFlags(1<<15))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if records, _, failure, err := parseDNSResponse(unrequested, 16, aOnly, 4); err != nil || failure != 0 || len(records) != 0 {
+		t.Fatalf("unrequested/irrelevant records = %+v, failure %v, err %v", records, failure, err)
+	}
+}
+
+func TestDNSResponseRejectsCNAMEConflictLoopAndMalformedWire(t *testing.T) {
+	request := namespace.DNSRequest{Name: "example.com", Types: namespace.DNSRecordsA}
+	name := lnetodns.MustNewName(request.Name)
+	alias := lnetodns.MustNewName("alias.example.com")
+	other := lnetodns.MustNewName("other.example.com")
+	aliasData, _ := alias.AppendTo(nil)
+	otherData, _ := other.AppendTo(nil)
+	nameData, _ := name.AppendTo(nil)
+	question := []lnetodns.Question{{Name: name, Type: lnetodns.TypeA, Class: lnetodns.ClassINET}}
+	for _, test := range []struct {
+		name    string
+		answers []lnetodns.Resource
+		limit   int
+		want    namespace.Failure
+	}{
+		{name: "conflicting cname", answers: []lnetodns.Resource{
+			lnetodns.NewResource(name, lnetodns.TypeCNAME, lnetodns.ClassINET, 1, aliasData),
+			lnetodns.NewResource(name, lnetodns.TypeCNAME, lnetodns.ClassINET, 1, otherData),
+		}, limit: 4, want: namespace.FailureIO},
+		{name: "cname loop", answers: []lnetodns.Resource{
+			lnetodns.NewResource(name, lnetodns.TypeCNAME, lnetodns.ClassINET, 1, aliasData),
+			lnetodns.NewResource(alias, lnetodns.TypeCNAME, lnetodns.ClassINET, 1, nameData),
+		}, limit: 4, want: namespace.FailureIO},
+		{name: "chain exceeds record limit", answers: []lnetodns.Resource{
+			lnetodns.NewResource(name, lnetodns.TypeCNAME, lnetodns.ClassINET, 1, aliasData),
+			lnetodns.NewResource(alias, lnetodns.TypeA, lnetodns.ClassINET, 1, []byte{192, 0, 2, 1}),
+		}, limit: 1, want: namespace.FailureResourceLimit},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			payload, err := (&lnetodns.Message{Questions: question, Answers: test.answers}).AppendTo(nil, 13, lnetodns.HeaderFlags(1<<15))
+			if err != nil {
+				t.Fatal(err)
+			}
+			_, response, failure, err := parseDNSResponse(payload, 13, request, test.limit)
+			if !response || failure != test.want || err == nil {
+				t.Fatalf("parse = response %v, failure %v, err %v", response, failure, err)
+			}
+		})
+	}
+
+	selfPointer := make([]byte, lnetodns.SizeHeader+6)
+	binary.BigEndian.PutUint16(selfPointer[0:2], 14)
+	binary.BigEndian.PutUint16(selfPointer[2:4], 1<<15)
+	binary.BigEndian.PutUint16(selfPointer[4:6], 1)
+	selfPointer[12], selfPointer[13] = 0xc0, 0x0c
+	binary.BigEndian.PutUint16(selfPointer[14:16], uint16(lnetodns.TypeA))
+	binary.BigEndian.PutUint16(selfPointer[16:18], uint16(lnetodns.ClassINET))
+	if _, response, failure, err := parseDNSResponse(selfPointer, 14, request, 4); !response || failure != namespace.FailureIO || err == nil {
+		t.Fatalf("self pointer = response %v, failure %v, err %v", response, failure, err)
+	}
+
+	valid, err := (&lnetodns.Message{Questions: question, Answers: []lnetodns.Resource{
+		lnetodns.NewResource(name, lnetodns.TypeA, lnetodns.ClassINET, 1, []byte{192, 0, 2, 1}),
+	}}).AppendTo(nil, 15, lnetodns.HeaderFlags(1<<15))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, malformed := range [][]byte{valid[:len(valid)-1], append(append([]byte(nil), valid...), 0)} {
+		if _, response, failure, err := parseDNSResponse(malformed, 15, request, 4); !response || failure != namespace.FailureIO || err == nil {
+			t.Fatalf("malformed resource = response %v, failure %v, err %v", response, failure, err)
+		}
+	}
+}
+
+func FuzzDNSWireResponse(f *testing.F) {
+	request := namespace.DNSRequest{Name: "example.com", Types: namespace.DNSRecordsA | namespace.DNSRecordsAAAA}
+	name := lnetodns.MustNewName(request.Name)
+	seed, err := (&lnetodns.Message{Questions: []lnetodns.Question{
+		{Name: name, Type: lnetodns.TypeA, Class: lnetodns.ClassINET},
+		{Name: name, Type: lnetodns.TypeAAAA, Class: lnetodns.ClassINET},
+	}, Answers: []lnetodns.Resource{
+		lnetodns.NewResource(name, lnetodns.TypeA, lnetodns.ClassINET, 1, []byte{192, 0, 2, 1}),
+	}}).AppendTo(nil, 77, lnetodns.HeaderFlags(1<<15))
+	if err != nil {
+		f.Fatal(err)
+	}
+	compressed, err := (&lnetodns.Message{Questions: []lnetodns.Question{
+		{Name: name, Type: lnetodns.TypeA, Class: lnetodns.ClassINET},
+		{Name: name, Type: lnetodns.TypeAAAA, Class: lnetodns.ClassINET},
+	}}).AppendTo(nil, 77, lnetodns.HeaderFlags(1<<15))
+	if err != nil {
+		f.Fatal(err)
+	}
+	binary.BigEndian.PutUint16(compressed[6:8], 1)
+	compressed = append(compressed, 0xc0, 0x0c, 0, byte(lnetodns.TypeA), 0, byte(lnetodns.ClassINET), 0, 0, 0, 1, 0, 4, 192, 0, 2, 1)
+	f.Add(seed)
+	f.Add(compressed)
+	f.Add([]byte{0, 77, 0x80})
+	f.Add(make([]byte, lnetodns.SizeHeader))
+	f.Fuzz(func(t *testing.T, payload []byte) {
+		if len(payload) > 2048 {
+			payload = payload[:2048]
+		}
+		records, _, _, _ := parseDNSResponse(payload, 77, request, 8)
+		if len(records) > 8 {
+			t.Fatalf("returned %d records", len(records))
+		}
+		current := request.Name
+		seen := make(map[namespace.DNSRecord]struct{}, len(records))
+		for _, record := range records {
+			if !record.Valid() || record.Name != current {
+				t.Fatalf("invalid or unreachable record %+v after %q", record, current)
+			}
+			key := record
+			key.TTLSeconds = 0
+			if _, exists := seen[key]; exists {
+				t.Fatalf("duplicate record %+v", record)
+			}
+			seen[key] = struct{}{}
+			if record.Type == namespace.DNSRecordCNAME {
+				current = record.CanonicalName
+			}
+		}
+	})
 }
 
 func TestDNSConcurrentOperationsAndNamespaceClose(t *testing.T) {

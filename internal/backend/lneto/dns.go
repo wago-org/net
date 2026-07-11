@@ -439,6 +439,13 @@ func parseDNSResponse(payload []byte, txid uint16, request namespace.DNSRequest,
 	if frame.TxID() != txid || !flags.IsResponse() {
 		return nil, false, 0, nil
 	}
+	if flags.OpCode() != lnetodns.OpCodeQuery {
+		return nil, true, namespace.FailureIO, lneto.ErrInvalidField
+	}
+	offset, err := validateDNSQuestions(payload, lnetodns.SizeHeader, frame.QDCount(), request)
+	if err != nil {
+		return nil, true, namespace.FailureIO, err
+	}
 	if flags.IsTruncated() {
 		return nil, true, namespace.FailureTemporary, lneto.ErrTruncatedFrame
 	}
@@ -456,72 +463,192 @@ func parseDNSResponse(payload []byte, txid uint16, request namespace.DNSRequest,
 		}
 		return nil, true, failure, rcode
 	}
-	offset := lnetodns.SizeHeader
-	for range int(frame.QDCount()) {
-		_, next, err := decodeDNSName(payload, offset)
+
+	candidates := make([]namespace.DNSRecord, 0, min(int(frame.ANCount()), len(payload)/11))
+	for range int(frame.ANCount()) {
+		var record namespace.DNSRecord
+		var recognized bool
+		record, recognized, offset, err = decodeDNSAnswer(payload, offset, request.Types)
+		if err != nil {
+			return nil, true, namespace.FailureIO, err
+		}
+		if recognized {
+			candidates = append(candidates, record)
+		}
+	}
+	for range int(frame.NSCount()) + int(frame.ARCount()) {
+		offset, err = skipDNSResource(payload, offset)
+		if err != nil {
+			return nil, true, namespace.FailureIO, err
+		}
+	}
+	if offset != len(payload) {
+		return nil, true, namespace.FailureIO, lneto.ErrInvalidLengthField
+	}
+	records, failure, err := selectDNSAnswers(candidates, request, maxRecords)
+	if err != nil {
+		return nil, true, failure, err
+	}
+	return records, true, 0, nil
+}
+
+func validateDNSQuestions(payload []byte, offset int, count uint16, request namespace.DNSRequest) (int, error) {
+	types := make([]lnetodns.Type, 0, 2)
+	if request.Types&namespace.DNSRecordsA != 0 {
+		types = append(types, lnetodns.TypeA)
+	}
+	if request.Types&namespace.DNSRecordsAAAA != 0 {
+		types = append(types, lnetodns.TypeAAAA)
+	}
+	if int(count) != len(types) {
+		return offset, lneto.ErrInvalidField
+	}
+	for _, expectedType := range types {
+		name, next, err := decodeDNSName(payload, offset)
 		if err != nil || next+4 > len(payload) {
 			if err == nil {
 				err = lneto.ErrTruncatedFrame
 			}
-			return nil, true, namespace.FailureIO, err
-		}
-		offset = next + 4
-	}
-	records := make([]namespace.DNSRecord, 0, min(maxRecords, int(frame.ANCount())))
-	for range int(frame.ANCount()) {
-		name, next, err := decodeDNSName(payload, offset)
-		if err != nil || next+10 > len(payload) {
-			if err == nil {
-				err = lneto.ErrTruncatedFrame
-			}
-			return nil, true, namespace.FailureIO, err
+			return offset, err
 		}
 		typ := lnetodns.Type(binary.BigEndian.Uint16(payload[next : next+2]))
 		class := lnetodns.Class(binary.BigEndian.Uint16(payload[next+2 : next+4]))
-		ttl := binary.BigEndian.Uint32(payload[next+4 : next+8])
-		length := int(binary.BigEndian.Uint16(payload[next+8 : next+10]))
-		dataStart := next + 10
-		dataEnd := dataStart + length
-		if dataEnd > len(payload) {
-			return nil, true, namespace.FailureIO, lneto.ErrTruncatedFrame
+		if name != request.Name || typ != expectedType || class != lnetodns.ClassINET {
+			return offset, lneto.ErrInvalidField
 		}
-		offset = dataEnd
-		if class != lnetodns.ClassINET {
-			continue
-		}
-		var record namespace.DNSRecord
-		switch typ {
-		case lnetodns.TypeA:
-			if request.Types&namespace.DNSRecordsA == 0 || length != 4 {
-				continue
-			}
-			record = namespace.DNSRecord{Name: name, Type: namespace.DNSRecordA, TTLSeconds: ttl, Address: netip.AddrFrom4([4]byte(payload[dataStart:dataEnd]))}
-		case lnetodns.TypeAAAA:
-			if request.Types&namespace.DNSRecordsAAAA == 0 || length != 16 {
-				continue
-			}
-			record = namespace.DNSRecord{Name: name, Type: namespace.DNSRecordAAAA, TTLSeconds: ttl, Address: netip.AddrFrom16([16]byte(payload[dataStart:dataEnd]))}
-		case lnetodns.TypeCNAME:
-			canonical, consumed, err := decodeDNSName(payload, dataStart)
-			if err != nil || consumed != dataEnd {
-				if err == nil {
-					err = lneto.ErrInvalidLengthField
-				}
-				return nil, true, namespace.FailureIO, err
-			}
-			record = namespace.DNSRecord{Name: name, Type: namespace.DNSRecordCNAME, TTLSeconds: ttl, CanonicalName: canonical}
-		default:
-			continue
-		}
-		if !record.Valid() {
-			return nil, true, namespace.FailureIO, lneto.ErrInvalidField
-		}
-		if len(records) == maxRecords {
-			return nil, true, namespace.FailureResourceLimit, lneto.ErrExhausted
-		}
-		records = append(records, record)
+		offset = next + 4
 	}
-	return records, true, 0, nil
+	return offset, nil
+}
+
+func decodeDNSAnswer(payload []byte, offset int, requested namespace.DNSRecordTypes) (record namespace.DNSRecord, recognized bool, nextOffset int, err error) {
+	name, next, err := decodeDNSName(payload, offset)
+	if err != nil || next+10 > len(payload) {
+		if err == nil {
+			err = lneto.ErrTruncatedFrame
+		}
+		return record, false, offset, err
+	}
+	typ := lnetodns.Type(binary.BigEndian.Uint16(payload[next : next+2]))
+	class := lnetodns.Class(binary.BigEndian.Uint16(payload[next+2 : next+4]))
+	ttl := binary.BigEndian.Uint32(payload[next+4 : next+8])
+	length := int(binary.BigEndian.Uint16(payload[next+8 : next+10]))
+	dataStart := next + 10
+	dataEnd := dataStart + length
+	if dataEnd > len(payload) {
+		return record, false, offset, lneto.ErrTruncatedFrame
+	}
+	if class != lnetodns.ClassINET {
+		return record, false, dataEnd, nil
+	}
+	switch typ {
+	case lnetodns.TypeA:
+		if length != 4 {
+			return record, false, offset, lneto.ErrInvalidLengthField
+		}
+		if requested&namespace.DNSRecordsA == 0 {
+			return record, false, dataEnd, nil
+		}
+		record = namespace.DNSRecord{Name: name, Type: namespace.DNSRecordA, TTLSeconds: ttl, Address: netip.AddrFrom4([4]byte(payload[dataStart:dataEnd]))}
+	case lnetodns.TypeAAAA:
+		if length != 16 {
+			return record, false, offset, lneto.ErrInvalidLengthField
+		}
+		if requested&namespace.DNSRecordsAAAA == 0 {
+			return record, false, dataEnd, nil
+		}
+		record = namespace.DNSRecord{Name: name, Type: namespace.DNSRecordAAAA, TTLSeconds: ttl, Address: netip.AddrFrom16([16]byte(payload[dataStart:dataEnd]))}
+	case lnetodns.TypeCNAME:
+		canonical, consumed, err := decodeDNSName(payload, dataStart)
+		if err != nil || consumed != dataEnd {
+			if err == nil {
+				err = lneto.ErrInvalidLengthField
+			}
+			return record, false, offset, err
+		}
+		record = namespace.DNSRecord{Name: name, Type: namespace.DNSRecordCNAME, TTLSeconds: ttl, CanonicalName: canonical}
+	default:
+		return record, false, dataEnd, nil
+	}
+	return record, true, dataEnd, nil
+}
+
+func skipDNSResource(payload []byte, offset int) (int, error) {
+	_, next, err := decodeDNSName(payload, offset)
+	if err != nil || next+10 > len(payload) {
+		if err == nil {
+			err = lneto.ErrTruncatedFrame
+		}
+		return offset, err
+	}
+	dataEnd := next + 10 + int(binary.BigEndian.Uint16(payload[next+8:next+10]))
+	if dataEnd > len(payload) {
+		return offset, lneto.ErrTruncatedFrame
+	}
+	return dataEnd, nil
+}
+
+func selectDNSAnswers(candidates []namespace.DNSRecord, request namespace.DNSRequest, maxRecords int) ([]namespace.DNSRecord, namespace.Failure, error) {
+	records := make([]namespace.DNSRecord, 0, min(maxRecords, len(candidates)))
+	current := request.Name
+	visited := make(map[string]struct{}, len(candidates)+1)
+	for {
+		if _, exists := visited[current]; exists {
+			return nil, namespace.FailureIO, lneto.ErrInvalidField
+		}
+		visited[current] = struct{}{}
+		var cname namespace.DNSRecord
+		for _, candidate := range candidates {
+			if candidate.Type != namespace.DNSRecordCNAME || candidate.Name != current {
+				continue
+			}
+			if !candidate.Valid() {
+				return nil, namespace.FailureIO, lneto.ErrInvalidField
+			}
+			if cname.Type == 0 {
+				cname = candidate
+				continue
+			}
+			if cname.CanonicalName != candidate.CanonicalName {
+				return nil, namespace.FailureIO, lneto.ErrInvalidField
+			}
+		}
+		if cname.Type == 0 {
+			break
+		}
+		var err error
+		records, err = appendUniqueDNSRecord(records, cname, maxRecords)
+		if err != nil {
+			return nil, namespace.FailureResourceLimit, err
+		}
+		current = cname.CanonicalName
+	}
+	for _, candidate := range candidates {
+		if candidate.Name != current || candidate.Type == namespace.DNSRecordCNAME {
+			continue
+		}
+		if !candidate.Valid() {
+			return nil, namespace.FailureIO, lneto.ErrInvalidField
+		}
+		var err error
+		records, err = appendUniqueDNSRecord(records, candidate, maxRecords)
+		if err != nil {
+			return nil, namespace.FailureResourceLimit, err
+		}
+	}
+	return records, 0, nil
+}
+
+func appendUniqueDNSRecord(records []namespace.DNSRecord, record namespace.DNSRecord, maxRecords int) ([]namespace.DNSRecord, error) {
+	for _, existing := range records {
+		if existing.Name == record.Name && existing.Type == record.Type && existing.Address == record.Address && existing.CanonicalName == record.CanonicalName {
+			return records, nil
+		}
+	}
+	if len(records) == maxRecords {
+		return nil, lneto.ErrExhausted
+	}
+	return append(records, record), nil
 }
 
 func decodeDNSName(message []byte, offset int) (string, int, error) {
