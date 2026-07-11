@@ -154,6 +154,42 @@ func TestDefaultTCPAllowsFiniteOutboundAndDeniesListenerSpecialAndCallerDeniedAu
 	}
 }
 
+func TestDefaultTCPStorageFitsSharedDefaultsAndStopsAtEightStreams(t *testing.T) {
+	network := wagonet.New(wagonet.WithConfig(wagonet.Config{StaticIPv4: selectiveStaticIPv4()}))
+	if err := tcp.Register(network); err != nil {
+		t.Fatalf("Register: %v", err)
+	}
+	runtime := wago.NewRuntime()
+	if err := runtime.Use(network); err != nil {
+		t.Fatalf("Use: %v", err)
+	}
+	module, err := runtime.Compile([]byte{0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00})
+	if err != nil {
+		t.Fatal(err)
+	}
+	instance, err := runtime.Instantiate(context.Background(), module)
+	if err != nil {
+		t.Fatalf("Instantiate: %v", err)
+	}
+	defer instance.Close()
+	host := exactHost{instance: instance, memory: make([]byte, 256)}
+	if got := callTCP(t, runtime, host, "namespace_default", 0); got != wagonet.StatusOK {
+		t.Fatalf("namespace_default = %v", got)
+	}
+	namespaceHandle := binary.LittleEndian.Uint64(host.memory[:8])
+	if !abicore.EncodeEndpointV1(host.memory, 16, nscore.Endpoint{Address: netip.MustParseAddr("192.0.2.20"), Port: 443}) {
+		t.Fatal("encode remote")
+	}
+	for stream := 0; stream < 8; stream++ {
+		if got := callTCP(t, runtime, host, "connect", namespaceHandle, 16, 64); got != wagonet.StatusInProgress {
+			t.Fatalf("connect %d = %v", stream, got)
+		}
+	}
+	if got := callTCP(t, runtime, host, "connect", namespaceHandle, 16, 64); got != wagonet.StatusResourceLimit {
+		t.Fatalf("ninth connect = %v", got)
+	}
+}
+
 func TestTCPRegistrationLeavesUDPImportUnresolved(t *testing.T) {
 	network := wagonet.New()
 	if err := tcp.Register(network); err != nil {

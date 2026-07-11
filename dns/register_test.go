@@ -152,6 +152,47 @@ func TestDefaultDNSResolverAllowsFiniteQueriesAndCallerDenyWins(t *testing.T) {
 	}
 }
 
+func TestDefaultDNSStorageFitsSharedDefaultsAndStopsAtEightQueries(t *testing.T) {
+	network := wagonet.New(wagonet.WithConfig(wagonet.Config{StaticIPv4: selectiveStaticIPv4()}))
+	if err := dns.Register(network, dns.Resolver("192.0.2.53")); err != nil {
+		t.Fatalf("Register: %v", err)
+	}
+	runtime := wago.NewRuntime()
+	if err := runtime.Use(network); err != nil {
+		t.Fatalf("Use: %v", err)
+	}
+	module, err := runtime.Compile([]byte{0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00})
+	if err != nil {
+		t.Fatal(err)
+	}
+	instance, err := runtime.Instantiate(context.Background(), module)
+	if err != nil {
+		t.Fatalf("Instantiate: %v", err)
+	}
+	defer instance.Close()
+	host := exactHost{instance: instance, memory: make([]byte, 1024)}
+	if got := callDNS(t, runtime, host, "namespace_default", 900); got != wagonet.StatusOK {
+		t.Fatalf("namespace_default = %v", got)
+	}
+	namespaceHandle := binary.LittleEndian.Uint64(host.memory[900:908])
+	for query := 0; query < 8; query++ {
+		request := dnsns.Request{Name: "query" + string(rune('a'+query)) + ".example", Types: dnsns.RecordsA | dnsns.RecordsAAAA}
+		if !dnsabi.EncodeDNSQueryV1(host.memory, 0, request) {
+			t.Fatalf("encode query %d", query)
+		}
+		if got := callDNS(t, runtime, host, "resolve", namespaceHandle, 0, 300); got != wagonet.StatusInProgress {
+			t.Fatalf("resolve %d = %v", query, got)
+		}
+	}
+	request := dnsns.Request{Name: "ninth.example", Types: dnsns.RecordsA | dnsns.RecordsAAAA}
+	if !dnsabi.EncodeDNSQueryV1(host.memory, 0, request) {
+		t.Fatal("encode ninth query")
+	}
+	if got := callDNS(t, runtime, host, "resolve", namespaceHandle, 0, 300); got != wagonet.StatusResourceLimit {
+		t.Fatalf("ninth resolve = %v", got)
+	}
+}
+
 func TestDNSRegistrationLeavesTCPAndUDPImportsUnresolved(t *testing.T) {
 	network := wagonet.New()
 	if err := dns.Register(network); err != nil {

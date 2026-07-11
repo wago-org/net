@@ -165,6 +165,42 @@ func TestDefaultUDPAllowsEphemeralUnicastAndDeniesServerSpecialAndCallerDeniedAu
 	}
 }
 
+func TestDefaultUDPStorageFitsSharedDefaultsAndStopsAtEightSockets(t *testing.T) {
+	network := wagonet.New(wagonet.WithConfig(wagonet.Config{StaticIPv4: selectiveStaticIPv4()}))
+	if err := udp.Register(network); err != nil {
+		t.Fatalf("Register: %v", err)
+	}
+	runtime := wago.NewRuntime()
+	if err := runtime.Use(network); err != nil {
+		t.Fatalf("Use: %v", err)
+	}
+	module, err := runtime.Compile([]byte{0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00})
+	if err != nil {
+		t.Fatal(err)
+	}
+	instance, err := runtime.Instantiate(context.Background(), module)
+	if err != nil {
+		t.Fatalf("Instantiate: %v", err)
+	}
+	defer instance.Close()
+	host := exactHost{instance: instance, memory: make([]byte, 256)}
+	if got := callUDP(t, runtime, host, "namespace_default", 0); got != wagonet.StatusOK {
+		t.Fatalf("namespace_default = %v", got)
+	}
+	namespaceHandle := binary.LittleEndian.Uint64(host.memory[:8])
+	if !abicore.EncodeEndpointV1(host.memory, 16, nscore.Endpoint{Address: netip.IPv4Unspecified()}) {
+		t.Fatal("encode ephemeral bind")
+	}
+	for socket := 0; socket < 8; socket++ {
+		if got := callUDP(t, runtime, host, "bind", namespaceHandle, 16, 64); got != wagonet.StatusOK {
+			t.Fatalf("bind %d = %v", socket, got)
+		}
+	}
+	if got := callUDP(t, runtime, host, "bind", namespaceHandle, 16, 64); got != wagonet.StatusResourceLimit {
+		t.Fatalf("ninth bind = %v", got)
+	}
+}
+
 func TestUDPRegistrationLeavesTCPAndDNSImportsUnresolved(t *testing.T) {
 	network := wagonet.New()
 	if err := udp.Register(network); err != nil {
