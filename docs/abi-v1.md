@@ -54,6 +54,12 @@ the complete range before mutation. Multi-output operations reject overlapping
 nonempty output ranges, and no guest-memory slice may be retained after a host
 call.
 
+The implementation keeps these shared memory, address, endpoint, handle, and
+poll codecs in `internal/abi/core`. TCP stream/I/O, UDP receive-result, and DNS
+name/query/record layouts are separate compilation units in
+`internal/abi/tcp`, `internal/abi/udp`, and `internal/abi/dns`. This package
+split changes no guest-visible size, offset, validation rule, or numeric value.
+
 ## UDP module and signatures
 
 Complete UDP operations are defined in the independently capability-gated

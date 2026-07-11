@@ -25,11 +25,15 @@ all three, rejecting omitted public, binding, and instance-operation packages.
 `internal/instance/core` now owns only exact attachment, shared resources,
 readiness, quotas, polling, and teardown; TCP, UDP, and DNS operations live in
 independently selected `internal/instance/{tcp,udp,dns}` packages and run under
-the core lifecycle mutex. The combined namespace contracts, ABI codecs, root
-lneto construction, lneto adapter, protocol-local finite defaults, and granular
-register packages remain unsplit; full compile-time isolation is therefore not
-yet claimed. Standard, focused race, and dependency suites pass after the
-instance split.
+the core lifecycle mutex. ABI ownership is also split: `internal/abi/core` owns
+checked memory, address/endpoint, handle, and poll codecs, while
+`internal/abi/{tcp,udp,dns}` own only their fixed protocol layouts. Dependency
+fixtures reject every omitted protocol ABI package. The combined namespace
+contracts, root lneto construction, lneto adapter, protocol-local finite
+defaults, and granular register packages remain unsplit; full compile-time
+isolation is therefore not yet claimed. Standard, race, vet, TinyGo,
+source-boundary, dependency, and focused ABI fuzz-smoke suites pass after the ABI
+split.
 
 ## Goal
 
@@ -150,8 +154,10 @@ to `compat.Init`. Full compile isolation is still blocked for these reasons:
   `internal/instance/{tcp,udp,dns}` contain independently selected operations;
   all use one core lifecycle lock, resource table, readiness coordinator, quota
   account, and deterministic close path.
-- `internal/namespace` and `internal/abi` combine common and protocol-specific
-  declarations in single packages.
+- `internal/namespace` still combines common and protocol-specific declarations.
+- `internal/abi/core` now contains only checked memory, address/endpoint, handle,
+  and poll layouts; protocol codecs are isolated in `internal/abi/tcp`, `/udp`,
+  and `/dns` and are gated from omitted fixture graphs.
 - `register/register.go` always constructs the aggregate extension.
 
 Exact runtime registration is implemented, but these remaining package edges
@@ -192,8 +198,10 @@ and close. Move protocol resource operations into protocol packages that operate
 through narrow common services.
 
 Split protocol-specific namespace interfaces and ABI codecs so importing common
-state does not compile every protocol operation. Keep status values and genuinely
-shared address/poll layouts in common packages.
+state does not compile every protocol operation. The ABI half is complete:
+status values and genuinely shared checked-memory, address/endpoint, handle, and
+poll layouts remain in `internal/abi/core`, while each protocol owns its fixed
+codecs. Protocol-specific namespace interfaces remain to be split.
 
 ### Stage 4: split the lneto adapter
 
@@ -228,11 +236,12 @@ Small root, TCP-only, UDP-only, DNS-only, pair, and aggregate fixtures now gate
 exact runtime capability/import sets under standard Go and TinyGo. Their
 standard-Go `go list -deps` gate rejects every omitted public protocol and
 binding package plus accidental aggregate-package dependencies. The fixtures
-require `internal/instance/core` in every graph, require only the selected
-`internal/instance/{tcp,udp,dns}` operation packages, and continue to assert the
-unified `internal/backend/lneto` package remains present so the next split cannot
-be mistaken for completed isolation. Extend the same gate to protocol-specific
-namespace, ABI, and lneto-adapter packages as those packages are extracted.
+require `internal/instance/core` and `internal/abi/core` in every graph, require
+only the selected `internal/instance/{tcp,udp,dns}` operation and
+`internal/abi/{tcp,udp,dns}` codec packages, and continue to assert the unified
+`internal/backend/lneto` package remains present so the next split cannot be
+mistaken for completed isolation. Extend the same gate to protocol-specific
+namespace and lneto-adapter packages as those packages are extracted.
 
 Run the complete standard, race, vet, fuzz, benchmark, TinyGo, cross-build,
 worker/lifecycle, source-boundary, and release-signoff matrices before declaring

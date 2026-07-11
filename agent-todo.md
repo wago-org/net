@@ -549,41 +549,50 @@ no signature, key, trust root, production decision, or hosted-activation claim.
   and rejects the operation package from non-TCP dependency graphs.
 - `43f1dd9` — extracts UDP and DNS operations into their protocol packages,
   removes protocol methods from the core, and extends exact dependency gates.
+- `01a8756` — extracts checked memory, address/endpoint, handle, and poll codecs
+  into `internal/abi/core`, moves shared polling to that package, and keeps root
+  compatibility constants literal so the root imports no protocol ABI package.
+- `144afae` — extracts TCP stream/I/O layouts into `internal/abi/tcp`, switches
+  TCP bindings to that compilation unit, and rejects it from non-TCP graphs.
+- `46ff627` — extracts UDP receive-result and DNS name/query/record codecs into
+  `internal/abi/udp` and `internal/abi/dns`, removes the combined ABI package,
+  and gates every fixture against omitted protocol ABI packages.
 
 ## Active work
 
 The current protocol-submodule slice is complete with exactly four bounded
-atomic commits. `internal/instance/core` now owns only the extension-local exact
-instance map, one state lifecycle mutex, namespace ownership, one generation-safe
-resource table, one readiness coordinator and poll scratch area, one immutable
-policy, one finite quota account, bounded poll, kind-checked close, and reverse
-teardown. `internal/instance/tcp`, `internal/instance/udp`, and
-`internal/instance/dns` own their protocol operations and execute each operation
-through the core lock, preserving atomic backend/resource/readiness rollback and
-serialization against `State.Close`.
+atomic commits. `internal/abi/core` now owns only uint64-checked guest memory,
+disjoint ranges, endpoint/address conversion, opaque handle encoding, and shared
+poll layouts. `internal/abi/tcp`, `internal/abi/udp`, and `internal/abi/dns` own
+only their protocol fixed layouts and atomic codecs. The former combined
+`internal/abi` package is gone, while the public root compatibility constants
+retain the exact numeric values without importing protocol ABI implementations.
 
 Root, single-protocol, pair, and all-protocol fixtures continue to prove exact
 runtime capabilities/import counts under standard Go and TinyGo. The standard-Go
-`go list -deps` gate now rejects every omitted public, binding, and
-instance-operation package and rejects accidental `compat` or root `register`
-edges. Every graph intentionally retains only `internal/instance/core` plus the
-selected protocol operation packages; the unified `internal/backend/lneto`
-blocker remains explicit. Standard, race, vet, TinyGo, source-boundary, runtime
-inspection, and dependency validation pass after the split.
+`go list -deps` gate now rejects every omitted public, binding,
+instance-operation, and protocol ABI package plus accidental `compat` or root
+`register` edges. Graphs reach `internal/abi/core` plus exactly the selected ABI
+set: root has only core; each single has core and one protocol; pairs/all contain
+only their selected protocol codecs. Existing offsets, sizes, checked-range and
+disjoint-output behavior, atomic writes, statuses, lifecycle identity, and
+cleanup remain unchanged. Standard, race, vet, TinyGo, source-boundary, runtime
+inspection, dependency, and focused ABI fuzz-smoke validation pass after the
+split.
 
 Compile isolation is still incomplete because root `Config`/`newExtension`
-constructs the combined lneto namespace, while `internal/namespace`,
-`internal/abi`, and `internal/backend/lneto` still compile all protocol
-contracts, layouts, and adapters. Package-local finite client defaults, granular
-`tcp/register`, `udp/register`, and `dns/register`, and the complete release
-matrix also remain. The next slice should split protocol ABI codecs and
-namespace contracts into separate packages, extend omitted-package dependency
-gates, and prepare the lneto adapter/root configuration split without moving
-shared resource, readiness, quota, poll, or teardown ownership out of the core.
-The exact workers subject remains published, while current Wago/networking
-reviews and the production ordered-parent Wago merge remain unpublished. Pooling
-remains unsupported, native arm64 execution is unavailable, and both WASI
-preview-1 exceptions remain active.
+constructs the combined lneto namespace, while `internal/namespace` and
+`internal/backend/lneto` still compile all protocol contracts and adapters.
+Package-local finite client defaults, granular `tcp/register`, `udp/register`,
+and `dns/register`, and the complete release matrix also remain. The next slice
+should split `internal/namespace` into neutral core/service ownership plus
+protocol facets, preserve one namespace handle/backend object, extend omitted
+namespace-package gates, and prepare protocol descriptors to contribute backend
+facets before the lneto/root configuration split. The exact workers subject
+remains published, while current Wago/networking reviews and the production
+ordered-parent Wago merge remain unpublished. Pooling remains unsupported,
+native arm64 execution is unavailable, and both WASI preview-1 exceptions remain
+active.
 
 ## Ordered backlog
 
@@ -596,8 +605,8 @@ preview-1 exceptions remain active.
 3. Activate hosted release automation only after the production Wago ref is
    fetchable, require executed linux/arm64 smoke on an arm64/QEMU tier, and remove
    the WASI exception only after reviewing and pinning an upstream fix.
-4. Continue the approved protocol-submodule refactor: split the instance,
-   namespace/ABI, and lneto protocol operations into separate compilation units;
+4. Continue the approved protocol-submodule refactor: split the remaining
+   namespace and lneto protocol operations into separate compilation units;
    add useful finite allow defaults plus explicit customization; provide granular
    self-registration packages; preserve `compat.Init` as the advanced aggregate
    path; and extend dependency gates to reject omitted instance-operation and

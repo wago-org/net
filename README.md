@@ -58,15 +58,17 @@ TCP, UDP, and DNS facades each construct an opaque descriptor, and all three
 checked host tables live in protocol-specific internal binding packages. The
 root package no longer imports those public or binding packages. Dependency and
 runtime-inspection fixtures cover no protocol, every single protocol, every
-pair, and all three. Omitted public, binding, and protocol-specific instance
-operation packages are rejected from each fixture's Go dependency graph. One
-protocol-neutral instance core still owns exact attachment, resource identity,
-readiness, quotas, polling, and teardown, while `internal/instance/tcp`,
-`internal/instance/udp`, and `internal/instance/dns` serialize their operations
-through that core. Full compile isolation is not yet claimed because the root
-configuration still constructs the combined lneto backend, and the namespace
-contracts and ABI codecs remain combined packages. Package-local finite client
-defaults also remain migration work.
+pair, and all three. Omitted public, binding, instance-operation, and fixed ABI
+packages are rejected from each fixture's Go dependency graph. Shared checked
+memory, endpoint/handle codecs, and poll layouts live in `internal/abi/core`;
+TCP, UDP, and DNS layouts live only in `internal/abi/tcp`, `/udp`, and `/dns`.
+One protocol-neutral instance core still owns exact attachment, resource
+identity, readiness, quotas, polling, and teardown, while
+`internal/instance/tcp`, `internal/instance/udp`, and `internal/instance/dns`
+serialize their operations through that core. Full compile isolation is not yet
+claimed because the root configuration still constructs the combined lneto
+backend and the namespace contracts remain combined. Package-local finite
+client defaults also remain migration work.
 
 The aggregate advanced compatibility path is now explicit:
 
