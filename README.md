@@ -72,15 +72,16 @@ narrow protocol facets and values. Production graphs no longer reach the former
 aggregate namespace compatibility package. `internal/backend/lneto/core` now
 owns the single lifecycle lock, `StackAsync`, packet link, IPv4 identity, frame
 scratch, bounded ingress/egress scheduler, participant ordering, maintenance
-charging, and deterministic close path. TCP listener/stream state has moved to
-`internal/backend/lneto/tcp` and focused tests preserve immediate operations,
-accepted-slot maintenance accounting, and cleanup. Root construction still
-imports the aggregate lneto assembler, so every fixture currently compiles that
-TCP adapter and the still-inline UDP/DNS adapters; UDP and DNS namespace facets
-also remain pulled through those inline adapters. Full compile isolation is
-therefore not yet claimed. Extracting UDP/DNS and moving adapter contributions
-into selective descriptors is the next migration stage. Package-local finite
-client defaults also remain migration work.
+charging, shared UDP-port leases, and deterministic close. TCP listeners and
+streams, UDP sockets and queues, and DNS query/wire state now live independently
+in `internal/backend/lneto/tcp`, `/udp`, and `/dns`. Focused tests preserve
+immediate operations, cross-UDP/DNS port collisions, packet and maintenance
+accounting, response filtering, quotas, and ordered cleanup. Root construction
+still imports the temporary aggregate lneto assembler, so every fixture currently
+compiles all three extracted adapters and their UDP/DNS namespace facets. Full
+compile isolation is therefore not yet claimed. Opaque selective backend
+contributions and delayed shared-manager construction are the next migration
+stage. Package-local finite client defaults also remain migration work.
 
 The aggregate advanced compatibility path is now explicit:
 

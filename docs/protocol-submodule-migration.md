@@ -35,15 +35,15 @@ protocol facets and values. Production code no longer imports the former
 aggregate compatibility package, and non-TCP graphs reject the TCP facet.
 `internal/backend/lneto/core` now owns the single stack, link, lifecycle lock,
 shared IPv4 state, bounded participant scheduler, maintenance charging, error
-mapping, and deterministic close. TCP listener/stream state is extracted into
-`internal/backend/lneto/tcp` over that same core. Root lneto construction still
-imports the aggregate assembler, which keeps the extracted TCP adapter plus
-inline UDP/DNS adapters in every fixture graph and pulls UDP/DNS facets into all
-configured graphs, so full compile-time isolation is not yet claimed.
-Protocol-local finite defaults and granular register packages also remain.
-Standard, race, vet, TinyGo, source-boundary, dependency, repeated focused
-core/TCP tests, and backend UDP/DNS fuzz-smoke suites pass after this partial
-Stage 4 split.
+mapping, shared UDP-port leases, and deterministic close. TCP listener/stream,
+UDP socket/queue, and DNS query/wire state are extracted into
+`internal/backend/lneto/{tcp,udp,dns}` over that same core. Root lneto
+construction still imports the aggregate assembler, which keeps all three
+adapters and the UDP/DNS facets in every fixture graph, so full compile-time
+isolation is not yet claimed. Protocol-local finite defaults and granular
+register packages also remain. Standard, race, vet, TinyGo, source-boundary,
+dependency, repeated focused core/adapter tests, and backend UDP/DNS fuzz-smoke
+suites pass after the adapter extraction.
 
 ## Goal
 
@@ -161,11 +161,16 @@ to `compat.Init`. Full compile isolation is still blocked for these reasons:
 - `internal/backend/lneto/core` now owns only the shared lock, stack, link,
   addressing, scratch, bounded scheduler, participant ordering, maintenance
   epoch, error mapping, and close. It imports no protocol adapter.
-- `internal/backend/lneto/tcp` now owns TCP listener/stream pools, fixed buffers,
-  port allocation, immediate operations, and accepted-slot maintenance. The
-  aggregate assembler still imports it unconditionally.
-- `internal/backend/lneto.Namespace` still stores UDP and DNS configuration/live
-  collections directly and installs their callbacks into core.
+- `internal/backend/lneto/tcp` owns TCP listener/stream pools, fixed buffers,
+  port allocation, immediate operations, and accepted-slot maintenance.
+- `internal/backend/lneto/udp` owns UDP socket state, bounded queues, frame
+  codecs, readiness, policy/quota checks, and service participation.
+- `internal/backend/lneto/dns` owns DNS query state, wire codecs, retries,
+  response filtering, readiness, policy/quota checks, and service participation.
+  The aggregate assembler still imports all three adapters unconditionally.
+- `internal/backend/lneto/core` provides the one UDP-port lease domain shared by
+  explicit UDP binds and DNS ephemeral source ports, preserving collisions and
+  deterministic release without owning protocol payload or record types.
 - `internal/instance/core` is now protocol-neutral, while
   `internal/instance/{tcp,udp,dns}` contain independently selected operations;
   all use one core lifecycle lock, resource table, readiness coordinator, quota
@@ -174,9 +179,9 @@ to `compat.Init`. Full compile isolation is still blocked for these reasons:
   I/O, readiness, resource, service, and semantic-failure declarations;
   `internal/namespace/{tcp,udp,dns}` own narrow protocol facets and values. The
   old aggregate package is compatibility aliases only and is absent from
-  production fixture graphs. The inline UDP and DNS lneto adapters still import
-  their facets, while the extracted TCP adapter is implemented structurally
-  without importing its facet.
+  production fixture graphs. The extracted UDP and DNS adapters import their
+  exact facets, while the TCP adapter is implemented structurally without
+  importing its facet.
 - `internal/abi/core` now contains only checked memory, address/endpoint, handle,
   and poll layouts; protocol codecs are isolated in `internal/abi/tcp`, `/udp`,
   and `/dns` and are gated from omitted fixture graphs.
@@ -223,17 +228,17 @@ Split protocol-specific namespace interfaces and ABI codecs so importing common
 state does not compile every protocol operation. This stage is complete: status
 values and genuinely shared checked-memory, address/endpoint, handle, poll,
 namespace ownership, readiness, resource, service, and failure contracts remain
-in core packages, while each protocol owns its fixed codecs plus narrow
-namespace facets and values. Exact omitted UDP/DNS namespace-graph rejection
-waits on the unified lneto adapter split rather than on the instance/core layer.
+in core packages, while each protocol owns its fixed codecs plus narrow namespace
+facets and values. Exact omitted UDP/DNS namespace-graph rejection now waits on
+selective adapter contributions rather than on adapter extraction itself.
 
 ### Stage 4: split the lneto adapter
 
-Extract the common lneto stack, packet link, addressing, and bounded service
-scheduler. This common core and the TCP listener/stream adapter are now
-implemented. Move the remaining UDP socket state/codecs and DNS query
-state/codecs into separate adapter packages, then replace root aggregate
-construction with opaque selective adapter contributions.
+Extract the common lneto stack, packet link, addressing, shared UDP-port lease
+domain, and bounded service scheduler. The common core and all three TCP, UDP,
+and DNS adapters are now implemented. Replace root aggregate construction with
+opaque selective adapter contributions and delay manager/namespace factory
+assembly until protocol registration freezes.
 
 The common scheduler calls installed protocol service participants through a
 bounded protocol-neutral contract. Focused tests preserve participant ordering,
@@ -267,9 +272,10 @@ binding package plus accidental aggregate-package dependencies. The fixtures
 require `internal/instance/core` and `internal/abi/core` in every graph, require
 only the selected `internal/instance/{tcp,udp,dns}` operation and
 `internal/abi/{tcp,udp,dns}` codec packages. They now also require
-`internal/backend/lneto/core` and the extracted `internal/backend/lneto/tcp`
-adapter in every graph, alongside the aggregate `internal/backend/lneto`
-assembler. That deliberately records the remaining root construction edge rather
+`internal/backend/lneto/core` and all three extracted
+`internal/backend/lneto/{tcp,udp,dns}` adapters in every graph, alongside the
+aggregate `internal/backend/lneto` assembler. That deliberately records the
+remaining root construction edge rather
 than mistaking a directory split for isolation. The gate requires the selected
 protocol namespace facet, rejects the former aggregate namespace package from
 production graphs, and rejects the TCP facet from non-TCP graphs. Once adapter

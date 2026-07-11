@@ -576,41 +576,50 @@ no signature, key, trust root, production decision, or hosted-activation claim.
   `internal/backend/lneto/tcp`, preserves immediate operations and accepted-slot
   maintenance charging, and records the still-unconditional aggregate import in
   dependency fixtures.
+- `ce833fe` — adds one protocol-neutral core UDP-port lease domain and migrates
+  explicit UDP binds plus DNS ephemeral source ports to exact shared collision,
+  deterministic allocation, release, exhaustion, and close semantics.
+- `d98ea0f` — extracts UDP sockets, fixed queues, frame codecs, readiness,
+  policy/quota checks, and ordered service/cleanup into
+  `internal/backend/lneto/udp` with focused exchange and lifecycle tests.
+- `140beb2` — extracts DNS query state, wire codecs, retries, response filtering,
+  readiness, policy/quota checks, and ordered service/cleanup into
+  `internal/backend/lneto/dns`; release fuzzing now targets the exact package.
 
 ## Active work
 
 The current protocol-submodule slice is complete with exactly four bounded
-atomic commits. `internal/backend/lneto/core` now owns exactly one namespace
-lifecycle lock, `StackAsync`, packet link, IPv4 identity, frame scratch buffer,
-bounded ingress/egress scheduler, participant ordering, TCP maintenance epoch,
-stable error mapping, and deterministic close path. Its participant contract is
-protocol-neutral and the core imports no protocol adapter. The aggregate
-namespace installs DNS and UDP ingress/egress participants plus explicit
-DNS/TCP/UDP close ordering while retaining the same one-object, one-link,
-one-service-owner lifecycle.
+atomic commits. `internal/backend/lneto/core` owns the one namespace lifecycle
+lock, `StackAsync`, packet link, IPv4 identity, frame scratch, bounded scheduler,
+participant ordering, TCP maintenance epoch, stable error mapping, deterministic
+close, and one shared UDP-port lease domain. UDP sockets and DNS queries now
+collide and release through that exact domain without moving datagrams, DNS
+records, or protocol policy into core.
 
-TCP listener/stream pools, ports, fixed buffers, immediate handler operations,
-policy/quota enforcement, and accepted-slot reclamation now live in
-`internal/backend/lneto/tcp`. Focused tests preserve partial I/O, connection
-progress/reset behavior, immediate quota release, one charged no-frame
-maintenance operation before accepted-slot reuse, and deterministic core close.
-Existing exact public, binding, instance-operation, ABI, namespace-facet, runtime
-inspection, and unresolved-import behavior remains unchanged. Standard, race,
-vet, TinyGo, source-boundary, dependency, repeated focused core/TCP tests, and
-one-second UDP-ingress/DNS-wire fuzz smokes pass.
+TCP listener/stream pools, UDP socket queues/frame codecs, and DNS query/wire
+state now live independently in `internal/backend/lneto/tcp`, `/udp`, and `/dns`.
+Each adapter executes under the same core lock and uses the same policy, quotas,
+IPv4 identity, packet link, and service owner. Focused tests preserve empty and
+truncated UDP datagrams, queue bounds, checksums, DNS retries/timeouts/question
+correlation/CNAME filtering, TCP charged maintenance, cross-UDP/DNS port
+collision and reuse, exact quota release, and deterministic DNS/TCP/UDP cleanup.
+Existing public registration, binding, instance-operation, ABI, namespace-facet,
+runtime inspection, and unresolved-import behavior remains unchanged. Standard,
+race, vet, TinyGo, source-boundary, dependency, repeated focused adapter tests,
+and one-second UDP-ingress/DNS-wire fuzz smokes pass.
 
 Compile isolation is still incomplete because root `Config`/`newExtension`
 constructs the aggregate `internal/backend/lneto` assembler. Consequently every
-fixture still compiles the extracted TCP adapter, and the inline UDP/DNS adapters
-still import their namespace facets into every configured graph. Dependency
-gates deliberately require the common core and TCP adapter in all fixtures so
-this remaining edge cannot be mistaken for completion. Package-local finite
-client defaults, granular `tcp/register`, `udp/register`, and `dns/register`, and
-the complete release matrix also remain. The next slice should extract UDP and
-DNS adapters over the existing core, then add opaque selective namespace
-contributions so root construction imports no aggregate/protocol adapter and
-fixtures can reject every omitted adapter/facet exactly. The exact workers
-subject remains published, while current Wago/networking reviews and the
+fixture still compiles all three extracted adapters, and UDP/DNS adapters import
+their exact namespace facets into every configured graph. Dependency gates now
+deliberately require core plus TCP/UDP/DNS adapters in all fixtures so this
+remaining edge cannot be mistaken for completion. Package-local finite client
+defaults, granular `tcp/register`, `udp/register`, and `dns/register`, and the
+complete release matrix also remain. The next slice should add opaque selective
+backend contributions to protocol descriptors, delay manager/namespace factory
+assembly until registration freeze, remove the root aggregate backend import,
+and switch fixtures to reject every omitted adapter and facet exactly. The exact
+workers subject remains published, while current Wago/networking reviews and the
 production ordered-parent Wago merge remain unpublished. Pooling remains
 unsupported, native arm64 execution is unavailable, and both WASI preview-1
 exceptions remain active.
@@ -626,9 +635,9 @@ exceptions remain active.
 3. Activate hosted release automation only after the production Wago ref is
    fetchable, require executed linux/arm64 smoke on an arm64/QEMU tier, and remove
    the WASI exception only after reviewing and pinning an upstream fix.
-4. Continue the approved protocol-submodule refactor: extract the remaining UDP
-   and DNS lneto adapters, replace root aggregate backend construction with
-   selective opaque contributions, add useful finite allow defaults plus explicit customization; provide granular
+4. Continue the approved protocol-submodule refactor: replace root aggregate
+   backend construction with selective opaque contributions, add useful finite
+   allow defaults plus explicit customization; provide granular
    self-registration packages; preserve `compat.Init` as the advanced aggregate
    path; and extend dependency gates to reject omitted instance-operation and
    lneto-adapter packages.

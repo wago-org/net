@@ -97,15 +97,15 @@ Ethernet ingress and egress calls enter bounded manual service; no lneto
 blocking, deadline, goroutine, or backoff wrapper is used. Service alternates
 directions under independent packet, byte, and operation bounds and maps backend
 errors to semantic namespace failures. The temporary aggregate
-`internal/backend/lneto` assembler still installs all configured participants.
-IPv4 UDP remains inline there with adapter-owned fixed datagram queues and
-lneto's immediate
-Ethernet/IPv4/UDP frame codecs. This design is deliberate: lneto's high-level UDP
-wrappers back off, while its exported immediate mux cannot represent an empty
-payload. The adapter preserves empty and truncated datagrams, validates checksums
-and fragmentation, enforces policy on bind and every send, reserves exact finite
-resource/retained-storage quota, rotates egress deterministically, and clears all
-queue bytes on close. `internal/backend/lneto/tcp` now independently owns TCP
+`internal/backend/lneto` assembler still selects all configured adapters, but it
+no longer owns protocol state. `internal/backend/lneto/udp` owns fixed datagram
+queues and lneto's immediate Ethernet/IPv4/UDP frame codecs. This design is
+deliberate: lneto's high-level UDP wrappers back off, while its exported
+immediate mux cannot represent an empty payload. The adapter preserves empty and
+truncated datagrams, validates checksums and fragmentation, enforces policy on
+bind and every send, reserves exact finite resource/retained-storage quota,
+rotates egress deterministically, and clears all queue bytes on close.
+`internal/backend/lneto/tcp` independently owns TCP
 listener/stream pools, ports, and fixed buffers over the same core lock and stack.
 It uses only immediate `tcp.Handler` buffer/state primitives and never calls
 `tcp.Conn`'s backoff-based `Read`, `Write`, or `Flush` wrappers. Fixed listener
@@ -118,8 +118,8 @@ listener performs maintenance; the next bounded egress service probe reclaims
 that entry and now reports one charged service operation even when no frame is
 emitted. This preserves lneto's private accepted-list bookkeeping without unsafe
 direct slot reuse, while making the finite maintenance cost and reuse point
-observable. DNS uses adapter-owned immediate
-IPv4 UDP queries plus lneto DNS codecs, finite query/record/response bounds,
+observable. `internal/backend/lneto/dns` owns immediate IPv4 UDP queries plus
+lneto DNS codecs, finite query/record/response bounds,
 policy and quota ownership, deterministic service-attempt retransmission and
 timeout, semantic RCode mapping, and copied A/AAAA/CNAME records. Responses must
 echo the exact requested names/classes/types. Only a unique CNAME chain reachable
@@ -127,11 +127,13 @@ from the requested name and requested A/AAAA records at its terminal name are
 emitted; irrelevant and duplicate answers are ignored, while conflicts and loops
 fail closed. Compressed names and resource framing have direct fuzz coverage.
 Truncated UDP responses map to temporary failure because DNS-over-TCP fallback is
-not implemented. Root namespace construction still imports the aggregate
-assembler, so the extracted TCP adapter and inline UDP/DNS code remain in every
-fixture dependency graph until selective protocol descriptors contribute their
-own adapters. The package split is structural progress, not yet compile-isolation
-signoff.
+not implemented. UDP sockets and DNS queries reserve local ports through one
+protocol-neutral core lease domain, preserving exact collision, release,
+deterministic allocation, and close behavior without moving datagrams or DNS
+records into core. Root namespace construction still imports the aggregate
+assembler, so all three extracted adapters remain in every fixture dependency
+graph until selective protocol descriptors contribute their own adapters. The
+package split is structural progress, not yet compile-isolation signoff.
 
 `internal/readiness` attaches a finite coordinator to each instance resource
 table. Registrations retain opaque handle plus exact kind, level-triggered polls
