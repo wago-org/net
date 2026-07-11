@@ -1,0 +1,27 @@
+{
+  "schema": "wago-plugin/v1",
+  "module": "github.com/wago-org/net",
+  "name": "Wago Networking",
+  "version": "0.0.0",
+  "description": "Capability-gated networking plugins for Wago backed initially by lneto.",
+  "stability": "experimental",
+  "license": "Apache-2.0",
+  "homepage": "https://github.com/wago-org/net",
+  "repository": "https://github.com/wago-org/net",
+  "authors": ["The wago authors"],
+  "keywords": [
+    "network",
+    "tcp",
+    "udp",
+    "dns",
+    "dhcp",
+    "icmp",
+    "ntp",
+    "mdns",
+    "lneto",
+    "wasm"
+  ],
+  "engines": {
+    "wago": ">=0.1.0"
+  }
+}
