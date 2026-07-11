@@ -387,6 +387,215 @@ func (s *State) ReceiveUDP(handle resource.Handle, dst []byte) (namespace.Datagr
 	return result, err
 }
 
+// ListenTCP transactionally creates, owns, and poll-registers one listener.
+func (s *State) ListenTCP(namespaceHandle resource.Handle, local namespace.Endpoint) (resource.Handle, namespace.Progress, error) {
+	if s == nil {
+		return 0, 0, ErrInvalidConfig
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed || s.resources == nil || s.readiness == nil {
+		return 0, 0, namespace.Fail(namespace.FailureClosed, resource.ErrClosed)
+	}
+	value, err := s.resources.Lookup(namespaceHandle, resource.KindNamespace)
+	if err != nil {
+		return 0, 0, err
+	}
+	backend, ok := value.(namespace.Namespace)
+	if !ok {
+		return 0, 0, namespace.Fail(namespace.FailureIO, ErrInvalidBackendResult)
+	}
+	listener, progress, err := backend.TryListenTCP(local)
+	if err != nil {
+		return 0, progress, err
+	}
+	if progress != namespace.ProgressDone || listener == nil {
+		if listener != nil {
+			_ = listener.Close()
+		}
+		return 0, 0, namespace.Fail(namespace.FailureIO, ErrInvalidBackendResult)
+	}
+	handle, err := s.resources.Add(resource.KindTCPListener, listener)
+	if err != nil {
+		_ = listener.Close()
+		return 0, 0, err
+	}
+	if err := s.readiness.Register(handle, resource.KindTCPListener); err != nil {
+		_ = s.resources.CloseHandle(handle, resource.KindTCPListener)
+		return 0, 0, err
+	}
+	return handle, namespace.ProgressDone, nil
+}
+
+// ConnectTCP owns and poll-registers one immediate or in-progress stream.
+func (s *State) ConnectTCP(namespaceHandle resource.Handle, remote namespace.Endpoint) (resource.Handle, namespace.Progress, error) {
+	if s == nil {
+		return 0, 0, ErrInvalidConfig
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed || s.resources == nil || s.readiness == nil {
+		return 0, 0, namespace.Fail(namespace.FailureClosed, resource.ErrClosed)
+	}
+	value, err := s.resources.Lookup(namespaceHandle, resource.KindNamespace)
+	if err != nil {
+		return 0, 0, err
+	}
+	backend, ok := value.(namespace.Namespace)
+	if !ok {
+		return 0, 0, namespace.Fail(namespace.FailureIO, ErrInvalidBackendResult)
+	}
+	stream, progress, err := backend.TryConnectTCP(remote)
+	if err != nil {
+		return 0, progress, err
+	}
+	if (progress != namespace.ProgressDone && progress != namespace.ProgressInProgress) || stream == nil {
+		if stream != nil {
+			_ = stream.Close()
+		}
+		return 0, 0, namespace.Fail(namespace.FailureIO, ErrInvalidBackendResult)
+	}
+	handle, err := s.ownTCPStreamLocked(stream)
+	if err != nil {
+		return 0, 0, err
+	}
+	return handle, progress, nil
+}
+
+// AcceptTCP owns one fully established stream returned by a live listener.
+func (s *State) AcceptTCP(listenerHandle resource.Handle) (resource.Handle, namespace.Progress, error) {
+	if s == nil {
+		return 0, 0, ErrInvalidConfig
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed || s.resources == nil || s.readiness == nil {
+		return 0, 0, namespace.Fail(namespace.FailureClosed, resource.ErrClosed)
+	}
+	value, err := s.resources.Lookup(listenerHandle, resource.KindTCPListener)
+	if err != nil {
+		return 0, 0, err
+	}
+	listener, ok := value.(namespace.TCPListener)
+	if !ok {
+		return 0, 0, namespace.Fail(namespace.FailureIO, ErrInvalidBackendResult)
+	}
+	stream, progress, err := listener.TryAccept()
+	if err != nil {
+		return 0, progress, err
+	}
+	if progress == namespace.ProgressWouldBlock {
+		if stream != nil {
+			_ = stream.Close()
+			return 0, 0, namespace.Fail(namespace.FailureIO, ErrInvalidBackendResult)
+		}
+		return 0, progress, nil
+	}
+	if progress != namespace.ProgressDone || stream == nil {
+		if stream != nil {
+			_ = stream.Close()
+		}
+		return 0, 0, namespace.Fail(namespace.FailureIO, ErrInvalidBackendResult)
+	}
+	handle, err := s.ownTCPStreamLocked(stream)
+	if err != nil {
+		return 0, 0, err
+	}
+	return handle, namespace.ProgressDone, nil
+}
+
+func (s *State) ownTCPStreamLocked(stream namespace.TCPStream) (resource.Handle, error) {
+	handle, err := s.resources.Add(resource.KindTCPStream, stream)
+	if err != nil {
+		_ = stream.Close()
+		return 0, err
+	}
+	if err := s.readiness.Register(handle, resource.KindTCPStream); err != nil {
+		_ = s.resources.CloseHandle(handle, resource.KindTCPStream)
+		return 0, err
+	}
+	return handle, nil
+}
+
+// FinishTCPConnect performs one nonblocking connection-completion check.
+func (s *State) FinishTCPConnect(handle resource.Handle) (namespace.Progress, error) {
+	if s == nil {
+		return 0, ErrInvalidConfig
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	stream, err := s.lookupTCPStreamLocked(handle)
+	if err != nil {
+		return 0, err
+	}
+	return stream.TryFinishConnect()
+}
+
+// ReadTCP performs one bounded stream read into caller-owned memory.
+func (s *State) ReadTCP(handle resource.Handle, dst []byte) (namespace.IOResult, error) {
+	if s == nil {
+		return namespace.IOResult{}, ErrInvalidConfig
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	stream, err := s.lookupTCPStreamLocked(handle)
+	if err != nil {
+		return namespace.IOResult{}, err
+	}
+	result, err := stream.TryRead(dst)
+	if err == nil && !result.Valid(len(dst)) {
+		return namespace.IOResult{}, namespace.Fail(namespace.FailureIO, ErrInvalidBackendResult)
+	}
+	return result, err
+}
+
+// WriteTCP performs one bounded partial stream write from caller-owned memory.
+func (s *State) WriteTCP(handle resource.Handle, src []byte) (namespace.IOResult, error) {
+	if s == nil {
+		return namespace.IOResult{}, ErrInvalidConfig
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	stream, err := s.lookupTCPStreamLocked(handle)
+	if err != nil {
+		return namespace.IOResult{}, err
+	}
+	result, err := stream.TryWrite(src)
+	if err == nil && !result.Valid(len(src)) {
+		return namespace.IOResult{}, namespace.Fail(namespace.FailureIO, ErrInvalidBackendResult)
+	}
+	return result, err
+}
+
+// ShutdownTCPWrite initiates a nonblocking write-half close.
+func (s *State) ShutdownTCPWrite(handle resource.Handle) (namespace.Progress, error) {
+	if s == nil {
+		return 0, ErrInvalidConfig
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	stream, err := s.lookupTCPStreamLocked(handle)
+	if err != nil {
+		return 0, err
+	}
+	return stream.TryShutdownWrite()
+}
+
+func (s *State) lookupTCPStreamLocked(handle resource.Handle) (namespace.TCPStream, error) {
+	if s.closed || s.resources == nil {
+		return nil, namespace.Fail(namespace.FailureClosed, resource.ErrClosed)
+	}
+	value, err := s.resources.Lookup(handle, resource.KindTCPStream)
+	if err != nil {
+		return nil, err
+	}
+	stream, ok := value.(namespace.TCPStream)
+	if !ok {
+		return nil, namespace.Fail(namespace.FailureIO, ErrInvalidBackendResult)
+	}
+	return stream, nil
+}
+
 // PollVisitor receives one bounded readiness result while State still owns its
 // reusable event storage and lifecycle lock. The callback must not retain events.
 type PollVisitor func(events []readiness.Event, report readiness.Report, progress namespace.Progress) error

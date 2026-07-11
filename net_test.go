@@ -1,6 +1,7 @@
 package net
 
 import (
+	"net/netip"
 	"reflect"
 	"testing"
 
@@ -64,6 +65,34 @@ func TestExtensionMetadataAndABIBinding(t *testing.T) {
 	fn(nil, nil, results)
 	if got := uint32(results[0]); got != ABIVersion1 {
 		t.Fatalf("abi_version = %#x, want %#x", got, ABIVersion1)
+	}
+}
+
+func TestTCPConfigurationRemainsInternalUntilGuestSurfaceIsComplete(t *testing.T) {
+	extension := Init(Config{StaticIPv4: &StaticIPv4Config{
+		Hostname:               "tcp1",
+		RandSeed:               1,
+		HardwareAddress:        [6]byte{2, 0, 0, 0, 0, 1},
+		GatewayHardwareAddress: [6]byte{2, 0, 0, 0, 0, 2},
+		IPv4Address:            netip.MustParseAddr("192.0.2.1"),
+		MTU:                    1500,
+		Link:                   PacketLinkConfig{MaxFrameBytes: 1514, IngressFrames: 2, EgressFrames: 2},
+		TCP: TCPConfig{
+			MaxListeners: 1, MaxOutboundStreams: 1, AcceptBacklog: 1,
+			ReceiveBytes: 256, TransmitBytes: 256, TransmitPackets: 4,
+		},
+	}})
+	runtime := wago.NewRuntime()
+	if err := runtime.Use(extension); err != nil {
+		t.Fatalf("Use TCP-configured extension: %v", err)
+	}
+	if got := runtime.Capabilities(); !reflect.DeepEqual(got, []wago.Capability{CapInfo, CapUDP}) {
+		t.Fatalf("TCP configuration advertised capability early: %v", got)
+	}
+	for _, spec := range runtime.ProvidedImports() {
+		if spec.Module == "wago_net_tcp" {
+			t.Fatalf("incomplete TCP import advertised: %+v", spec)
+		}
 	}
 }
 

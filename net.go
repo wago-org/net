@@ -77,6 +77,18 @@ type UDPConfig struct {
 	MaxPayloadBytes   int
 }
 
+// TCPConfig fixes per-stream buffers, packet tracking, listener backlog, and
+// finite lneto registration counts. Zero listener and outbound limits disable
+// TCP without exposing guest imports.
+type TCPConfig struct {
+	MaxListeners       uint16
+	MaxOutboundStreams uint16
+	AcceptBacklog      uint16
+	ReceiveBytes       int
+	TransmitBytes      int
+	TransmitPackets    int
+}
+
 // StaticIPv4Config configures one isolated lneto-backed IPv4 namespace per
 // Runtime instance without exposing lneto types in the host configuration.
 type StaticIPv4Config struct {
@@ -88,6 +100,7 @@ type StaticIPv4Config struct {
 	MTU                    uint16
 	Link                   PacketLinkConfig
 	UDP                    UDPConfig
+	TCP                    TCPConfig
 }
 
 // Config configures immutable authority and finite instance-owned networking
@@ -232,6 +245,14 @@ func lnetoConfig(config StaticIPv4Config) lnetobackend.Config {
 			ReceiveDatagrams:  config.UDP.ReceiveDatagrams,
 			TransmitDatagrams: config.UDP.TransmitDatagrams,
 			MaxPayloadBytes:   config.UDP.MaxPayloadBytes,
+		},
+		TCP: lnetobackend.TCPConfig{
+			MaxListeners:       config.TCP.MaxListeners,
+			MaxOutboundStreams: config.TCP.MaxOutboundStreams,
+			AcceptBacklog:      config.TCP.AcceptBacklog,
+			ReceiveBytes:       config.TCP.ReceiveBytes,
+			TransmitBytes:      config.TCP.TransmitBytes,
+			TransmitPackets:    config.TCP.TransmitPackets,
 		},
 	}
 }
