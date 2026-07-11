@@ -10,7 +10,7 @@ import (
 )
 
 func main() {
-	mode := flag.String("mode", "verify", "operation: verify, export, statement, verify-signed, verify-trusted-receipt, verify-production-candidate, or verify-readiness-receipt")
+	mode := flag.String("mode", "verify", "operation: verify, export, statement, verify-signed, verify-trusted-receipt, verify-production-candidate, verify-production-candidate-chain, or verify-readiness-receipt")
 	source := flag.String("source", "", "extracted release-signoff evidence directory")
 	bundle := flag.String("bundle", "", "review bundle directory or .tar.gz path")
 	out := flag.String("out", "", "mode-specific destination path")
@@ -21,6 +21,7 @@ func main() {
 	signaturePath := flag.String("signature", "", "raw detached Ed25519 signature path")
 	trustPolicyPath := flag.String("trust-policy", "", "explicit canonical distribution trust policy path")
 	receiptPath := flag.String("receipt", "", "canonical retained receipt path")
+	trustedReceiptPath := flag.String("trusted-receipt", "", "canonical trusted-distribution receipt path")
 	statementSHA256 := flag.String("statement-sha256", "", "exact statement SHA-256 required by receipt policy")
 	signatureSHA256 := flag.String("signature-sha256", "", "exact signature SHA-256 required by receipt policy")
 	trustPolicySHA256 := flag.String("trust-policy-sha256", "", "exact trust-policy SHA-256 required by receipt policy")
@@ -126,6 +127,36 @@ func main() {
 				os.Exit(1)
 			}
 			fmt.Printf("release-review: wrote production readiness receipt %s\nreadiness_sha256=%s\n", *out, receiptHash)
+		}
+		if !report.Ready {
+			os.Exit(1)
+		}
+	case "verify-production-candidate-chain":
+		if *bundle == "" || *statementPath == "" || *signaturePath == "" || *trustPolicyPath == "" || *trustedReceiptPath == "" {
+			fmt.Fprintln(os.Stderr, "release-review: -bundle, -statement, -signature, -trust-policy, and -trusted-receipt are required for verify-production-candidate-chain")
+			os.Exit(2)
+		}
+		report, err := releaseprovenance.VerifyProductionReleaseCandidateWithTrustedReceipt(
+			*bundle, *statementPath, *signaturePath, *trustPolicyPath, *trustedReceiptPath,
+		)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+		if *out == "" {
+			data, err := json.MarshalIndent(report, "", "  ")
+			if err != nil {
+				fmt.Fprintln(os.Stderr, err)
+				os.Exit(1)
+			}
+			fmt.Println(string(data))
+		} else {
+			receiptHash, err := releaseprovenance.WriteProductionReadinessReceiptV2(*out, report)
+			if err != nil {
+				fmt.Fprintln(os.Stderr, err)
+				os.Exit(1)
+			}
+			fmt.Printf("release-review: wrote linked production readiness receipt %s\nreadiness_sha256=%s\n", *out, receiptHash)
 		}
 		if !report.Ready {
 			os.Exit(1)

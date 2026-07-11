@@ -737,6 +737,92 @@ func TestProductionReadinessProfileReportsExactCurrentBlockers(t *testing.T) {
 	}
 }
 
+func TestProductionReadinessV2BindsFreshTrustedDistributionReceipt(t *testing.T) {
+	fixture := newSignedDistributionFixture(t)
+	trusted, err := verifySignedDistribution(fixture.bundle, fixture.statement, fixture.signature, fixture.policy, fixture.opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	trustedReceiptPath := filepath.Join(t.TempDir(), "trusted-distribution.json")
+	trustedReceiptHash, err := WriteTrustedDistributionReceipt(trustedReceiptPath, trusted)
+	if err != nil {
+		t.Fatal(err)
+	}
+	report, err := verifyProductionReleaseCandidateWithTrustedReceipt(
+		fixture.bundle, fixture.statement, fixture.signature, fixture.policy, trustedReceiptPath, fixture.opts,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if report.Schema != ProductionReadinessSchemaV2 || report.Ready || report.Algorithm != "ed25519" ||
+		report.TrustedKeyID != fixture.keyID || report.Subject != fixture.opts.ExpectedSubject ||
+		report.StatementSHA256 != fixture.statementHash || report.SignatureSHA256 != fixture.signatureHash ||
+		report.TrustPolicySHA256 != fixture.policyHash || report.TrustedDistributionReceiptSHA256 != trustedReceiptHash ||
+		report.ProvenanceSHA256 != trusted.Verification.ProvenanceSHA256 || report.ReviewBundleSHA256 != fixture.bundleHash ||
+		len(report.Blockers) != 5 {
+		t.Fatalf("linked production readiness = %+v", report)
+	}
+
+	readinessPath := filepath.Join(t.TempDir(), "production-readiness.json")
+	readinessHash, err := WriteProductionReadinessReceiptV2(readinessPath, report)
+	if err != nil {
+		t.Fatal(err)
+	}
+	readinessData, err := os.ReadFile(readinessPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var retained ProductionReadinessV2
+	if err := decodeCanonicalJSON(readinessData, &retained, "production readiness v2 receipt"); err != nil {
+		t.Fatal(err)
+	}
+	if err := validateProductionReadinessV2(&retained); err != nil || !reflect.DeepEqual(&retained, report) {
+		t.Fatalf("retained linked readiness = %+v, %v", retained, err)
+	}
+	readinessSum := sha256.Sum256(readinessData)
+	if got := hex.EncodeToString(readinessSum[:]); got != readinessHash {
+		t.Fatalf("linked readiness SHA-256 = %s, want %s", got, readinessHash)
+	}
+	checksumData, err := os.ReadFile(readinessPath + ".sha256")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := readinessHash + "  " + filepath.Base(readinessPath) + "\n"; string(checksumData) != want {
+		t.Fatalf("linked readiness checksum = %q, want %q", checksumData, want)
+	}
+	if secondHash, err := WriteProductionReadinessReceiptV2(readinessPath, report); err != nil || secondHash != readinessHash {
+		t.Fatalf("deterministic linked readiness rewrite = %q, %v", secondHash, err)
+	}
+
+	trustedReceiptData, err := os.ReadFile(trustedReceiptPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var receipt TrustedDistributionReceipt
+	if err := json.Unmarshal(trustedReceiptData, &receipt); err != nil {
+		t.Fatal(err)
+	}
+	receipt.TrustedKeyID = "release-test-rotated"
+	trustedReceiptData, err = json.MarshalIndent(&receipt, "", "  ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	trustedReceiptData = append(trustedReceiptData, '\n')
+	trustedReceiptSum := sha256.Sum256(trustedReceiptData)
+	trustedReceiptHash = hex.EncodeToString(trustedReceiptSum[:])
+	if err := os.WriteFile(trustedReceiptPath, trustedReceiptData, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(trustedReceiptPath+".sha256", []byte(trustedReceiptHash+"  "+filepath.Base(trustedReceiptPath)+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := verifyProductionReleaseCandidateWithTrustedReceipt(
+		fixture.bundle, fixture.statement, fixture.signature, fixture.policy, trustedReceiptPath, fixture.opts,
+	); err == nil {
+		t.Fatal("fresh verification unexpectedly accepted a differently labeled trusted-distribution receipt")
+	}
+}
+
 type signedDistributionFixture struct {
 	bundle, statement, signature, policy                        string
 	opts                                                        VerifyOptions

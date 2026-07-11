@@ -6,6 +6,7 @@ bundle=${REVIEW_BUNDLE:-}
 statement=${DISTRIBUTION_STATEMENT:-}
 signature=${DISTRIBUTION_SIGNATURE:-}
 trust_policy=${DISTRIBUTION_TRUST_POLICY:-}
+trusted_receipt=${TRUSTED_DISTRIBUTION_RECEIPT:-}
 receipt=${PRODUCTION_READINESS_RECEIPT:-}
 
 fail() { echo "release-candidate-readiness: $*" >&2; exit 2; }
@@ -13,15 +14,17 @@ fail() { echo "release-candidate-readiness: $*" >&2; exit 2; }
 [[ -n "$statement" ]] || fail "DISTRIBUTION_STATEMENT is required"
 [[ -n "$signature" ]] || fail "DISTRIBUTION_SIGNATURE is required"
 [[ -n "$trust_policy" ]] || fail "DISTRIBUTION_TRUST_POLICY is required"
+[[ -n "$trusted_receipt" ]] || fail "TRUSTED_DISTRIBUTION_RECEIPT is required"
 [[ -n "$receipt" ]] || fail "PRODUCTION_READINESS_RECEIPT is required"
 
 cd "$root"
 GOWORK=off go run ./internal/cmd/release-review \
-  -mode verify-production-candidate \
+  -mode verify-production-candidate-chain \
   -bundle "$bundle" \
   -statement "$statement" \
   -signature "$signature" \
   -trust-policy "$trust_policy" \
+  -trusted-receipt "$trusted_receipt" \
   -out "$receipt"
 
 echo "release-candidate-readiness: PASS"

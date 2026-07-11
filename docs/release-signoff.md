@@ -288,7 +288,11 @@ identity, or readiness decision is stored there.
 ## Production release-candidate readiness
 
 `scripts/release-candidate-readiness.sh` is the strict activation profile. It
-first requires the valid explicitly trusted statement above, then requires:
+freshly verifies the original archive, statement, detached signature, and
+explicit policy; independently checks the canonical trusted-distribution receipt
+retained by `verify-signed -out`; requires both results to bind the same key
+label, subject, statement, signature, policy, provenance, and archive; then
+requires:
 
 - `currentPlugin=adopted` for exact fetchable current Wago/networking/workers
   subjects;
@@ -303,17 +307,20 @@ REVIEW_BUNDLE=/path/to/release-signoff.review.tar.gz \
 DISTRIBUTION_STATEMENT=/path/to/release.distribution.json \
 DISTRIBUTION_SIGNATURE=/trusted-channel/release.distribution.sig \
 DISTRIBUTION_TRUST_POLICY=/operator-config/wago-net-trust-policy.json \
+TRUSTED_DISTRIBUTION_RECEIPT=/automation/release.trusted-distribution.json \
 PRODUCTION_READINESS_RECEIPT=/automation/release.production-readiness.json \
   scripts/release-candidate-readiness.sh
 ```
 
 The command atomically replaces the deterministic
-`github.com/wago-org/net/production-readiness/v1` JSON decision and its adjacent
-`.sha256` sidecar before exiting nonzero when any blocker remains. The receipt
-binds the trusted key label, exact canonical trust-policy SHA-256, exact plugin
-subject, statement SHA-256, provenance SHA-256, review-bundle SHA-256, readiness
-boolean, and ordered blockers. A verification error emits no new decision; a valid
-but blocked candidate retains
+`github.com/wago-org/net/production-readiness/v2` JSON decision and its adjacent
+`.sha256` sidecar before exiting nonzero when any blocker remains. The v2 receipt
+binds the Ed25519 algorithm, opaque trusted key label, exact subject, statement,
+signature, canonical trust-policy, trusted-distribution receipt, provenance, and
+review-bundle SHA-256 values plus the readiness boolean and ordered blockers.
+The v1 receipt and verifier remain available for compatibility, but the strict
+script now requires the linked v2 contract. A verification error emits no new
+decision; a valid but blocked candidate retains
 a checksummed denial for external automation rather than losing the reason in a
 nonzero process result. The currently recorded review state is deliberately not
 production-ready even with a cryptographically valid test signature: its exact

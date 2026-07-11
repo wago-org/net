@@ -80,10 +80,13 @@ policy, provenance, archive, subject, and opaque key label without claiming
 publisher identity or production readiness, with public synthetic positive and
 tamper/constraint receipt vectors that store no signature or trust key; keeps
 production activation behind published exact subjects, executed arm64
-evidence, and zero accepted exceptions; atomically retains and independently
-verifies checksummed canonical readiness receipts that bind the exact canonical
-trust-policy digest, with public ready/blocked/tamper/constraint interoperability
-vectors for external automation; audits unsupported pool topology; runs bounded
+evidence, and zero accepted exceptions; freshly recomputes strict readiness from
+the original signed inputs while binding a new v2 decision to the exact retained
+trusted-distribution receipt and signature digest; preserves the v1 receipt
+contract for compatibility; atomically retains and independently verifies
+checksummed canonical readiness receipts, with public ready/blocked/tamper/
+constraint interoperability vectors for external automation; audits unsupported
+pool topology; runs bounded
 fuzz smoke, benchmarks, TinyGo,
 cross-build, package/custom CLI inspection, and final clean-tree checks; and
 records disposable artifacts under `.wago/release-signoff`:
