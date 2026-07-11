@@ -31,6 +31,14 @@ type ReadinessBlocker struct {
 	Detail string `json:"detail"`
 }
 
+// ProductionReadinessVerifyOptions are independently provisioned constraints
+// for a retained readiness receipt. All fields are required.
+type ProductionReadinessVerifyOptions struct {
+	ExpectedSubject           string
+	ExpectedStatementSHA256   string
+	ExpectedTrustPolicySHA256 string
+}
+
 // VerifyProductionReleaseCandidate verifies the trusted distribution first,
 // then applies the strict activation profile. An invalid or absent signature is
 // a verification error rather than a readiness result.
@@ -78,15 +86,11 @@ func assessProductionReadiness(trusted *TrustedDistribution) *ProductionReadines
 // decision and then its adjacent SHA-256 sidecar. A failed sidecar write leaves
 // no stale checksum that external automation could mistake for the new receipt.
 func WriteProductionReadinessReceipt(destination string, report *ProductionReadiness) (string, error) {
-	if destination == "" || report == nil || report.Schema != ProductionReadinessSchemaV1 || report.TrustedKeyID == "" ||
-		!validSHA256(report.TrustPolicySHA256) || !validObjectID(report.Subject) || !validSHA256(report.StatementSHA256) ||
-		!validSHA256(report.ProvenanceSHA256) || !validSHA256(report.ReviewBundleSHA256) || report.Ready != (len(report.Blockers) == 0) {
-		return "", fmt.Errorf("release provenance: invalid production readiness receipt")
+	if destination == "" {
+		return "", fmt.Errorf("release provenance: production readiness receipt path is required")
 	}
-	for _, blocker := range report.Blockers {
-		if blocker.ID == "" || blocker.Detail == "" {
-			return "", fmt.Errorf("release provenance: invalid production readiness blocker")
-		}
+	if err := validateProductionReadiness(report); err != nil {
+		return "", err
 	}
 	data, err := json.MarshalIndent(report, "", "  ")
 	if err != nil {
@@ -107,4 +111,60 @@ func WriteProductionReadinessReceipt(destination string, report *ProductionReadi
 		return "", err
 	}
 	return digest, nil
+}
+
+// VerifyProductionReadinessReceipt independently verifies canonical receipt
+// bytes, the exact adjacent checksum sidecar, and externally supplied selection
+// constraints. A valid blocked decision is evidence and is returned without an
+// error; callers decide separately whether Ready must be true for activation.
+func VerifyProductionReadinessReceipt(path string, opts ProductionReadinessVerifyOptions) (*ProductionReadiness, string, error) {
+	if !validObjectID(opts.ExpectedSubject) || !validSHA256(opts.ExpectedStatementSHA256) ||
+		!validSHA256(opts.ExpectedTrustPolicySHA256) {
+		return nil, "", fmt.Errorf("release provenance: explicit readiness receipt subject, statement, and trust policy constraints are required")
+	}
+	receiptData, err := readBoundedFile(path, 1<<20, "production readiness receipt")
+	if err != nil {
+		return nil, "", err
+	}
+	receiptSum := sha256.Sum256(receiptData)
+	digest := hex.EncodeToString(receiptSum[:])
+	checksumData, err := readBoundedFile(path+".sha256", 256, "production readiness checksum")
+	if err != nil {
+		return nil, "", err
+	}
+	wantChecksum := digest + "  " + filepath.Base(path) + "\n"
+	if string(checksumData) != wantChecksum {
+		return nil, "", fmt.Errorf("release provenance: production readiness checksum does not match receipt")
+	}
+	var report ProductionReadiness
+	if err := decodeCanonicalJSON(receiptData, &report, "production readiness receipt"); err != nil {
+		return nil, "", err
+	}
+	if err := validateProductionReadiness(&report); err != nil {
+		return nil, "", err
+	}
+	if report.Subject != opts.ExpectedSubject {
+		return nil, "", fmt.Errorf("release provenance: production readiness subject does not match expected subject")
+	}
+	if report.StatementSHA256 != opts.ExpectedStatementSHA256 {
+		return nil, "", fmt.Errorf("release provenance: production readiness statement SHA-256 does not match expected statement")
+	}
+	if report.TrustPolicySHA256 != opts.ExpectedTrustPolicySHA256 {
+		return nil, "", fmt.Errorf("release provenance: production readiness trust policy SHA-256 does not match expected trust policy")
+	}
+	return &report, digest, nil
+}
+
+func validateProductionReadiness(report *ProductionReadiness) error {
+	if report == nil || report.Schema != ProductionReadinessSchemaV1 || report.TrustedKeyID == "" ||
+		!validSHA256(report.TrustPolicySHA256) || !validObjectID(report.Subject) || !validSHA256(report.StatementSHA256) ||
+		!validSHA256(report.ProvenanceSHA256) || !validSHA256(report.ReviewBundleSHA256) || report.Ready != (len(report.Blockers) == 0) {
+		return fmt.Errorf("release provenance: invalid production readiness receipt")
+	}
+	for _, blocker := range report.Blockers {
+		if blocker.ID == "" || blocker.Detail == "" {
+			return fmt.Errorf("release provenance: invalid production readiness blocker")
+		}
+	}
+	return nil
 }

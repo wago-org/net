@@ -3,6 +3,7 @@
 package releaseprovenance
 
 import (
+	"bytes"
 	"crypto/ed25519"
 	"crypto/sha256"
 	"encoding/base64"
@@ -356,6 +357,66 @@ func TestProductionReadinessProfileReportsExactCurrentBlockers(t *testing.T) {
 	if err != nil || secondHash != receiptHash {
 		t.Fatalf("deterministic receipt rewrite = %q, %v", secondHash, err)
 	}
+	verifyOpts := ProductionReadinessVerifyOptions{
+		ExpectedSubject: fixture.opts.ExpectedSubject, ExpectedStatementSHA256: fixture.statementHash,
+		ExpectedTrustPolicySHA256: fixture.policyHash,
+	}
+	verifiedReceipt, verifiedHash, err := VerifyProductionReadinessReceipt(receiptPath, verifyOpts)
+	if err != nil {
+		t.Fatalf("verify blocked readiness receipt: %v", err)
+	}
+	if verifiedReceipt.Ready || verifiedHash != receiptHash || !reflect.DeepEqual(verifiedReceipt, report) {
+		t.Fatalf("verified blocked receipt = %+v, %s", verifiedReceipt, verifiedHash)
+	}
+	for _, test := range []struct {
+		name   string
+		mutate func(*ProductionReadinessVerifyOptions)
+	}{
+		{name: "subject", mutate: func(opts *ProductionReadinessVerifyOptions) { opts.ExpectedSubject = strings.Repeat("f", 40) }},
+		{name: "statement", mutate: func(opts *ProductionReadinessVerifyOptions) { opts.ExpectedStatementSHA256 = strings.Repeat("f", 64) }},
+		{name: "trust policy", mutate: func(opts *ProductionReadinessVerifyOptions) { opts.ExpectedTrustPolicySHA256 = strings.Repeat("f", 64) }},
+	} {
+		t.Run("receipt constraint "+test.name, func(t *testing.T) {
+			wrong := verifyOpts
+			test.mutate(&wrong)
+			if _, _, err := VerifyProductionReadinessReceipt(receiptPath, wrong); err == nil {
+				t.Fatalf("wrong %s constraint unexpectedly accepted", test.name)
+			}
+		})
+	}
+
+	tamperedPath := filepath.Join(t.TempDir(), "production-readiness.json")
+	tamperedData := bytes.Replace(receiptData, []byte(fixture.keyID), []byte("release-test-2027"), 1)
+	if reflect.DeepEqual(tamperedData, receiptData) {
+		t.Fatal("readiness tamper did not change receipt")
+	}
+	if err := os.WriteFile(tamperedPath, tamperedData, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(tamperedPath+".sha256", []byte(receiptHash+"  "+filepath.Base(tamperedPath)+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := VerifyProductionReadinessReceipt(tamperedPath, verifyOpts); err == nil {
+		t.Fatal("tampered readiness receipt unexpectedly accepted")
+	}
+
+	noncanonicalPath := filepath.Join(t.TempDir(), "production-readiness.json")
+	noncanonicalData, err := json.Marshal(report)
+	if err != nil {
+		t.Fatal(err)
+	}
+	noncanonicalData = append(noncanonicalData, '\n')
+	noncanonicalSum := sha256.Sum256(noncanonicalData)
+	noncanonicalHash := hex.EncodeToString(noncanonicalSum[:])
+	if err := os.WriteFile(noncanonicalPath, noncanonicalData, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(noncanonicalPath+".sha256", []byte(noncanonicalHash+"  "+filepath.Base(noncanonicalPath)+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := VerifyProductionReadinessReceipt(noncanonicalPath, verifyOpts); err == nil {
+		t.Fatal("noncanonical readiness receipt unexpectedly accepted")
+	}
 
 	trusted.Verification.Manifest.Publication.CurrentPlugin = "adopted"
 	trusted.Verification.Manifest.Publication.ProductionWagoMerge = "published"
@@ -366,6 +427,18 @@ func TestProductionReadinessProfileReportsExactCurrentBlockers(t *testing.T) {
 	ready := assessProductionReadiness(trusted)
 	if !ready.Ready || len(ready.Blockers) != 0 {
 		t.Fatalf("ready production profile = %+v", ready)
+	}
+	readyPath := filepath.Join(t.TempDir(), "production-readiness.json")
+	readyHash, err := WriteProductionReadinessReceipt(readyPath, ready)
+	if err != nil {
+		t.Fatal(err)
+	}
+	verifiedReady, verifiedReadyHash, err := VerifyProductionReadinessReceipt(readyPath, verifyOpts)
+	if err != nil {
+		t.Fatalf("verify ready receipt: %v", err)
+	}
+	if !verifiedReady.Ready || verifiedReadyHash != readyHash || len(verifiedReady.Blockers) != 0 {
+		t.Fatalf("verified ready receipt = %+v, %s", verifiedReady, verifiedReadyHash)
 	}
 }
 

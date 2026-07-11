@@ -284,6 +284,26 @@ blockers are `current-plugin-not-adopted`,
 accepted WASI exception IDs. The profile does not activate hosted automation;
 it is a prerequisite that must pass before an external publisher may enable it.
 
+A retained receipt can be verified later without the review archive, signature,
+or public key, provided the verifier independently receives the exact subject,
+statement digest, and canonical trust-policy digest selected by its trusted
+channel:
+
+```sh
+GOWORK=off go run ./internal/cmd/release-review \
+  -mode verify-readiness-receipt \
+  -receipt /automation/release.production-readiness.json \
+  -subject <40-lowercase-hex-plugin-commit> \
+  -statement-sha256 <64-lowercase-hex-statement-digest> \
+  -trust-policy-sha256 <64-lowercase-hex-policy-digest>
+```
+
+Standalone verification requires the exact adjacent `.sha256` sidecar, canonical
+JSON bytes, complete receipt semantics, and all three external constraints. It
+returns success for either a valid ready decision or a valid blocked decision;
+`ready=false` is retained evidence rather than corruption. Activation automation
+must separately require `ready=true` after verification.
+
 Verification rejects a different schema; changed or
 unordered evidence; unknown or noncanonical manifest fields; unsafe archive
 paths; wrong exact production or first-class current-review subjects, trees, or
