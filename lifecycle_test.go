@@ -7,6 +7,7 @@ import (
 	"sync/atomic"
 	"testing"
 
+	"github.com/wago-org/net/internal/quota"
 	"github.com/wago-org/net/internal/resource"
 	wago "github.com/wago-org/wago"
 	"github.com/wago-org/wago/testutil/wasmtest"
@@ -200,6 +201,47 @@ func TestInstanceStateCleanupOnRepeatedAndConcurrentClose(t *testing.T) {
 				t.Fatal("closed instance retained state")
 			}
 		})
+	}
+}
+
+func TestInstanceStateCleanupClosesQuotaLedger(t *testing.T) {
+	extension := Init(Config{})
+	manager := extension.instanceManager()
+	runtime := wago.NewRuntime()
+	if err := runtime.Use(extension); err != nil {
+		t.Fatalf("Use: %v", err)
+	}
+	instance, err := runtime.Instantiate(context.Background(), emptyModule(t, runtime))
+	if err != nil {
+		t.Fatalf("Instantiate: %v", err)
+	}
+	state, ok := manager.ForInstance(instance)
+	if !ok {
+		t.Fatal("state not attached")
+	}
+	pending, err := state.Quotas().ReserveQueuedBytes(4096)
+	if err != nil {
+		t.Fatalf("ReserveQueuedBytes: %v", err)
+	}
+	reservation, err := state.Quotas().ReserveDNSWork(1)
+	if err != nil {
+		t.Fatalf("ReserveDNSWork: %v", err)
+	}
+	allocation, ok := reservation.Commit()
+	if !ok {
+		t.Fatal("Commit DNS work failed")
+	}
+	if err := instance.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	if usage, closed := state.Quotas().Snapshot(); !closed || usage != (quota.Usage{}) {
+		t.Fatalf("quota after instance close = %+v, closed=%v", usage, closed)
+	}
+	if _, err := state.Quotas().ReserveService(1); !errors.Is(err, quota.ErrClosed) {
+		t.Fatalf("reserve after instance close error = %v", err)
+	}
+	if !pending.Rollback() || !allocation.Release() {
+		t.Fatal("late token cleanup was not locally accepted")
 	}
 }
 
