@@ -209,6 +209,10 @@ func (e *Extension) udpClose(module wago.HostModule, params, results []uint64) {
 var errGuestPollEncoding = errors.New("net: failed to encode validated guest poll output")
 
 func (e *Extension) udpPoll(module wago.HostModule, params, results []uint64) {
+	e.poll(module, params, results)
+}
+
+func (e *Extension) poll(module wago.HostModule, params, results []uint64) {
 	if len(params) != 4 || len(results) != 1 {
 		setStatus(results, StatusInvalidArgument)
 		return
