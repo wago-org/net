@@ -424,6 +424,83 @@ func TestTCPImmediateConnectAcceptPartialIOAndEOF(t *testing.T) {
 	}
 }
 
+func TestTCPAcceptedCloseReclaimsPoolSlotAsChargedMaintenance(t *testing.T) {
+	clientConfig := tcpTestConfig(t, 37)
+	serverConfig := tcpTestConfig(t, 38)
+	clientConfig.GatewayHardwareAddress = serverConfig.HardwareAddress
+	serverConfig.GatewayHardwareAddress = clientConfig.HardwareAddress
+	serverConfig.TCP.AcceptBacklog = 1
+	client := newTestNamespace(t, clientConfig)
+	server := newTestNamespace(t, serverConfig)
+	t.Cleanup(func() { _ = client.Close() })
+	t.Cleanup(func() { _ = server.Close() })
+
+	serverEndpoint := namespace.Endpoint{Address: serverConfig.IPv4Address, Port: 4238}
+	listenerResource, progress, err := server.TryListenTCP(serverEndpoint)
+	if err != nil || progress != namespace.ProgressDone {
+		t.Fatalf("listen = %T, %v, %v", listenerResource, progress, err)
+	}
+	listener := listenerResource.(*tcpListener)
+	connectAndAccept := func() (*tcpStream, *tcpStream) {
+		clientResource, progress, err := client.TryConnectTCP(serverEndpoint)
+		if err != nil || progress != namespace.ProgressInProgress {
+			t.Fatalf("connect = %T, %v, %v", clientResource, progress, err)
+		}
+		clientStream := clientResource.(*tcpStream)
+		tcpTransfer(t, client, server)
+		tcpTransfer(t, server, client)
+		tcpTransfer(t, client, server)
+		if progress, err := clientStream.TryFinishConnect(); err != nil || progress != namespace.ProgressDone {
+			t.Fatalf("finish connect = %v, %v", progress, err)
+		}
+		serverResource, progress, err := listener.TryAccept()
+		if err != nil || progress != namespace.ProgressDone {
+			t.Fatalf("accept = %T, %v, %v", serverResource, progress, err)
+		}
+		return clientStream, serverResource.(*tcpStream)
+	}
+
+	firstClient, firstServer := connectAndAccept()
+	if len(listener.pool.slots) != 1 || !listener.pool.slots[0].inUse {
+		t.Fatalf("accepted listener pool = %+v", listener.pool.slots)
+	}
+	beforeUsage, _ := serverConfig.Quotas.Snapshot()
+	if beforeUsage.Resources != 2 || beforeUsage.TCPResources != 2 {
+		t.Fatalf("accepted quota = %+v", beforeUsage)
+	}
+	if err := firstServer.Close(); err != nil {
+		t.Fatal(err)
+	}
+	afterClose, _ := serverConfig.Quotas.Snapshot()
+	if afterClose.Resources != 1 || afterClose.TCPResources != 1 {
+		t.Fatalf("accepted close did not release quota immediately: %+v", afterClose)
+	}
+	if !listener.pool.slots[0].inUse || listener.pool.slots[0].stream == nil {
+		t.Fatalf("lneto released accepted slot outside charged maintenance: in_use=%v stream=%p resource=%p", listener.pool.slots[0].inUse, listener.pool.slots[0].stream, listener.pool.slots[0].resource)
+	}
+
+	server.nextIngress = false
+	budget := namespace.ServiceBudget{Packets: 1, Bytes: uint32(server.requiredFrameBytes), Operations: 1}
+	report, progress, err := server.TryService(budget)
+	if err != nil || progress != namespace.ProgressDone || report != (namespace.ServiceReport{Operations: 1}) {
+		t.Fatalf("accepted close maintenance = %+v, %v, %v", report, progress, err)
+	}
+	if listener.pool.slots[0].inUse || listener.pool.slots[0].stream != nil || listener.pool.slots[0].resource != nil {
+		t.Fatalf("accepted slot retained after bounded maintenance: in_use=%v stream=%p resource=%p", listener.pool.slots[0].inUse, listener.pool.slots[0].stream, listener.pool.slots[0].resource)
+	}
+	if usage, _ := serverConfig.Quotas.Snapshot(); usage != afterClose {
+		t.Fatalf("maintenance changed released quota: before=%+v after=%+v", afterClose, usage)
+	}
+
+	if err := firstClient.Close(); err != nil {
+		t.Fatal(err)
+	}
+	secondClient, secondServer := connectAndAccept()
+	if secondClient == firstClient || secondServer == firstServer || !listener.pool.slots[0].inUse {
+		t.Fatalf("accepted slot was not reusable: client=%p server=%p in_use=%v stream=%p resource=%p", secondClient, secondServer, listener.pool.slots[0].inUse, listener.pool.slots[0].stream, listener.pool.slots[0].resource)
+	}
+}
+
 func TestTCPConnectResetBeforeEstablishment(t *testing.T) {
 	config := tcpTestConfig(t, 35)
 	ns := newTestNamespace(t, config)

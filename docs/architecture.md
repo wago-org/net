@@ -97,7 +97,13 @@ primitives under the namespace lifecycle lock; it never calls `tcp.Conn`'s
 backoff-based `Read`, `Write`, or `Flush` wrappers. Fixed listener pools and
 outbound streams have bounded receive/transmit storage, partial I/O, connect and
 accept progress, half-close, level readiness, endpoint policy, quota ownership,
-port reuse, and deterministic abort cleanup. DNS uses adapter-owned immediate
+port reuse, and deterministic abort cleanup. Closing an accepted stream releases
+its resource quota immediately. lneto retains the closed pool entry until its
+listener performs maintenance; the next bounded egress service probe reclaims
+that entry and now reports one charged service operation even when no frame is
+emitted. This preserves lneto's private accepted-list bookkeeping without unsafe
+direct slot reuse, while making the finite maintenance cost and reuse point
+observable. DNS uses adapter-owned immediate
 IPv4 UDP queries plus lneto DNS codecs, finite query/record/response bounds,
 policy and quota ownership, deterministic service-attempt retransmission and
 timeout, semantic RCode mapping, and copied A/AAAA/CNAME records. Responses must

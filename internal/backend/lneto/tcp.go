@@ -147,6 +147,9 @@ func (p *tcpPool) PutTCP(conn *lnetotcp.Conn) {
 		}
 		slot.stream = nil
 		slot.inUse = false
+		if p.owner != nil {
+			p.owner.tcpMaintenanceEpoch++
+		}
 		return
 	}
 	panic("lneto TCP listener returned a foreign connection")

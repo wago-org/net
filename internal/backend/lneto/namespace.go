@@ -76,6 +76,7 @@ type Namespace struct {
 	tcpListeners           []*tcpListener
 	tcpStreams             []*tcpStream
 	tcpPorts               map[uint16]struct{}
+	tcpMaintenanceEpoch    uint64
 	nextTCPPort            uint16
 	nextTCPISS             lnetotcp.Value
 	dnsConfig              DNSConfig
@@ -248,10 +249,11 @@ func (n *Namespace) TryResolve(request namespace.DNSRequest) (namespace.DNSQuery
 	return n.tryResolve(request)
 }
 
-// TryService performs bounded, nonblocking packet transfer and DNS maintenance.
-// Each direction probe consumes the private attempt bound. Completed packet or
-// DNS state-transition work increments Operations; only frames increment
-// Packets and Bytes. Empty probes remain unreported.
+// TryService performs bounded, nonblocking packet transfer plus TCP and DNS
+// maintenance. Each direction probe consumes the private attempt bound.
+// Completed packet, accepted-slot reclamation, or DNS state-transition work
+// increments Operations; only frames increment Packets and Bytes. Empty probes
+// remain unreported.
 func (n *Namespace) TryService(budget namespace.ServiceBudget) (namespace.ServiceReport, namespace.Progress, error) {
 	if n == nil {
 		return namespace.ServiceReport{}, 0, namespace.Fail(namespace.FailureClosed, net.ErrClosed)
@@ -336,7 +338,7 @@ func (n *Namespace) tryEgress(remainingBytes uint32) (bool, bool, int, error) {
 	if remainingBytes < uint32(n.requiredFrameBytes) {
 		return false, false, 0, nil
 	}
-	var dnsWorked bool
+	var dnsWorked, tcpWorked bool
 	result, err := n.link.TryFill(packetlink.Egress, func(dst []byte) (int, error) {
 		hasDNS := n.hasDNSWorkLocked()
 		if hasDNS && n.nextDNSEgress {
@@ -359,7 +361,9 @@ func (n *Namespace) tryEgress(remainingBytes uint32) (bool, bool, int, error) {
 				return written, udpErr
 			}
 		}
+		maintenanceEpoch := n.tcpMaintenanceEpoch
 		written, stackErr := n.stack.EgressEthernet(dst[:n.requiredFrameBytes])
+		tcpWorked = n.tcpMaintenanceEpoch != maintenanceEpoch
 		if written != 0 || stackErr != nil {
 			if hasUDP {
 				n.nextUDPEgress = true
@@ -391,10 +395,10 @@ func (n *Namespace) tryEgress(remainingBytes uint32) (bool, bool, int, error) {
 		return false, false, 0, nil
 	}
 	if err != nil {
-		return dnsWorked, false, 0, mapError(err)
+		return dnsWorked || tcpWorked, false, 0, mapError(err)
 	}
 	if !result.Ready {
-		return dnsWorked, false, 0, nil
+		return dnsWorked || tcpWorked, false, 0, nil
 	}
 	return true, true, result.FrameBytes, nil
 }
