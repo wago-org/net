@@ -63,9 +63,11 @@ The gate performs, in order:
 13. deterministic non-thin Git object packs for the exact plugin subject,
     production Wago/lneto/WASI inputs, current Wago/networking review subjects,
     and external workers, including all required ordered parents;
-14. isolated reconstruction of the current Wago/net/workers/lneto workspace from
-    those packs, with standard Go, focused linked-child race, vet, workers,
-    TinyGo, and exact four-capability/24-import inspection checks;
+14. isolated reconstruction of the current Wago/net/workers/lneto workspace and
+    Wago's local WASI module from those packs, with an initially empty module
+    cache, network-disabled module resolution, exact `go.mod`/`go.sum` inventory,
+    standard Go, focused linked-child race, vet, workers, TinyGo, and exact
+    four-capability/24-import inspection checks;
 15. deterministic machine-readable provenance plus SHA-256 verification of every
     retained evidence artifact and the manifest itself; and
 16. standalone semantic verification and deterministic export of a compressed
@@ -131,7 +133,10 @@ source tree; production Wago contains the merge commit, both ordered parent
 commits, and all three complete source trees; lneto and WASI contain their exact
 pinned commits and trees. Separate packs contain the exact current networking
 review, current Wago lifecycle replay, and external workers commit/tree closures.
-No moving remote ref is needed to inspect those snapshots. Tar paths are sorted;
+The isolated review output also records the exact local module mapping and
+committed Go checksum lines used while `GOPROXY=off`; its fresh `GOMODCACHE`
+acquires no module payload. No moving remote ref is needed to inspect those
+snapshots. Tar paths are sorted;
 uid/gid, names, modes, and timestamps are normalized; gzip metadata is fixed.
 Byte-identical evidence therefore produces a byte-identical archive.
 

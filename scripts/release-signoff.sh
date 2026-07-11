@@ -235,7 +235,7 @@ record_check source-object-packs pass 'production pins plus exact current Wago/n
 log "isolated current plugin adoption gate"
 CURRENT_REVIEW_SOURCE_DIR="$out/source-objects" CURRENT_REVIEW_OUT="$out/current-plugin-review" \
   "$root/scripts/current-plugin-review-signoff.sh"
-record_check current-plugin-review-signoff pass 'immutable reconstruction; 4 capabilities; 24 imports; linked-child cleanup; TinyGo'
+record_check current-plugin-review-signoff pass 'immutable reconstruction; initially empty GOMODCACHE; network disabled; exact module and go.sum inventory; 4 capabilities; 24 imports; linked-child cleanup; TinyGo'
 
 log "deterministic release provenance"
 GOWORK=off go run ./internal/cmd/release-provenance \

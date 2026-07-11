@@ -2,11 +2,13 @@
 set -euo pipefail
 
 root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
+net_dir=$(realpath "${NET_DIR:-$root}")
 wago_dir=$(realpath "${WAGO_DIR:-$root/.audit/wago}")
 lneto_dir=$(realpath "${LNETO_DIR:-$root/.audit/lneto}")
+workers_dir=$(realpath "${WORKERS_DIR:-$root/.wago/workers-plugin}")
 out=$(realpath -m "${SIGNOFF_CUSTOM_DIR:-$root/.wago/release-signoff/custom-cli}")
 
-for dir in "$wago_dir" "$lneto_dir"; do
+for dir in "$wago_dir" "$lneto_dir" "$workers_dir"; do
   if [[ ! -d "$dir/.git" && ! -f "$dir/.git" ]]; then
     echo "custom-cli: missing repository $dir" >&2
     exit 1
@@ -27,9 +29,10 @@ require (
 	github.com/wago-org/wago v0.1.0
 )
 
-replace github.com/wago-org/net => $root
+replace github.com/wago-org/net => $net_dir
 replace github.com/wago-org/wago => $wago_dir
 replace github.com/soypat/lneto => $lneto_dir
+replace github.com/wago-org/workers => $workers_dir
 EOF
 cat >"$out/main.go" <<'EOF'
 package main

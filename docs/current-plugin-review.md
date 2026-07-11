@@ -22,7 +22,7 @@ signatures and do not make an unpublished object an upstream release.
 ## Isolated adoption proof
 
 After the packs are created, `scripts/current-plugin-review-signoff.sh` imports
-only the bound net, Wago, workers, and lneto packs into disposable shallow
+only the bound net, Wago, workers, lneto, and WASI packs into disposable shallow
 repositories. It verifies each exact commit, tree, and parent list before
 checking out source, then creates an isolated Go workspace and runs:
 
@@ -42,9 +42,14 @@ before worker-exit observation. Ordinary networking still requests only
 managed-instance authority.
 
 The isolated gate uses immutable packed source rather than the mutable review
-worktrees. Its output is retained under
-`.wago/release-signoff/current-plugin-review/` and is required by standalone
-bundle verification.
+worktrees. It starts with an empty `GOMODCACHE`, sets `GOPROXY=off`, supplies all
+module paths from those local checkouts (including Wago's sibling WASI replace
+and the custom CLI's workers replace), and rejects any downloaded module payload.
+Before testing, it requires exact SHA-256 values for every participating
+`go.mod`/`go.sum` and writes a canonical module/source/sum inventory. This keeps
+the committed Go checksums enforced without relying on a warm cache or network.
+Its output is retained under `.wago/release-signoff/current-plugin-review/` and
+is required by standalone bundle verification.
 
 ## Publication and pool topology
 
