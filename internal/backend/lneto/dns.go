@@ -23,6 +23,8 @@ var _ dnsns.Query = (*dnsQuery)(nil)
 
 const firstEphemeralDNSPort uint16 = 53000
 
+var errPolicyDenied = errors.New("net: endpoint policy denied operation")
+
 // DNSConfig fixes resolver authority, response retention, concurrency, and
 // deterministic retransmission work. Zero MaxQueries disables DNS truthfully.
 type DNSConfig struct {
@@ -730,7 +732,7 @@ func validDNSConfig(config DNSConfig, mtu int, compiled *policy.Policy, account 
 }
 
 func (n *Namespace) allocateDNSPortLocked() (*lnetocore.UDPPortLease, bool) {
-	attempts := int(n.dnsConfig.MaxQueries) + len(n.udpOrder) + 1
+	attempts := int(n.dnsConfig.MaxQueries) + n.core.UDPPortLeaseCountLocked() + 1
 	lease, next, ok := n.core.TryLeaseUDPPortRangeLocked(n.nextDNSPort, firstEphemeralDNSPort, attempts)
 	if ok {
 		n.nextDNSPort = next

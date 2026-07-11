@@ -685,15 +685,16 @@ func FuzzUDPIngress(f *testing.F) {
 		ns := newTestNamespace(t, config)
 		defer ns.Close()
 		bindUDP(t, ns, namespace.Endpoint{Address: config.IPv4Address, Port: 4127})
-		ns.core.Lock()
-		handled, err := ns.ingressUDPLocked(frame)
-		ns.core.Unlock()
+		if err := ns.Link().TryEnqueue(packetlink.Ingress, frame); err != nil {
+			t.Fatal(err)
+		}
+		setNextIngress(ns, true)
+		_, _, err := ns.TryService(namespace.ServiceBudget{Packets: 1, Bytes: uint32(max(1, len(frame))), Operations: 1})
 		if err != nil {
-			if failure := requireFailure(t, mapError(err)); !failure.Valid() {
+			if failure := requireFailure(t, err); !failure.Valid() {
 				t.Fatalf("invalid mapped ingress failure = %v", failure)
 			}
 		}
-		_ = handled
 	})
 }
 
@@ -732,23 +733,6 @@ func FuzzUDPOperationSequence(f *testing.F) {
 			}
 		}
 	})
-}
-
-func BenchmarkUDPDatagramQueueRoundTrip(b *testing.B) {
-	queue := newDatagramQueue(8, 64, 512)
-	endpoint := namespace.Endpoint{Address: netip.MustParseAddr("192.0.2.1"), Port: 53}
-	payload := make([]byte, 64)
-	buffer := make([]byte, 64)
-	b.ReportAllocs()
-	for b.Loop() {
-		if !queue.push(payload, endpoint) {
-			b.Fatal("queue push blocked")
-		}
-		result, ok := queue.pop(buffer)
-		if !ok || !result.Ready || result.Copied != len(payload) {
-			b.Fatalf("queue pop = %+v, %v", result, ok)
-		}
-	}
 }
 
 func transferOne(t testing.TB, from, to *packetlink.Link) int {

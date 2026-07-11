@@ -1,4 +1,4 @@
-package lnetobackend
+package udp
 
 import (
 	"errors"
@@ -20,11 +20,92 @@ var _ udpns.Socket = (*udpSocket)(nil)
 
 var errPolicyDenied = errors.New("net: endpoint policy denied operation")
 
+const (
+	serviceOrder = 20
+	closeOrder   = 30
+)
+
+// Config fixes all storage allocated for each nonblocking UDP socket. Zero
+// MaxSockets disables UDP truthfully.
+type Config struct {
+	MaxSockets        uint16
+	ReceiveBytes      int
+	TransmitBytes     int
+	ReceiveDatagrams  int
+	TransmitDatagrams int
+	MaxPayloadBytes   int
+}
+
+// Adapter owns UDP sockets, fixed datagram queues, and frame codecs over one
+// shared lneto core.
+type Adapter struct {
+	core                   *lnetocore.Namespace
+	config                 Config
+	ipv4Address            netip.Addr
+	hardwareAddress        [6]byte
+	gatewayHardwareAddress [6]byte
+	policy                 *policy.Policy
+	quotas                 *quota.Account
+	byPort                 map[uint16]*udpSocket
+	sockets                []*udpSocket
+	cursor                 int
+}
+
+// New attaches UDP-local state and its bounded service participant to common.
+func New(common *lnetocore.Namespace, config Config) (*Adapter, error) {
+	if common == nil {
+		return nil, nscore.Fail(nscore.FailureInvalidArgument, lneto.ErrInvalidConfig)
+	}
+	common.Lock()
+	if common.ClosedLocked() || !ValidConfig(config, common.RequiredFrameBytesLocked()-14, common.PolicyLocked(), common.QuotasLocked(), true) {
+		common.Unlock()
+		return nil, nscore.Fail(nscore.FailureInvalidArgument, lneto.ErrInvalidConfig)
+	}
+	n := &Adapter{
+		core: common, config: config,
+		ipv4Address: common.IPv4AddressLocked(), hardwareAddress: common.HardwareAddressLocked(),
+		gatewayHardwareAddress: common.GatewayHardwareAddressLocked(), policy: common.PolicyLocked(), quotas: common.QuotasLocked(),
+		byPort: make(map[uint16]*udpSocket, config.MaxSockets), sockets: make([]*udpSocket, 0, config.MaxSockets),
+	}
+	common.Unlock()
+	if err := common.Install(lnetocore.Participant{
+		IngressOrder: serviceOrder,
+		Ingress:      n.ingressLocked,
+		EgressOrder:  serviceOrder,
+		HasEgress:    n.hasEgressLocked,
+		Egress: func(dst []byte) (int, bool, error) {
+			written, err := n.egressLocked(dst)
+			return written, written != 0, err
+		},
+		CloseOrder: closeOrder,
+		Close:      n.CloseLocked,
+	}); err != nil {
+		return nil, err
+	}
+	return n, nil
+}
+
+// ValidConfig validates UDP-local finite storage and authority.
+func ValidConfig(config Config, mtu int, compiled *policy.Policy, account *quota.Account, requireAuthority bool) bool {
+	if config.MaxSockets == 0 {
+		return config == (Config{})
+	}
+	if (requireAuthority && (compiled == nil || account == nil)) || config.ReceiveDatagrams <= 0 || config.TransmitDatagrams <= 0 ||
+		config.MaxPayloadBytes < 0 || config.MaxPayloadBytes > mtu-28 || config.MaxPayloadBytes > int(^uint16(0)) {
+		return false
+	}
+	if config.MaxPayloadBytes != 0 && (config.ReceiveDatagrams > int(^uint(0)>>1)/config.MaxPayloadBytes || config.TransmitDatagrams > int(^uint(0)>>1)/config.MaxPayloadBytes) {
+		return false
+	}
+	return config.ReceiveBytes >= config.ReceiveDatagrams*config.MaxPayloadBytes &&
+		config.TransmitBytes >= config.TransmitDatagrams*config.MaxPayloadBytes
+}
+
 // udpSocket uses adapter-owned fixed queues because lneto's exported high-level
 // UDP wrappers back off and its immediate mux cannot represent an empty payload.
 // Packet encoding and validation still use lneto's Ethernet/IPv4/UDP codecs.
 type udpSocket struct {
-	owner *Namespace
+	owner *Adapter
 	local nscore.Endpoint
 	rx    datagramQueue
 	tx    datagramQueue
@@ -134,19 +215,19 @@ func (q *datagramQueue) clear() {
 	q.bytes = 0
 }
 
-func (n *Namespace) tryBindUDP(local nscore.Endpoint) (nscore.Resource, nscore.Progress, error) {
+func (n *Adapter) TryBind(local nscore.Endpoint) (nscore.Resource, nscore.Progress, error) {
 	if n == nil {
 		return nil, 0, nscore.Fail(nscore.FailureClosed, net.ErrClosed)
 	}
 	n.core.Lock()
 	defer n.core.Unlock()
-	if n.core.ClosedLocked() || n.stack == nil {
+	if n.core.ClosedLocked() {
 		return nil, 0, nscore.Fail(nscore.FailureClosed, net.ErrClosed)
 	}
 	if !local.Valid() || !local.Address.Is4() || local.Port == 0 {
 		return nil, 0, nscore.Fail(nscore.FailureInvalidArgument, lneto.ErrInvalidAddr)
 	}
-	if n.udpConfig.MaxSockets == 0 {
+	if n.config.MaxSockets == 0 {
 		return nil, 0, nscore.Fail(nscore.FailureNotSupported, lneto.ErrUnsupported)
 	}
 	if !local.Address.IsUnspecified() && local.Address != n.ipv4Address {
@@ -155,7 +236,7 @@ func (n *Namespace) tryBindUDP(local nscore.Endpoint) (nscore.Resource, nscore.P
 	if !n.policy.CheckEndpoint(policy.OperationUDPBind, local.Address, local.Port) {
 		return nil, 0, nscore.Fail(nscore.FailureAccessDenied, errPolicyDenied)
 	}
-	if len(n.udpOrder) == int(n.udpConfig.MaxSockets) {
+	if len(n.sockets) == int(n.config.MaxSockets) {
 		return nil, 0, nscore.Fail(nscore.FailureResourceLimit, lneto.ErrExhausted)
 	}
 	portLease, ok := n.core.TryLeaseUDPPortLocked(local.Port)
@@ -166,14 +247,14 @@ func (n *Namespace) tryBindUDP(local nscore.Endpoint) (nscore.Resource, nscore.P
 	resourceReservation, err := n.quotas.ReserveResource(quota.ResourceUDP, 1)
 	if err != nil {
 		portLease.ReleaseLocked()
-		return nil, 0, mapError(err)
+		return nil, 0, lnetocore.MapError(err)
 	}
-	retainedBytes := uint64(n.udpConfig.MaxPayloadBytes) * uint64(n.udpConfig.ReceiveDatagrams+n.udpConfig.TransmitDatagrams)
+	retainedBytes := uint64(n.config.MaxPayloadBytes) * uint64(n.config.ReceiveDatagrams+n.config.TransmitDatagrams)
 	queuedReservation, err := n.quotas.ReserveQueuedBytes(retainedBytes)
 	if err != nil {
 		resourceReservation.Rollback()
 		portLease.ReleaseLocked()
-		return nil, 0, mapError(err)
+		return nil, 0, lnetocore.MapError(err)
 	}
 	resourceAllocation, ok := resourceReservation.Commit()
 	if !ok {
@@ -191,13 +272,13 @@ func (n *Namespace) tryBindUDP(local nscore.Endpoint) (nscore.Resource, nscore.P
 		owner:     n,
 		local:     local,
 		portLease: portLease,
-		rx:        newDatagramQueue(n.udpConfig.ReceiveDatagrams, n.udpConfig.MaxPayloadBytes, n.udpConfig.ReceiveBytes),
-		tx:        newDatagramQueue(n.udpConfig.TransmitDatagrams, n.udpConfig.MaxPayloadBytes, n.udpConfig.TransmitBytes),
+		rx:        newDatagramQueue(n.config.ReceiveDatagrams, n.config.MaxPayloadBytes, n.config.ReceiveBytes),
+		tx:        newDatagramQueue(n.config.TransmitDatagrams, n.config.MaxPayloadBytes, n.config.TransmitBytes),
 		resource:  resourceAllocation,
 		queued:    queuedAllocation,
 	}
-	n.udpByPort[local.Port] = socket
-	n.udpOrder = append(n.udpOrder, socket)
+	n.byPort[local.Port] = socket
+	n.sockets = append(n.sockets, socket)
 	return socket, nscore.ProgressDone, nil
 }
 
@@ -261,7 +342,7 @@ func (s *udpSocket) TrySend(payload []byte, remote nscore.Endpoint) (nscore.Prog
 	if !s.owner.policy.CheckEndpoint(policy.OperationUDPSend, remote.Address, remote.Port) {
 		return 0, nscore.Fail(nscore.FailureAccessDenied, errPolicyDenied)
 	}
-	if len(payload) > s.owner.udpConfig.MaxPayloadBytes {
+	if len(payload) > s.owner.config.MaxPayloadBytes {
 		return 0, nscore.Fail(nscore.FailureMessageTooLarge, lneto.ErrShortBuffer)
 	}
 	if !s.tx.push(payload, remote) {
@@ -284,21 +365,21 @@ func (s *udpSocket) closeLocked() error {
 		return nil
 	}
 	s.closed = true
-	if s.owner != nil && s.owner.udpByPort != nil {
-		delete(s.owner.udpByPort, s.local.Port)
-		for i, socket := range s.owner.udpOrder {
+	if s.owner != nil && s.owner.byPort != nil {
+		delete(s.owner.byPort, s.local.Port)
+		for i, socket := range s.owner.sockets {
 			if socket != s {
 				continue
 			}
-			copy(s.owner.udpOrder[i:], s.owner.udpOrder[i+1:])
-			s.owner.udpOrder[len(s.owner.udpOrder)-1] = nil
-			s.owner.udpOrder = s.owner.udpOrder[:len(s.owner.udpOrder)-1]
-			if len(s.owner.udpOrder) == 0 {
-				s.owner.udpCursor = 0
-			} else if s.owner.udpCursor > i {
-				s.owner.udpCursor--
-			} else if s.owner.udpCursor >= len(s.owner.udpOrder) {
-				s.owner.udpCursor = 0
+			copy(s.owner.sockets[i:], s.owner.sockets[i+1:])
+			s.owner.sockets[len(s.owner.sockets)-1] = nil
+			s.owner.sockets = s.owner.sockets[:len(s.owner.sockets)-1]
+			if len(s.owner.sockets) == 0 {
+				s.owner.cursor = 0
+			} else if s.owner.cursor > i {
+				s.owner.cursor--
+			} else if s.owner.cursor >= len(s.owner.sockets) {
+				s.owner.cursor = 0
 			}
 			break
 		}
@@ -320,8 +401,23 @@ func (s *udpSocket) closeLocked() error {
 	return nil
 }
 
-func (n *Namespace) hasUDPEgressLocked() bool {
-	for _, socket := range n.udpOrder {
+// CloseLocked releases every UDP socket and retained allocation. The caller
+// must hold the shared core lock.
+func (n *Adapter) CloseLocked() {
+	if n == nil {
+		return
+	}
+	for len(n.sockets) > 0 {
+		_ = n.sockets[len(n.sockets)-1].closeLocked()
+	}
+	clear(n.byPort)
+	n.byPort = nil
+	n.sockets = nil
+	n.cursor = 0
+}
+
+func (n *Adapter) hasEgressLocked() bool {
+	for _, socket := range n.sockets {
 		if !socket.closed && socket.tx.count > 0 {
 			return true
 		}
@@ -329,22 +425,22 @@ func (n *Namespace) hasUDPEgressLocked() bool {
 	return false
 }
 
-func (n *Namespace) egressUDPLocked(dst []byte) (int, error) {
-	if len(n.udpOrder) == 0 {
+func (n *Adapter) egressLocked(dst []byte) (int, error) {
+	if len(n.sockets) == 0 {
 		return 0, nil
 	}
 	var selected *udpSocket
-	for offset := 0; offset < len(n.udpOrder); offset++ {
-		index := n.udpCursor + offset
-		if index >= len(n.udpOrder) {
-			index -= len(n.udpOrder)
+	for offset := 0; offset < len(n.sockets); offset++ {
+		index := n.cursor + offset
+		if index >= len(n.sockets) {
+			index -= len(n.sockets)
 		}
-		socket := n.udpOrder[index]
+		socket := n.sockets[index]
 		if !socket.closed && socket.tx.count > 0 {
 			selected = socket
-			n.udpCursor = index + 1
-			if n.udpCursor == len(n.udpOrder) {
-				n.udpCursor = 0
+			n.cursor = index + 1
+			if n.cursor == len(n.sockets) {
+				n.cursor = 0
 			}
 			break
 		}
@@ -387,7 +483,7 @@ func (n *Namespace) egressUDPLocked(dst []byte) (int, error) {
 	return frameBytes, nil
 }
 
-func (n *Namespace) ingressUDPLocked(frame []byte) (bool, error) {
+func (n *Adapter) ingressLocked(frame []byte) (bool, error) {
 	ethernetFrame, err := ethernet.NewFrame(frame)
 	if err != nil || ethernetFrame.EtherTypeOrSize() != ethernet.TypeIPv4 {
 		return false, err
@@ -424,7 +520,7 @@ func (n *Namespace) ingressUDPLocked(frame []byte) (bool, error) {
 			return true, lneto.ErrBadCRC
 		}
 	}
-	selected := n.udpByPort[udpFrame.DestinationPort()]
+	selected := n.byPort[udpFrame.DestinationPort()]
 	if selected == nil || selected.closed {
 		return false, nil
 	}
