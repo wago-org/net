@@ -362,7 +362,7 @@ func expectedReviewSourceRepositories(opts VerifyOptions) []Repository {
 
 func validateChecks(checks []Check, arm64Status string) error {
 	requiredPass := []string{
-		"pinned-revisions", "initial-clean-trees", "wago-plugin-plan-compat",
+		"pinned-revisions", "initial-clean-trees", "wago-plugin-plan-compat", "current-plugin-topology-audit",
 		"go-test-workspace", "go-test-module", "go-test-race", "go-vet", "go-list", "go-mod-tidy",
 		"fuzz-dns-wire", "fuzz-dns-layout", "fuzz-dns-guest", "fuzz-shared-layout",
 		"benchmark-guest-poll", "benchmark-udp-queue", "tinygo-test", "cross-build",

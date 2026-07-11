@@ -1,8 +1,9 @@
 # Deterministic release signoff
 
 The release gate is `scripts/release-signoff.sh`. It runs from a clean plugin
-checkout with three clean audit repositories and writes disposable logs under
-`.wago/release-signoff/`.
+checkout with clean production audit repositories, current Wago/networking
+review worktrees, and the external workers checkout. It writes disposable logs
+under `.wago/release-signoff/`.
 
 ## Pinned inputs
 
@@ -15,11 +16,17 @@ The script refuses revision drift before doing work:
 | Wago worker parent | `ffd5ef4b122cbd019897eeea3503789ab5860e4a` |
 | lneto | `ab1a0c735a8b534a1d6322a3e245bc11a09431e7` |
 | WASI audit | `3df6c766ad00e83b314da799dbf9a77b409ad19d` |
+| Current Wago lifecycle review | `e44b1baa6eabfba07967a4458fdb56983cb054ae` |
+| Current networking registration review | `5b444e9dfbbf1b64e7b1f923f1dc3579a4aaf87e` |
+| External workers | `1e9139756d8a3c631c59c00b028038c83bfa8341` |
 
-By default these are `.audit/wago`, `.audit/lneto`, and `.audit/wasi`.
-`../wago` must resolve to the Wago audit checkout because `go.mod` deliberately
+By default the production inputs are `.audit/wago`, `.audit/lneto`, and
+`.audit/wasi`; current review inputs are `.wago/wago-current-plugin-lifecycle`,
+`.wago/net-current-plugin-registration`, and `.wago/workers-plugin`. `../wago`
+must resolve to the production Wago audit checkout because `go.mod` deliberately
 uses the adjacent development replacement. Override locations with `WAGO_DIR`,
-`LNETO_DIR`, and `WASI_DIR`; revision checks still apply.
+`LNETO_DIR`, `WASI_DIR`, `CURRENT_WAGO_DIR`, `CURRENT_NET_DIR`, and
+`WORKERS_DIR`; revision checks still apply.
 
 ## Gate
 
@@ -29,9 +36,10 @@ scripts/release-signoff.sh
 
 The gate performs, in order:
 
-1. revision, merge-parent, toolchain, symlink, initial clean-tree, exact
-   reviewed plugin-plan compatibility-decision checks, and an isolated audit of
-   the reviewed docs/CI-only WASI upstream snapshot;
+1. revision, merge-parent, toolchain, symlink, and initial clean-tree checks;
+   the exact reviewed plugin-plan compatibility decision; a moving-ref
+   publication/pool topology refresh for current Wago/net/workers; and an
+   isolated audit of the reviewed docs/CI-only WASI upstream snapshot;
 2. workspace and `GOWORK=off` Go tests, race tests, vet, package listing, and a
    no-change `go mod tidy`;
 3. bounded fuzz smoke for DNS wire parsing, DNS ABI layouts, checked DNS guest
@@ -51,13 +59,16 @@ The gate performs, in order:
 10. the complete pinned lneto test suite;
 11. the pinned WASI suite, accepting only the documented native preview-1
     SIGSEGV signature if it remains; and
-12. final clean-tree checks for all four repositories; and
-13. deterministic non-thin Git object packs for the exact plugin subject and
-    pinned Wago, lneto, and WASI source trees, including both ordered Wago merge
-    parents;
-14. deterministic machine-readable provenance plus SHA-256 verification of every
+12. final clean-tree checks for production and current review repositories;
+13. deterministic non-thin Git object packs for the exact plugin subject,
+    production Wago/lneto/WASI inputs, current Wago/networking review subjects,
+    and external workers, including all required ordered parents;
+14. isolated reconstruction of the current Wago/net/workers/lneto workspace from
+    those packs, with standard Go, focused linked-child race, vet, workers,
+    TinyGo, and exact four-capability/24-import inspection checks;
+15. deterministic machine-readable provenance plus SHA-256 verification of every
     retained evidence artifact and the manifest itself; and
-15. standalone semantic verification and deterministic export of a compressed
+16. standalone semantic verification and deterministic export of a compressed
     downstream review bundle.
 
 `scripts/arm64-execution-signoff.sh` always cross-compiles a `CGO_ENABLED=0`
@@ -111,18 +122,20 @@ hosted-CI assertion; identical inputs and evidence produce identical JSON.
 
 A passing gate exports `.wago/release-signoff.review.tar.gz` and its adjacent
 `.sha256` file. The archive contains only the manifest-listed evidence plus
-`evidence.sha256`, `provenance.json`, and `provenance.sha256`. This includes four
-non-thin packs under `source-objects/` and canonical object inventories. The net
-pack contains the exact release subject's commit and complete source tree; Wago
-contains the merge commit, both ordered parent commits, and all three complete
-source trees; lneto and WASI contain their exact pinned commits and trees. No
-moving remote ref is needed to inspect those snapshots. Tar paths are sorted;
+`evidence.sha256`, `provenance.json`, and `provenance.sha256`. This includes seven
+non-thin packs under `source-objects/` and canonical object inventories. The
+production net pack contains the exact release subject's commit and complete
+source tree; production Wago contains the merge commit, both ordered parent
+commits, and all three complete source trees; lneto and WASI contain their exact
+pinned commits and trees. Separate packs contain the exact current networking
+review, current Wago lifecycle replay, and external workers commit/tree closures.
+No moving remote ref is needed to inspect those snapshots. Tar paths are sorted;
 uid/gid, names, modes, and timestamps are normalized; gzip metadata is fixed.
 Byte-identical evidence therefore produces a byte-identical archive.
 
 A downstream reviewer with Git installed can validate an extracted signoff
-directory or the archive without the Wago, lneto, WASI, or plugin source
-checkouts and without rerunning tests:
+directory or the archive without the Wago, lneto, WASI, workers, current review,
+or plugin source checkouts and without rerunning tests:
 
 ```sh
 GOWORK=off go run ./internal/cmd/release-review \
@@ -132,8 +145,8 @@ GOWORK=off go run ./internal/cmd/release-review \
 To require a separately obtained expected plugin commit, add
 `-subject <40-hex-commit>`. Verification rejects a different schema; changed or
 unordered evidence; unknown or noncanonical manifest fields; unsafe archive
-paths; wrong exact Wago/lneto/WASI pins or Wago parent order; inconsistent
-checks, exceptions, limitations, targets, revisions, toolchains, or inspection
+paths; wrong exact production or current-review pins, trees, or parent order;
+inconsistent checks, exceptions, limitations, targets, revisions, toolchains, or inspection
 facts; and any extra or missing artifact. Each Git pack is indexed in an isolated
 bare repository, checked for pack integrity, compared exactly with its canonical
 object inventory, and required to contain no more and no less than the selected
@@ -185,7 +198,11 @@ current remote divergence, and immutable-publication requirement.
 `scripts/wago-plugin-plan-compat.sh` and
 `docs/wago-plugin-plan-compatibility.md` separately pin the reviewed redesign
 snapshot and prove why it requires a lifecycle/identity/worker migration rather
-than a silent pin replacement. `scripts/wasi-upstream-preview1-audit.sh` and
+than a silent pin replacement. `scripts/current-plugin-review-signoff.sh`,
+`scripts/current-plugin-topology-audit.sh`, and
+`docs/current-plugin-review.md` bind and reconstruct the hardened current-main
+review while keeping unpublished subjects review-only and pooling unsupported.
+`scripts/wasi-upstream-preview1-audit.sh` and
 `docs/wasi-upstream-preview1-audit.md` prove that the reviewed newer WASI tree
 changes only documentation and CI, then reproduce the same native preview-1
 SIGSEGV from an isolated exact-object export; the release pin therefore remains

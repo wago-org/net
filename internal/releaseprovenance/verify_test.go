@@ -131,6 +131,7 @@ func validReviewFixture(t *testing.T) (string, VerifyOptions) {
 		{Name: "pinned-revisions", Status: "pass"},
 		{Name: "initial-clean-trees", Status: "pass"},
 		{Name: "wago-plugin-plan-compat", Status: "pass"},
+		{Name: "current-plugin-topology-audit", Status: "pass"},
 		{Name: "wasi-upstream-preview1-audit", Status: "accepted-exception", Detail: "reviewed docs/CI-only upstream retains crash"},
 		{Name: "go-test-workspace", Status: "pass"},
 		{Name: "go-test-module", Status: "pass"},
