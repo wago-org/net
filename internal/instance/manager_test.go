@@ -3,6 +3,7 @@ package instance
 import (
 	"errors"
 	"net/netip"
+	"sync"
 	"sync/atomic"
 	"testing"
 
@@ -19,6 +20,7 @@ type fakeNamespace struct {
 	socket   namespace.UDPSocket
 	listener namespace.TCPListener
 	stream   namespace.TCPStream
+	query    namespace.DNSQuery
 }
 
 func (n *fakeNamespace) Close() error {
@@ -46,6 +48,9 @@ func (n *fakeNamespace) TryConnectTCP(namespace.Endpoint) (namespace.TCPStream, 
 	return nil, 0, namespace.Fail(namespace.FailureNotSupported, nil)
 }
 func (n *fakeNamespace) TryResolve(namespace.DNSRequest) (namespace.DNSQuery, namespace.Progress, error) {
+	if n.query != nil {
+		return n.query, namespace.ProgressInProgress, nil
+	}
 	return nil, 0, namespace.Fail(namespace.FailureNotSupported, nil)
 }
 func (n *fakeNamespace) TryService(namespace.ServiceBudget) (namespace.ServiceReport, namespace.Progress, error) {
@@ -131,6 +136,43 @@ func (s *fakeTCPStream) TryShutdownWrite() (namespace.Progress, error) {
 	return namespace.ProgressDone, nil
 }
 
+type fakeDNSQuery struct {
+	closed   atomic.Int32
+	canceled atomic.Int32
+	records  []namespace.DNSRecord
+	failure  error
+}
+
+func (q *fakeDNSQuery) Close() error {
+	q.closed.Add(1)
+	return nil
+}
+func (q *fakeDNSQuery) Cancel() error {
+	q.canceled.Add(1)
+	q.failure = namespace.Fail(namespace.FailureCanceled, nil)
+	return nil
+}
+func (q *fakeDNSQuery) Readiness() namespace.Readiness {
+	if q.failure != nil {
+		return namespace.ReadyError
+	}
+	if len(q.records) != 0 {
+		return namespace.ReadyDNSResult
+	}
+	return 0
+}
+func (q *fakeDNSQuery) TryNext() (namespace.DNSRecord, namespace.DNSNext, error) {
+	if q.failure != nil {
+		return namespace.DNSRecord{}, 0, q.failure
+	}
+	if len(q.records) == 0 {
+		return namespace.DNSRecord{}, namespace.DNSNextWouldBlock, nil
+	}
+	record := q.records[0]
+	q.records = q.records[1:]
+	return record, namespace.DNSNextReady, nil
+}
+
 type fakePollable struct{}
 
 func (fakePollable) Close() error                   { return nil }
@@ -212,6 +254,17 @@ func TestConfiguredNamespacesAreQuotaOwnedIsolatedAndGenerationSafe(t *testing.T
 		t.Fatalf("cross-instance TCP read = %v", err)
 	}
 	if err := first.Resources().CloseHandle(crossHandle, resource.KindTCPStream); err != nil {
+		t.Fatal(err)
+	}
+	crossDNS := new(fakeDNSQuery)
+	crossDNSHandle, err := first.Resources().Add(resource.KindDNSQuery, crossDNS)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := second.NextDNS(crossDNSHandle); !errors.Is(err, resource.ErrBadHandle) {
+		t.Fatalf("cross-instance DNS next = %v", err)
+	}
+	if err := first.Resources().CloseHandle(crossDNSHandle, resource.KindDNSQuery); err != nil {
 		t.Fatal(err)
 	}
 	for _, state := range []*State{first, second} {
@@ -365,6 +418,171 @@ func TestTCPHandlesReadinessPartialIOAndKindSafety(t *testing.T) {
 	if listener.closed.Load() != 1 || outbound.closed.Load() != 1 || accepted.closed.Load() != 1 {
 		t.Fatalf("TCP close counts listener=%d outbound=%d accepted=%d", listener.closed.Load(), outbound.closed.Load(), accepted.closed.Load())
 	}
+}
+
+func TestDNSHandlesReadinessCancelKindAndGenerationSafety(t *testing.T) {
+	table, err := resource.NewTable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	poller, err := readiness.New(table, readiness.Config{MaxRegistrations: 3})
+	if err != nil {
+		t.Fatal(err)
+	}
+	compiled, err := policy.Compile(policy.Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	record := namespace.DNSRecord{Name: "example.com", Type: namespace.DNSRecordA, TTLSeconds: 60, Address: netip.MustParseAddr("192.0.2.10")}
+	query := &fakeDNSQuery{records: []namespace.DNSRecord{record}}
+	backend := &fakeNamespace{query: query}
+	namespaceHandle, err := table.Add(resource.KindNamespace, backend)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := poller.Register(namespaceHandle, resource.KindNamespace); err != nil {
+		t.Fatal(err)
+	}
+	state := &State{resources: table, readiness: poller, quotas: quota.NewAccount(quota.DefaultLimits()), policy: compiled, namespace: namespaceHandle}
+
+	handle, progress, err := state.ResolveDNS(namespaceHandle, namespace.DNSRequest{Name: "example.com", Types: namespace.DNSRecordsA})
+	if err != nil || progress != namespace.ProgressInProgress || handle == 0 {
+		t.Fatalf("ResolveDNS = %v, %v, %v", handle, progress, err)
+	}
+	if snapshot := poller.Snapshot(); snapshot.Registrations != 2 {
+		t.Fatalf("DNS readiness registrations = %+v", snapshot)
+	}
+	if got, next, err := state.NextDNS(handle); err != nil || next != namespace.DNSNextReady || got != record {
+		t.Fatalf("NextDNS = %+v, %v, %v", got, next, err)
+	}
+	if _, _, err := state.NextDNS(namespaceHandle); !errors.Is(err, resource.ErrBadHandle) {
+		t.Fatalf("wrong-kind DNS next = %v", err)
+	}
+	if err := state.CloseHandle(namespaceHandle, resource.KindDNSQuery); !errors.Is(err, resource.ErrBadHandle) {
+		t.Fatalf("wrong-kind DNS close = %v", err)
+	}
+	if poller.Snapshot().Registrations != 2 {
+		t.Fatal("wrong-kind DNS close changed readiness")
+	}
+	if err := state.CloseHandle(handle, resource.KindDNSQuery); err != nil {
+		t.Fatal(err)
+	}
+	if query.closed.Load() != 1 {
+		t.Fatalf("DNS close count = %d", query.closed.Load())
+	}
+	if _, _, err := state.NextDNS(handle); !errors.Is(err, resource.ErrBadHandle) {
+		t.Fatalf("stale DNS handle = %v", err)
+	}
+
+	cancelQuery := new(fakeDNSQuery)
+	backend.query = cancelQuery
+	cancelHandle, _, err := state.ResolveDNS(namespaceHandle, namespace.DNSRequest{Name: "example.com", Types: namespace.DNSRecordsAAAA})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := state.CancelDNS(cancelHandle); err != nil || cancelQuery.canceled.Load() != 1 {
+		t.Fatalf("CancelDNS = %d, %v", cancelQuery.canceled.Load(), err)
+	}
+	if _, _, err := state.NextDNS(cancelHandle); requireStateFailure(t, err) != namespace.FailureCanceled {
+		t.Fatalf("canceled DNS result = %v", err)
+	}
+	if err := state.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if cancelQuery.closed.Load() != 1 {
+		t.Fatalf("lifecycle DNS close count = %d", cancelQuery.closed.Load())
+	}
+}
+
+func TestDNSRegistrationRollbackAndInvalidBackendResults(t *testing.T) {
+	table, err := resource.NewTable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	poller, err := readiness.New(table, readiness.Config{MaxRegistrations: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	compiled, err := policy.Compile(policy.Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	query := &fakeDNSQuery{}
+	backend := &fakeNamespace{query: query}
+	namespaceHandle, err := table.Add(resource.KindNamespace, backend)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := poller.Register(namespaceHandle, resource.KindNamespace); err != nil {
+		t.Fatal(err)
+	}
+	state := &State{resources: table, readiness: poller, quotas: quota.NewAccount(quota.DefaultLimits()), policy: compiled, namespace: namespaceHandle}
+	if handle, progress, err := state.ResolveDNS(namespaceHandle, namespace.DNSRequest{Name: "example.com", Types: namespace.DNSRecordsA}); handle != 0 || progress != 0 || !errors.Is(err, readiness.ErrLimit) {
+		t.Fatalf("ResolveDNS rollback = %v, %v, %v", handle, progress, err)
+	}
+	if query.closed.Load() != 1 || table.Len() != 1 || poller.Snapshot().Registrations != 1 {
+		t.Fatalf("failed DNS retained state: closes=%d resources=%d readiness=%+v", query.closed.Load(), table.Len(), poller.Snapshot())
+	}
+
+	invalid := &fakeDNSQuery{records: []namespace.DNSRecord{{}}}
+	handle, err := table.Add(resource.KindDNSQuery, invalid)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := state.NextDNS(handle); requireStateFailure(t, err) != namespace.FailureIO {
+		t.Fatalf("invalid DNS record error = %v", err)
+	}
+	if err := table.CloseHandle(handle, resource.KindDNSQuery); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestDNSStateConcurrentCancelReadAndClose(t *testing.T) {
+	table, err := resource.NewTable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	poller, err := readiness.New(table, readiness.Config{MaxRegistrations: 2})
+	if err != nil {
+		t.Fatal(err)
+	}
+	compiled, _ := policy.Compile(policy.Config{})
+	query := new(fakeDNSQuery)
+	backend := &fakeNamespace{query: query}
+	namespaceHandle, _ := table.Add(resource.KindNamespace, backend)
+	_ = poller.Register(namespaceHandle, resource.KindNamespace)
+	state := &State{resources: table, readiness: poller, quotas: quota.NewAccount(quota.DefaultLimits()), policy: compiled, namespace: namespaceHandle}
+	handle, _, err := state.ResolveDNS(namespaceHandle, namespace.DNSRequest{Name: "example.com", Types: namespace.DNSRecordsA})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var wait sync.WaitGroup
+	for range 8 {
+		wait.Add(1)
+		go func() {
+			defer wait.Done()
+			for range 100 {
+				_, _, _ = state.NextDNS(handle)
+				_ = state.CancelDNS(handle)
+			}
+		}()
+	}
+	if err := state.Close(); err != nil {
+		t.Fatal(err)
+	}
+	wait.Wait()
+	if query.closed.Load() != 1 {
+		t.Fatalf("concurrent DNS close count = %d", query.closed.Load())
+	}
+}
+
+func requireStateFailure(t testing.TB, err error) namespace.Failure {
+	t.Helper()
+	failure, ok := namespace.FailureOf(err)
+	if !ok {
+		t.Fatalf("uncategorized state error: %v", err)
+	}
+	return failure
 }
 
 func TestTCPRegistrationRollbackClosesBackendResource(t *testing.T) {

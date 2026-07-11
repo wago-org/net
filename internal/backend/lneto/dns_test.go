@@ -126,6 +126,18 @@ func TestDNSRetryTimeoutPolicyLimitsAndReuse(t *testing.T) {
 	if err != nil || progress != namespace.ProgressInProgress || reused == query {
 		t.Fatalf("query reuse = %T, %v, %v", reused, progress, err)
 	}
+	if err := reused.Cancel(); err != nil {
+		t.Fatal(err)
+	}
+	if got := reused.Readiness(); got != namespace.ReadyError {
+		t.Fatalf("canceled readiness = %v", got)
+	}
+	if _, _, err := reused.TryNext(); requireFailure(t, err) != namespace.FailureCanceled {
+		t.Fatalf("canceled result error = %v", err)
+	}
+	if usage, _ := config.Quotas.Snapshot(); usage.DNSWork != 0 || usage.DNSResources != 1 {
+		t.Fatalf("canceled quota = %+v", usage)
+	}
 	if err := reused.Close(); err != nil {
 		t.Fatal(err)
 	}

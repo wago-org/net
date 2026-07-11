@@ -504,6 +504,96 @@ func (s *State) AcceptTCP(listenerHandle resource.Handle) (resource.Handle, name
 	return handle, namespace.ProgressDone, nil
 }
 
+// ResolveDNS owns and poll-registers one immediate or in-progress DNS query.
+func (s *State) ResolveDNS(namespaceHandle resource.Handle, request namespace.DNSRequest) (resource.Handle, namespace.Progress, error) {
+	if s == nil {
+		return 0, 0, ErrInvalidConfig
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed || s.resources == nil || s.readiness == nil {
+		return 0, 0, namespace.Fail(namespace.FailureClosed, resource.ErrClosed)
+	}
+	value, err := s.resources.Lookup(namespaceHandle, resource.KindNamespace)
+	if err != nil {
+		return 0, 0, err
+	}
+	backend, ok := value.(namespace.Namespace)
+	if !ok {
+		return 0, 0, namespace.Fail(namespace.FailureIO, ErrInvalidBackendResult)
+	}
+	query, progress, err := backend.TryResolve(request)
+	if err != nil {
+		return 0, progress, err
+	}
+	if (progress != namespace.ProgressDone && progress != namespace.ProgressInProgress) || query == nil {
+		if query != nil {
+			_ = query.Close()
+		}
+		return 0, 0, namespace.Fail(namespace.FailureIO, ErrInvalidBackendResult)
+	}
+	handle, err := s.resources.Add(resource.KindDNSQuery, query)
+	if err != nil {
+		_ = query.Close()
+		return 0, 0, err
+	}
+	if err := s.readiness.Register(handle, resource.KindDNSQuery); err != nil {
+		_ = s.resources.CloseHandle(handle, resource.KindDNSQuery)
+		return 0, 0, err
+	}
+	return handle, progress, nil
+}
+
+// NextDNS performs one nonblocking copied-record read from an exact live query.
+func (s *State) NextDNS(handle resource.Handle) (namespace.DNSRecord, namespace.DNSNext, error) {
+	if s == nil {
+		return namespace.DNSRecord{}, 0, ErrInvalidConfig
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	query, err := s.lookupDNSLocked(handle)
+	if err != nil {
+		return namespace.DNSRecord{}, 0, err
+	}
+	record, next, err := query.TryNext()
+	if err == nil && next == namespace.DNSNextReady && !record.Valid() {
+		return namespace.DNSRecord{}, 0, namespace.Fail(namespace.FailureIO, ErrInvalidBackendResult)
+	}
+	if err == nil && next != namespace.DNSNextReady && next != namespace.DNSNextWouldBlock && next != namespace.DNSNextEOF {
+		return namespace.DNSRecord{}, 0, namespace.Fail(namespace.FailureIO, ErrInvalidBackendResult)
+	}
+	return record, next, err
+}
+
+// CancelDNS makes one unfinished query terminal without retiring its handle.
+func (s *State) CancelDNS(handle resource.Handle) error {
+	if s == nil {
+		return ErrInvalidConfig
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	query, err := s.lookupDNSLocked(handle)
+	if err != nil {
+		return err
+	}
+	return query.Cancel()
+}
+
+func (s *State) lookupDNSLocked(handle resource.Handle) (namespace.DNSQuery, error) {
+	if s.closed || s.resources == nil {
+		return nil, namespace.Fail(namespace.FailureClosed, resource.ErrClosed)
+	}
+	value, err := s.resources.Lookup(handle, resource.KindDNSQuery)
+	if err != nil {
+		return nil, err
+	}
+	query, ok := value.(namespace.DNSQuery)
+	if !ok {
+		return nil, namespace.Fail(namespace.FailureIO, ErrInvalidBackendResult)
+	}
+	return query, nil
+}
+
 func (s *State) ownTCPStreamLocked(stream namespace.TCPStream) (resource.Handle, error) {
 	handle, err := s.resources.Add(resource.KindTCPStream, stream)
 	if err != nil {

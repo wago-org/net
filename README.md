@@ -17,9 +17,11 @@ no host-facing path uses its blocking/backoff wrappers. Protocol polling is
 level-triggered and bounded independently by scans, event outputs, namespace
 service attempts, and per-attempt packet/byte/operation budgets, with finite
 per-instance service-work accounting. A bounded lneto-backed DNS query engine
-now exists behind the backend-neutral namespace boundary, but `wago_net_dns`
-and `net.dns` remain absent until instance handles and the complete checked guest
-surface are finished. Privileged packet access remains absent and unsupported.
+now exists behind the backend-neutral namespace boundary and uses generation-
+safe per-instance query handles with readiness, cancellation, timeout, quota,
+and lifecycle cleanup. `wago_net_dns` and `net.dns` remain absent until the
+complete checked guest surface is finished. Privileged packet access remains
+absent and unsupported.
 
 ```go
 rt := wago.NewRuntime()

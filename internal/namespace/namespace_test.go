@@ -153,11 +153,23 @@ func (s *fakeStream) TryShutdownWrite() (Progress, error) { return ProgressDone,
 
 type fakeDNS struct {
 	fakeResource
-	records []DNSRecord
-	ready   bool
+	records  []DNSRecord
+	ready    bool
+	canceled bool
+}
+
+func (q *fakeDNS) Cancel() error {
+	q.ready = true
+	q.records = nil
+	q.canceled = true
+	q.fakeResource.ready = ReadyError
+	return nil
 }
 
 func (q *fakeDNS) TryNext() (DNSRecord, DNSNext, error) {
+	if q.canceled {
+		return DNSRecord{}, 0, Fail(FailureCanceled, nil)
+	}
 	if !q.ready {
 		return DNSRecord{}, DNSNextWouldBlock, nil
 	}
@@ -289,6 +301,17 @@ func TestFakeBackendNonblockingSemantics(t *testing.T) {
 	if _, next, err := query.TryNext(); err != nil || next != DNSNextEOF {
 		t.Fatalf("complete TryNext = %v, %v", next, err)
 	}
+	pendingResource, _, err := backend.TryResolve(DNSRequest{Name: "cancel.example", Types: DNSRecordsA})
+	if err != nil {
+		t.Fatal(err)
+	}
+	pending := pendingResource.(*fakeDNS)
+	if err := pending.Cancel(); err != nil || pending.Readiness() != ReadyError {
+		t.Fatalf("Cancel = readiness %v, %v", pending.Readiness(), err)
+	}
+	if _, _, err := pending.TryNext(); failureFromTest(err) != FailureCanceled {
+		t.Fatalf("canceled TryNext = %v", err)
+	}
 
 	budget := ServiceBudget{Packets: 1, Bytes: 128, Operations: 1}
 	report, progress, err := backend.TryService(budget)
@@ -311,6 +334,11 @@ func TestBackendFailureCategoriesSurviveWrapping(t *testing.T) {
 	if _, ok := FailureOf(cause); ok {
 		t.Fatal("uncategorized backend error acquired a failure category")
 	}
+}
+
+func failureFromTest(err error) Failure {
+	failure, _ := FailureOf(err)
+	return failure
 }
 
 func TestDNSContractValidation(t *testing.T) {

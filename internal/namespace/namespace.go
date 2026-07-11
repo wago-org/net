@@ -241,9 +241,12 @@ const (
 )
 
 // DNSQuery streams bounded records without returning backend-owned slices.
+// Cancel immediately makes an unfinished query terminal with FailureCanceled;
+// Close separately retires all retained records and accounting.
 type DNSQuery interface {
 	Resource
 	TryNext() (DNSRecord, DNSNext, error)
+	Cancel() error
 }
 
 // ServiceBudget bounds one manual backend service attempt in every dimension.

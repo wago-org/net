@@ -187,6 +187,22 @@ func (q *dnsQuery) TryNext() (namespace.DNSRecord, namespace.DNSNext, error) {
 	return namespace.DNSRecord{}, namespace.DNSNextWouldBlock, nil
 }
 
+func (q *dnsQuery) Cancel() error {
+	if q == nil || q.owner == nil {
+		return namespace.Fail(namespace.FailureClosed, net.ErrClosed)
+	}
+	q.owner.mu.Lock()
+	defer q.owner.mu.Unlock()
+	if q.state == dnsQueryClosed || q.owner.closed {
+		return namespace.Fail(namespace.FailureClosed, net.ErrClosed)
+	}
+	if q.state == dnsQueryDone || q.state == dnsQueryFailed {
+		return namespace.Fail(namespace.FailureInvalidState, lneto.ErrBadState)
+	}
+	q.failLocked(namespace.FailureCanceled, errors.New("DNS query canceled"))
+	return nil
+}
+
 func (q *dnsQuery) Close() error {
 	if q == nil || q.owner == nil {
 		return nil
@@ -487,7 +503,7 @@ func parseDNSResponse(payload []byte, txid uint16, request namespace.DNSRequest,
 			record = namespace.DNSRecord{Name: name, Type: namespace.DNSRecordAAAA, TTLSeconds: ttl, Address: netip.AddrFrom16([16]byte(payload[dataStart:dataEnd]))}
 		case lnetodns.TypeCNAME:
 			canonical, consumed, err := decodeDNSName(payload, dataStart)
-			if err != nil || consumed > dataEnd {
+			if err != nil || consumed != dataEnd {
 				if err == nil {
 					err = lneto.ErrInvalidLengthField
 				}

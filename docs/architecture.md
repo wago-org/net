@@ -117,10 +117,12 @@ readiness coordinator, immutable policy, and finite quota ledger to the exact
 `*wago.Instance`. Optional static
 IPv4 configuration transactionally reserves namespace quota, constructs the
 backend, inserts a generation-safe handle, and registers bounded readiness before
-the state is published. UDP and TCP creation repeat that transaction for their
-exact socket, listener, or stream handle and poll registration; every failed
-stage closes the backend
-resource and releases accounting. TCP guest bindings prevalidate all complete
+the state is published. UDP, TCP, and unregistered DNS creation repeat that
+transaction for exact socket, listener, stream, or query handles and poll
+registration; every failed stage closes the backend resource and releases
+accounting. DNS handles support copied record iteration, explicit cancellation,
+backend service-attempt timeout, stale/wrong-kind/cross-instance rejection, and
+deterministic lifecycle close without exposing a guest module. TCP guest bindings prevalidate all complete
 endpoint, descriptor, payload, result, event, and poll ranges before backend
 work. Connect and accept roll back newly owned handles if descriptor encoding
 cannot complete; AGAIN and EOF stream results leave guest outputs unchanged.
