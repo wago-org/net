@@ -1,0 +1,30 @@
+{
+  "schema": "github.com/wago-org/net/distribution-signature-vectors/v1",
+  "algorithm": "ed25519",
+  "messageEncoding": "exact-file-bytes",
+  "publicKeyBase64": "T8DKYlJYhOZdcLTtGnK+2BhvyFVNPnDJ7Yr010/e3MA=",
+  "statementSha256": "7c3c250756ab09a52713e1d351b8f144538d735a0d45d5703b34a0be9f460767",
+  "signatureSha256": "7b0298df4a683d3b68b269581852566b7c8f61d60b58d3b05728b6fd149ccf10",
+  "invalidSignatureSha256": "f2b0d36c344f50ab2d055a3fa0be8ddd94555b0a1178aff0c41e3e4e141079d3",
+  "alteredStatementSha256": "ddbf601a14e6dd36490b30d899122360694d464517bf8a43fd48dbdc35f94115",
+  "cases": [
+    {
+      "name": "valid",
+      "statement": "statement.json",
+      "signature": "signature.ed25519",
+      "result": "valid"
+    },
+    {
+      "name": "altered-statement",
+      "statement": "statement-altered.json",
+      "signature": "signature.ed25519",
+      "result": "invalid"
+    },
+    {
+      "name": "altered-signature",
+      "statement": "statement.json",
+      "signature": "signature-invalid.ed25519",
+      "result": "invalid"
+    }
+  ]
+}

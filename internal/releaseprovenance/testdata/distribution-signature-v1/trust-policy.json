@@ -1,0 +1,8 @@
+{
+  "schema": "github.com/wago-org/net/distribution-trust-policy/v1",
+  "keyId": "public-interoperability-test-vector-v1",
+  "algorithm": "ed25519",
+  "publicKey": "T8DKYlJYhOZdcLTtGnK+2BhvyFVNPnDJ7Yr010/e3MA=",
+  "statementSha256": "7c3c250756ab09a52713e1d351b8f144538d735a0d45d5703b34a0be9f460767",
+  "subject": "1111111111111111111111111111111111111111"
+}

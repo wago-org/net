@@ -204,6 +204,101 @@ func TestVerifySignedDistributionEnforcesAntiRollbackConstraints(t *testing.T) {
 	}
 }
 
+func TestDetachedSignatureInteroperabilityVectors(t *testing.T) {
+	dir := filepath.Join("testdata", "distribution-signature-v1")
+	vectorData, err := os.ReadFile(filepath.Join(dir, "vectors.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var vectors struct {
+		Schema                 string `json:"schema"`
+		Algorithm              string `json:"algorithm"`
+		MessageEncoding        string `json:"messageEncoding"`
+		PublicKeyBase64        string `json:"publicKeyBase64"`
+		StatementSHA256        string `json:"statementSha256"`
+		SignatureSHA256        string `json:"signatureSha256"`
+		InvalidSignatureSHA256 string `json:"invalidSignatureSha256"`
+		AlteredStatementSHA256 string `json:"alteredStatementSha256"`
+		Cases                  []struct {
+			Name      string `json:"name"`
+			Statement string `json:"statement"`
+			Signature string `json:"signature"`
+			Result    string `json:"result"`
+		} `json:"cases"`
+	}
+	if err := decodeCanonicalJSON(vectorData, &vectors, "distribution signature vectors"); err != nil {
+		t.Fatal(err)
+	}
+	if vectors.Schema != "github.com/wago-org/net/distribution-signature-vectors/v1" ||
+		vectors.Algorithm != "ed25519" || vectors.MessageEncoding != "exact-file-bytes" || len(vectors.Cases) != 3 {
+		t.Fatalf("vector metadata = %+v", vectors)
+	}
+
+	policyData, err := os.ReadFile(filepath.Join(dir, "trust-policy.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var policy DistributionTrustPolicy
+	if err := decodeCanonicalJSON(policyData, &policy, "distribution trust policy vector"); err != nil {
+		t.Fatal(err)
+	}
+	publicKey, err := validateDistributionTrustPolicy(&policy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if base64.StdEncoding.EncodeToString(publicKey) != vectors.PublicKeyBase64 {
+		t.Fatal("vector public key does not match trust policy")
+	}
+
+	wantDigests := map[string]string{
+		"statement.json":            vectors.StatementSHA256,
+		"statement-altered.json":    vectors.AlteredStatementSHA256,
+		"signature.ed25519":         vectors.SignatureSHA256,
+		"signature-invalid.ed25519": vectors.InvalidSignatureSHA256,
+	}
+	for name, want := range wantDigests {
+		data, err := os.ReadFile(filepath.Join(dir, name))
+		if err != nil {
+			t.Fatal(err)
+		}
+		sum := sha256.Sum256(data)
+		if got := hex.EncodeToString(sum[:]); got != want {
+			t.Fatalf("%s SHA-256 = %s, want %s", name, got, want)
+		}
+	}
+
+	for _, vector := range vectors.Cases {
+		statementData, err := os.ReadFile(filepath.Join(dir, vector.Statement))
+		if err != nil {
+			t.Fatal(err)
+		}
+		var statement DistributionStatement
+		if err := decodeCanonicalJSON(statementData, &statement, "distribution statement vector"); err != nil {
+			t.Fatal(err)
+		}
+		if err := validateDistributionStatement(&statement, VerifyOptions{}); err != nil {
+			t.Fatal(err)
+		}
+		signature, err := os.ReadFile(filepath.Join(dir, vector.Signature))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(signature) != ed25519.SignatureSize {
+			t.Fatalf("%s signature size = %d", vector.Name, len(signature))
+		}
+		gotValid := ed25519.Verify(publicKey, statementData, signature)
+		wantValid := vector.Result == "valid"
+		if gotValid != wantValid {
+			t.Fatalf("%s verification = %t, want %t", vector.Name, gotValid, wantValid)
+		}
+		sum := sha256.Sum256(statementData)
+		constraintErr := enforceDistributionTrustConstraints(&policy, &statement, hex.EncodeToString(sum[:]))
+		if (constraintErr == nil) != (vector.Statement == "statement.json") {
+			t.Fatalf("%s anti-rollback constraint error = %v", vector.Name, constraintErr)
+		}
+	}
+}
+
 func TestProductionReadinessProfileReportsExactCurrentBlockers(t *testing.T) {
 	fixture := newSignedDistributionFixture(t)
 	trusted, err := verifySignedDistribution(fixture.bundle, fixture.statement, fixture.signature, fixture.policy, fixture.opts)

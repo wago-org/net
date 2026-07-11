@@ -214,6 +214,14 @@ review interoperability:
 }
 ```
 
+Public detached-signature interoperability vectors live under
+`internal/releaseprovenance/testdata/distribution-signature-v1/`. They include a
+canonical synthetic statement, canonical constrained trust policy, raw 64-byte
+valid and invalid signatures, an altered canonical statement, and a checksummed
+case manifest. The vector key is explicitly test-only and has no publisher
+identity or production trust. Repository tests require exact-file-byte Ed25519
+verification to accept only the positive case; no private key is tracked.
+
 Verify a signed statement and bind it back to the archive with:
 
 ```sh

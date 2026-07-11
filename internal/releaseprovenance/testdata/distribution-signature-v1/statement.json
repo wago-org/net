@@ -1,0 +1,41 @@
+{
+  "schema": "github.com/wago-org/net/distribution-statement/v1",
+  "subject": "1111111111111111111111111111111111111111",
+  "provenanceSha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "reviewBundleSha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+  "reviewSubjects": [
+    {
+      "name": "net-current-review",
+      "revision": "5b444e9dfbbf1b64e7b1f923f1dc3579a4aaf87e",
+      "tree": "2ab621daa95f38878ba7cae1893333cf73d759c3",
+      "parents": [
+        "29d59163a500e96f9567f14beeb4f3bb04e6351e"
+      ]
+    },
+    {
+      "name": "wago-current-review",
+      "revision": "e44b1baa6eabfba07967a4458fdb56983cb054ae",
+      "tree": "826ac3cc506c8ebe1b6631992bf9acb4304ee879",
+      "parents": [
+        "7fbc00a57624b26ba8d528d97b419b670e85f64b"
+      ]
+    },
+    {
+      "name": "workers-current",
+      "revision": "1e9139756d8a3c631c59c00b028038c83bfa8341",
+      "tree": "ca79d1fb02f19ae15d7b166ffc179c01f9a7c212",
+      "parents": [
+        "5cb4efff83f0a519311fcf03b63496433f2901f0",
+        "08466d04599d7c0da88d4c5cda73a62c775a8dfc"
+      ]
+    }
+  ],
+  "publication": {
+    "currentPlugin": "review-only",
+    "productionWagoMerge": "unpublished",
+    "externalWorkers": "published",
+    "pooling": "unsupported",
+    "publisherAuthentication": "external-required",
+    "hostedReleaseAutomation": "disabled"
+  }
+}

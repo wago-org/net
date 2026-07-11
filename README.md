@@ -72,7 +72,9 @@ publisher authentication or hosted activation; emits an unsigned canonical
 statement binding the exact subject, provenance, bundle, and review subjects for
 external detached signing; optionally verifies a raw Ed25519 signature only
 against an explicitly supplied no-discovery trust policy that can pin the exact
-statement digest and plugin subject against rollback; keeps production
+statement digest and plugin subject against rollback; publishes public positive
+and negative detached-signature interoperability vectors without a private key
+or publisher claim; keeps production
 activation behind published exact subjects, executed arm64 evidence, and zero
 accepted exceptions; audits unsupported pool topology; runs bounded fuzz smoke, benchmarks, TinyGo,
 cross-build, package/custom CLI inspection, and final clean-tree checks; and
