@@ -610,6 +610,14 @@ no signature, key, trust root, production decision, or hosted-activation claim.
   unresolved.
 - `da7ac6e` — extends standard-Go/TinyGo custom CLI inspection to granular
   protocol keys and moves release fuzz/benchmark commands to split packages.
+- `c3b2b36` — adds exact revision/tree/ordered-parent verification and safe
+  preparation of a clean production Wago worktree without cleaning or
+  overwriting its potentially dirty source checkout.
+- `685cdd7` — routes release workspace Go, module-mode Go, TinyGo, cross-build,
+  custom CLI, source-pack, WASI, and provenance work through the selected clean
+  production Wago source.
+- `e76869c` — adds release-input fixtures proving dirty source preservation and
+  fail-closed wrong/dirty substitutes, including linked-worktree compatibility.
 
 ## Active work
 
@@ -644,16 +652,22 @@ The moving-ref compatibility review is now green: Wago `8131d967` and selective
 networking `173b38a` pass standard Go, focused race, vet, TinyGo, exact
 least-authority direct/managed/external-worker lifecycle tests, granular custom
 CLI inspection, deterministic source packs, and cold-cache pack-only
-reconstruction. A full `ALLOW_DIRTY=1 RUN_WASI=1 FUZZTIME=1s` development release
-run reached deterministic provenance after all protocol and external suites
-passed, then stopped because standalone bundle verification correctly rejects
-`final-clean-trees=skipped`.
+reconstruction.
 
-The complete heavyweight release gate is still not green. Its strict run stops
-on the pre-existing dirty production Wago audit file. Native/QEMU arm64
-execution, publication of current and production subjects, and removal of the
-accepted WASI preview-1 exceptions remain external blockers rather than protocol
-architecture gaps.
+The complete heavyweight local release gate is now green. A strict
+`RUN_WASI=1 FUZZTIME=1s` run at `e76869c4991b408e1c25093fd98ced52f369d3f2`
+used exact clean production Wago revision `97e6f91`, tree `adbba31c`, and ordered
+parents `54499ba5` / `ffd5ef4b` while leaving the user-owned
+`.audit/wago/src/wago/bottomref_test.go` modification untouched. Standard and
+module-mode Go, race, vet, generated-module tidy, fuzz, benchmarks, TinyGo,
+arm64 cross-build, granular custom CLI, Wago/lneto, accepted WASI, clean-tree,
+source-pack, pack-only current-review, provenance, and standalone bundle checks
+passed. Provenance SHA-256 was
+`4ecf8956e6ede7d4bd1e4733a011cd20f257173ce8c37a9b430da39761226c1e`; bundle
+SHA-256 was `fe615d7af0eb86dc3526be5eb2c347860cb02d5db7af12a039c517d1f0c867a2`.
+Native/QEMU arm64 execution, publication of current and production subjects, and
+removal of the accepted WASI preview-1 exceptions remain external production
+activation blockers rather than protocol architecture gaps.
 
 ## Ordered backlog
 
@@ -666,10 +680,11 @@ architecture gaps.
 3. Activate hosted release automation only after the production Wago ref is
    fetchable, require executed linux/arm64 smoke on an arm64/QEMU tier, and remove
    the WASI exception only after reviewing and pinning an upstream fix.
-4. Restore clean production audit inputs and rerun the strict complete release
-   gate with WASI enabled. Keep the reviewed Wago `8131d967`, selective
-   networking `173b38a`, protocol, granular inspection, fuzz, benchmark,
-   cross-build, and pack-only reconstruction gates unchanged.
+4. Rerun the strict complete release gate on each final candidate subject using
+   the exact clean production Wago worktree. Keep the dirty source-audit
+   preservation fixture and the reviewed Wago `8131d967`, selective networking
+   `173b38a`, protocol, granular inspection, fuzz, benchmark, cross-build, and
+   pack-only reconstruction gates unchanged.
 
 ## Blockers and discovered prerequisites
 

@@ -56,10 +56,11 @@ allocation-reporting benchmarks, linux/arm64 cross-build, and pack-only external
 reconstruction pass for this stage. The arm64 smoke binary cross-compiles but
 cannot execute on this host because no native or QEMU runner is installed. The
 Wago moving-ref compatibility replay and selective networking reconstruction now
-pass on exact upstream `18615546584ec09e607856a0da99851656f5be80`. The final
-heavyweight release matrix remains blocked by dirty production audit input,
-unpublished exact subjects, missing arm64 execution, and accepted WASI
-preview-1 exceptions.
+pass on exact upstream `18615546584ec09e607856a0da99851656f5be80`. The strict
+heavyweight local release matrix now passes through an exact clean production
+Wago worktree while leaving the user-owned dirty audit checkout untouched.
+Production activation remains blocked by unpublished exact subjects, missing
+arm64 execution, and accepted WASI preview-1 exceptions.
 
 ## Goal
 
@@ -211,7 +212,8 @@ Exact runtime registration, protocol implementation compile isolation, finite
 client defaults, policy composition, granular register packages, self-register
 factory inspection, granular standard-Go/TinyGo custom CLI inspection, practical
 fuzz/benchmark smoke, cross-build, and pack-only reconstruction are implemented
-and passing. Complete heavyweight release signoff remains externally blocked.
+and passing. The strict local heavyweight signoff passes; production activation
+remains externally blocked.
 
 ## Migration sequence
 
@@ -304,13 +306,14 @@ is rejected, as are the former aggregate namespace package and aggregate lneto
 assembler.
 
 The standard, race, vet, fuzz, benchmark, TinyGo, cross-build, lifecycle,
-source-boundary, direct/granular dependency, granular custom CLI, and pack-only
-reconstruction portions pass. The refreshed current-Wago review and selective
-networking review also pass direct, managed, external-worker, and granular
-inspection reconstruction. Before declaring production completion, restore
-clean production audit inputs, publish the exact required subjects, execute the
-arm64 smoke on a native or QEMU runner, and remove or re-review the accepted
-WASI preview-1 exceptions.
+source-boundary, direct/granular dependency, granular custom CLI, source-pack,
+pack-only reconstruction, provenance, and standalone bundle portions pass. The
+refreshed current-Wago review and selective networking review also pass direct,
+managed, external-worker, and granular inspection reconstruction. Release
+validation selects the exact clean production Wago merge independently of the
+user-owned dirty audit checkout. Before declaring production completion,
+publish the exact required subjects, execute the arm64 smoke on a native or QEMU
+runner, and remove or re-review the accepted WASI preview-1 exceptions.
 
 ## Exact registration matrix
 

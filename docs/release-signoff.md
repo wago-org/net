@@ -1,10 +1,11 @@
 # Deterministic release signoff
 
 The release gate is `scripts/release-signoff.sh`. It runs from a clean plugin
-checkout with clean production audit repositories, current Wago/networking
-review worktrees, and the external workers checkout. It writes disposable logs
-under `.wago/release-signoff/`. The default current-review worktrees are
-`.wago/wago-current-plugin-lifecycle-18615546` and
+checkout with an exact clean production-Wago worktree, clean lneto/WASI inputs,
+current Wago/networking review worktrees, and the external workers checkout. It
+writes disposable logs under `.wago/release-signoff/`. The default production
+Wago worktree is `.wago/wago-production-97e6f91`; the default current-review
+worktrees are `.wago/wago-current-plugin-lifecycle-18615546` and
 `.wago/net-current-plugin-registration-18615546`.
 
 ## Pinned inputs
@@ -13,7 +14,7 @@ The script refuses revision drift before doing work:
 
 | Repository | Required revision |
 |---|---|
-| Wago merged lifecycle/worker branch | `97e6f91e6c822491577faa86f3c30aa5a8fff1e8` |
+| Wago merged lifecycle/worker branch | `97e6f91e6c822491577faa86f3c30aa5a8fff1e8` (tree `adbba31c51996f1c1d6d3c2069de8ddf0afd94ee`) |
 | Wago lifecycle/reset parent | `54499ba5135f69a062e23a7255f4a408d6cecf8c` |
 | Wago worker parent | `ffd5ef4b122cbd019897eeea3503789ab5860e4a` |
 | lneto | `ab1a0c735a8b534a1d6322a3e245bc11a09431e7` |
@@ -22,15 +23,26 @@ The script refuses revision drift before doing work:
 | Current networking registration review | `173b38a4d5a0db0e6058544576942a46b9d543df` |
 | External workers | `1e9139756d8a3c631c59c00b028038c83bfa8341` |
 
-By default the production inputs are `.audit/wago`, `.audit/lneto`, and
-`.audit/wasi`; current review inputs are
+By default the production inputs are `.wago/wago-production-97e6f91`,
+`.audit/lneto`, and `.audit/wasi`; current review inputs are
 `.wago/wago-current-plugin-lifecycle-18615546`,
 `.wago/net-current-plugin-registration-18615546`, and
-`.wago/workers-plugin`. `../wago`
-must resolve to the production Wago audit checkout because `go.mod` deliberately
-uses the adjacent development replacement. Override locations with `WAGO_DIR`,
+`.wago/workers-plugin`. Prepare or verify the production Wago worktree with:
+
+```sh
+scripts/prepare-production-wago.sh
+```
+
+The preparation script may read Git objects from `.audit/wago`, even when that
+source worktree has user-owned modifications, but it never resets, cleans, or
+overwrites that source. An existing substitute must already be clean and match
+the exact revision, tree, and ordered parents; wrong or dirty substitutes fail
+closed. The release gate generates a disposable Go workspace and module file so
+workspace Go, `GOWORK=off` Go, TinyGo, arm64 cross-compilation, and custom CLI
+builds all select this exact clean source instead of the development
+`go.mod`/`go.work` replacements. Override locations with `WAGO_DIR`,
 `LNETO_DIR`, `WASI_DIR`, `CURRENT_WAGO_DIR`, `CURRENT_NET_DIR`, and
-`WORKERS_DIR`; revision checks still apply.
+`WORKERS_DIR`; all revision and cleanliness checks still apply.
 
 ## Gate
 
@@ -40,8 +52,8 @@ scripts/release-signoff.sh
 
 The gate performs, in order:
 
-1. revision, merge-parent, toolchain, symlink, and initial clean-tree checks;
-   the exact reviewed plugin-plan compatibility decision; a moving-ref
+1. revision, tree, ordered merge-parent, toolchain, selected-module, and initial
+   clean-tree checks; the exact reviewed plugin-plan compatibility decision; a moving-ref
    publication/pool topology refresh for current Wago/net/workers; and an
    isolated audit of the reviewed docs/CI-only WASI upstream snapshot;
 2. workspace and `GOWORK=off` Go tests, race tests, vet, package listing, and a
@@ -100,15 +112,22 @@ vet, TinyGo, exact direct/managed/external-worker cleanup, and pack-only
 cold-cache reconstruction. The reconstructed custom CLI inspects all four keys:
 `net`, `net-tcp`, `net-udp`, and `net-dns`.
 
-The complete strict release script still does not pass because
-`.audit/wago/src/wago/bottomref_test.go` is a pre-existing user-owned modification.
-A full `ALLOW_DIRTY=1 RUN_WASI=1 FUZZTIME=1s` development run passed every
-protocol, race, vet, fuzz, benchmark, TinyGo, cross-build, Wago, lneto, WASI
-exception, source-pack, and isolated current-review check through deterministic
-provenance generation. It then stopped, as designed, when standalone bundle
-verification rejected the recorded `final-clean-trees=skipped` status. Arm64
-execution remained `skipped-no-runner`; current Wago/networking review subjects
-and the production ordered-parent Wago merge remain unpublished.
+A strict `RUN_WASI=1 FUZZTIME=1s` run passed on July 11, 2026, at plugin subject
+`e76869c4991b408e1c25093fd98ced52f369d3f2`. It used the clean
+`.wago/wago-production-97e6f91` worktree while preserving the pre-existing
+`.audit/wago/src/wago/bottomref_test.go` modification. Standard workspace and
+module-mode Go, race, vet, idempotent generated-module tidy, eight fuzz targets,
+benchmarks, TinyGo, arm64 cross-build, granular custom CLI inspection, exact Wago
+and lneto suites, the accepted WASI signature, final clean-tree checks, all seven
+source packs, cold-cache current-review reconstruction, provenance verification,
+and standalone bundle verification passed. The provenance SHA-256 was
+`4ecf8956e6ede7d4bd1e4733a011cd20f257173ce8c37a9b430da39761226c1e`; the
+review bundle SHA-256 was
+`fe615d7af0eb86dc3526be5eb2c347860cb02d5db7af12a039c517d1f0c867a2`.
+Arm64 execution remained truthfully `skipped-no-runner`; current
+Wago/networking review subjects and the production ordered-parent Wago merge
+remain unpublished, and the WASI preview-1 exceptions remain accepted rather
+than fixed.
 
 Protocol-submodule release acceptance also includes
 `internal/dependencytest`'s root/single/pair/all `go list -deps` matrix. Every
@@ -136,9 +155,11 @@ TinyGo still compiles and tests the complete networking packages, and the custom
 TinyGo CLI includes the registered production plugin and must emit byte-identical
 inspection.
 
-The temporary Wago helper is removed by a shell trap. Any other Wago/WASI error,
-revision drift, module-file change, generated artifact, or dirty tree fails the
-gate. Set `RUN_WASI=0` only for a deliberately shortened PR job; release runs
+The temporary Wago helper is created only in the selected clean substitute and
+removed by a shell trap. The dirty source audit worktree is never used for that
+helper. Any other Wago/WASI error, revision/tree/parent drift, selected-module
+mismatch, generated-module instability, repository module-file change, generated
+artifact, or dirty selected tree fails the gate. Set `RUN_WASI=0` only for a deliberately shortened PR job; release runs
 must leave it enabled. `ALLOW_DIRTY=1` exists only for developing the signoff
 scripts themselves and is not a release setting.
 
