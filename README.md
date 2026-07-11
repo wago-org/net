@@ -62,8 +62,11 @@ pair, and all three. Omitted public, binding, instance-operation, and fixed ABI
 packages are rejected from each fixture's Go dependency graph. Shared checked
 memory, endpoint/handle codecs, and poll layouts live in `internal/abi/core`;
 TCP, UDP, and DNS layouts live only in `internal/abi/tcp`, `/udp`, and `/dns`.
-One protocol-neutral instance core still owns exact attachment, resource
-identity, readiness, quotas, polling, and teardown, while
+The dependency matrix also rejects each omitted protocol's namespace facet and
+`internal/backend/lneto/{tcp,udp,dns}` adapter, and rejects the temporary
+aggregate lneto assembler from every selective production graph. One
+protocol-neutral instance core still owns exact attachment, resource identity,
+readiness, quotas, polling, and teardown, while
 `internal/instance/tcp`, `internal/instance/udp`, and `internal/instance/dns`
 serialize their operations through that core. Namespace ownership is likewise
 split: `internal/namespace/core` owns shared endpoint, failure, readiness,
@@ -76,12 +79,16 @@ charging, shared UDP-port leases, and deterministic close. TCP listeners and
 streams, UDP sockets and queues, and DNS query/wire state now live independently
 in `internal/backend/lneto/tcp`, `/udp`, and `/dns`. Focused tests preserve
 immediate operations, cross-UDP/DNS port collisions, packet and maintenance
-accounting, response filtering, quotas, and ordered cleanup. Root construction
-still imports the temporary aggregate lneto assembler, so every fixture currently
-compiles all three extracted adapters and their UDP/DNS namespace facets. Full
-compile isolation is therefore not yet claimed. Opaque selective backend
-contributions and delayed shared-manager construction are the next migration
-stage. Package-local finite client defaults also remain migration work.
+accounting, response filtering, quotas, and ordered cleanup. Protocol descriptors
+now contribute only their exact adapter after registration freezes. The root
+creates one shared lneto core per exact instance, installs selected adapters
+transactionally before publishing the namespace, and exposes them through an
+immutable protocol-neutral service composition. Failed assembly closes the core
+and every installed participant before any instance state is published. The root
+imports no aggregate or protocol adapter package, and TCP-only, UDP-only, and
+DNS-only fixtures now compile only their selected public, binding, operation,
+namespace-facet, ABI, and adapter packages. Package-local finite client defaults
+remain migration work.
 
 The aggregate advanced compatibility path is now explicit:
 
@@ -101,7 +108,10 @@ selective client to compile all protocol bindings. `compat.Init` preserves the
 aggregate `Config` behavior and explicitly selects UDP, TCP, and DNS. Each
 configured Runtime instance still receives its own isolated namespace and
 handles. New callers should prefer `wagonet.New` plus only the protocol-local
-registration functions they need.
+registration functions they need. Advanced selective callers pass exact backend
+storage through `tcp.WithConfig(tcp.Config{...})`,
+`udp.WithConfig(udp.Config{...})`, or `dns.WithConfig(dns.Config{...})`; the
+compatibility constructor maps the legacy aggregate protocol fields explicitly.
 
 The extension declares that networking state requires physical reinstantiation.
 Wago therefore downgrades `ResetMemorySnapshot` and other in-place class reset

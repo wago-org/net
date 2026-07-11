@@ -1,11 +1,16 @@
 package net
 
 import (
+	"context"
+	"errors"
 	"net/netip"
 	"reflect"
 	"testing"
 
+	lnetocore "github.com/wago-org/net/internal/backend/lneto/core"
 	"github.com/wago-org/net/internal/namespace"
+	nscore "github.com/wago-org/net/internal/namespace/core"
+	"github.com/wago-org/net/internal/plugin"
 
 	wago "github.com/wago-org/wago"
 )
@@ -137,6 +142,57 @@ func TestProtocolConfigurationAdvertisesCompleteGuestSurface(t *testing.T) {
 	}
 	if dnsImports != 6 || tcpImports != 11 {
 		t.Fatalf("protocol import counts = DNS %d/6 TCP %d/11", dnsImports, tcpImports)
+	}
+}
+
+func TestSelectiveBackendAssemblyRejectsIncompatibleFamily(t *testing.T) {
+	extension := New(WithConfig(Config{StaticIPv4: selectiveTestStaticIPv4()}))
+	backend := plugin.NewBackend("other", nil, func(any) (nscore.Service, error) {
+		return nscore.Service{Key: "test", Value: new(int)}, nil
+	})
+	if err := extension.RegisterModule(plugin.NewModule(plugin.ModuleTCP, func(*wago.Registry, plugin.Host) {}, backend)); err != nil {
+		t.Fatal(err)
+	}
+	if err := wago.NewRuntime().Use(extension); !errors.Is(err, plugin.ErrIncompatibleBackend) {
+		t.Fatalf("Use incompatible backend = %v", err)
+	}
+	if extension.instanceManager() != nil {
+		t.Fatal("incompatible backend constructed an instance manager")
+	}
+}
+
+func TestSelectiveBackendAssemblyRollsBackCoreBeforePublication(t *testing.T) {
+	extension := New(WithConfig(Config{StaticIPv4: selectiveTestStaticIPv4()}))
+	installErr := errors.New("install selected adapter")
+	var common *lnetocore.Namespace
+	backend := plugin.NewBackend(plugin.BackendLnetoV1, nil, func(base any) (nscore.Service, error) {
+		common, _ = base.(*lnetocore.Namespace)
+		return nscore.Service{}, installErr
+	})
+	if err := extension.RegisterModule(plugin.NewModule(plugin.ModuleTCP, func(*wago.Registry, plugin.Host) {}, backend)); err != nil {
+		t.Fatal(err)
+	}
+	runtime := wago.NewRuntime()
+	if err := runtime.Use(extension); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := runtime.Instantiate(context.Background(), emptyModule(t, runtime)); !errors.Is(err, installErr) {
+		t.Fatalf("Instantiate install failure = %v", err)
+	}
+	if common == nil || common.Link() == nil || !common.Link().Snapshot().Closed {
+		t.Fatalf("rolled-back core = %#v", common)
+	}
+	if manager := extension.instanceManager(); manager == nil || manager.Len() != 0 {
+		t.Fatalf("published failed state: manager=%v", manager)
+	}
+}
+
+func selectiveTestStaticIPv4() *StaticIPv4Config {
+	return &StaticIPv4Config{
+		Hostname: "selective", RandSeed: 99,
+		HardwareAddress: [6]byte{2, 0, 0, 0, 0, 99}, GatewayHardwareAddress: [6]byte{2, 0, 0, 0, 0, 100},
+		IPv4Address: netip.MustParseAddr("192.0.2.99"), MTU: 1500,
+		Link: PacketLinkConfig{MaxFrameBytes: 1514, IngressFrames: 1, EgressFrames: 1},
 	}
 }
 

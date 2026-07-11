@@ -16,12 +16,13 @@ type protocolDependency struct {
 	operation string
 	abi       string
 	namespace string
+	adapter   string
 }
 
 var protocolDependencies = map[string]protocolDependency{
-	"tcp": {public: modulePath + "/tcp", binding: modulePath + "/internal/binding/tcp", operation: modulePath + "/internal/instance/tcp", abi: modulePath + "/internal/abi/tcp", namespace: modulePath + "/internal/namespace/tcp"},
-	"udp": {public: modulePath + "/udp", binding: modulePath + "/internal/binding/udp", operation: modulePath + "/internal/instance/udp", abi: modulePath + "/internal/abi/udp", namespace: modulePath + "/internal/namespace/udp"},
-	"dns": {public: modulePath + "/dns", binding: modulePath + "/internal/binding/dns", operation: modulePath + "/internal/instance/dns", abi: modulePath + "/internal/abi/dns", namespace: modulePath + "/internal/namespace/dns"},
+	"tcp": {public: modulePath + "/tcp", binding: modulePath + "/internal/binding/tcp", operation: modulePath + "/internal/instance/tcp", abi: modulePath + "/internal/abi/tcp", namespace: modulePath + "/internal/namespace/tcp", adapter: modulePath + "/internal/backend/lneto/tcp"},
+	"udp": {public: modulePath + "/udp", binding: modulePath + "/internal/binding/udp", operation: modulePath + "/internal/instance/udp", abi: modulePath + "/internal/abi/udp", namespace: modulePath + "/internal/namespace/udp", adapter: modulePath + "/internal/backend/lneto/udp"},
+	"dns": {public: modulePath + "/dns", binding: modulePath + "/internal/binding/dns", operation: modulePath + "/internal/instance/dns", abi: modulePath + "/internal/abi/dns", namespace: modulePath + "/internal/namespace/dns", adapter: modulePath + "/internal/backend/lneto/dns"},
 }
 
 func TestFixtureDependencyBoundaries(t *testing.T) {
@@ -47,11 +48,7 @@ func TestFixtureDependencyBoundaries(t *testing.T) {
 				modulePath + "/internal/abi/core",
 				modulePath + "/internal/instance/core",
 				modulePath + "/internal/namespace/core",
-				modulePath + "/internal/backend/lneto",
 				modulePath + "/internal/backend/lneto/core",
-				modulePath + "/internal/backend/lneto/dns",
-				modulePath + "/internal/backend/lneto/tcp",
-				modulePath + "/internal/backend/lneto/udp",
 			} {
 				if !dependencies[required] {
 					t.Fatalf("dependency %q absent; shared instance-core/backend boundary changed without updating the gate", required)
@@ -59,23 +56,20 @@ func TestFixtureDependencyBoundaries(t *testing.T) {
 			}
 			for protocol, dependency := range protocolDependencies {
 				if test.selected[protocol] {
-					if !dependencies[dependency.public] || !dependencies[dependency.binding] || !dependencies[dependency.operation] || !dependencies[dependency.abi] || !dependencies[dependency.namespace] {
-						t.Fatalf("selected %s dependencies absent: public=%v binding=%v operation=%v ABI=%v namespace=%v", protocol, dependencies[dependency.public], dependencies[dependency.binding], dependencies[dependency.operation], dependencies[dependency.abi], dependencies[dependency.namespace])
+					if !dependencies[dependency.public] || !dependencies[dependency.binding] || !dependencies[dependency.operation] || !dependencies[dependency.abi] || !dependencies[dependency.namespace] || !dependencies[dependency.adapter] {
+						t.Fatalf("selected %s dependencies absent: public=%v binding=%v operation=%v ABI=%v namespace=%v adapter=%v", protocol, dependencies[dependency.public], dependencies[dependency.binding], dependencies[dependency.operation], dependencies[dependency.abi], dependencies[dependency.namespace], dependencies[dependency.adapter])
 					}
 					continue
 				}
-				if dependencies[dependency.public] || dependencies[dependency.binding] || dependencies[dependency.operation] || dependencies[dependency.abi] {
-					t.Fatalf("unselected %s compiled: public=%v binding=%v operation=%v ABI=%v", protocol, dependencies[dependency.public], dependencies[dependency.binding], dependencies[dependency.operation], dependencies[dependency.abi])
-				}
-				// All adapters are now separate packages, but aggregate root construction
-				// still imports all three in every fixture until namespace contributions
-				// move into selective descriptors. TCP contracts remain structural.
-				if protocol == "tcp" && dependencies[dependency.namespace] {
-					t.Fatalf("unselected TCP namespace facet compiled")
+				if dependencies[dependency.public] || dependencies[dependency.binding] || dependencies[dependency.operation] || dependencies[dependency.abi] || dependencies[dependency.namespace] || dependencies[dependency.adapter] {
+					t.Fatalf("unselected %s compiled: public=%v binding=%v operation=%v ABI=%v namespace=%v adapter=%v", protocol, dependencies[dependency.public], dependencies[dependency.binding], dependencies[dependency.operation], dependencies[dependency.abi], dependencies[dependency.namespace], dependencies[dependency.adapter])
 				}
 			}
 			if dependencies[modulePath+"/internal/namespace"] {
 				t.Fatal("production graph reached the temporary aggregate namespace compatibility package")
+			}
+			if dependencies[modulePath+"/internal/backend/lneto"] {
+				t.Fatal("production graph reached the temporary aggregate lneto assembler")
 			}
 			for _, aggregate := range []string{modulePath + "/compat", modulePath + "/register"} {
 				if dependencies[aggregate] {

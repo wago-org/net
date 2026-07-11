@@ -77,9 +77,12 @@ that may await network progress remain single `Try` calls with explicit
 would-block or in-progress results. Focused fake backends exercise each contract
 without importing lneto; no lneto type is part of these layers. The exact
 instance manager stores one quota-owned core namespace resource and protocol
-operation packages recover that same concrete object through a neutral carrier
-before asserting only their selected facet. This preserves one namespace handle,
-one lifecycle lock, one readiness/service participant, and one teardown path.
+operation packages recover their selected facet through an immutable,
+protocol-neutral keyed service composition. The composition imports no protocol
+facet itself and retains one protocol-neutral base namespace for trusted link and
+service integration. This preserves one namespace handle, one lifecycle lock,
+one readiness/service owner, and one teardown path without forcing omitted
+protocol facets into the dependency graph.
 
 `internal/packetlink` owns fixed ingress and egress frame slots. Enqueue copies
 caller data, dequeue has explicit truncation and byte-budget rollback semantics,
@@ -96,9 +99,13 @@ DNS/TCP/UDP teardown order without importing a protocol adapter. Only immediate
 Ethernet ingress and egress calls enter bounded manual service; no lneto
 blocking, deadline, goroutine, or backoff wrapper is used. Service alternates
 directions under independent packet, byte, and operation bounds and maps backend
-errors to semantic namespace failures. The temporary aggregate
-`internal/backend/lneto` assembler still selects all configured adapters, but it
-no longer owns protocol state. `internal/backend/lneto/udp` owns fixed datagram
+errors to semantic namespace failures. Opaque protocol descriptors configure
+and install only their exact adapter after registration freezes. The root creates
+one common core per exact instance, installs every selected contribution before
+namespace publication, and closes that core transactionally on any failure. The
+temporary aggregate `internal/backend/lneto` assembler remains only for focused
+historical backend tests and is rejected from production dependency fixtures.
+`internal/backend/lneto/udp` owns fixed datagram
 queues and lneto's immediate Ethernet/IPv4/UDP frame codecs. This design is
 deliberate: lneto's high-level UDP wrappers back off, while its exported
 immediate mux cannot represent an empty payload. The adapter preserves empty and
@@ -130,10 +137,10 @@ Truncated UDP responses map to temporary failure because DNS-over-TCP fallback i
 not implemented. UDP sockets and DNS queries reserve local ports through one
 protocol-neutral core lease domain, preserving exact collision, release,
 deterministic allocation, and close behavior without moving datagrams or DNS
-records into core. Root namespace construction still imports the aggregate
-assembler, so all three extracted adapters remain in every fixture dependency
-graph until selective protocol descriptors contribute their own adapters. The
-package split is structural progress, not yet compile-isolation signoff.
+records into core. Root namespace construction imports only the shared lneto
+core. Root, single-protocol, pair, and all-protocol dependency fixtures require
+exactly the selected adapters/facets and reject every omitted one plus the
+aggregate assembler, completing the Stage 4 compile-isolation boundary.
 
 `internal/readiness` attaches a finite coordinator to each instance resource
 table. Registrations retain opaque handle plus exact kind, level-triggered polls
