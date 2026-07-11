@@ -21,11 +21,11 @@ const (
 
 // Descriptor returns the opaque TCP module installed by the public tcp facade
 // and the bounded aggregate compatibility path.
-func Descriptor() plugin.Module {
+func Descriptor(backend ...plugin.Backend) plugin.Module {
 	return plugin.NewModule(plugin.ModuleTCP, func(registry *wago.Registry, host plugin.Host) {
 		registry.Capability(Capability, wago.CapabilityDocs("use checked nonblocking TCP networking for the exact calling instance"))
 		plugin.RegisterBindings(registry.ImportModule(Module), Bindings(host))
-	})
+	}, backend...)
 }
 
 // Bindings returns the complete checked TCP operation table.

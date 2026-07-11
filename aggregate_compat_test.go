@@ -1,9 +1,17 @@
 package net
 
 import (
+	lnetocore "github.com/wago-org/net/internal/backend/lneto/core"
+	dnsbackend "github.com/wago-org/net/internal/backend/lneto/dns"
+	tcpbackend "github.com/wago-org/net/internal/backend/lneto/tcp"
+	udpbackend "github.com/wago-org/net/internal/backend/lneto/udp"
 	dnsbinding "github.com/wago-org/net/internal/binding/dns"
 	tcpbinding "github.com/wago-org/net/internal/binding/tcp"
 	udpbinding "github.com/wago-org/net/internal/binding/udp"
+	nscore "github.com/wago-org/net/internal/namespace/core"
+	dnsns "github.com/wago-org/net/internal/namespace/dns"
+	tcpns "github.com/wago-org/net/internal/namespace/tcp"
+	udpns "github.com/wago-org/net/internal/namespace/udp"
 	"github.com/wago-org/net/internal/plugin"
 	wago "github.com/wago-org/wago"
 )
@@ -22,11 +30,7 @@ func Init(config Config) *Extension {
 }
 
 func (e *Extension) registerAllProtocols() error {
-	for _, descriptor := range []plugin.Module{
-		udpbinding.Descriptor(),
-		tcpbinding.Descriptor(),
-		dnsbinding.Descriptor(),
-	} {
+	for _, descriptor := range aggregateTestDescriptors(e.config) {
 		if err := e.RegisterModule(descriptor); err != nil {
 			return err
 		}
@@ -37,6 +41,53 @@ func (e *Extension) registerAllProtocols() error {
 func (e *Extension) registerUDPModule() error { return e.RegisterModule(udpbinding.Descriptor()) }
 func (e *Extension) registerTCPModule() error { return e.RegisterModule(tcpbinding.Descriptor()) }
 func (e *Extension) registerDNSModule() error { return e.RegisterModule(dnsbinding.Descriptor()) }
+
+func aggregateTestDescriptors(config Config) []plugin.Module {
+	var udpConfig udpbackend.Config
+	var tcpConfig tcpbackend.Config
+	var dnsConfig dnsbackend.Config
+	if config.StaticIPv4 != nil {
+		udpConfig = udpbackend.Config(config.StaticIPv4.UDP)
+		tcpConfig = tcpbackend.Config(config.StaticIPv4.TCP)
+		dnsConfig = dnsbackend.Config(config.StaticIPv4.DNS)
+	}
+	udpContribution := plugin.NewBackend(plugin.BackendLnetoV1, nil, func(base any) (nscore.Service, error) {
+		common, ok := base.(*lnetocore.Namespace)
+		if !ok {
+			return nscore.Service{}, plugin.ErrInvalidBackend
+		}
+		adapter, err := udpbackend.New(common, udpConfig)
+		return nscore.Service{Key: udpns.ServiceKey, Value: adapter}, err
+	})
+	tcpContribution := plugin.NewBackend(plugin.BackendLnetoV1, func(target any) error {
+		common, ok := target.(*lnetocore.Config)
+		if !ok {
+			return plugin.ErrInvalidBackend
+		}
+		common.MaxActiveTCPPorts = tcpConfig.MaxListeners + tcpConfig.MaxOutboundStreams
+		return nil
+	}, func(base any) (nscore.Service, error) {
+		common, ok := base.(*lnetocore.Namespace)
+		if !ok {
+			return nscore.Service{}, plugin.ErrInvalidBackend
+		}
+		adapter, err := tcpbackend.New(common, tcpConfig)
+		return nscore.Service{Key: tcpns.ServiceKey, Value: adapter}, err
+	})
+	dnsContribution := plugin.NewBackend(plugin.BackendLnetoV1, nil, func(base any) (nscore.Service, error) {
+		common, ok := base.(*lnetocore.Namespace)
+		if !ok {
+			return nscore.Service{}, plugin.ErrInvalidBackend
+		}
+		adapter, err := dnsbackend.New(common, dnsConfig)
+		return nscore.Service{Key: dnsns.ServiceKey, Value: adapter}, err
+	})
+	return []plugin.Module{
+		udpbinding.Descriptor(udpContribution),
+		tcpbinding.Descriptor(tcpContribution),
+		dnsbinding.Descriptor(dnsContribution),
+	}
+}
 
 func protocolTestBindings(bindings []plugin.Binding) []binding {
 	converted := make([]binding, len(bindings))

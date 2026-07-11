@@ -21,8 +21,6 @@ import (
 
 var _ nscore.Namespace = (*Namespace)(nil)
 
-const tcpCloseOrder = 20
-
 // UDPConfig is the UDP adapter's finite socket and datagram storage contract.
 type UDPConfig = udpbackend.Config
 
@@ -101,16 +99,6 @@ func New(config Config) (*Namespace, error) {
 	n := &Namespace{
 		core: common, stack: stack, requiredFrameBytes: int(config.MTU) + 14,
 		tcp: tcpAdapter, udp: udpAdapter, dns: dnsAdapter,
-	}
-	participants := []lnetocore.Participant{{
-		CloseOrder: tcpCloseOrder,
-		Close:      tcpAdapter.CloseLocked,
-	}}
-	for _, participant := range participants {
-		if err := common.Install(participant); err != nil {
-			_ = common.Close()
-			return nil, err
-		}
 	}
 	return n, nil
 }

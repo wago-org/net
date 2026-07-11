@@ -22,11 +22,11 @@ const (
 
 // Descriptor returns the opaque DNS module installed by the public dns facade
 // and the bounded aggregate compatibility path.
-func Descriptor() plugin.Module {
+func Descriptor(backend ...plugin.Backend) plugin.Module {
 	return plugin.NewModule(plugin.ModuleDNS, func(registry *wago.Registry, host plugin.Host) {
 		registry.Capability(Capability, wago.CapabilityDocs("use checked bounded DNS queries for the exact calling instance"))
 		plugin.RegisterBindings(registry.ImportModule(Module), Bindings(host))
-	})
+	}, backend...)
 }
 
 // Bindings returns the complete checked DNS operation table.

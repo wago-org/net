@@ -15,7 +15,10 @@ import (
 	"github.com/wago-org/net/internal/quota"
 )
 
-const firstEphemeralTCPPort uint16 = 49152
+const (
+	firstEphemeralTCPPort uint16 = 49152
+	closeOrder                   = 20
+)
 
 var ErrPolicyDenied = errors.New("net: endpoint policy denied operation")
 
@@ -48,11 +51,11 @@ func New(common *lnetocore.Namespace, config Config) (*Adapter, error) {
 		return nil, nscore.Fail(nscore.FailureInvalidArgument, lneto.ErrInvalidConfig)
 	}
 	common.Lock()
-	defer common.Unlock()
 	if common.ClosedLocked() || !ValidConfig(config, common.PolicyLocked(), common.QuotasLocked(), true) {
+		common.Unlock()
 		return nil, nscore.Fail(nscore.FailureInvalidArgument, lneto.ErrInvalidConfig)
 	}
-	return &Adapter{
+	n := &Adapter{
 		core: common, stack: common.StackLocked(), ipv4Address: common.IPv4AddressLocked(),
 		policy: common.PolicyLocked(), quotas: common.QuotasLocked(), config: config,
 		listeners: make([]*tcpListener, 0, config.MaxListeners),
@@ -60,7 +63,12 @@ func New(common *lnetocore.Namespace, config Config) (*Adapter, error) {
 		ports:     make(map[uint16]struct{}, int(config.MaxListeners)+int(config.MaxOutboundStreams)),
 		nextPort:  firstEphemeralTCPPort,
 		nextISS:   lnetotcp.Value(common.RandSeedLocked()),
-	}, nil
+	}
+	common.Unlock()
+	if err := common.Install(lnetocore.Participant{CloseOrder: closeOrder, Close: n.CloseLocked}); err != nil {
+		return nil, err
+	}
+	return n, nil
 }
 
 // ValidConfig validates TCP-local storage and authority without allocation.
@@ -237,6 +245,11 @@ func (p *tcpPool) closeLocked() {
 	p.owner = nil
 }
 
+// TryListenTCP implements the narrow TCP namespace facet.
+func (n *Adapter) TryListenTCP(local nscore.Endpoint) (nscore.Resource, nscore.Progress, error) {
+	return n.TryListen(local)
+}
+
 func (n *Adapter) TryListen(local nscore.Endpoint) (nscore.Resource, nscore.Progress, error) {
 	if n == nil {
 		return nil, 0, nscore.Fail(nscore.FailureClosed, net.ErrClosed)
@@ -314,6 +327,11 @@ func (n *Adapter) TryListen(local nscore.Endpoint) (nscore.Resource, nscore.Prog
 	n.ports[local.Port] = struct{}{}
 	n.listeners = append(n.listeners, listener)
 	return listener, nscore.ProgressDone, nil
+}
+
+// TryConnectTCP implements the narrow TCP namespace facet.
+func (n *Adapter) TryConnectTCP(remote nscore.Endpoint) (nscore.Resource, nscore.Progress, error) {
+	return n.TryConnect(remote)
 }
 
 func (n *Adapter) TryConnect(remote nscore.Endpoint) (nscore.Resource, nscore.Progress, error) {

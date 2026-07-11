@@ -147,6 +147,12 @@ type ServiceCarrier interface {
 	NamespaceService(ServiceKey) (any, bool)
 }
 
+// BaseCarrier exposes the one protocol-neutral ownership/service namespace
+// beneath an immutable composition for trusted host-side link integration.
+type BaseCarrier interface {
+	NamespaceBase() Namespace
+}
+
 // ComposeNamespace publishes one immutable namespace over base. The base owns
 // readiness, bounded service, and close; selected protocol adapters remain
 // reachable only through their exact service keys.
@@ -170,6 +176,19 @@ func ComposeNamespace(base Namespace, services ...Service) (Namespace, error) {
 // ResolveNamespaceService unwraps the quota-owned namespace resource and
 // resolves key when the namespace is composed. Historical direct facet values
 // remain usable by focused operation tests and backend-neutral fakes.
+// ResolveNamespaceBase unwraps quota ownership and immutable composition to
+// the one protocol-neutral base namespace.
+func ResolveNamespaceBase(value any) Namespace {
+	if carrier, ok := value.(NamespaceCarrier); ok {
+		value = carrier.NamespaceBackend()
+	}
+	if carrier, ok := value.(BaseCarrier); ok {
+		return carrier.NamespaceBase()
+	}
+	base, _ := value.(Namespace)
+	return base
+}
+
 func ResolveNamespaceService(value any, key ServiceKey) any {
 	if carrier, ok := value.(NamespaceCarrier); ok {
 		value = carrier.NamespaceBackend()
@@ -190,6 +209,13 @@ func ResolveNamespaceService(value any, key ServiceKey) any {
 type composedNamespace struct {
 	base     Namespace
 	services map[ServiceKey]any
+}
+
+func (n *composedNamespace) NamespaceBase() Namespace {
+	if n == nil {
+		return nil
+	}
+	return n.base
 }
 
 func (n *composedNamespace) NamespaceService(key ServiceKey) (any, bool) {

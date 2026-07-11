@@ -16,9 +16,17 @@ import (
 // supplied root Config retains the advanced aggregate configuration surface.
 func Init(config wagonet.Config) *wagonet.Extension {
 	network := wagonet.New(wagonet.WithConfig(config))
-	mustRegister(udp.Register(network))
-	mustRegister(tcp.Register(network))
-	mustRegister(dns.Register(network))
+	var udpConfig udp.Config
+	var tcpConfig tcp.Config
+	var dnsConfig dns.Config
+	if config.StaticIPv4 != nil {
+		udpConfig = udp.Config(config.StaticIPv4.UDP)
+		tcpConfig = tcp.Config(config.StaticIPv4.TCP)
+		dnsConfig = dns.Config(config.StaticIPv4.DNS)
+	}
+	mustRegister(udp.Register(network, udp.WithConfig(udpConfig)))
+	mustRegister(tcp.Register(network, tcp.WithConfig(tcpConfig)))
+	mustRegister(dns.Register(network, dns.WithConfig(dnsConfig)))
 	return network
 }
 

@@ -12,7 +12,7 @@ import (
 	"net/netip"
 	"sync"
 
-	lnetobackend "github.com/wago-org/net/internal/backend/lneto"
+	lnetocore "github.com/wago-org/net/internal/backend/lneto/core"
 	instancestate "github.com/wago-org/net/internal/instance/core"
 	nscore "github.com/wago-org/net/internal/namespace/core"
 	"github.com/wago-org/net/internal/packetlink"
@@ -216,7 +216,7 @@ func (e *Extension) initialize(modules []plugin.Module) (*instancestate.Manager,
 	return e.instances, e.stateErr
 }
 
-func (e *Extension) buildManager(_ []plugin.Module) (*instancestate.Manager, error) {
+func (e *Extension) buildManager(modules []plugin.Module) (*instancestate.Manager, error) {
 	managerConfig := instancestate.DefaultConfig()
 	managerConfig.Policy = e.config.Policy
 	if e.config.Limits != nil {
@@ -226,15 +226,40 @@ func (e *Extension) buildManager(_ []plugin.Module) (*instancestate.Manager, err
 		managerConfig.Readiness = *e.config.Readiness
 	}
 	if e.config.StaticIPv4 != nil {
-		backendConfig := lnetoConfig(*e.config.StaticIPv4)
-		if err := lnetobackend.ValidateConfig(backendConfig); err != nil {
+		backendConfig := lnetoCoreConfig(*e.config.StaticIPv4)
+		for _, module := range modules {
+			if err := module.ConfigureBackend(plugin.BackendLnetoV1, &backendConfig); err != nil {
+				return nil, err
+			}
+		}
+		if err := lnetocore.ValidateConfig(backendConfig); err != nil {
 			return nil, err
 		}
 		managerConfig.NamespaceFactory = func(compiled *policy.Policy, account *quota.Account) (nscore.Namespace, error) {
 			instanceConfig := backendConfig
 			instanceConfig.Policy = compiled
 			instanceConfig.Quotas = account
-			return lnetobackend.New(instanceConfig)
+			common, err := lnetocore.New(instanceConfig)
+			if err != nil {
+				return nil, err
+			}
+			services := make([]nscore.Service, 0, len(modules))
+			for _, module := range modules {
+				service, installed, installErr := module.InstallBackend(plugin.BackendLnetoV1, common)
+				if installErr != nil {
+					_ = common.Close()
+					return nil, installErr
+				}
+				if installed {
+					services = append(services, service)
+				}
+			}
+			composed, err := nscore.ComposeNamespace(common, services...)
+			if err != nil {
+				_ = common.Close()
+				return nil, err
+			}
+			return composed, nil
 		}
 	}
 	return instancestate.NewManagerConfigured(managerConfig)
@@ -339,8 +364,8 @@ func (e *Extension) instanceManager() *instancestate.Manager {
 	return manager
 }
 
-func lnetoConfig(config StaticIPv4Config) lnetobackend.Config {
-	return lnetobackend.Config{
+func lnetoCoreConfig(config StaticIPv4Config) lnetocore.Config {
+	return lnetocore.Config{
 		Hostname:               config.Hostname,
 		RandSeed:               config.RandSeed,
 		HardwareAddress:        config.HardwareAddress,
@@ -348,30 +373,6 @@ func lnetoConfig(config StaticIPv4Config) lnetobackend.Config {
 		IPv4Address:            config.IPv4Address,
 		MTU:                    config.MTU,
 		Link:                   config.Link,
-		UDP: lnetobackend.UDPConfig{
-			MaxSockets:        config.UDP.MaxSockets,
-			ReceiveBytes:      config.UDP.ReceiveBytes,
-			TransmitBytes:     config.UDP.TransmitBytes,
-			ReceiveDatagrams:  config.UDP.ReceiveDatagrams,
-			TransmitDatagrams: config.UDP.TransmitDatagrams,
-			MaxPayloadBytes:   config.UDP.MaxPayloadBytes,
-		},
-		TCP: lnetobackend.TCPConfig{
-			MaxListeners:       config.TCP.MaxListeners,
-			MaxOutboundStreams: config.TCP.MaxOutboundStreams,
-			AcceptBacklog:      config.TCP.AcceptBacklog,
-			ReceiveBytes:       config.TCP.ReceiveBytes,
-			TransmitBytes:      config.TCP.TransmitBytes,
-			TransmitPackets:    config.TCP.TransmitPackets,
-		},
-		DNS: lnetobackend.DNSConfig{
-			Server:               config.DNS.Server,
-			MaxQueries:           config.DNS.MaxQueries,
-			MaxRecords:           config.DNS.MaxRecords,
-			MaxResponseBytes:     config.DNS.MaxResponseBytes,
-			MaxAttempts:          config.DNS.MaxAttempts,
-			RetryServiceAttempts: config.DNS.RetryServiceAttempts,
-		},
 	}
 }
 

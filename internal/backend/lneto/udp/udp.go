@@ -215,6 +215,11 @@ func (q *datagramQueue) clear() {
 	q.bytes = 0
 }
 
+// TryBindUDP implements the narrow UDP namespace facet.
+func (n *Adapter) TryBindUDP(local nscore.Endpoint) (nscore.Resource, nscore.Progress, error) {
+	return n.TryBind(local)
+}
+
 func (n *Adapter) TryBind(local nscore.Endpoint) (nscore.Resource, nscore.Progress, error) {
 	if n == nil {
 		return nil, 0, nscore.Fail(nscore.FailureClosed, net.ErrClosed)

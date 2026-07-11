@@ -11,6 +11,7 @@ import (
 	abi "github.com/wago-org/net/internal/abi/core"
 	instance "github.com/wago-org/net/internal/instance/core"
 	"github.com/wago-org/net/internal/namespace"
+	nscore "github.com/wago-org/net/internal/namespace/core"
 	"github.com/wago-org/net/internal/packetlink"
 	"github.com/wago-org/net/internal/resource"
 	wago "github.com/wago-org/wago"
@@ -340,7 +341,7 @@ func concreteNamespace(t testing.TB, state *instance.State) linkedNamespace {
 	if err != nil {
 		t.Fatalf("namespace lookup: %v", err)
 	}
-	backend, ok := value.(linkedNamespace)
+	backend, ok := nscore.ResolveNamespaceBase(value).(linkedNamespace)
 	if !ok {
 		t.Fatalf("namespace resource type = %T", value)
 	}
