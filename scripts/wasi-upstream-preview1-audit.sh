@@ -7,6 +7,9 @@ wago_dir=$(realpath "${WAGO_DIR:-$root/.wago/wago-production-97e6f91}")
 out=${WASI_UPSTREAM_AUDIT_OUT:-$root/.wago/wasi-upstream-audit-evidence}
 require_current=${REQUIRE_CURRENT_WASI:-0}
 
+# shellcheck source=scripts/lib/wasi-preview1-exception.sh
+source "$root/scripts/lib/wasi-preview1-exception.sh"
+
 readonly pinned_wasi=3df6c766ad00e83b314da799dbf9a77b409ad19d
 readonly reviewed_upstream=1a7eeb215229e05bcb0f09d5cb3280d231739def
 readonly reviewed_parent=ab7d597a8517283b0399e09d967b7f02ded1772f
@@ -61,29 +64,22 @@ mkdir -p "$tmp/wasi"
 git -C "$wasi_dir" archive "$reviewed_upstream" | tar -x -C "$tmp/wasi"
 ln -s "$wago_dir" "$tmp/wago"
 
-set +e
-(
-  cd "$tmp/wasi"
-  GOWORK=off go test ./... -count=1
-) >"$out/test.txt" 2>&1
-status=$?
-set -e
-sed -i "s#${tmp//\#/\\#}#<isolated-wasi-audit>#g" "$out/test.txt"
-if ((status == 0)); then
-  fail "reviewed upstream suite passed; remove the exception and review a WASI pin update"
-fi
-if ! grep -Eqi 'SIGSEGV|segmentation violation' "$out/test.txt" ||
-   ! grep -Eqi 'p1|preview.?1' "$out/test.txt"; then
-  cat "$out/test.txt" >&2
-  fail "reviewed upstream failed outside the documented native preview-1 exception"
-fi
+wasi_preview1_run_exception_matrix "$tmp/wasi" "$out/matrix" ||
+  fail "reviewed upstream did not match the exact preview-1 pass/fault matrix"
+for evidence in "$out/matrix/"*.txt; do
+  sed -i "s#${tmp//\#/\\#}#<isolated-wasi-audit>#g" "$evidence"
+done
+cp "$out/matrix/fault-blake3sum.txt" "$out/test.txt"
 
 cat >"$out/status.txt" <<EOF
-status=accepted-preview1-native-sigsegv
+status=accepted-exact-preview1-native-sigsegv-matrix
 pinned=$pinned_wasi
 reviewed=$reviewed_upstream
 implementation_inventory_sha256=$reviewed_inventory
 changed_files=.github/workflows/ci.yml,README.md
+passing_cases=$(IFS=,; echo "${wasi_preview1_passing_cases[*]}")
+fault_cases=$(IFS=,; echo "${wasi_preview1_fault_cases[*]}")
+package=$wasi_preview1_package
 EOF
 cat "$out/status.txt"
 echo 'decision=retain-pinned-wasi; reviewed upstream contains documentation and CI only, not a preview-1 crash fix'

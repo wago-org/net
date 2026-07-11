@@ -15,6 +15,8 @@ out=${SIGNOFF_DIR:-$root/.wago/release-signoff}
 
 # shellcheck source=scripts/lib/production-wago-input.sh
 source "$root/scripts/lib/production-wago-input.sh"
+# shellcheck source=scripts/lib/wasi-preview1-exception.sh
+source "$root/scripts/lib/wasi-preview1-exception.sh"
 
 readonly expected_wago=$production_wago_revision
 readonly expected_wago_tree=$production_wago_tree
@@ -129,7 +131,7 @@ hosted_release_automation=disabled
 EOF
 WASI_DIR="$wasi_dir" WAGO_DIR="$wago_dir" WASI_UPSTREAM_AUDIT_OUT="$out/wasi-upstream" \
   "$root/scripts/wasi-upstream-preview1-audit.sh" | tee "$out/wasi-upstream-preview1-audit.txt"
-record_check wasi-upstream-preview1-audit accepted-exception 'reviewed docs/CI-only upstream still reaches the native preview-1 SIGSEGV; pin retained'
+record_check wasi-upstream-preview1-audit accepted-exception 'reviewed docs/CI-only upstream matches the exact four-pass/four-fault p1 matrix; pin retained'
 printf 'go: %s\n' "$(go version)" | tee "$out/toolchains.txt"
 printf 'tinygo: %s\n' "$(tinygo version | tr '\n' ' ')" | tee -a "$out/toolchains.txt"
 printf 'plugin: %s\nWago: %s\nlneto: %s\nWASI: %s\ncurrent net review: %s\ncurrent Wago review: %s\nworkers: %s\n' \
@@ -239,25 +241,13 @@ log "lneto audit suite"
 record_check lneto-test pass
 
 if [[ $run_wasi == 1 ]]; then
-  log "WASI audit suite (known native p1 SIGSEGV is the only accepted failure)"
-  set +e
-  (
-    cd "$wasi_dir"
-    GOWORK=off go test ./... -count=1
-  ) >"$out/wasi-test.txt" 2>&1
-  wasi_status=$?
-  set -e
-  if ((wasi_status != 0)); then
-    if ! grep -Eqi 'SIGSEGV|segmentation violation' "$out/wasi-test.txt" || ! grep -Eqi 'p1|preview.?1' "$out/wasi-test.txt"; then
-      cat "$out/wasi-test.txt" >&2
-      fail "WASI failed outside the documented native p1 exception"
-    fi
-    echo "WASI: accepted documented native p1 SIGSEGV" | tee "$out/wasi-status.txt"
-    record_check wasi-preview1-native-sigsegv accepted-exception 'pinned native preview-1 suite reached the documented SIGSEGV signature'
-  else
-    echo "WASI: full suite passed; remove the documented exception" | tee "$out/wasi-status.txt"
-    record_check wasi-test pass 'full pinned suite passed'
-  fi
+  log "WASI audit suite (exact four-pass/four-fault p1 matrix is the only accepted exception)"
+  wasi_preview1_run_exception_matrix "$wasi_dir" "$out/wasi-matrix" ||
+    fail "pinned WASI did not match the exact preview-1 exception matrix"
+  cp "$out/wasi-matrix/fault-blake3sum.txt" "$out/wasi-test.txt"
+  cat "$out/wasi-matrix/status.txt" >"$out/wasi-status.txt"
+  cat "$out/wasi-status.txt"
+  record_check wasi-preview1-native-sigsegv accepted-exception 'pinned p1: markdown/crcsum/base64x/jsonproc pass; blake3sum/script/regexmatch/bignum match the exact native SIGSEGV signature'
 else
   echo "WASI: skipped by RUN_WASI=$run_wasi" | tee "$out/wasi-status.txt"
   record_check wasi-test skipped "RUN_WASI=$run_wasi"
