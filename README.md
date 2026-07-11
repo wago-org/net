@@ -208,6 +208,13 @@ records disposable artifacts under `.wago/release-signoff`:
 scripts/release-signoff.sh
 ```
 
+The current Wago review is replayed on exact upstream
+`18615546584ec09e607856a0da99851656f5be80`, and pack-only reconstruction now
+validates aggregate plus granular registration under standard Go and TinyGo.
+Strict release completion remains blocked by a pre-existing dirty production
+Wago audit file, absent native/QEMU arm64 execution, unpublished review and
+production Wago subjects, and the accepted WASI preview-1 exception.
+
 See [`docs/release-signoff.md`](docs/release-signoff.md) for the exact matrix,
 pinned revisions, CI tiers, and the narrowly accepted known WASI preview-1 native
 SIGSEGV. Long-running implementation work follows

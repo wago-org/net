@@ -55,8 +55,11 @@ policy/default/core tests, practical protocol/core/guest fuzz smoke,
 allocation-reporting benchmarks, linux/arm64 cross-build, and pack-only external
 reconstruction pass for this stage. The arm64 smoke binary cross-compiles but
 cannot execute on this host because no native or QEMU runner is installed. The
-final heavyweight release matrix remains blocked pending a new Wago moving-ref
-compatibility review and clean audit inputs.
+Wago moving-ref compatibility replay and selective networking reconstruction now
+pass on exact upstream `18615546584ec09e607856a0da99851656f5be80`. The final
+heavyweight release matrix remains blocked by dirty production audit input,
+unpublished exact subjects, missing arm64 execution, and accepted WASI
+preview-1 exceptions.
 
 ## Goal
 
@@ -302,9 +305,12 @@ assembler.
 
 The standard, race, vet, fuzz, benchmark, TinyGo, cross-build, lifecycle,
 source-boundary, direct/granular dependency, granular custom CLI, and pack-only
-reconstruction portions pass. Before declaring production completion, rerun the
-complete clean-tree release gate after reviewing Wago `origin/main` movement and
-execute the arm64 smoke on a native or QEMU runner.
+reconstruction portions pass. The refreshed current-Wago review and selective
+networking review also pass direct, managed, external-worker, and granular
+inspection reconstruction. Before declaring production completion, restore
+clean production audit inputs, publish the exact required subjects, execute the
+arm64 smoke on a native or QEMU runner, and remove or re-review the accepted
+WASI preview-1 exceptions.
 
 ## Exact registration matrix
 

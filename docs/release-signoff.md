@@ -3,7 +3,9 @@
 The release gate is `scripts/release-signoff.sh`. It runs from a clean plugin
 checkout with clean production audit repositories, current Wago/networking
 review worktrees, and the external workers checkout. It writes disposable logs
-under `.wago/release-signoff/`.
+under `.wago/release-signoff/`. The default current-review worktrees are
+`.wago/wago-current-plugin-lifecycle-18615546` and
+`.wago/net-current-plugin-registration-18615546`.
 
 ## Pinned inputs
 
@@ -16,13 +18,15 @@ The script refuses revision drift before doing work:
 | Wago worker parent | `ffd5ef4b122cbd019897eeea3503789ab5860e4a` |
 | lneto | `ab1a0c735a8b534a1d6322a3e245bc11a09431e7` |
 | WASI audit | `3df6c766ad00e83b314da799dbf9a77b409ad19d` |
-| Current Wago lifecycle review | `e44b1baa6eabfba07967a4458fdb56983cb054ae` |
-| Current networking registration review | `5b444e9dfbbf1b64e7b1f923f1dc3579a4aaf87e` |
+| Current Wago lifecycle review | `8131d967211871936793a4f129164ec0cd928ea9` |
+| Current networking registration review | `173b38a4d5a0db0e6058544576942a46b9d543df` |
 | External workers | `1e9139756d8a3c631c59c00b028038c83bfa8341` |
 
 By default the production inputs are `.audit/wago`, `.audit/lneto`, and
-`.audit/wasi`; current review inputs are `.wago/wago-current-plugin-lifecycle`,
-`.wago/net-current-plugin-registration`, and `.wago/workers-plugin`. `../wago`
+`.audit/wasi`; current review inputs are
+`.wago/wago-current-plugin-lifecycle-18615546`,
+`.wago/net-current-plugin-registration-18615546`, and
+`.wago/workers-plugin`. `../wago`
 must resolve to the production Wago audit checkout because `go.mod` deliberately
 uses the adjacent development replacement. Override locations with `WAGO_DIR`,
 `LNETO_DIR`, `WASI_DIR`, `CURRENT_WAGO_DIR`, `CURRENT_NET_DIR`, and
@@ -88,13 +92,23 @@ the pinned historical current-plugin review also passed after the custom CLI
 kept its aggregate-only compatibility mode. Arm64 execution was truthfully
 `skipped-no-runner`.
 
-The complete release script did not pass. Its strict clean-input attempt stopped
-because `.audit/wago/src/wago/bottomref_test.go` was already modified. A shortened
-`ALLOW_DIRTY=1 RUN_WASI=0` attempt then fetched Wago `origin/main` at
-`18615546584ec09e607856a0da99851656f5be80` and stopped because that moving ref is
-newer than the reviewed `7fbc00a57624b26ba8d528d97b419b670e85f64b` base. A new
-compatibility replay/review is required; neither failure weakens or bypasses the
-clean-tree, moving-ref, arm64-execution, publication, or WASI gates.
+The moving-ref compatibility blocker is resolved locally. Wago review
+`8131d967211871936793a4f129164ec0cd928ea9` replays the hardened lifecycle commit
+directly onto `18615546584ec09e607856a0da99851656f5be80`, and selective networking
+review `173b38a4d5a0db0e6058544576942a46b9d543df` passes standard Go, focused race,
+vet, TinyGo, exact direct/managed/external-worker cleanup, and pack-only
+cold-cache reconstruction. The reconstructed custom CLI inspects all four keys:
+`net`, `net-tcp`, `net-udp`, and `net-dns`.
+
+The complete strict release script still does not pass because
+`.audit/wago/src/wago/bottomref_test.go` is a pre-existing user-owned modification.
+A full `ALLOW_DIRTY=1 RUN_WASI=1 FUZZTIME=1s` development run passed every
+protocol, race, vet, fuzz, benchmark, TinyGo, cross-build, Wago, lneto, WASI
+exception, source-pack, and isolated current-review check through deterministic
+provenance generation. It then stopped, as designed, when standalone bundle
+verification rejected the recorded `final-clean-trees=skipped` status. Arm64
+execution remained `skipped-no-runner`; current Wago/networking review subjects
+and the production ordered-parent Wago merge remain unpublished.
 
 Protocol-submodule release acceptance also includes
 `internal/dependencytest`'s root/single/pair/all `go list -deps` matrix. Every

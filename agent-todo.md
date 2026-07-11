@@ -21,10 +21,10 @@ and lneto as the first backend.
 
 ## Pinned analysis revisions
 
-- Reviewed Wago main base: `7fbc00a57624b26ba8d528d97b419b670e85f64b` (2026-07-11), parent `6070d2d71700b2cca813d7a56f807b0b4bcc2e1b`; its ancestry includes #241 `f23549c` and squashed #232 `de402df`. Current lifecycle review `e44b1baa6eabfba07967a4458fdb56983cb054ae` is based directly on that exact main. A July 11, 2026 release refresh observed newer Wago `origin/main` `18615546584ec09e607856a0da99851656f5be80`; it is not adopted until the lifecycle/registration compatibility review is replayed.
+- Reviewed Wago main base: `18615546584ec09e607856a0da99851656f5be80` (2026-07-11). Current lifecycle review `8131d967211871936793a4f129164ec0cd928ea9` is its direct child and replays the hardened caller-identity/start/failure/close contract. The earlier reviewed pair `7fbc00a57624b26ba8d528d97b419b670e85f64b` / `e44b1baa6eabfba07967a4458fdb56983cb054ae` remains historical evidence only.
 - Wago merged lifecycle/worker branch: `97e6f91e6c822491577faa86f3c30aa5a8fff1e8` on `net/instance-close-hooks`, with ordered parents `54499ba5135f69a062e23a7255f4a408d6cecf8c` and `ffd5ef4b122cbd019897eeea3503789ab5860e4a`.
 - External workers main: `1e9139756d8a3c631c59c00b028038c83bfa8341`, pinned as `v0.0.0-20260711080606-1e9139756d8a`. Exact Wago documentation reserves pooling for a future plugin; workers contains no pool implementation, and the refreshed `wago-org` repository inventory exposes no pool-named repository.
-- Current networking review: `5b444e9dfbbf1b64e7b1f923f1dc3579a4aaf87e`, parent `29d59163a500e96f9567f14beeb4f3bb04e6351e`, on production base `d582be74d3cd5da844f530ce5f6f16aa803ed258`.
+- Current selective networking review: `173b38a4d5a0db0e6058544576942a46b9d543df`, parent `164ee79e98d7e51bf3553fb18b46fd2044b223aa`. It preserves protocol compile isolation while using Wago `8131d967` for exact expiring caller identity and external workers `1e913975` for managed-child cleanup.
 - lneto main: `ab1a0c735a8b534a1d6322a3e245bc11a09431e7` (2026-07-10).
 - WASI audit: `3df6c766ad00e83b314da799dbf9a77b409ad19d`; reviewed `origin/main` at `1a7eeb215229e05bcb0f09d5cb3280d231739def` changes only README/CI files, has an implementation-tree inventory identical to the pin, and still reaches the native preview-1 SIGSEGV, so the release pin remains unchanged.
 
@@ -221,9 +221,9 @@ not expand `HostModule` or change the TinyGo-compatible `HostFunc` shape.
 downgrade in-place resets whenever an extension owns non-Wasm state. Networking
 worker/class tests now prove UDP/TCP/DNS child state cannot cross leases.
 
-A current-main Wago review worktree on `net/current-plugin-lifecycle` at
-`e44b1baa6eabfba07967a4458fdb56983cb054ae` replays the hardened lifecycle
-contract directly onto fetched main `7fbc00a`. `HostImportAccess.CallerResolver`
+A current-main Wago review worktree on `net/current-plugin-lifecycle-18615546` at
+`8131d967211871936793a4f129164ec0cd928ea9` replays the hardened lifecycle
+contract directly onto fetched main `18615546584ec09e607856a0da99851656f5be80`. `HostImportAccess.CallerResolver`
 provides exact, expiring, runtime-scoped caller identity under `host.imports`
 without granting `instance.manage`; runtime and origin attach before imported or
 local start functions; failed starts close extension state; lifecycle panics are
@@ -231,8 +231,8 @@ isolated; and concurrent close callers receive one completed result. Wago now
 passes callback parameters/results at exact declared slot widths. Complete
 standard-Go, focused race, vet, facade, and TinyGo `src/wago` checks pass.
 
-The current networking review at
-`5b444e9dfbbf1b64e7b1f923f1dc3579a4aaf87e` compiles against that exact Wago
+The current selective networking review at
+`173b38a4d5a0db0e6058544576942a46b9d543df` compiles against that exact Wago
 replay. Ordinary networking requests only `host.imports` and
 `instance.lifecycle`, uses strict checked handlers without an arity shim, and
 does not request `instance.manage`. Direct and genuinely managed instances prove
@@ -624,23 +624,35 @@ Self-registration factories `net-tcp`, `net-udp`, `net-dns`, and `net` now have
 direct runtime inspection tests. Granular factories expose only their protocol
 plus `wago_net.abi_version`, and omitted Wasm imports fail normal resolution.
 The custom CLI release gate builds and compares standard-Go/TinyGo inspection for
-all four keys; its aggregate-only compatibility mode preserves reconstruction of
-the pinned historical review that predates granular packages.
+all four keys. The refreshed current networking review now contains granular
+packages itself, while aggregate-only compatibility remains available solely for
+older historical source packs.
 
 On July 11, 2026, workspace and `GOWORK=off` tests, race, vet, TinyGo,
 source-boundary, direct/granular dependency fixtures, twentyfold focused tests,
 eight practical one-second fuzz targets, allocation-reporting benchmarks,
 linux/arm64 package and smoke-binary cross-compilation, granular custom CLI
 inspection, deterministic source packs, and pack-only cold-cache external
-reconstruction passed. Arm64 execution remained `skipped-no-runner`.
+reconstruction passed. The refreshed development release run additionally
+completed 130,261 DNS-wire, 95,213 DNS-layout, 370,461 TCP-layout, 364,817
+UDP-layout, 353,915 shared-layout, 54,760 guest-DNS, 78,312 guest-TCP, and 80,892
+guest-UDP fuzz executions. Benchmarks measured 125.8 ns/op for guest UDP poll,
+115.2 ns/op for guest TCP poll, and 20.83 ns/op for the UDP queue, all at 0 B/op
+and 0 allocs/op. Arm64 execution remained `skipped-no-runner`.
 
-The complete heavyweight release gate is not green. Its strict run stopped on a
-pre-existing dirty production Wago audit file; an `ALLOW_DIRTY=1 RUN_WASI=0`
-development run then refreshed Wago `origin/main` to
-`18615546584ec09e607856a0da99851656f5be80` and correctly stopped because the
-reviewed lifecycle replay is based on `7fbc00a`. Full clean-tree release signoff,
-new-current-Wago compatibility review, native/QEMU arm64 execution, publication,
-and WASI exception removal remain external blockers rather than protocol
+The moving-ref compatibility review is now green: Wago `8131d967` and selective
+networking `173b38a` pass standard Go, focused race, vet, TinyGo, exact
+least-authority direct/managed/external-worker lifecycle tests, granular custom
+CLI inspection, deterministic source packs, and cold-cache pack-only
+reconstruction. A full `ALLOW_DIRTY=1 RUN_WASI=1 FUZZTIME=1s` development release
+run reached deterministic provenance after all protocol and external suites
+passed, then stopped because standalone bundle verification correctly rejects
+`final-clean-trees=skipped`.
+
+The complete heavyweight release gate is still not green. Its strict run stops
+on the pre-existing dirty production Wago audit file. Native/QEMU arm64
+execution, publication of current and production subjects, and removal of the
+accepted WASI preview-1 exceptions remain external blockers rather than protocol
 architecture gaps.
 
 ## Ordered backlog
@@ -654,24 +666,24 @@ architecture gaps.
 3. Activate hosted release automation only after the production Wago ref is
    fetchable, require executed linux/arm64 smoke on an arm64/QEMU tier, and remove
    the WASI exception only after reviewing and pinning an upstream fix.
-4. Replay the lifecycle/registration compatibility review on Wago
-   `18615546584ec09e607856a0da99851656f5be80`, restore clean audit inputs, and
-   rerun the complete release gate with WASI enabled. Keep the already-passing
-   protocol, granular inspection, fuzz, benchmark, cross-build, and pack-only
-   reconstruction gates unchanged.
+4. Restore clean production audit inputs and rerun the strict complete release
+   gate with WASI enabled. Keep the reviewed Wago `8131d967`, selective
+   networking `173b38a`, protocol, granular inspection, fuzz, benchmark,
+   cross-build, and pack-only reconstruction gates unchanged.
 
 ## Blockers and discovered prerequisites
 
 - The pinned production Wago line's `src/wago` tests still need a temporary
   test-only `trapCode` helper; current Wago main `7fbc00a` does not have that
   historical defect. The helper is removed by the release gate.
-- The hardened review `e44b1ba` is a direct child of reviewed Wago main
-  `7fbc00a` and Wago owns exact callback slot slicing. Wago `origin/main` moved to
-  `18615546584ec09e607856a0da99851656f5be80` on July 11, 2026, so adoption and
-  full release signoff require a fresh replay/review. Networking `5b444e9` proves
-  complete least-authority registration and real external-worker composition.
-  Deterministic packs and isolated reconstruction remove moving-ref dependence
-  for review, but neither current Wago nor current networking review is fetchable
+- The hardened review `8131d967` is a direct child of reviewed Wago main
+  `18615546584ec09e607856a0da99851656f5be80`; Wago owns exact callback slot
+  slicing, expiring caller identity, start/failure cleanup, and deterministic
+  panic-isolated close. Selective networking `173b38a` proves complete
+  least-authority registration, exact protocol surfaces, and real
+  external-worker composition. Deterministic packs and isolated reconstruction
+  remove moving-ref dependence for review, but neither current Wago nor current
+  networking review is fetchable
   from origin, so `CURRENT_PLUGIN_ADOPTION=adopted` correctly fails. Workers
   `1e913975` is fetchable. Schema-v2 provenance binds all three review subjects;
   cold-cache reconstruction uses only packed local modules with exact committed
