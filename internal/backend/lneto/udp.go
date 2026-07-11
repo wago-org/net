@@ -158,6 +158,9 @@ func (n *Namespace) tryBindUDP(local namespace.Endpoint) (namespace.UDPSocket, n
 	if socket := n.udpByPort[local.Port]; socket != nil && !socket.closed {
 		return nil, 0, namespace.Fail(namespace.FailureAddressInUse, lneto.ErrAlreadyRegistered)
 	}
+	if query := n.dnsByPort[local.Port]; query != nil && query.state != dnsQueryClosed {
+		return nil, 0, namespace.Fail(namespace.FailureAddressInUse, lneto.ErrAlreadyRegistered)
+	}
 
 	resourceReservation, err := n.quotas.ReserveResource(quota.ResourceUDP, 1)
 	if err != nil {

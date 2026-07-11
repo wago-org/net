@@ -96,7 +96,11 @@ primitives under the namespace lifecycle lock; it never calls `tcp.Conn`'s
 backoff-based `Read`, `Write`, or `Flush` wrappers. Fixed listener pools and
 outbound streams have bounded receive/transmit storage, partial I/O, connect and
 accept progress, half-close, level readiness, endpoint policy, quota ownership,
-port reuse, and deterministic abort cleanup. DNS remains truthfully unsupported.
+port reuse, and deterministic abort cleanup. DNS now has an unregistered backend
+foundation: adapter-owned immediate IPv4 UDP queries use lneto DNS codecs,
+finite query/record/response bounds, policy and quota ownership, deterministic
+service-attempt retransmission and timeout, semantic RCode mapping, and copied
+A/AAAA/CNAME records. No DNS guest module or capability is advertised yet.
 
 `internal/readiness` attaches a finite coordinator to each instance resource
 table. Registrations retain opaque handle plus exact kind, level-triggered polls

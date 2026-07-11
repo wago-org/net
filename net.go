@@ -95,6 +95,18 @@ type TCPConfig struct {
 	TransmitPackets    int
 }
 
+// DNSConfig fixes one static IPv4 recursive resolver plus finite query,
+// response, retry, and record-retention bounds. Zero MaxQueries disables DNS;
+// the guest DNS module remains unregistered until its complete ABI is ready.
+type DNSConfig struct {
+	Server               netip.Addr
+	MaxQueries           uint16
+	MaxRecords           uint16
+	MaxResponseBytes     int
+	MaxAttempts          uint16
+	RetryServiceAttempts uint16
+}
+
 // StaticIPv4Config configures one isolated lneto-backed IPv4 namespace per
 // Runtime instance without exposing lneto types in the host configuration.
 type StaticIPv4Config struct {
@@ -107,6 +119,7 @@ type StaticIPv4Config struct {
 	Link                   PacketLinkConfig
 	UDP                    UDPConfig
 	TCP                    TCPConfig
+	DNS                    DNSConfig
 }
 
 // Config configures immutable authority and finite instance-owned networking
@@ -262,6 +275,14 @@ func lnetoConfig(config StaticIPv4Config) lnetobackend.Config {
 			ReceiveBytes:       config.TCP.ReceiveBytes,
 			TransmitBytes:      config.TCP.TransmitBytes,
 			TransmitPackets:    config.TCP.TransmitPackets,
+		},
+		DNS: lnetobackend.DNSConfig{
+			Server:               config.DNS.Server,
+			MaxQueries:           config.DNS.MaxQueries,
+			MaxRecords:           config.DNS.MaxRecords,
+			MaxResponseBytes:     config.DNS.MaxResponseBytes,
+			MaxAttempts:          config.DNS.MaxAttempts,
+			RetryServiceAttempts: config.DNS.RetryServiceAttempts,
 		},
 	}
 }

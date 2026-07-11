@@ -16,8 +16,10 @@ fixed UDP queues, immediate frame codecs, and immediate TCP handler primitives;
 no host-facing path uses its blocking/backoff wrappers. Protocol polling is
 level-triggered and bounded independently by scans, event outputs, namespace
 service attempts, and per-attempt packet/byte/operation budgets, with finite
-per-instance service-work accounting. DNS and privileged packet access remain
-absent and truthfully unsupported.
+per-instance service-work accounting. A bounded lneto-backed DNS query engine
+now exists behind the backend-neutral namespace boundary, but `wago_net_dns`
+and `net.dns` remain absent until instance handles and the complete checked guest
+surface are finished. Privileged packet access remains absent and unsupported.
 
 ```go
 rt := wago.NewRuntime()
@@ -26,7 +28,8 @@ if err := rt.Use(wagonet.Init(wagonet.Config{})); err != nil {
 }
 
 // A configured deployment can instead provide immutable policy, finite quota,
-// readiness, packet-link, static IPv4, UDP queue, and TCP pool settings. Each
+// readiness, packet-link, static IPv4, UDP queue, TCP pool, and bounded DNS
+// resolver settings. Each
 // Runtime instance then receives its own isolated namespace and handles.
 ```
 

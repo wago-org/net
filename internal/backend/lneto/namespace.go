@@ -46,6 +46,7 @@ type Config struct {
 	Link                   packetlink.Config
 	UDP                    UDPConfig
 	TCP                    TCPConfig
+	DNS                    DNSConfig
 	Policy                 *policy.Policy
 	Quotas                 *quota.Account
 }
@@ -60,6 +61,7 @@ type Namespace struct {
 	requiredFrameBytes     int
 	nextIngress            bool
 	nextUDPEgress          bool
+	nextDNSEgress          bool
 	nextIPv4ID             uint16
 	ipv4Address            netip.Addr
 	hardwareAddress        [6]byte
@@ -76,6 +78,12 @@ type Namespace struct {
 	tcpPorts               map[uint16]struct{}
 	nextTCPPort            uint16
 	nextTCPISS             lnetotcp.Value
+	dnsConfig              DNSConfig
+	dnsQueries             []*dnsQuery
+	dnsByPort              map[uint16]*dnsQuery
+	dnsCursor              int
+	nextDNSPort            uint16
+	nextDNSTxID            uint16
 	closed                 bool
 }
 
@@ -120,6 +128,7 @@ func New(config Config) (*Namespace, error) {
 		requiredFrameBytes:     requiredFrameBytes,
 		nextIngress:            true,
 		nextUDPEgress:          true,
+		nextDNSEgress:          true,
 		nextIPv4ID:             uint16(config.RandSeed),
 		ipv4Address:            config.IPv4Address,
 		hardwareAddress:        config.HardwareAddress,
@@ -135,6 +144,11 @@ func New(config Config) (*Namespace, error) {
 		tcpPorts:               make(map[uint16]struct{}, int(config.TCP.MaxListeners)+int(config.TCP.MaxOutboundStreams)),
 		nextTCPPort:            firstEphemeralTCPPort,
 		nextTCPISS:             lnetotcp.Value(config.RandSeed),
+		dnsConfig:              config.DNS,
+		dnsQueries:             make([]*dnsQuery, 0, config.DNS.MaxQueries),
+		dnsByPort:              make(map[uint16]*dnsQuery, config.DNS.MaxQueries),
+		nextDNSPort:            firstEphemeralDNSPort,
+		nextDNSTxID:            uint16(config.RandSeed) | 1,
 	}, nil
 }
 
@@ -185,6 +199,13 @@ func (n *Namespace) Close() error {
 		return nil
 	}
 	n.closed = true
+	for len(n.dnsQueries) > 0 {
+		n.dnsQueries[len(n.dnsQueries)-1].closeLocked()
+	}
+	clear(n.dnsByPort)
+	n.dnsByPort = nil
+	n.dnsQueries = nil
+	n.dnsCursor = 0
 	for len(n.tcpListeners) > 0 {
 		n.tcpListeners[len(n.tcpListeners)-1].closeLocked()
 	}
@@ -224,25 +245,13 @@ func (n *Namespace) TryConnectTCP(remote namespace.Endpoint) (namespace.TCPStrea
 }
 
 func (n *Namespace) TryResolve(request namespace.DNSRequest) (namespace.DNSQuery, namespace.Progress, error) {
-	if n == nil {
-		return nil, 0, namespace.Fail(namespace.FailureClosed, net.ErrClosed)
-	}
-	n.mu.Lock()
-	defer n.mu.Unlock()
-	if n.closed {
-		return nil, 0, namespace.Fail(namespace.FailureClosed, net.ErrClosed)
-	}
-	if !request.Valid() {
-		return nil, 0, namespace.Fail(namespace.FailureInvalidArgument, lneto.ErrInvalidAddr)
-	}
-	return nil, 0, namespace.Fail(namespace.FailureNotSupported, lneto.ErrUnsupported)
+	return n.tryResolve(request)
 }
 
-// TryService performs bounded, nonblocking packet transfer between the link and
-// stack. Each direction probe consumes one operation from the attempt budget;
-// completed frames increment the reported packet and operation counts, with
-// Bytes set to exact frame lengths. Empty probes remain unreported so a call
-// with no completed work returns would-block with a zero report.
+// TryService performs bounded, nonblocking packet transfer and DNS maintenance.
+// Each direction probe consumes the private attempt bound. Completed packet or
+// DNS state-transition work increments Operations; only frames increment
+// Packets and Bytes. Empty probes remain unreported.
 func (n *Namespace) TryService(budget namespace.ServiceBudget) (namespace.ServiceReport, namespace.Progress, error) {
 	if n == nil {
 		return namespace.ServiceReport{}, 0, namespace.Fail(namespace.FailureClosed, net.ErrClosed)
@@ -263,18 +272,20 @@ func (n *Namespace) TryService(budget namespace.ServiceBudget) (namespace.Servic
 		ingress := n.nextIngress
 		n.nextIngress = !n.nextIngress
 		attempts++
-		var worked bool
+		var worked, packet bool
 		var frameBytes int
 		var err error
 		if ingress {
-			worked, frameBytes, err = n.tryIngress(remainingBytes)
+			worked, packet, frameBytes, err = n.tryIngress(remainingBytes)
 		} else {
-			worked, frameBytes, err = n.tryEgress(remainingBytes)
+			worked, packet, frameBytes, err = n.tryEgress(remainingBytes)
 		}
 		if worked {
-			report.Packets++
 			report.Operations++
-			report.Bytes += uint32(frameBytes)
+			if packet {
+				report.Packets++
+				report.Bytes += uint32(frameBytes)
+			}
 		}
 		if err != nil {
 			progress := namespace.ProgressWouldBlock
@@ -290,21 +301,24 @@ func (n *Namespace) TryService(budget namespace.ServiceBudget) (namespace.Servic
 	return report, namespace.ProgressDone, nil
 }
 
-func (n *Namespace) tryIngress(remainingBytes uint32) (bool, int, error) {
+func (n *Namespace) tryIngress(remainingBytes uint32) (bool, bool, int, error) {
 	result, err := n.link.TryDequeueWithin(packetlink.Ingress, n.scratch, int(remainingBytes))
 	if errors.Is(err, packetlink.ErrFrameBudget) {
-		return false, 0, nil
+		return false, false, 0, nil
 	}
 	if err != nil {
-		return false, 0, mapError(err)
+		return false, false, 0, mapError(err)
 	}
 	if !result.Ready {
-		return false, 0, nil
+		return false, false, 0, nil
 	}
 	frame := n.scratch[:result.FrameBytes]
-	handled, udpErr := n.ingressUDPLocked(frame)
+	handled, protocolErr := n.ingressDNSLocked(frame)
+	if !handled {
+		handled, protocolErr = n.ingressUDPLocked(frame)
+	}
 	if handled {
-		err = udpErr
+		err = protocolErr
 	} else {
 		err = n.stack.IngressEthernet(frame)
 	}
@@ -313,41 +327,76 @@ func (n *Namespace) tryIngress(remainingBytes uint32) (bool, int, error) {
 		err = nil
 	}
 	if err != nil {
-		return true, result.FrameBytes, mapError(err)
+		return true, true, result.FrameBytes, mapError(err)
 	}
-	return true, result.FrameBytes, nil
+	return true, true, result.FrameBytes, nil
 }
 
-func (n *Namespace) tryEgress(remainingBytes uint32) (bool, int, error) {
+func (n *Namespace) tryEgress(remainingBytes uint32) (bool, bool, int, error) {
 	if remainingBytes < uint32(n.requiredFrameBytes) {
-		return false, 0, nil
+		return false, false, 0, nil
 	}
+	var dnsWorked bool
 	result, err := n.link.TryFill(packetlink.Egress, func(dst []byte) (int, error) {
+		hasDNS := n.hasDNSWorkLocked()
+		if hasDNS && n.nextDNSEgress {
+			n.nextDNSEgress = false
+			written, worked, dnsErr := n.egressDNSLocked(dst[:n.requiredFrameBytes])
+			dnsWorked = worked
+			if written != 0 || worked || dnsErr != nil {
+				return written, dnsErr
+			}
+		}
+
 		hasUDP := n.hasUDPEgressLocked()
 		if hasUDP && n.nextUDPEgress {
 			n.nextUDPEgress = false
-			return n.egressUDPLocked(dst[:n.requiredFrameBytes])
+			written, udpErr := n.egressUDPLocked(dst[:n.requiredFrameBytes])
+			if written != 0 || udpErr != nil {
+				if hasDNS {
+					n.nextDNSEgress = true
+				}
+				return written, udpErr
+			}
 		}
 		written, stackErr := n.stack.EgressEthernet(dst[:n.requiredFrameBytes])
-		if written != 0 || stackErr != nil || !hasUDP {
+		if written != 0 || stackErr != nil {
 			if hasUDP {
 				n.nextUDPEgress = true
 			}
+			if hasDNS {
+				n.nextDNSEgress = true
+			}
 			return written, stackErr
 		}
-		n.nextUDPEgress = true
-		return n.egressUDPLocked(dst[:n.requiredFrameBytes])
+		if hasUDP {
+			n.nextUDPEgress = true
+			written, udpErr := n.egressUDPLocked(dst[:n.requiredFrameBytes])
+			if written != 0 || udpErr != nil {
+				if hasDNS {
+					n.nextDNSEgress = true
+				}
+				return written, udpErr
+			}
+		}
+		if hasDNS {
+			n.nextDNSEgress = true
+			written, worked, dnsErr := n.egressDNSLocked(dst[:n.requiredFrameBytes])
+			dnsWorked = worked
+			return written, dnsErr
+		}
+		return 0, nil
 	})
 	if errors.Is(err, packetlink.ErrQueueFull) {
-		return false, 0, nil
+		return false, false, 0, nil
 	}
 	if err != nil {
-		return false, 0, mapError(err)
+		return dnsWorked, false, 0, mapError(err)
 	}
 	if !result.Ready {
-		return false, 0, nil
+		return dnsWorked, false, 0, nil
 	}
-	return true, result.FrameBytes, nil
+	return true, true, result.FrameBytes, nil
 }
 
 func (n *Namespace) checkEndpoint(endpoint namespace.Endpoint) error {
@@ -377,7 +426,8 @@ func validConfig(config Config, requireAuthority bool) bool {
 		return false
 	}
 	return validUDPConfig(config.UDP, int(config.MTU), config.Policy, config.Quotas, requireAuthority) &&
-		validTCPConfig(config.TCP, config.Policy, config.Quotas, requireAuthority)
+		validTCPConfig(config.TCP, config.Policy, config.Quotas, requireAuthority) &&
+		validDNSConfig(config.DNS, int(config.MTU), config.Policy, config.Quotas, requireAuthority)
 }
 
 func validTCPConfig(config TCPConfig, compiled *policy.Policy, account *quota.Account, requireAuthority bool) bool {
