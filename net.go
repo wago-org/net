@@ -301,7 +301,7 @@ func (e *Extension) RegisterModule(module plugin.Module) error {
 }
 
 // Info returns extension metadata loaded from wago.json.
-func (e *Extension) Info() wago.ExtensionInfo { return extensionInfo }
+func (e *Extension) Info() wago.ExtensionInfo { return cloneExtensionInfo(extensionInfo) }
 
 // Register declares the core networking capability and host imports.
 func (e *Extension) Register(reg *wago.Registry) error {
@@ -434,7 +434,7 @@ func loadExtensionInfo() wago.ExtensionInfo {
 	if err := json.Unmarshal(data, &m); err != nil {
 		panic("wagonet: parsing wago.json: " + err.Error())
 	}
-	return wago.ExtensionInfo{
+	return cloneExtensionInfo(wago.ExtensionInfo{
 		ID:          m.Module,
 		Name:        m.Name,
 		Version:     m.Version,
@@ -443,12 +443,26 @@ func loadExtensionInfo() wago.ExtensionInfo {
 		License:     m.License,
 		Homepage:    m.Homepage,
 		Repository:  m.Repository,
-		Authors:     append([]string(nil), m.Authors...),
-		Tags:        append([]string(nil), m.Keywords...),
+		Authors:     m.Authors,
+		Tags:        m.Keywords,
 		Private:     m.Private,
 		Compat: wago.Compatibility{
 			Engines:   m.Engines,
-			Platforms: append([]string(nil), m.Platforms...),
+			Platforms: m.Platforms,
 		},
+	})
+}
+
+func cloneExtensionInfo(info wago.ExtensionInfo) wago.ExtensionInfo {
+	cloned := info
+	cloned.Authors = append([]string(nil), info.Authors...)
+	cloned.Tags = append([]string(nil), info.Tags...)
+	cloned.Compat.Platforms = append([]string(nil), info.Compat.Platforms...)
+	if info.Compat.Engines != nil {
+		cloned.Compat.Engines = make(map[string]string, len(info.Compat.Engines))
+		for key, value := range info.Compat.Engines {
+			cloned.Compat.Engines[key] = value
+		}
 	}
+	return cloned
 }

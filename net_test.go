@@ -121,6 +121,50 @@ func TestExtensionMetadataAndABIBinding(t *testing.T) {
 	}
 }
 
+func TestExtensionInfoReturnsIndependentMutableCopies(t *testing.T) {
+	ext := Init(Config{})
+	first := ext.Info()
+	if len(first.Authors) == 0 || len(first.Tags) == 0 || len(first.Compat.Engines) == 0 {
+		t.Fatalf("unexpected extension info = %+v", first)
+	}
+	first.Authors[0] = "mutated author"
+	first.Tags[0] = "mutated-tag"
+	if len(first.Compat.Platforms) != 0 {
+		first.Compat.Platforms = append(first.Compat.Platforms[:0:0], "mutated-platform")
+	}
+	first.Compat.Engines["wago"] = "mutated-engine"
+
+	second := ext.Info()
+	if second.Authors[0] == "mutated author" || second.Tags[0] == "mutated-tag" || second.Compat.Engines["wago"] == "mutated-engine" {
+		t.Fatalf("Info returned aliased mutable data: %+v", second)
+	}
+}
+
+func TestExtensionInfoConcurrentCallsDoNotAlias(t *testing.T) {
+	ext := Init(Config{})
+	infos := make([]wago.ExtensionInfo, 2)
+	start := make(chan struct{})
+	var workers sync.WaitGroup
+	for i := range infos {
+		workers.Add(1)
+		go func(i int) {
+			defer workers.Done()
+			<-start
+			infos[i] = ext.Info()
+		}(i)
+	}
+	close(start)
+	workers.Wait()
+	if len(infos[0].Authors) == 0 || len(infos[1].Authors) == 0 || len(infos[0].Compat.Engines) == 0 || len(infos[1].Compat.Engines) == 0 {
+		t.Fatalf("unexpected concurrent Info results: %+v / %+v", infos[0], infos[1])
+	}
+	infos[0].Authors[0] = "mutated concurrently"
+	infos[0].Compat.Engines["wago"] = "mutated concurrently"
+	if infos[1].Authors[0] == "mutated concurrently" || infos[1].Compat.Engines["wago"] == "mutated concurrently" {
+		t.Fatalf("concurrent Info calls aliased mutable data: %+v / %+v", infos[0], infos[1])
+	}
+}
+
 func TestExtensionSnapshotsCallerConfigBeforeRegistrationAndInstantiation(t *testing.T) {
 	prefix := netip.MustParsePrefix("192.0.2.0/24")
 	limits := QuotaLimits{Resources: 8, UDPResources: 8, TCPResources: 8, DNSResources: 8, QueuedBytes: 1 << 20, DNSWork: 8, ServiceUnits: 64}
