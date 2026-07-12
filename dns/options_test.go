@@ -1,11 +1,18 @@
 package dns
 
 import (
+	"errors"
 	"testing"
 
 	wagonet "github.com/wago-org/net"
 	"github.com/wago-org/net/internal/policy"
 )
+
+func TestAllowSuffixesRejectsEmptyInput(t *testing.T) {
+	if err := AllowSuffixes().applyDNS(&registration{}); !errors.Is(err, ErrInvalidOption) {
+		t.Fatalf("empty suffix helper = %v", err)
+	}
+}
 
 func TestSuffixAuthorityRequiresExplicitGrantAfterDefaultSuppression(t *testing.T) {
 	config := registration{defaultAuthority: true}

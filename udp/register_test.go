@@ -56,6 +56,9 @@ func TestRegisterRejectsDuplicateInvalidOptionFrozenAndNilNetwork(t *testing.T) 
 	if err := udp.Register(network, nil); !errors.Is(err, udp.ErrInvalidOption) {
 		t.Fatalf("nil option = %v", err)
 	}
+	if err := udp.Register(network, udp.AllowServer()); !errors.Is(err, udp.ErrInvalidOption) {
+		t.Fatalf("empty server helper = %v", err)
+	}
 	if err := udp.Register(network); err != nil {
 		t.Fatalf("Register: %v", err)
 	}

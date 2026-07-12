@@ -50,6 +50,9 @@ func TestRegisterRejectsDuplicateInvalidOptionFrozenAndNilNetwork(t *testing.T) 
 	if err := tcp.Register(network, nil); !errors.Is(err, tcp.ErrInvalidOption) {
 		t.Fatalf("nil option = %v", err)
 	}
+	if err := tcp.Register(network, tcp.AllowListeners()); !errors.Is(err, tcp.ErrInvalidOption) {
+		t.Fatalf("empty listener helper = %v", err)
+	}
 	if err := tcp.Register(network); err != nil {
 		t.Fatalf("Register: %v", err)
 	}

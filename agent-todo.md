@@ -1202,3 +1202,60 @@ Interpretation:
 1. `fix: snapshot networking configuration`
 2. `fix: clone extension metadata results`
 3. `fix: make authority helpers fail closed`
+
+## Audit recursion update — 2026-07-12 iteration 2
+
+### Completed work
+
+1. `5e8dddf` — `fix: snapshot networking configuration`
+   - Deep-copied root `net.Config` at the extension boundary, including policy slices plus `Limits`, `Readiness`, and `StaticIPv4` pointees.
+   - Added regressions proving post-construction caller mutation cannot invalidate later registration or instance attachment.
+   - Added a race-oriented regression that mutates caller-owned config concurrently with `runtime.Use` and repeated instantiation to prove the extension no longer aliases caller-owned mutable state.
+2. `6a450ae` — `fix: clone extension metadata results`
+   - Made `Extension.Info()` return a deep clone of every mutable collection instead of a shared manifest-backed result.
+   - Added mutation and concurrent-call aliasing regressions covering authors, tags, and compatibility engines.
+3. `HEAD` — `fix: make authority helpers fail closed`
+   - Made `tcp.AllowListeners()`, `udp.AllowServer()`, and `dns.AllowSuffixes()` reject empty input instead of broadening authority implicitly.
+   - Added explicit `tcp.AllowAllListenerPorts()` and `udp.AllowAllServerPorts()` helpers for intentional nonprivileged all-port grants.
+   - Added registration and authority regressions proving the new helpers stay explicit and do not restore unrelated default authority.
+
+### Remaining work
+
+Unresolved P1/P2 work from the audit prompt still includes at least:
+- endpoint-transition API narrowing,
+- empty-network lifecycle semantics,
+- service byte-budget semantics,
+- DNS option-order determinism,
+- low-level `Imports` cleanup,
+- closed-resource graph clearing,
+- allocation-reduction follow-up work (resource-table close scratch removal, TCP/UDP/DNS reuse work, service composition),
+- README and documentation reorganization,
+- `wago.json` capability keyword cleanup,
+- lifecycle serialization proof or an explicit attachment state machine.
+
+### Exact tests run
+
+Broad validation at recursion end:
+- `go test ./...`
+- `go test -race ./...`
+- `go vet ./...`
+- `scripts/check-source-boundaries.sh`
+- `GOOS=linux GOARCH=arm64 CGO_ENABLED=0 go build ./...`
+- `tinygo test ./...` → blocked on this host (`tinygo: command not found`)
+
+### Benchmark results
+
+- No hot-path benchmarks were rerun for this slice.
+- This slice changed configuration snapshotting, metadata cloning, and authority-option validation only; it did not intentionally change packet, poll, DNS transport, or TCP stream hot paths.
+- Iteration-1 benchmark baselines remain the latest measured hot-path numbers until a later slice changes those paths again.
+
+### Discovered follow-up issues / blockers
+
+- `tinygo` is still unavailable on the current host, so required TinyGo validation remains an external environment blocker.
+- Empty helper rejection is an intentional host Go API tightening, not a guest ABI change; broader public docs still need the planned README/documentation refresh.
+
+### Next three proposed atomic commits
+
+1. `fix: narrow endpoint transition authority`
+2. `fix: make empty-network lifecycle semantics explicit`
+3. `fix: validate service byte-budget semantics`

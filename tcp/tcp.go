@@ -75,13 +75,23 @@ func WithoutDefaultAuthority() Option {
 }
 
 // AllowListeners explicitly grants TCP listen authority for the supplied local
-// port ranges. An empty range list means every nonprivileged local port. Finite
-// listener storage must still be supplied with WithConfig.
+// port ranges. Empty input is rejected; use AllowAllListenerPorts to grant
+// every nonprivileged local port. Finite listener storage must still be
+// supplied with WithConfig.
 func AllowListeners(ports ...wagonet.PolicyPortRange) Option {
+	if len(ports) == 0 {
+		return optionFunc(func(*registration) error { return ErrInvalidOption })
+	}
 	return WithPolicy(wagonet.PolicyConfig{Rules: []wagonet.PolicyRule{{
 		Action: wagonet.PolicyAllow, Transports: []wagonet.PolicyTransport{wagonet.PolicyTransportTCP},
 		Directions: []wagonet.PolicyDirection{wagonet.PolicyInbound}, Ports: append([]wagonet.PolicyPortRange(nil), ports...),
 	}}})
+}
+
+// AllowAllListenerPorts explicitly grants listeners on every nonprivileged
+// local port. Privileged listeners still require AllowPrivilegedBind.
+func AllowAllListenerPorts() Option {
+	return AllowListeners(wagonet.PolicyPortRange{First: 1024, Last: ^uint16(0)})
 }
 
 // AllowWildcardBind permits explicitly granted listeners to use an unspecified

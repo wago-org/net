@@ -1,6 +1,7 @@
 package tcp
 
 import (
+	"errors"
 	"net/netip"
 	"testing"
 
@@ -42,6 +43,38 @@ func TestAuthorityOptionsKeepListenersAndSpecialClassesExplicit(t *testing.T) {
 	}
 	if compiled.CheckEndpoint(policy.OperationUDPBind, netip.IPv4Unspecified(), 80) {
 		t.Fatal("TCP wildcard/privileged grants widened UDP authority")
+	}
+}
+
+func TestAllowListenersRejectsEmptyInputAndAllPortsHelperStaysExplicit(t *testing.T) {
+	if err := AllowListeners().applyTCP(&registration{}); !errors.Is(err, ErrInvalidOption) {
+		t.Fatalf("empty listener helper = %v", err)
+	}
+	config := registration{defaultAuthority: true}
+	for _, option := range []Option{
+		WithoutDefaultAuthority(),
+		AllowAllListenerPorts(),
+		AllowWildcardBind(),
+	} {
+		if err := option.applyTCP(&config); err != nil {
+			t.Fatalf("apply option: %v", err)
+		}
+	}
+	compiled, err := policy.Compile(config.authority())
+	if err != nil {
+		t.Fatalf("Compile: %v", err)
+	}
+	if !compiled.CheckEndpoint(policy.OperationTCPListen, netip.IPv4Unspecified(), 1024) {
+		t.Fatal("all-port helper denied nonprivileged wildcard listener")
+	}
+	if !compiled.CheckEndpoint(policy.OperationTCPListen, netip.MustParseAddr("192.0.2.10"), 65535) {
+		t.Fatal("all-port helper denied highest nonprivileged listener")
+	}
+	if compiled.CheckEndpoint(policy.OperationTCPListen, netip.MustParseAddr("192.0.2.10"), 443) {
+		t.Fatal("all-port helper widened authority to privileged listeners")
+	}
+	if compiled.CheckEndpoint(policy.OperationTCPConnect, netip.MustParseAddr("192.0.2.20"), 443) {
+		t.Fatal("all-port helper restored default outbound authority")
 	}
 }
 

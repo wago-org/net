@@ -70,12 +70,22 @@ func WithoutDefaultAuthority() Option {
 }
 
 // AllowServer explicitly grants binds to the supplied local port ranges on the
-// configured local address. An empty range list grants all nonprivileged ports.
+// configured local address. Empty input is rejected; use AllowAllServerPorts to
+// grant every nonprivileged port.
 func AllowServer(ports ...wagonet.PolicyPortRange) Option {
+	if len(ports) == 0 {
+		return optionFunc(func(*registration) error { return ErrInvalidOption })
+	}
 	return WithPolicy(wagonet.PolicyConfig{Rules: []wagonet.PolicyRule{{
 		Action: wagonet.PolicyAllow, Transports: []wagonet.PolicyTransport{wagonet.PolicyTransportUDP},
 		Directions: []wagonet.PolicyDirection{wagonet.PolicyInbound}, Ports: append([]wagonet.PolicyPortRange(nil), ports...),
 	}}})
+}
+
+// AllowAllServerPorts explicitly grants binds on every nonprivileged local
+// port. Privileged binds still require AllowPrivilegedBind.
+func AllowAllServerPorts() Option {
+	return AllowServer(wagonet.PolicyPortRange{First: 1024, Last: ^uint16(0)})
 }
 
 // AllowWildcardBind permits explicitly granted non-ephemeral server binds to

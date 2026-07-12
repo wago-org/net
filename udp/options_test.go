@@ -1,6 +1,7 @@
 package udp
 
 import (
+	"errors"
 	"net/netip"
 	"testing"
 
@@ -50,6 +51,38 @@ func TestAuthorityOptionsKeepServerAndSpecialClassesExplicit(t *testing.T) {
 	}
 	if compiled.CheckEndpoint(policy.OperationTCPListen, netip.IPv4Unspecified(), 80) {
 		t.Fatal("UDP wildcard/privileged grants widened TCP authority")
+	}
+}
+
+func TestAllowServerRejectsEmptyInputAndAllPortsHelperStaysExplicit(t *testing.T) {
+	if err := AllowServer().applyUDP(&registration{}); !errors.Is(err, ErrInvalidOption) {
+		t.Fatalf("empty server helper = %v", err)
+	}
+	config := registration{defaultAuthority: true}
+	for _, option := range []Option{
+		WithoutDefaultAuthority(),
+		AllowAllServerPorts(),
+		AllowWildcardBind(),
+	} {
+		if err := option.applyUDP(&config); err != nil {
+			t.Fatalf("apply option: %v", err)
+		}
+	}
+	compiled, err := policy.Compile(config.authority())
+	if err != nil {
+		t.Fatalf("Compile: %v", err)
+	}
+	if !compiled.CheckEndpoint(policy.OperationUDPBind, netip.IPv4Unspecified(), 1024) {
+		t.Fatal("all-port helper denied nonprivileged wildcard bind")
+	}
+	if !compiled.CheckEndpoint(policy.OperationUDPBind, netip.MustParseAddr("192.0.2.10"), 65535) {
+		t.Fatal("all-port helper denied highest nonprivileged bind")
+	}
+	if compiled.CheckEndpoint(policy.OperationUDPBind, netip.MustParseAddr("192.0.2.10"), 443) {
+		t.Fatal("all-port helper widened authority to privileged binds")
+	}
+	if compiled.CheckEndpoint(policy.OperationUDPSend, netip.MustParseAddr("192.0.2.20"), 53) {
+		t.Fatal("all-port helper restored default outbound authority")
 	}
 }
 

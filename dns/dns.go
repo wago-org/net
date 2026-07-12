@@ -93,7 +93,12 @@ func WithoutDefaultAuthority() Option {
 }
 
 // AllowSuffixes explicitly grants exact names and subdomains of each suffix.
+// Empty input is rejected; use AllowAll to grant every structurally valid DNS
+// name.
 func AllowSuffixes(suffixes ...string) Option {
+	if len(suffixes) == 0 {
+		return optionFunc(func(*registration) error { return ErrInvalidOption })
+	}
 	return WithPolicy(wagonet.PolicyConfig{Rules: []wagonet.PolicyRule{{
 		Action: wagonet.PolicyAllow, Transports: []wagonet.PolicyTransport{wagonet.PolicyTransportDNS},
 		Directions: []wagonet.PolicyDirection{wagonet.PolicyOutbound}, DNSSuffixes: append([]string(nil), suffixes...),
