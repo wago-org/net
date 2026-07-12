@@ -18,6 +18,25 @@ var (
 	benchmarkInt      int
 )
 
+func BenchmarkAdapterNew(b *testing.B) {
+	config := Config{MaxListeners: 1, MaxOutboundStreams: 8, AcceptBacklog: 1, ReceiveBytes: 256, TransmitBytes: 256, TransmitPackets: 4}
+	b.ReportAllocs()
+	for b.Loop() {
+		common := newConfigTestCore(b, config.MaxListeners+config.MaxOutboundStreams)
+		adapter, err := New(common, config)
+		if err != nil {
+			common.Close()
+			b.Fatal(err)
+		}
+		if err := common.Close(); err != nil {
+			b.Fatal(err)
+		}
+		if adapter == nil {
+			b.Fatal("nil adapter")
+		}
+	}
+}
+
 func BenchmarkAdapterTryListenClose(b *testing.B) {
 	_, adapter := newTestAdapter(b, 111, 1, 0)
 	local := nscore.Endpoint{Address: netip.MustParseAddr("192.0.2.111"), Port: 4211}

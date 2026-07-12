@@ -12,6 +12,66 @@ import (
 	"github.com/wago-org/net/internal/quota"
 )
 
+func TestValidConfigRejectsOverflowAndKeepsAdapterCreationBounded(t *testing.T) {
+	compiled, err := policy.Compile(policy.Config{Rules: []policy.Rule{{
+		Action: policy.ActionAllow, Transports: []policy.Transport{policy.TransportTCP},
+		Directions: []policy.Direction{policy.DirectionInbound, policy.DirectionOutbound},
+		Prefixes:   []netip.Prefix{netip.MustParsePrefix("192.0.2.0/24")},
+	}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	account := quota.NewAccount(quota.Limits{Resources: 16, TCPResources: 16, QueuedBytes: 1 << 20})
+	for _, test := range []struct {
+		name    string
+		config  Config
+		maxInt  uint64
+		wantErr bool
+	}{
+		{name: "normal defaults", config: Config{MaxListeners: 1, MaxOutboundStreams: 8, AcceptBacklog: 1, ReceiveBytes: 256, TransmitBytes: 256, TransmitPackets: 4}},
+		{name: "listener only", config: Config{MaxListeners: 1, AcceptBacklog: 1, ReceiveBytes: 256, TransmitBytes: 256, TransmitPackets: 4}},
+		{name: "outbound only", config: Config{MaxOutboundStreams: 8, ReceiveBytes: 256, TransmitBytes: 256, TransmitPackets: 4}},
+		{name: "max listener values remain valid", config: Config{MaxListeners: ^uint16(0), AcceptBacklog: ^uint16(0), ReceiveBytes: 256, TransmitBytes: 256, TransmitPackets: 4}},
+		{name: "max outbound values remain valid", config: Config{MaxOutboundStreams: ^uint16(0), ReceiveBytes: 256, TransmitBytes: 256, TransmitPackets: 4}},
+		{name: "combined port count overflow", config: Config{MaxListeners: ^uint16(0), MaxOutboundStreams: 1, AcceptBacklog: 1, ReceiveBytes: 256, TransmitBytes: 256, TransmitPackets: 4}, wantErr: true},
+		{name: "listener backlog requires unreasonable eager allocation", config: Config{MaxListeners: 1, AcceptBacklog: 256, ReceiveBytes: 1 << 20, TransmitBytes: 1 << 20, TransmitPackets: 4}, wantErr: true},
+		{name: "simulated 32-bit outbound storage overflow", config: Config{MaxOutboundStreams: 1, ReceiveBytes: 1 << 30, TransmitBytes: 1 << 30, TransmitPackets: 4}, maxInt: uint64(^uint32(0) >> 1), wantErr: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			maxIntValue := maxInt()
+			if test.maxInt != 0 {
+				maxIntValue = test.maxInt
+			}
+			if err := validateConfig(test.config, compiled, account, true, maxIntValue); (err != nil) != test.wantErr {
+				t.Fatalf("validateConfig error = %v, wantErr=%v", err, test.wantErr)
+			}
+		})
+	}
+
+	common := newConfigTestCore(t, ^uint16(0))
+	defer common.Close()
+	config := Config{MaxListeners: ^uint16(0), AcceptBacklog: ^uint16(0), ReceiveBytes: 256, TransmitBytes: 256, TransmitPackets: 4}
+	var adapter *Adapter
+	func() {
+		defer func() {
+			if recovered := recover(); recovered != nil {
+				t.Fatalf("adapter creation panicked: %v", recovered)
+			}
+		}()
+		var err error
+		adapter, err = New(common, config)
+		if err != nil {
+			t.Fatalf("New error = %v", err)
+		}
+	}()
+	if cap(adapter.streams) != maxTCPStreamCapacityHint {
+		t.Fatalf("stream capacity hint = %d, want %d", cap(adapter.streams), maxTCPStreamCapacityHint)
+	}
+	if len(adapter.streams) != 0 {
+		t.Fatalf("new adapter eagerly populated streams = %d", len(adapter.streams))
+	}
+}
+
 func TestAcceptedCloseRetainsSlotUntilChargedMaintenance(t *testing.T) {
 	clientCore, client := newTestAdapter(t, 1, 0, 2)
 	serverCore, server := newTestAdapter(t, 2, 1, 0)
@@ -161,6 +221,33 @@ func newTestAdapter(t testing.TB, id byte, listeners, outbound uint16) (*lnetoco
 	}
 	t.Cleanup(func() { _ = common.Close() })
 	return common, adapter
+}
+
+func newConfigTestCore(t testing.TB, maxActiveTCPPorts uint16) *lnetocore.Namespace {
+	t.Helper()
+	compiled, err := policy.Compile(policy.Config{Rules: []policy.Rule{{
+		Action: policy.ActionAllow, Transports: []policy.Transport{policy.TransportTCP},
+		Directions: []policy.Direction{policy.DirectionInbound, policy.DirectionOutbound},
+		Prefixes:   []netip.Prefix{netip.MustParsePrefix("192.0.2.0/24")},
+	}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	mtu := uint16(ethernet.MaxMTU)
+	common, err := lnetocore.New(lnetocore.Config{
+		Hostname: "tcp-config", RandSeed: 99,
+		HardwareAddress:        [6]byte{0x02, 0, 0, 0, 0, 99},
+		GatewayHardwareAddress: [6]byte{0x02, 0, 0, 0, 0, 98},
+		IPv4Address:            netip.AddrFrom4([4]byte{192, 0, 2, 99}), MTU: mtu,
+		Link:              packetlink.Config{MaxFrameBytes: int(mtu) + 14, IngressFrames: 4, EgressFrames: 4},
+		MaxActiveTCPPorts: maxActiveTCPPorts,
+		Policy:            compiled,
+		Quotas:            quota.NewAccount(quota.Limits{Resources: 16, TCPResources: 16, QueuedBytes: 16 << 10}),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return common
 }
 
 func setGateways(common *lnetocore.Namespace, gateway [6]byte) {

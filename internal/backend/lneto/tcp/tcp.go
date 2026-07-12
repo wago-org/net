@@ -16,8 +16,10 @@ import (
 )
 
 const (
-	firstEphemeralTCPPort uint16 = 49152
-	closeOrder                   = 20
+	firstEphemeralTCPPort           uint16 = 49152
+	closeOrder                             = 20
+	maxEagerTCPListenerStorageBytes        = 256 << 20
+	maxTCPStreamCapacityHint               = 16
 )
 
 var ErrPolicyDenied = errors.New("net: endpoint policy denied operation")
@@ -59,8 +61,8 @@ func New(common *lnetocore.Namespace, config Config) (*Adapter, error) {
 		core: common, stack: common.StackLocked(), ipv4Address: common.IPv4AddressLocked(),
 		policy: common.PolicyLocked(), quotas: common.QuotasLocked(), config: config,
 		listeners: make([]*tcpListener, 0, config.MaxListeners),
-		streams:   make([]*tcpStream, 0, int(config.MaxOutboundStreams)+int(config.MaxListeners)*int(config.AcceptBacklog)),
-		ports:     make(map[uint16]struct{}, int(config.MaxListeners)+int(config.MaxOutboundStreams)),
+		streams:   make([]*tcpStream, 0, streamCapacityHint(config)),
+		ports:     make(map[uint16]struct{}, tcpPortCapacity(config)),
 		nextPort:  firstEphemeralTCPPort,
 		nextISS:   lnetotcp.Value(common.RandSeedLocked()),
 	}
@@ -73,21 +75,7 @@ func New(common *lnetocore.Namespace, config Config) (*Adapter, error) {
 
 // ValidConfig validates TCP-local storage and authority without allocation.
 func ValidConfig(config Config, compiled *policy.Policy, account *quota.Account, requireAuthority bool) bool {
-	if config.MaxListeners == 0 && config.MaxOutboundStreams == 0 {
-		return config == (Config{})
-	}
-	if requireAuthority && (compiled == nil || account == nil) {
-		return false
-	}
-	if uint32(config.MaxListeners)+uint32(config.MaxOutboundStreams) > uint32(^uint16(0)) ||
-		config.ReceiveBytes < 256 || config.TransmitBytes < 256 || config.TransmitPackets <= 0 || config.TransmitPackets > config.TransmitBytes {
-		return false
-	}
-	if config.MaxListeners > 0 && config.AcceptBacklog == 0 || config.MaxListeners == 0 && config.AcceptBacklog != 0 {
-		return false
-	}
-	stride := uint64(config.ReceiveBytes) + uint64(config.TransmitBytes)
-	return stride <= uint64(^uint(0)>>1) && uint64(config.AcceptBacklog) <= uint64(^uint(0)>>1)/stride
+	return validateConfig(config, compiled, account, requireAuthority, maxInt()) == nil
 }
 
 // TCPConfig fixes all lneto TCP storage and registration bounds. Each listener
@@ -101,6 +89,88 @@ type Config struct {
 	ReceiveBytes       int
 	TransmitBytes      int
 	TransmitPackets    int
+}
+
+func validateConfig(config Config, compiled *policy.Policy, account *quota.Account, requireAuthority bool, maxIntValue uint64) error {
+	if config.MaxListeners == 0 && config.MaxOutboundStreams == 0 {
+		if config != (Config{}) {
+			return lneto.ErrInvalidConfig
+		}
+		return nil
+	}
+	if requireAuthority && (compiled == nil || account == nil) {
+		return lneto.ErrInvalidConfig
+	}
+	if config.ReceiveBytes < 256 || config.TransmitBytes < 256 || config.TransmitPackets <= 0 || config.TransmitPackets > config.TransmitBytes {
+		return lneto.ErrInvalidConfig
+	}
+	if (config.MaxListeners > 0 && config.AcceptBacklog == 0) || (config.MaxListeners == 0 && config.AcceptBacklog != 0) {
+		return lneto.ErrInvalidConfig
+	}
+	portCount := uint64(config.MaxListeners) + uint64(config.MaxOutboundStreams)
+	if portCount > uint64(^uint16(0)) {
+		return lneto.ErrInvalidConfig
+	}
+	if _, ok := uint64ToInt(portCount, maxIntValue); !ok {
+		return lneto.ErrInvalidConfig
+	}
+	stride, ok := tcpStreamStorageBytes(config)
+	if !ok {
+		return lneto.ErrInvalidConfig
+	}
+	if _, ok := uint64ToInt(stride, maxIntValue); !ok {
+		return lneto.ErrInvalidConfig
+	}
+	listenerBytes, ok := multiplyUint64(uint64(config.AcceptBacklog), stride)
+	if !ok || listenerBytes > maxIntValue || listenerBytes > maxEagerTCPListenerStorageBytes {
+		return lneto.ErrInvalidConfig
+	}
+	return nil
+}
+
+func tcpStreamStorageBytes(config Config) (uint64, bool) {
+	if config.ReceiveBytes < 0 || config.TransmitBytes < 0 {
+		return 0, false
+	}
+	return addUint64(uint64(config.ReceiveBytes), uint64(config.TransmitBytes))
+}
+
+func streamCapacityHint(config Config) int {
+	hint := uint64(config.MaxListeners) + uint64(config.MaxOutboundStreams)
+	if hint > maxTCPStreamCapacityHint {
+		hint = maxTCPStreamCapacityHint
+	}
+	return int(hint)
+}
+
+func tcpPortCapacity(config Config) int {
+	return int(uint64(config.MaxListeners) + uint64(config.MaxOutboundStreams))
+}
+
+func addUint64(left, right uint64) (uint64, bool) {
+	sum := left + right
+	return sum, sum >= left
+}
+
+func multiplyUint64(left, right uint64) (uint64, bool) {
+	if left == 0 || right == 0 {
+		return 0, true
+	}
+	if left > ^uint64(0)/right {
+		return 0, false
+	}
+	return left * right, true
+}
+
+func uint64ToInt(value, maxIntValue uint64) (int, bool) {
+	if value > maxIntValue {
+		return 0, false
+	}
+	return int(value), true
+}
+
+func maxInt() uint64 {
+	return uint64(^uint(0) >> 1)
 }
 
 type tcpListener struct {
@@ -150,14 +220,15 @@ func newTCPPool(owner *Adapter, count uint16, config Config) (tcpPool, error) {
 	if count == 0 {
 		return pool, nil
 	}
-	storage := make([]byte, int(count)*(config.ReceiveBytes+config.TransmitBytes))
-	stride := config.ReceiveBytes + config.TransmitBytes
+	stride, _ := tcpStreamStorageBytes(config)
+	storage := make([]byte, int(uint64(count)*stride))
+	strideBytes := int(stride)
 	for i := range pool.slots {
-		start := i * stride
+		start := i * strideBytes
 		rxEnd := start + config.ReceiveBytes
 		if err := pool.slots[i].conn.Configure(lnetotcp.ConnConfig{
 			RxBuf:             storage[start:rxEnd],
-			TxBuf:             storage[rxEnd : start+stride],
+			TxBuf:             storage[rxEnd : start+strideBytes],
 			TxPacketQueueSize: config.TransmitPackets,
 			RWBackoff:         immediateBackoff,
 		}); err != nil {
@@ -334,7 +405,7 @@ func (n *Adapter) TryConnect(remote nscore.Endpoint) (nscore.Resource, nscore.Pr
 	if !ok {
 		return nil, 0, nscore.Fail(nscore.FailureResourceLimit, lneto.ErrExhausted)
 	}
-	retained := uint64(n.config.ReceiveBytes + n.config.TransmitBytes)
+	retained, _ := tcpStreamStorageBytes(n.config)
 	stream := &tcpStream{
 		owner:  n,
 		local:  nscore.Endpoint{Address: n.ipv4Address, Port: localPort},

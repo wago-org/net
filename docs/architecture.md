@@ -133,10 +133,14 @@ It uses only immediate `tcp.Handler` buffer/state primitives and never calls
 pools and
 outbound streams have bounded receive/transmit storage, partial I/O, connect and
 accept progress, half-close, level readiness, endpoint policy, quota ownership,
-port reuse, and deterministic abort cleanup. Closing an accepted stream releases
-its resource quota immediately. lneto retains the closed pool entry until its
-listener performs maintenance; the next bounded egress service probe reclaims
-that entry and now reports one charged service operation even when no frame is
+port reuse, and deterministic abort cleanup. Adapter creation seeds only a
+small stream-registry capacity hint and grows that registry as streams are
+actually created rather than preallocating for the full theoretical
+`MaxOutboundStreams + MaxListeners*AcceptBacklog` population. Closing an
+accepted stream releases its resource quota immediately. lneto retains the
+closed pool entry until its listener performs maintenance; the next bounded
+egress service probe reclaims that entry and now reports one charged service
+operation even when no frame is
 emitted. This preserves lneto's private accepted-list bookkeeping without unsafe
 direct slot reuse, while making the finite maintenance cost and reuse point
 observable. `internal/backend/lneto/dns` owns immediate IPv4 UDP queries plus

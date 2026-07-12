@@ -1115,3 +1115,90 @@ trust-policy provisioning, and the signed trusted channel remain external.
 
 After any supportable slice, run the committed release gate and recurse only if a
 new thread can make concrete progress toward the long-term completion criteria.
+
+## Audit recursion update — 2026-07-12 iteration 1
+
+### Completed work
+
+1. `d454d64` — `fix: guard destructive release output paths`
+   - Added centralized Go artifact-path validation for source-object export.
+   - Replaced destructive in-place rebuilds with temp-sibling generation plus atomic directory promotion.
+   - Rejected `/`, `$HOME`, the plugin repo root, configured source repos, their ancestors, the active working directory, and symlinked paths that resolve through those locations.
+   - Added shell defense-in-depth checks for `scripts/release-source-objects.sh` and `scripts/release-signoff.sh`.
+   - Added table-driven safety tests plus replacement/preservation regressions.
+2. `b93095b` — `fix: retire terminal DNS transport state`
+   - Split terminal DNS handle state from active transport state.
+   - Retired `byPort` dispatch and shared UDP port leases before publishing DNS success/failure.
+   - Rejected late DNS ingress for non-pending/non-waiting queries.
+   - Added regressions for duplicate/late responses, cancellation, timeout, parser failure, transport retirement, deterministic port reuse, and idempotent close.
+   - Documented that `MaxQueries` still limits live guest handles until `close`.
+3. `HEAD` — `fix: bound TCP adapter allocation from configuration`
+   - Removed the theoretical `streams` slice preallocation based on `MaxOutboundStreams + MaxListeners*AcceptBacklog`.
+   - Switched validation arithmetic to `uint64`, added explicit checked helpers, and simulated 32-bit representability tests.
+   - Added eager-allocation bounds for listener pool storage and kept adapter stream-registry seeding to a small fixed hint.
+   - Added a TCP adapter-creation benchmark alongside the existing outbound connect benchmark.
+
+### Remaining work
+
+Unresolved P1/P2 work from the audit prompt still includes at least:
+- immutable root configuration snapshots,
+- immutable `Extension.Info()` results,
+- fail-closed authority helpers plus restrictive DNS suffix API cleanup,
+- endpoint-transition API narrowing,
+- empty-network lifecycle semantics,
+- service byte-budget semantics,
+- DNS option-order determinism,
+- low-level `Imports` cleanup,
+- closed-resource graph clearing,
+- allocation-reduction follow-up work (resource-table close scratch removal, TCP/UDP/DNS reuse work, service composition),
+- README and documentation reorganization,
+- `wago.json` capability keyword cleanup,
+- lifecycle serialization proof or attachment state machine.
+
+### Exact tests run
+
+Focused after each slice:
+- `go test ./internal/releaseprovenance ./internal/cmd/release-source-objects`
+- `bash -n scripts/release-source-objects.sh scripts/release-signoff.sh scripts/release-review-bundle.sh`
+- `go test ./internal/backend/lneto/dns`
+- `go test ./internal/backend/lneto/tcp`
+
+Broad validation at recursion end:
+- `go test ./...`
+- `go test -race ./...`
+- `go vet ./...`
+- `scripts/check-source-boundaries.sh`
+- `GOOS=linux GOARCH=arm64 CGO_ENABLED=0 go build ./...`
+- `tinygo test ./...` → blocked on this host (`tinygo: command not found`)
+
+### Benchmark results
+
+Initial focused baselines before changes:
+- `BenchmarkAdapterTryConnectClose`: 515.1 / 539.3 / 551.8 ns/op, 1416 B/op, 6 allocs/op
+- `BenchmarkAdapterTryBindClose`: 269.3 / 295.2 / 274.1 ns/op, 640 B/op, 3 allocs/op
+- `BenchmarkAdapterTryResolveClose`: 410.9 / 390.5 / 391.6 ns/op, 1408 B/op, 1 alloc/op
+- `BenchmarkTableCloseLive/resources=1024`: 44809 / 44513 / 45621 ns/op, 157408 B/op, 1037 allocs/op
+- `BenchmarkGuestDNSPoll`: 94.20 / 94.61 / 94.71 ns/op, 0 allocs/op
+- `BenchmarkGuestUDPPoll`: 120.1 / 115.0 / 115.8 ns/op, 0 allocs/op
+- `BenchmarkGuestTCPPoll`: 114.8 / 115.2 / 113.0 ns/op, 0 allocs/op
+
+Post-change hot-path reruns:
+- `BenchmarkAdapterNew`: 2751 / 2705 / 2868 ns/op, 19832 B/op, 36 allocs/op
+- `BenchmarkAdapterTryConnectClose`: 545.7 / 547.6 / 534.2 ns/op, 1416 B/op, 6 allocs/op
+- `BenchmarkAdapterTryResolveClose`: 420.5 / 424.7 / 418.3 ns/op, 1408 B/op, 1 alloc/op
+
+Interpretation:
+- The TCP allocation fix eliminated the configuration-amplified eager `streams` slice reservation; the steady-state outbound connect path stayed at 1416 B/op and 6 allocs/op.
+- DNS transport-retirement changes preserved the single-allocation query-create baseline.
+- No performance claim is justified yet beyond removal of the pathological theoretical-capacity allocation hazard.
+
+### Discovered follow-up issues / blockers
+
+- `tinygo` is unavailable on the current host, so the required TinyGo validation remains an external environment blocker for this recursion.
+- `scripts/release-signoff.sh` now has shell defense-in-depth path checks, but the broader release-output flow still deserves a later maintainability review if more artifact paths become caller-selectable.
+
+### Next three proposed atomic commits
+
+1. `fix: snapshot networking configuration`
+2. `fix: clone extension metadata results`
+3. `fix: make authority helpers fail closed`
