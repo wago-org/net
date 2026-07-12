@@ -174,20 +174,20 @@ func (p *Policy) CheckEndpoint(operation Operation, address netip.Addr, port uin
 	return p.decide(query{transport: transport, direction: direction, address: address, port: port})
 }
 
-// CheckEndpointTransition validates an authority-preserving endpoint change.
-// The requested placeholder must be ordinarily allowed, the concrete endpoint
-// must pass every special-class gate, and no deny rule may match the concrete
-// endpoint. This permits a port-zero allocation request without turning its
-// resulting ephemeral port into general explicit-bind authority.
-func (p *Policy) CheckEndpointTransition(operation Operation, requestedAddress netip.Addr, requestedPort uint16, actualAddress netip.Addr, actualPort uint16) bool {
-	if !p.CheckEndpoint(operation, requestedAddress, requestedPort) {
+// CheckPortAllocation validates an authority-preserving local port allocation.
+// The request address remains unchanged, only the placeholder port zero may be
+// widened, the concrete port must pass every special-class gate, and no deny
+// rule may match the final endpoint. This permits a port-zero allocation
+// request without turning it into general explicit-bind authority.
+func (p *Policy) CheckPortAllocation(operation Operation, address netip.Addr, actualPort uint16) bool {
+	if actualPort == 0 || !p.CheckEndpoint(operation, address, 0) {
 		return false
 	}
 	transport, direction, ok := operationEndpoint(operation)
-	if !ok || !p.endpointClassAllowed(transport, direction, actualAddress, actualPort) {
+	if !ok || !p.endpointClassAllowed(transport, direction, address, actualPort) {
 		return false
 	}
-	return !p.denied(query{transport: transport, direction: direction, address: actualAddress, port: actualPort})
+	return !p.denied(query{transport: transport, direction: direction, address: address, port: actualPort})
 }
 
 func (p *Policy) endpointClassAllowed(transport Transport, direction Direction, address netip.Addr, port uint16) bool {

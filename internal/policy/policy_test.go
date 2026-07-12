@@ -58,7 +58,7 @@ func TestTransportScopedSpecialClassesDoNotCrossProtocols(t *testing.T) {
 	}
 }
 
-func TestEndpointTransitionPreservesAllocationAuthorityAndConcreteDenies(t *testing.T) {
+func TestPortAllocationPreservesAllocationAuthorityAndConcreteDenies(t *testing.T) {
 	compiled, err := Compile(Config{
 		Rules: []Rule{
 			{Action: ActionAllow, Transports: []Transport{TransportUDP}, Directions: []Direction{DirectionInbound}, Ports: []PortRange{{First: 0, Last: 0}}},
@@ -76,10 +76,13 @@ func TestEndpointTransitionPreservesAllocationAuthorityAndConcreteDenies(t *test
 	if compiled.CheckEndpoint(OperationUDPBind, wildcard, 49153) {
 		t.Fatal("placeholder authority became explicit ephemeral-port authority")
 	}
-	if compiled.CheckEndpointTransition(OperationUDPBind, wildcard, 0, wildcard, 49152) {
+	if compiled.CheckPortAllocation(OperationUDPBind, wildcard, 0) {
+		t.Fatal("zero concrete port was treated as an allocation result")
+	}
+	if compiled.CheckPortAllocation(OperationUDPBind, wildcard, 49152) {
 		t.Fatal("concrete ephemeral-port deny was bypassed")
 	}
-	if !compiled.CheckEndpointTransition(OperationUDPBind, wildcard, 0, wildcard, 49153) {
+	if !compiled.CheckPortAllocation(OperationUDPBind, wildcard, 49153) {
 		t.Fatal("non-denied concrete ephemeral allocation was rejected")
 	}
 }

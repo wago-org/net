@@ -286,9 +286,9 @@ func (n *Adapter) TryBind(local nscore.Endpoint) (nscore.Resource, nscore.Progre
 		return nil, 0, nscore.Fail(nscore.FailureAddressInUse, lneto.ErrAlreadyRegistered)
 	}
 	// Port zero is only an allocation request. Check authority against the final
-	// concrete endpoint before publishing the socket so a deny rule for an
-	// ephemeral port cannot be bypassed by binding the placeholder port zero.
-	if requested.Port == 0 && !n.policy.CheckEndpointTransition(policy.OperationUDPBind, requested.Address, requested.Port, local.Address, local.Port) {
+	// concrete port before publishing the socket so a deny rule for an ephemeral
+	// port cannot be bypassed by binding the placeholder port zero.
+	if requested.Port == 0 && !n.policy.CheckPortAllocation(policy.OperationUDPBind, requested.Address, local.Port) {
 		socket.portLease.ReleaseLocked()
 		return nil, 0, nscore.Fail(nscore.FailureAccessDenied, errPolicyDenied)
 	}
