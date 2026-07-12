@@ -121,7 +121,7 @@ func TestDNSBindingsAreRegisteredOnlyAsCompleteTable(t *testing.T) {
 	if !foundCapability {
 		t.Fatal("complete DNS capability was not advertised")
 	}
-	for name := range Imports(Config{}) {
+	for name := range InfoImports() {
 		if len(name) >= len(DNSModule)+1 && name[:len(DNSModule)+1] == DNSModule+"." {
 			t.Fatalf("low-level stateless imports exposed DNS resource function %q", name)
 		}

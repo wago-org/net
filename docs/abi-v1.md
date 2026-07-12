@@ -119,8 +119,8 @@ confused with `AGAIN`.
 The complete backend-neutral TCP ABI is independently gated in the
 `wago_net_tcp` module by the narrow `net.tcp` capability. Every resource call
 requires exact Runtime instance identity; no TCP resource import is exposed by
-the low-level stateless `Imports` bundle. The signatures all return one `i32`
-status:
+the low-level stateless `InfoImports` bundle. The signatures all return one
+`i32` status:
 
 ```text
 namespace_default(out_handle_ptr: i32) -> i32
@@ -191,7 +191,7 @@ zero-byte progress.
 The complete checked DNS ABI is independently gated in the `wago_net_dns`
 module by the narrow `net.dns` capability. Every resource call requires exact
 Runtime instance identity; no DNS resource import is exposed by the low-level
-stateless `Imports` bundle. The table is:
+stateless `InfoImports` bundle. The table is:
 
 ```text
 namespace_default(out_handle_ptr: i32) -> i32

@@ -331,16 +331,41 @@ func (e *Extension) Register(reg *wago.Registry) error {
 	return nil
 }
 
-// Imports returns the stateless core host imports for Wago's low-level
-// Instantiate path. Resource-owning protocol imports require the Runtime
+// InfoImports returns the explicit stateless core host imports for Wago's
+// low-level Instantiate path. It is limited to shared inspection helpers such
+// as abi_version; resource-owning protocol imports require the Runtime
 // extension path so per-instance lifecycle state can be attached and cleaned.
-func Imports(config Config) wago.Imports {
-	ext := New(WithConfig(config))
+func InfoImports() wago.Imports {
 	imports := make(wago.Imports)
-	for _, binding := range ext.bindings() {
+	for _, binding := range newExtension(Config{}).bindings() {
 		imports[Module+"."+binding.name] = binding.fn
 	}
 	return imports
+}
+
+// Imports preserves the historical low-level helper surface. Only the zero
+// configuration is accepted because low-level imports cannot own configured
+// protocol resources or lifecycle state; configured callers must fail closed
+// and use the Runtime extension path instead.
+func Imports(config Config) wago.Imports {
+	if !lowLevelImportsAllowed(config) {
+		return nil
+	}
+	return InfoImports()
+}
+
+func lowLevelImportsAllowed(config Config) bool {
+	if config.Limits != nil || config.Readiness != nil || config.StaticIPv4 != nil {
+		return false
+	}
+	return !policyConfigConfigured(config.Policy)
+}
+
+func policyConfigConfigured(config policy.Config) bool {
+	return len(config.Rules) != 0 ||
+		config.AllowWildcardBind || config.AllowLoopback || config.AllowMulticast || config.AllowBroadcast || config.AllowPrivilegedBind ||
+		len(config.WildcardBindTransports) != 0 || len(config.LoopbackTransports) != 0 || len(config.MulticastTransports) != 0 ||
+		len(config.BroadcastTransports) != 0 || len(config.PrivilegedBindTransports) != 0
 }
 
 func registerBindings(module *wago.ImportModuleBuilder, bindings []binding) {

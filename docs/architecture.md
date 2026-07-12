@@ -40,8 +40,9 @@ The root extension owns four distinct import modules: `wago_net` declares
 authority; `wago_net_tcp` declares narrow `net.tcp` authority; and
 `wago_net_dns` declares narrow `net.dns` authority. UDP, TCP, and DNS each expose
 complete configured-namespace discovery, protocol operations, kind-safe close,
-and independently capability-gated bounded poll. The low-level `Imports` bundle
-remains core-only because protocol resources require Runtime lifecycle identity.
+and independently capability-gated bounded poll. The explicit low-level
+`InfoImports` bundle remains core-only because protocol resources require
+Runtime lifecycle identity.
 Registration and implementation share complete binding tables so inspection
 metadata, TinyGo-compatible slot shapes, and actual host functions do not drift.
 `internal/abi` provides allocation-free checked ranges, fixed-width endpoint,
@@ -206,9 +207,10 @@ before polling shutdown, reverse-creation resource cleanup, and quota shutdown.
 The extension also calls `Registry.RequireReinstantiation`, so class resets that
 would reuse a physical instance are engine-downgraded to the same deterministic
 close-and-recreate path. Failed later setup and class replacement use that close
-path as well. No process-global instance map is used. The low-level `Imports` bundle remains
-suitable only for stateless core imports such as `abi_version`; resource-owning
-protocol extensions require the Runtime lifecycle path.
+path as well. No process-global instance map is used. The low-level
+`InfoImports` bundle remains suitable only for stateless core imports such as
+`abi_version`; resource-owning protocol extensions require the Runtime
+lifecycle path.
 
 The companion Wago branch `net/instance-close-hooks` now merges both prerequisite
 histories at `97e6f91`: its first parent preserves lifecycle/reset/identity work

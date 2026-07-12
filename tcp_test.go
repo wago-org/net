@@ -41,7 +41,10 @@ func TestTCPBindingsAreRegisteredOnlyAsCompleteTable(t *testing.T) {
 	if !foundCapability {
 		t.Fatal("complete TCP capability was not advertised")
 	}
-	for name := range Imports(guestTCPConfig(1, 2)) {
+	if imports := Imports(guestTCPConfig(1, 2)); len(imports) != 0 {
+		t.Fatalf("configured low-level imports = %v, want none", imports)
+	}
+	for name := range InfoImports() {
 		if len(name) >= len(TCPModule)+1 && name[:len(TCPModule)+1] == TCPModule+"." {
 			t.Fatalf("low-level stateless imports exposed TCP resource function %q", name)
 		}

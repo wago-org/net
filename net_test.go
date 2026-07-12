@@ -121,6 +121,34 @@ func TestExtensionMetadataAndABIBinding(t *testing.T) {
 	}
 }
 
+func TestInfoImportsStayCoreOnlyAndRejectConfiguredState(t *testing.T) {
+	imports := InfoImports()
+	if len(imports) != 1 {
+		t.Fatalf("InfoImports length = %d, want 1", len(imports))
+	}
+	fn, ok := imports[Module+".abi_version"].(wago.HostFunc)
+	if !ok {
+		t.Fatalf("abi_version import has type %T", imports[Module+".abi_version"])
+	}
+	results := []uint64{0}
+	fn(nil, nil, results)
+	if got := uint32(results[0]); got != ABIVersion1 {
+		t.Fatalf("abi_version = %#x, want %#x", got, ABIVersion1)
+	}
+	if imports := Imports(Config{Policy: PolicyConfig{AllowLoopback: true}}); len(imports) != 0 {
+		t.Fatalf("policy-configured low-level imports = %v, want none", imports)
+	}
+	if imports := Imports(Config{Limits: &QuotaLimits{Resources: 1}}); len(imports) != 0 {
+		t.Fatalf("quota-configured low-level imports = %v, want none", imports)
+	}
+	if imports := Imports(Config{Readiness: &ReadinessConfig{MaxRegistrations: 1}}); len(imports) != 0 {
+		t.Fatalf("readiness-configured low-level imports = %v, want none", imports)
+	}
+	if imports := Imports(Config{StaticIPv4: &StaticIPv4Config{}}); len(imports) != 0 {
+		t.Fatalf("namespace-configured low-level imports = %v, want none", imports)
+	}
+}
+
 func TestExtensionInfoReturnsIndependentMutableCopies(t *testing.T) {
 	ext := Init(Config{})
 	first := ext.Info()
