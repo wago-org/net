@@ -82,13 +82,14 @@ trigger digest, source-worktree preservation, the focused Wago regression, and
 the full isolated WASI suite.
 
 The current-Wago line is explicit rather than silently rebased. Patch-equivalent
-fix port `2a9bf214` follows lifecycle replay `cf2409d3` on exact upstream
-`2fbb34a5`; integration child `da4db3c9` directly invokes local untagged wrapper
-table entries so managed worker callbacks remain valid. Current WASI `cbdb9b32` is the direct child of
-`1a7eeb2` that adopts capability-based registration. Full current Wago, focused
+fix port `b1721328` follows authoritative upstream lifecycle commit `1a912c69`;
+managed integration child `f59d96c6` directly invokes local untagged wrapper
+table entries; exact-slot child `5385ea0a` bounds forced synchronous callbacks to
+their declared widths. Current WASI `cbdb9b32` is the direct child of `1a7eeb2`
+that adopts capability-based registration. Full current Wago, focused
 standard/race regressions, TinyGo, all eight current WASI corpus cases, and the
 pack-only networking external-worker lifecycle gate pass on exact integration
-subject `da4db3c9`.
+subject `5385ea0a`.
 
 ## Pin and production decision
 

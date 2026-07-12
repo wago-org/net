@@ -55,8 +55,9 @@ policy/default/core tests, practical protocol/core/guest fuzz smoke,
 allocation-reporting benchmarks, linux/arm64 cross-build, and pack-only external
 reconstruction pass for this stage. The arm64 smoke binary cross-compiles but
 cannot execute on this host because no native or QEMU runner is installed. The
-Wago moving-ref compatibility replay and selective networking reconstruction now
-pass on exact upstream `2fbb34a50e89faad0f2ea4d47a219218d0cd2871`. The strict
+Wago moving-ref compatibility and selective networking reconstruction now pass
+on authoritative upstream lifecycle commit
+`1a912c699d913fe3e398a5bc33bfdd9fbeeba391`. The strict
 heavyweight local release matrix now passes through an exact clean production
 Wago worktree while leaving the user-owned dirty audit checkout untouched.
 Production activation remains blocked by unpublished exact subjects, missing
@@ -64,12 +65,13 @@ arm64 execution, and accepted WASI preview-1 exceptions. Those exceptions are
 now bound to an exact four-pass/four-fault corpus matrix. A minimized trigger
 identifies Wago's synchronous-host register-ABI `call_indirect` path. Exact
 production-derived fix review `5c7f76db` passes the complete production-line
-WASI suite. The patch-equivalent current-Wago port `2a9bf214` plus managed-wrapper
-compatibility child `da4db3c9` pass current WASI `cbdb9b32`, full current Wago,
-and pack-only networking/worker reconstruction. They follow lifecycle replay
-`cf2409d3` on the CLI-only upstream child, so moving-ref acceptance is bound to
-the current exact base and remains fail-closed on later movement. Production removal still waits for publication and adoption of an exact
-fixed production input.
+WASI suite. Patch-equivalent current-Wago port `b1721328`, managed-wrapper child
+`f59d96c6`, and exact synchronous-callback slot child `5385ea0a` pass current
+WASI `cbdb9b32`, full current Wago, and direct/managed/external-worker networking
+coverage. They follow upstream's authoritative lifecycle implementation directly,
+so moving-ref acceptance is bound to that exact base and remains fail-closed on
+later movement. Production exception removal still waits for publication and
+adoption of an exact fixed production input.
 
 ## Goal
 

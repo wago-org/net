@@ -7,7 +7,7 @@ silently replacing that production prerequisite:
 
 | Review source | Exact revision | Exact tree |
 |---|---|---|
-| Wago integrated lifecycle + preview-1 fix review | `da4db3c97c643b5385cbca02ec125822afd82abd` | `5a538aee28e7a8ff85003dfc35f0f8fc6147fed3` |
+| Wago upstream lifecycle + preview-1/managed/exact-slot review | `5385ea0a7d87332cc3926459ffb20d5cc36aff6e` | `b01ebcbd8ffaa5cb2a3159f2d0b3cf20e35e6735` |
 | Selective networking registration and workers composition | `173b38a4d5a0db0e6058544576942a46b9d543df` | `ca7534943e653a6c04c63ec458fc00feb6350799` |
 | External workers | `1e9139756d8a3c631c59c00b028038c83bfa8341` | `ca79d1fb02f19ae15d7b166ffc179c01f9a7c212` |
 
@@ -18,10 +18,13 @@ the standalone verifier requires their revisions, trees, and ordered commit
 parents before deriving the same identities from the packs. These declarations
 and packs establish source availability and integrity; they are not publisher
 signatures and do not make an unpublished object an upstream release. The review
-chain is replayed onto exact Wago `origin/main` `2fbb34a5` (tree
-`42ddd8148a73d0a0bd2faccb03c834cfa06e2df3`), whose sole delta from the prior
-base is `cli/wagocli/plugin_build.go`; the moving-ref topology gate now binds
-that exact base and fails closed on any later movement.
+chain is based directly on authoritative Wago `origin/main`
+`1a912c699d913fe3e398a5bc33bfdd9fbeeba391` (tree
+`77f69ddfa2d574174b7534a7adedc110e7c740e4`, parent `e335cc1e`). That upstream
+commit owns exact-instance caller resolution, start/failure disposal,
+panic-isolated lifecycle hooks, and deterministic concurrent close. The
+moving-ref topology gate binds that exact base and fails closed on any later
+movement.
 
 ## Isolated adoption proof
 
@@ -39,12 +42,14 @@ checking out source, then creates an isolated Go workspace and runs:
   `net-udp`, and `net-dns`, requiring each exact capability/import surface.
 
 The refreshed Wago review preserves the exact lineage
-`da4db3c9 -> 2a9bf214 -> cf2409d3 -> 2fbb34a5`. `cf2409d3` replays lifecycle and
-caller hardening, `2a9bf214` is patch-equivalent to production-derived preview-1
-fix `5c7f76db`, and `da4db3c9` directly invokes local wrapper table entries so the
-managed-worker dispatcher remains safe. Complete standard Go, focused race,
-TinyGo, both matching WASI suites, and the external linked-child test pass. The
-selective networking review is a direct child of
+`5385ea0a -> f59d96c6 -> b1721328 -> 1a912c69`. Upstream `1a912c69` is the
+authoritative lifecycle implementation; `b1721328` is patch-equivalent to
+production-derived preview-1 fix `5c7f76db`; `f59d96c6` directly invokes local
+wrapper table entries so the managed-worker dispatcher remains safe; and
+`5385ea0a` restores exact declared callback slot widths when caller resolution
+forces synchronous host linking. Complete standard Go, focused race, TinyGo,
+both matching WASI suites, and direct/managed/external linked-child tests pass.
+The selective networking review is a direct child of
 `164ee79e98d7e51bf3553fb18b46fd2044b223aa`; it preserves the root/protocol
 compile boundaries while replacing forgeable direct-host test calls with real
 Wasm dispatch under Wago's expiring caller identity.
@@ -70,9 +75,10 @@ is required by standalone bundle verification.
 
 `scripts/current-plugin-topology-audit.sh` refreshes Wago, workers, and net
 remote refs before deciding whether the review can be adopted. It requires the
-integrated Wago review and its full fix/lifecycle parent chain locally, requires
-the exact workers subject to remain fetchable, and checks the exact current Wago documentation and workers
-source before preserving the statement that pooling is unsupported.
+integrated Wago review and its full upstream/fix/integration parent chain
+locally, requires the exact workers subject to remain fetchable, and checks the
+exact current Wago documentation and workers source before preserving the
+statement that pooling is unsupported.
 
 The default `CURRENT_PLUGIN_ADOPTION=review` mode permits bound local review
 objects while reporting that unpublished Wago/net subjects are not adopted. The

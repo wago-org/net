@@ -24,9 +24,9 @@ const (
 	ExpectedLnetoRevision = "ab1a0c735a8b534a1d6322a3e245bc11a09431e7"
 	ExpectedWASIRevision  = "3df6c766ad00e83b314da799dbf9a77b409ad19d"
 
-	ExpectedCurrentWagoRevision = "da4db3c97c643b5385cbca02ec125822afd82abd"
-	ExpectedCurrentWagoTree     = "5a538aee28e7a8ff85003dfc35f0f8fc6147fed3"
-	ExpectedCurrentWagoParent   = "2a9bf214957f47137287f7138cbdcaa634f2715b"
+	ExpectedCurrentWagoRevision = "5385ea0a7d87332cc3926459ffb20d5cc36aff6e"
+	ExpectedCurrentWagoTree     = "b01ebcbd8ffaa5cb2a3159f2d0b3cf20e35e6735"
+	ExpectedCurrentWagoParent   = "f59d96c61d77a26ec054191fd74a5e1889909dd7"
 	ExpectedCurrentNetRevision  = "173b38a4d5a0db0e6058544576942a46b9d543df"
 	ExpectedCurrentNetTree      = "ca7534943e653a6c04c63ec458fc00feb6350799"
 	ExpectedCurrentNetParent    = "164ee79e98d7e51bf3553fb18b46fd2044b223aa"

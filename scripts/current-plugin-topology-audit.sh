@@ -2,19 +2,20 @@
 set -euo pipefail
 
 root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
-wago_dir=$(realpath "${CURRENT_WAGO_DIR:-$root/.wago/wago-current-plugin-lifecycle-2fbb34a5}")
+wago_dir=$(realpath "${CURRENT_WAGO_DIR:-$root/.wago/wago-current-plugin-lifecycle-1a912c69}")
 workers_dir=$(realpath "${WORKERS_DIR:-$root/.wago/workers-plugin}")
 net_dir=$(realpath "${CURRENT_NET_DIR:-$root/.wago/net-current-plugin-registration-18615546}")
 adoption=${CURRENT_PLUGIN_ADOPTION:-review}
 require_production=${REQUIRE_PUBLISHED_WAGO_MERGE:-0}
 
-readonly wago_main=2fbb34a50e89faad0f2ea4d47a219218d0cd2871
-readonly wago_lifecycle_review=cf2409d32d7bac858a30422b329984e65cca8fd7
-readonly wago_lifecycle_parent=2fbb34a50e89faad0f2ea4d47a219218d0cd2871
-readonly wago_fix_review=2a9bf214957f47137287f7138cbdcaa634f2715b
-readonly wago_fix_parent=cf2409d32d7bac858a30422b329984e65cca8fd7
-readonly wago_review=da4db3c97c643b5385cbca02ec125822afd82abd
-readonly wago_review_parent=2a9bf214957f47137287f7138cbdcaa634f2715b
+readonly wago_main=1a912c699d913fe3e398a5bc33bfdd9fbeeba391
+readonly wago_main_parent=e335cc1ef896419994df5fa2f92f9824d010cd14
+readonly wago_fix_review=b17213288cc673b8a6b4e32e29592ae776a5615e
+readonly wago_fix_parent=1a912c699d913fe3e398a5bc33bfdd9fbeeba391
+readonly wago_managed_review=f59d96c61d77a26ec054191fd74a5e1889909dd7
+readonly wago_managed_parent=b17213288cc673b8a6b4e32e29592ae776a5615e
+readonly wago_review=5385ea0a7d87332cc3926459ffb20d5cc36aff6e
+readonly wago_review_parent=f59d96c61d77a26ec054191fd74a5e1889909dd7
 readonly production_merge=97e6f91e6c822491577faa86f3c30aa5a8fff1e8
 readonly production_parent1=54499ba5135f69a062e23a7255f4a408d6cecf8c
 readonly production_parent2=ffd5ef4b122cbd019897eeea3503789ab5860e4a
@@ -44,15 +45,16 @@ git -C "$workers_dir" fetch --prune origin
 git -C "$net_dir" fetch --prune origin
 
 [[ $(git -C "$wago_dir" rev-parse refs/remotes/origin/main) == "$wago_main" ]] ||
-  fail "Wago origin/main moved; replay and re-review the lifecycle commit before adoption"
+  fail "Wago origin/main moved; re-review upstream lifecycle and re-port the preview-1 integrations before adoption"
 [[ $(git -C "$workers_dir" rev-parse refs/remotes/origin/main) == "$workers_review" ]] ||
   fail "workers origin/main moved; re-review external lifecycle composition"
 [[ $(git -C "$wago_dir" rev-parse HEAD) == "$wago_review" ]] || fail "current Wago review checkout drifted"
 [[ $(git -C "$net_dir" rev-parse HEAD) == "$net_review" ]] || fail "current networking review checkout drifted"
 [[ $(git -C "$workers_dir" rev-parse HEAD) == "$workers_review" ]] || fail "workers checkout drifted"
-[[ $(parents "$wago_dir" "$wago_review") == "$wago_review_parent" ]] || fail "current Wago integration review parent drifted"
-[[ $(parents "$wago_dir" "$wago_fix_review") == "$wago_fix_parent" ]] || fail "current Wago fix review parent drifted"
-[[ $(parents "$wago_dir" "$wago_lifecycle_review") == "$wago_lifecycle_parent" ]] || fail "current Wago lifecycle review parent drifted"
+[[ $(parents "$wago_dir" "$wago_review") == "$wago_review_parent" ]] || fail "current Wago exact-slot integration parent drifted"
+[[ $(parents "$wago_dir" "$wago_managed_review") == "$wago_managed_parent" ]] || fail "current Wago managed-wrapper review parent drifted"
+[[ $(parents "$wago_dir" "$wago_fix_review") == "$wago_fix_parent" ]] || fail "current Wago preview-1 fix review parent drifted"
+[[ $(parents "$wago_dir" "$wago_main") == "$wago_main_parent" ]] || fail "reviewed upstream Wago lifecycle parent drifted"
 [[ $(parents "$net_dir" "$net_review") == "$net_review_parent" ]] || fail "current networking review parent drifted"
 [[ $(parents "$workers_dir" "$workers_review") == "$workers_parent1 $workers_parent2" ]] || fail "workers ordered parents drifted"
 [[ $(parents "$wago_dir" "$production_merge") == "$production_parent1 $production_parent2" ]] || fail "production Wago merge ordered parents drifted"
@@ -66,7 +68,7 @@ workers_refs=$(printf '%s\n' "$workers_remote" | refs_for "$workers_review" | pa
 net_review_refs=$(printf '%s\n' "$net_remote" | refs_for "$net_review" | paste -sd, -)
 [[ -n "$workers_refs" ]] || fail "exact external workers subject is not fetchable from origin"
 if [[ "$adoption" == adopted ]]; then
-  [[ -n "$wago_review_refs" ]] || fail "adopted Wago lifecycle subject is not fetchable from origin"
+  [[ -n "$wago_review_refs" ]] || fail "adopted Wago integrated review subject is not fetchable from origin"
   [[ -n "$net_review_refs" ]] || fail "adopted networking subject is not fetchable from origin"
 fi
 if [[ "$require_production" == 1 && -z "$production_refs" ]]; then
@@ -127,7 +129,7 @@ PY
 
 printf 'Wago origin/main: %s\n' "$wago_main"
 printf 'current Wago integrated fix review refs: %s\n' "${wago_review_refs:-absent}"
-printf 'current Wago integrated fix lineage: %s -> %s -> %s -> %s\n' "$wago_review" "$wago_fix_review" "$wago_lifecycle_review" "$wago_main"
+printf 'current Wago integrated fix lineage: %s -> %s -> %s -> %s\n' "$wago_review" "$wago_managed_review" "$wago_fix_review" "$wago_main"
 printf 'current networking review refs: %s\n' "${net_review_refs:-absent}"
 printf 'external workers refs: %s\n' "$workers_refs"
 printf 'production Wago merge refs: %s\n' "${production_refs:-absent}"

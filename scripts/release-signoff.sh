@@ -6,7 +6,7 @@ wago_dir=$(realpath "${WAGO_DIR:-$root/.wago/wago-production-97e6f91}")
 lneto_dir=$(realpath "${LNETO_DIR:-$root/.audit/lneto}")
 wasi_dir=$(realpath "${WASI_DIR:-$root/.audit/wasi}")
 current_net_dir=$(realpath "${CURRENT_NET_DIR:-$root/.wago/net-current-plugin-registration-18615546}")
-current_wago_dir=$(realpath "${CURRENT_WAGO_DIR:-$root/.wago/wago-current-plugin-lifecycle-2fbb34a5}")
+current_wago_dir=$(realpath "${CURRENT_WAGO_DIR:-$root/.wago/wago-current-plugin-lifecycle-1a912c69}")
 workers_dir=$(realpath "${WORKERS_DIR:-$root/.wago/workers-plugin}")
 fuzztime=${FUZZTIME:-3s}
 run_wasi=${RUN_WASI:-1}
@@ -25,7 +25,7 @@ readonly expected_wago_parent_workers=$production_wago_parent_workers
 readonly expected_lneto=ab1a0c735a8b534a1d6322a3e245bc11a09431e7
 readonly expected_wasi=3df6c766ad00e83b314da799dbf9a77b409ad19d
 readonly expected_current_net=173b38a4d5a0db0e6058544576942a46b9d543df
-readonly expected_current_wago=da4db3c97c643b5385cbca02ec125822afd82abd
+readonly expected_current_wago=5385ea0a7d87332cc3926459ffb20d5cc36aff6e
 readonly expected_workers=1e9139756d8a3c631c59c00b028038c83bfa8341
 
 log() { printf '\n==> %s\n' "$*"; }
@@ -113,7 +113,7 @@ CURRENT_WAGO_DIR="$current_wago_dir" CURRENT_NET_DIR="$current_net_dir" WORKERS_
 record_check current-plugin-topology-audit pass 'moving refs refreshed; explicit publication truth; pooling unsupported'
 CURRENT_WAGO_WASI_FIX_DIR="$current_wago_dir" WASI_DIR="$wasi_dir" WASI_FIX_REVIEW_OUT="$out/wasi-fix-review" \
   "$root/scripts/wasi-preview1-fix-review.sh" | tee "$out/wasi-preview1-fix-review.txt"
-record_check wasi-preview1-fix-review pass 'patch-equivalent production/current Wago fixes; exact lineages; standard/race/TinyGo and both complete WASI suites'
+record_check wasi-preview1-fix-review pass 'patch-equivalent production/current Wago fixes; upstream lifecycle lineage; managed-wrapper and exact-slot integrations; standard/race/TinyGo and both complete WASI suites'
 if grep -q '^adoption mode: adopted$' "$out/current-plugin-topology.txt"; then
   current_plugin_publication=adopted
 else

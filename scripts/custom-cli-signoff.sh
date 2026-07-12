@@ -128,14 +128,23 @@ func main() {
 }
 EOF
 
+inspect_package() {
+  local binary=$1 key=$2 output=$3
+  if "$binary" pkg inspect --help >/dev/null 2>&1; then
+    "$binary" pkg inspect "$key" --json >"$output"
+  else
+    "$binary" plugin inspect "$key" --json >"$output"
+  fi
+}
+
 (
   cd "$out"
   GOWORK=off go mod tidy
   for key in "${keys[@]}"; do
     GOWORK=off go build -trimpath -o "wago-$key-go" "./cmd/$key"
     GOWORK=off tinygo build -scheduler=tasks -o "wago-$key-tinygo" "./cmd/$key"
-    "./wago-$key-go" plugin inspect "$key" --json >"inspection-$key-go.json"
-    "./wago-$key-tinygo" plugin inspect "$key" --json >"inspection-$key-tinygo.json"
+    inspect_package "./wago-$key-go" "$key" "inspection-$key-go.json"
+    inspect_package "./wago-$key-tinygo" "$key" "inspection-$key-tinygo.json"
     cmp "inspection-$key-go.json" "inspection-$key-tinygo.json"
     GOWORK=off go run ./cmd/validate "$key" "inspection-$key-go.json"
   done

@@ -208,15 +208,15 @@ records disposable artifacts under `.wago/release-signoff`:
 scripts/release-signoff.sh
 ```
 
-The current Wago review now ends at integrated fix subject
-`da4db3c97c643b5385cbca02ec125822afd82abd`: lifecycle replay `cf2409d3` is a
-direct child of exact upstream `2fbb34a50e89faad0f2ea4d47a219218d0cd2871`,
-patch-equivalent preview-1 fix `2a9bf214` follows it, and `da4db3c9` preserves
-managed worker table callbacks by directly invoking local wrapper descriptors.
-The upstream delta from the prior reviewed base is confined to
-`cli/wagocli/plugin_build.go`. Pack-only reconstruction validates aggregate plus
-granular registration, external-worker cleanup, standard Go, race, vet, and
-TinyGo on that exact line, and the moving-ref gate fails closed on later drift. The strict
+The current Wago review now ends at integrated subject
+`5385ea0a7d87332cc3926459ffb20d5cc36aff6e` on exact upstream lifecycle release
+`1a912c699d913fe3e398a5bc33bfdd9fbeeba391`. Patch-equivalent preview-1 fix
+`b1721328` follows upstream, `f59d96c6` preserves managed worker table callbacks
+by directly invoking local wrapper descriptors, and `5385ea0a` bounds forced
+synchronous host callbacks to their declared parameter/result slots. Pack-only
+reconstruction validates aggregate plus granular registration, exact
+direct/managed/external-worker cleanup, standard Go, race, vet, and TinyGo on
+that exact line, and the moving-ref gate fails closed on later drift. The strict
 local release gate still uses an exact clean production-Wago
 worktree, so a separate user-owned dirty audit checkout is neither cleaned nor
 used for compilation. The retained production WASI exception is an exact
