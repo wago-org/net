@@ -182,10 +182,8 @@ GOWORK="$release_work" go test . -run '^$' -fuzz '^FuzzGuestUDPPollMemory$' -fuz
 record_check fuzz-udp-guest pass "$fuzztime"
 
 log "benchmarks"
-GOWORK="$release_work" go test . -run '^$' -bench 'BenchmarkGuest(UDP|TCP)Poll$' -benchmem -count=1 | tee "$out/bench-guest-poll.txt"
-record_check benchmark-guest-poll pass 'benchmem count=1'
-GOWORK="$release_work" go test ./internal/backend/lneto/udp -run '^$' -bench '^BenchmarkUDPDatagramQueueRoundTrip$' -benchmem -count=1 | tee "$out/bench-udp-queue.txt"
-record_check benchmark-udp-queue pass 'benchmem count=1'
+GOMAXPROCS=1 GOWORK="$release_work" go test ./... -run '^$' -bench '^Benchmark' -benchmem -benchtime=100ms -count=1 -cpu=1 | tee "$out/bench-runtime.txt"
+record_check benchmark-runtime pass 'all runtime benchmarks; benchmem; 100ms; count=1; cpu=1'
 
 log "TinyGo and cross-compile"
 GOWORK=off GOFLAGS="$release_goflags" tinygo test ./...

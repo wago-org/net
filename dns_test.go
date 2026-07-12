@@ -528,6 +528,21 @@ func FuzzGuestDNSMemory(f *testing.F) {
 	})
 }
 
+func BenchmarkGuestDNSPoll(b *testing.B) {
+	extension, _, _, host := newGuestDNSHarness(b)
+	writePollBudget(host.memory, 0, 1, 1, 0, 0, 0, 0)
+	params := []uint64{64, 1, 0, 128}
+	results := []uint64{0}
+	b.ReportAllocs()
+	b.ResetTimer()
+	for b.Loop() {
+		extension.dnsPoll(&host, params, results)
+		if status := Status(wago.AsI32(results[0])); status != StatusOK {
+			b.Fatalf("DNS poll status = %v", status)
+		}
+	}
+}
+
 func newGuestDNSHarness(t testing.TB, queries ...*guestDNSQuery) (*Extension, *instance.State, *guestDNSNamespace, udpHostModule) {
 	t.Helper()
 	backend := &guestDNSNamespace{queries: append([]*guestDNSQuery(nil), queries...)}

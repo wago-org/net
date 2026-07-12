@@ -173,6 +173,17 @@ go vet ./...
 scripts/check-source-boundaries.sh
 ```
 
+Capture the complete runtime microbenchmark suite and allocation baseline with:
+
+```sh
+scripts/benchmark-baseline.sh
+```
+
+See [`benchmarks/README.md`](benchmarks/README.md) for scope, sampling controls,
+and comparison guidance. The checked-in baseline currently summarizes 114
+benchmark cases across guest ABI, ownership/accounting, polling, packet queues,
+and the lneto UDP, TCP, and DNS data paths.
+
 The deterministic release gate additionally pins and verifies the production
 Wago/lneto/WASI inputs and exact current Wago/networking/workers review objects;
 reconstructs the current plugin workspace from immutable packs with a cold,
