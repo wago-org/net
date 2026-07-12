@@ -153,12 +153,30 @@ type BaseCarrier interface {
 	NamespaceBase() Namespace
 }
 
+const inlineNamespaceServiceCapacity = 3
+
 // ComposeNamespace publishes one immutable namespace over base. The base owns
 // readiness, bounded service, and close; selected protocol adapters remain
 // reachable only through their exact service keys.
 func ComposeNamespace(base Namespace, services ...Service) (Namespace, error) {
 	if base == nil {
 		return nil, ErrInvalidNamespaceComposition
+	}
+	composed := &composedNamespace{base: base}
+	if len(services) <= inlineNamespaceServiceCapacity {
+		for i, service := range services {
+			if service.Key == "" || service.Value == nil {
+				return nil, ErrInvalidNamespaceComposition
+			}
+			for previous := 0; previous < i; previous++ {
+				if composed.inline[previous].Key == service.Key {
+					return nil, ErrDuplicateNamespaceService
+				}
+			}
+			composed.inline[i] = service
+		}
+		composed.inlineCount = uint8(len(services))
+		return composed, nil
 	}
 	values := make(map[ServiceKey]any, len(services))
 	for _, service := range services {
@@ -170,7 +188,8 @@ func ComposeNamespace(base Namespace, services ...Service) (Namespace, error) {
 		}
 		values[service.Key] = service.Value
 	}
-	return &composedNamespace{base: base, services: values}, nil
+	composed.services = values
+	return composed, nil
 }
 
 // ResolveNamespaceService unwraps the quota-owned namespace resource and
@@ -207,8 +226,10 @@ func ResolveNamespaceService(value any, key ServiceKey) any {
 // installed on base during assembly, so closing the base tears down every
 // selected service exactly once in deterministic backend order.
 type composedNamespace struct {
-	base     Namespace
-	services map[ServiceKey]any
+	base        Namespace
+	inlineCount uint8
+	inline      [inlineNamespaceServiceCapacity]Service
+	services    map[ServiceKey]any
 }
 
 func (n *composedNamespace) NamespaceBase() Namespace {
@@ -222,8 +243,16 @@ func (n *composedNamespace) NamespaceService(key ServiceKey) (any, bool) {
 	if n == nil {
 		return nil, false
 	}
-	value, ok := n.services[key]
-	return value, ok
+	if n.services != nil {
+		value, ok := n.services[key]
+		return value, ok
+	}
+	for i := 0; i < int(n.inlineCount); i++ {
+		if n.inline[i].Key == key {
+			return n.inline[i].Value, true
+		}
+	}
+	return nil, false
 }
 
 func (n *composedNamespace) Readiness() Readiness {

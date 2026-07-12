@@ -426,6 +426,59 @@ func TestSelectiveBackendAssemblyRollsBackCoreBeforePublication(t *testing.T) {
 	}
 }
 
+type assemblyNamespace struct{}
+
+func (*assemblyNamespace) Close() error { return nil }
+func (*assemblyNamespace) Readiness() nscore.Readiness {
+	return nscore.ReadyReadable | nscore.ReadyWritable
+}
+func (*assemblyNamespace) TryService(nscore.ServiceBudget) (nscore.ServiceReport, nscore.Progress, error) {
+	return nscore.ServiceReport{}, nscore.ProgressWouldBlock, nil
+}
+
+func TestInstallNamespaceServicesAvoidsPerProtocolScratchForCommonSelections(t *testing.T) {
+	tcpService := new(int)
+	udpService := new(string)
+	dnsService := new(byte)
+	modules := []plugin.Module{
+		testBackendModule(plugin.ModuleTCP, nscore.Service{Key: "tcp", Value: tcpService}),
+		testBackendModule(plugin.ModuleUDP, nscore.Service{Key: "udp", Value: udpService}),
+		testBackendModule(plugin.ModuleDNS, nscore.Service{Key: "dns", Value: dnsService}),
+	}
+	allocs := testing.AllocsPerRun(1000, func() {
+		composed, err := installNamespaceServices(new(assemblyNamespace), modules)
+		if err != nil {
+			t.Fatal(err)
+		}
+		carrier, ok := composed.(nscore.ServiceCarrier)
+		if !ok {
+			t.Fatalf("installed namespace type = %T", composed)
+		}
+		for _, want := range []struct {
+			key   nscore.ServiceKey
+			value any
+		}{
+			{key: "tcp", value: tcpService},
+			{key: "udp", value: udpService},
+			{key: "dns", value: dnsService},
+		} {
+			if got, exists := carrier.NamespaceService(want.key); !exists || got != want.value {
+				t.Fatalf("service %q = %T %v", want.key, got, exists)
+			}
+		}
+	})
+	if allocs != 1 {
+		t.Fatalf("installNamespaceServices allocs = %v, want 1", allocs)
+	}
+}
+
+func testBackendModule(key plugin.ModuleKey, service nscore.Service) plugin.Module {
+	backend := plugin.NewBackend(plugin.BackendLnetoV1, nil, func(any) (nscore.Service, error) {
+		return service, nil
+	})
+	return plugin.NewModule(key, func(*wago.Registry, plugin.Host) {}, backend)
+}
+
 func selectiveTestStaticIPv4() *StaticIPv4Config {
 	return &StaticIPv4Config{
 		Hostname: "selective", RandSeed: 99,

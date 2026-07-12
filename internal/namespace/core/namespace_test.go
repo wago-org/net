@@ -73,6 +73,44 @@ func (b *compositionBase) Close() error {
 	return nil
 }
 
+func TestNamespaceCompositionAvoidsPerServiceHeapGrowthForCommonSelections(t *testing.T) {
+	base := new(compositionBase)
+	tcpService := new(int)
+	udpService := new(string)
+	dnsService := new(byte)
+	for _, test := range []struct {
+		name     string
+		services []Service
+		want     float64
+	}{
+		{name: "empty", want: 1},
+		{name: "single", services: []Service{{Key: "tcp", Value: tcpService}}, want: 1},
+		{name: "three", services: []Service{{Key: "tcp", Value: tcpService}, {Key: "udp", Value: udpService}, {Key: "dns", Value: dnsService}}, want: 1},
+		{name: "overflow", services: []Service{{Key: "tcp", Value: tcpService}, {Key: "udp", Value: udpService}, {Key: "dns", Value: dnsService}, {Key: "test", Value: new(bool)}}, want: 3},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			allocs := testing.AllocsPerRun(1000, func() {
+				composed, err := ComposeNamespace(base, test.services...)
+				if err != nil {
+					t.Fatal(err)
+				}
+				carrier, ok := composed.(ServiceCarrier)
+				if !ok {
+					t.Fatalf("composed namespace type = %T", composed)
+				}
+				for _, service := range test.services {
+					if got, exists := carrier.NamespaceService(service.Key); !exists || got != service.Value {
+						t.Fatalf("resolved %q = %T %v", service.Key, got, exists)
+					}
+				}
+			})
+			if allocs != test.want {
+				t.Fatalf("ComposeNamespace allocs = %v, want %v", allocs, test.want)
+			}
+		})
+	}
+}
+
 func TestNamespaceCompositionExactServicesAndLifecycle(t *testing.T) {
 	empty, err := ComposeNamespace(new(compositionBase))
 	if err != nil {

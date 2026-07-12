@@ -268,18 +268,7 @@ func (e *Extension) buildManager(modules []plugin.Module) (*instancestate.Manage
 			if err != nil {
 				return nil, err
 			}
-			services := make([]nscore.Service, 0, len(modules))
-			for _, module := range modules {
-				service, installed, installErr := module.InstallBackend(plugin.BackendLnetoV1, common)
-				if installErr != nil {
-					_ = common.Close()
-					return nil, installErr
-				}
-				if installed {
-					services = append(services, service)
-				}
-			}
-			composed, err := nscore.ComposeNamespace(common, services...)
+			composed, err := installNamespaceServices(common, modules)
 			if err != nil {
 				_ = common.Close()
 				return nil, err
@@ -288,6 +277,21 @@ func (e *Extension) buildManager(modules []plugin.Module) (*instancestate.Manage
 		}
 	}
 	return instancestate.NewManagerConfigured(managerConfig)
+}
+
+func installNamespaceServices(common nscore.Namespace, modules []plugin.Module) (nscore.Namespace, error) {
+	var inline [3]nscore.Service
+	services := inline[:0]
+	for _, module := range modules {
+		service, installed, err := module.InstallBackend(plugin.BackendLnetoV1, common)
+		if err != nil {
+			return nil, err
+		}
+		if installed {
+			services = append(services, service)
+		}
+	}
+	return nscore.ComposeNamespace(common, services...)
 }
 
 // RegisterModule installs one opaque protocol descriptor. The internal type in

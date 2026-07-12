@@ -14,9 +14,10 @@ func (*benchmarkNamespace) TryService(ServiceBudget) (ServiceReport, Progress, e
 }
 
 var (
-	benchmarkBool    bool
-	benchmarkService any
-	benchmarkBase    Namespace
+	benchmarkBool     bool
+	benchmarkService  any
+	benchmarkBase     Namespace
+	benchmarkComposed Namespace
 )
 
 func BenchmarkEndpointValid(b *testing.B) {
@@ -49,6 +50,31 @@ func BenchmarkServiceReportValidResult(b *testing.B) {
 	b.ReportAllocs()
 	for b.Loop() {
 		benchmarkBool = report.ValidResult(budget, ProgressDone)
+	}
+}
+
+func BenchmarkComposeNamespace(b *testing.B) {
+	base := &benchmarkNamespace{}
+	services := []struct {
+		name     string
+		services []Service
+	}{
+		{name: "empty"},
+		{name: "single", services: []Service{{Key: "tcp", Value: base}}},
+		{name: "three", services: []Service{{Key: "tcp", Value: base}, {Key: "udp", Value: new(int)}, {Key: "dns", Value: new(string)}}},
+		{name: "overflow", services: []Service{{Key: "tcp", Value: base}, {Key: "udp", Value: new(int)}, {Key: "dns", Value: new(string)}, {Key: "test", Value: new(byte)}}},
+	}
+	for _, test := range services {
+		b.Run(test.name, func(b *testing.B) {
+			b.ReportAllocs()
+			for b.Loop() {
+				composed, err := ComposeNamespace(base, test.services...)
+				if err != nil {
+					b.Fatal(err)
+				}
+				benchmarkComposed = composed
+			}
+		})
 	}
 }
 
