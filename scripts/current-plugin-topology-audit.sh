@@ -23,8 +23,14 @@ readonly wago_review_parent=59ce1c136492be44f8f4d252096bda01d3ef4a22
 readonly production_merge=97e6f91e6c822491577faa86f3c30aa5a8fff1e8
 readonly production_parent1=54499ba5135f69a062e23a7255f4a408d6cecf8c
 readonly production_parent2=ffd5ef4b122cbd019897eeea3503789ab5860e4a
-readonly net_review=173b38a4d5a0db0e6058544576942a46b9d543df
-readonly net_review_parent=164ee79e98d7e51bf3553fb18b46fd2044b223aa
+readonly net_review=362ddf815904340aefc526d4bc57e1c7a24d36c9
+readonly net_review_parent=e79ae21532c2a60c60d0524855db0cc38dd17598
+readonly net_failed_setup_review=e79ae21532c2a60c60d0524855db0cc38dd17598
+readonly net_failed_setup_parent=4cd6ff1e22d751e4a7a112a1eadf04da3e77ef1f
+readonly net_direct_managed_review=4cd6ff1e22d751e4a7a112a1eadf04da3e77ef1f
+readonly net_direct_managed_parent=173b38a4d5a0db0e6058544576942a46b9d543df
+readonly net_registration_review=173b38a4d5a0db0e6058544576942a46b9d543df
+readonly net_registration_parent=164ee79e98d7e51bf3553fb18b46fd2044b223aa
 readonly workers_review=1e9139756d8a3c631c59c00b028038c83bfa8341
 readonly workers_parent1=5cb4efff83f0a519311fcf03b63496433f2901f0
 readonly workers_parent2=08466d04599d7c0da88d4c5cda73a62c775a8dfc
@@ -63,7 +69,10 @@ git -C "$net_dir" fetch --prune origin
 [[ $(parents "$wago_dir" "$wago_lifecycle") == "$wago_lifecycle_parent" ]] || fail "authoritative upstream Wago lifecycle parent drifted"
 [[ -z $(git -C "$wago_dir" diff --name-only "$wago_lifecycle..$wago_main" -- src/wago) ]] ||
   fail "reviewed upstream movement changed src/wago; perform a fresh semantic review"
-[[ $(parents "$net_dir" "$net_review") == "$net_review_parent" ]] || fail "current networking review parent drifted"
+[[ $(parents "$net_dir" "$net_review") == "$net_review_parent" ]] || fail "current networking worker-socket cleanup parent drifted"
+[[ $(parents "$net_dir" "$net_failed_setup_review") == "$net_failed_setup_parent" ]] || fail "current networking failed-setup cleanup parent drifted"
+[[ $(parents "$net_dir" "$net_direct_managed_review") == "$net_direct_managed_parent" ]] || fail "current networking direct/managed socket cleanup parent drifted"
+[[ $(parents "$net_dir" "$net_registration_review") == "$net_registration_parent" ]] || fail "current networking registration review parent drifted"
 [[ $(parents "$workers_dir" "$workers_review") == "$workers_parent1 $workers_parent2" ]] || fail "workers ordered parents drifted"
 [[ $(parents "$wago_dir" "$production_merge") == "$production_parent1 $production_parent2" ]] || fail "production Wago merge ordered parents drifted"
 
@@ -139,6 +148,7 @@ printf 'Wago origin/main: %s\n' "$wago_main"
 printf 'current Wago integrated fix review refs: %s\n' "${wago_review_refs:-absent}"
 printf 'current Wago integrated fix lineage: %s -> %s -> %s -> %s -> %s -> %s\n' "$wago_review" "$wago_managed_review" "$wago_fix_review" "$wago_main" "$wago_benchmark" "$wago_lifecycle"
 printf 'current networking review refs: %s\n' "${net_review_refs:-absent}"
+printf 'current networking socket-cleanup lineage: %s -> %s -> %s -> %s\n' "$net_review" "$net_failed_setup_review" "$net_direct_managed_review" "$net_registration_review"
 printf 'external workers refs: %s\n' "$workers_refs"
 printf 'production Wago merge refs: %s\n' "${production_refs:-absent}"
 printf 'adoption mode: %s\n' "$adoption"

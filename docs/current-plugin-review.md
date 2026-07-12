@@ -8,7 +8,7 @@ silently replacing that production prerequisite:
 | Review source | Exact revision | Exact tree |
 |---|---|---|
 | Wago current-main + preview-1/managed/exact-slot review | `d556b20ff8667a8ae17b1ca399c74a949ac78f2f` | `457770eff0a8af628715ae1305151d5f534d0af4` |
-| Selective networking registration and workers composition | `173b38a4d5a0db0e6058544576942a46b9d543df` | `ca7534943e653a6c04c63ec458fc00feb6350799` |
+| Selective networking registration, socket-lifecycle cleanup, and workers composition | `362ddf815904340aefc526d4bc57e1c7a24d36c9` | `40e707389b44ccc075498d905265e3faa0407331` |
 | External workers | `1e9139756d8a3c631c59c00b028038c83bfa8341` | `ca79d1fb02f19ae15d7b166ffc179c01f9a7c212` |
 
 `scripts/release-source-objects.sh` exports these three exact commit/tree
@@ -54,15 +54,20 @@ wrapper table entries so the managed-worker dispatcher remains safe; and
 `d556b20f` restores exact declared callback slot widths when caller resolution
 forces synchronous host linking. Complete standard Go, focused race, TinyGo,
 both matching WASI suites, and direct/managed/external linked-child tests pass.
-The selective networking review is a direct child of
-`164ee79e98d7e51bf3553fb18b46fd2044b223aa`; it preserves the root/protocol
-compile boundaries while replacing forgeable direct-host test calls with real
-Wasm dispatch under Wago's expiring caller identity.
+The selective networking review preserves the registration review
+`173b38a4d5a0db0e6058544576942a46b9d543df` through three bounded children:
+`4cd6ff1e` exercises direct and managed close with a retained UDP datagram, live
+TCP listener and outbound stream, and pending DNS query; `e79ae215` proves the
+same resources retire when a later `AfterInstantiate` hook fails; and
+`362ddf81` proves linked external-worker close retires the live socket set and
+both parent and worker packet links. The chain preserves the root/protocol
+compile boundaries and real Wasm dispatch under Wago's expiring caller identity.
 
-The external worker test spawns and links a real managed child, attaches
-UDP/TCP/DNS state, resolves the exact caller during a child host callback, and
-proves handles, quotas, readiness registrations, and attachment maps retire
-before worker-exit observation. Ordinary networking still requests only
+The external worker test spawns and links a real managed child, attaches an
+active UDP socket, TCP listener, outbound TCP stream, and DNS query, resolves the
+exact caller during a child host callback, and proves handles, resource tables,
+quotas, readiness registrations, packet links, and attachment maps retire before
+worker-exit observation. Ordinary networking still requests only
 `host.imports` and `instance.lifecycle`; the workers plugin separately requires
 managed-instance authority.
 

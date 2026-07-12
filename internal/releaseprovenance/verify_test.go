@@ -1135,6 +1135,36 @@ func TestExportSourceObjectsIsDeterministic(t *testing.T) {
 	}
 }
 
+func TestValidateManifestAcceptsExplicitlyDisabledArm64WithoutBinary(t *testing.T) {
+	dir, opts := validReviewFixture(t)
+	data, err := os.ReadFile(filepath.Join(dir, "provenance.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var manifest Manifest
+	if err := json.Unmarshal(data, &manifest); err != nil {
+		t.Fatal(err)
+	}
+	manifest.Targets.Arm64Execution = TargetResult{GOOS: "linux", GOARCH: "arm64", Status: "skipped-disabled", Runner: "none"}
+	for index := range manifest.Checks {
+		if manifest.Checks[index].Name == "arm64-execution" {
+			manifest.Checks[index].Status = "skipped-disabled"
+		}
+	}
+	manifest.Limitations = []Limitation{{
+		ID: "linux-arm64-execution", Status: "skipped-disabled",
+		Detail: "cross-build passed, but this release gate did not execute the arm64 smoke binary",
+	}}
+	if err := validateManifest(&manifest, opts); err != nil {
+		t.Fatalf("explicit disabled arm64 validation: %v", err)
+	}
+
+	manifest.Targets.Arm64Execution.BinarySHA256 = strings.Repeat("a", 64)
+	if err := validateManifest(&manifest, opts); err == nil || !strings.Contains(err.Error(), "retained a binary or runner") {
+		t.Fatalf("disabled arm64 with binary error = %v", err)
+	}
+}
+
 func TestVerifyRejectsTamperedEvidenceAndWrongSubject(t *testing.T) {
 	dir, opts := validReviewFixture(t)
 	wrong := opts

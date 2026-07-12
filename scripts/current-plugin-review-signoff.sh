@@ -6,9 +6,9 @@ source_dir=$(realpath "${CURRENT_REVIEW_SOURCE_DIR:-${SIGNOFF_DIR:-$root/.wago/r
 out=$(realpath -m "${CURRENT_REVIEW_OUT:-${SIGNOFF_DIR:-$root/.wago/release-signoff}/current-plugin-review}")
 work=$(realpath -m "${CURRENT_REVIEW_WORK_DIR:-$root/.wago/current-plugin-review-work}")
 
-readonly net_revision=173b38a4d5a0db0e6058544576942a46b9d543df
-readonly net_tree=ca7534943e653a6c04c63ec458fc00feb6350799
-readonly net_parent=164ee79e98d7e51bf3553fb18b46fd2044b223aa
+readonly net_revision=362ddf815904340aefc526d4bc57e1c7a24d36c9
+readonly net_tree=40e707389b44ccc075498d905265e3faa0407331
+readonly net_parent=e79ae21532c2a60c60d0524855db0cc38dd17598
 readonly wago_revision=d556b20ff8667a8ae17b1ca399c74a949ac78f2f
 readonly wago_tree=457770eff0a8af628715ae1305151d5f534d0af4
 readonly wago_parent=59ce1c136492be44f8f4d252096bda01d3ef4a22
@@ -118,8 +118,8 @@ export GOMODCACHE="$gomodcache" GOPROXY=off GOSUMDB=off
 ) 2>&1 | tee "$out/go-test.txt"
 (
   cd "$work/net"
-  GOWORK="$work/go.work" go test -race . -run '^TestExternalWorkersPluginRetiresLinkedNetworkingState$' -count=5
-) 2>&1 | tee "$out/external-workers-race.txt"
+  GOWORK="$work/go.work" go test -race . -run '^(TestCurrentPluginLeastAuthorityDirectAndManagedLifecycle|TestAfterInstantiateFailureRetiresActiveSockets|TestExternalWorkersPluginRetiresLinkedNetworkingState)$' -count=5
+) 2>&1 | tee "$out/socket-lifecycle-race.txt"
 (
   cd "$work/net"
   GOWORK="$work/go.work" go vet ./...
@@ -143,4 +143,4 @@ if find "$gomodcache" -type f ! -path "$gomodcache/cache/lock" -print -quit | gr
   find "$gomodcache" -type f ! -path "$gomodcache/cache/lock" -print >&2
   fail 'cold module cache unexpectedly acquired module files'
 fi
-echo 'current-plugin-review-signoff: PASS (pack-only local modules; initially empty GOMODCACHE with no module payload; network disabled; exact go.sum evidence; granular and aggregate inspection; linked-child cleanup)'
+echo 'current-plugin-review-signoff: PASS (pack-only local modules; initially empty GOMODCACHE with no module payload; network disabled; exact go.sum evidence; granular and aggregate inspection; direct/managed/failed-setup/linked-child socket cleanup)'

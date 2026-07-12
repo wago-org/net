@@ -20,7 +20,7 @@ The script refuses revision drift before doing work:
 | lneto | `ab1a0c735a8b534a1d6322a3e245bc11a09431e7` |
 | WASI audit | `3df6c766ad00e83b314da799dbf9a77b409ad19d` |
 | Current Wago main + preview-1/managed/exact-slot review | `d556b20ff8667a8ae17b1ca399c74a949ac78f2f` |
-| Current networking registration review | `173b38a4d5a0db0e6058544576942a46b9d543df` |
+| Current networking socket-lifecycle review | `362ddf815904340aefc526d4bc57e1c7a24d36c9` |
 | External workers | `1e9139756d8a3c631c59c00b028038c83bfa8341` |
 
 By default the production inputs are `.wago/wago-production-97e6f91`,
@@ -65,7 +65,10 @@ The gate performs, in order:
 4. guest UDP/TCP poll and fixed UDP queue benchmarks with `-benchmem`;
 5. TinyGo tests and a `linux/arm64` standard-Go package cross-build;
 6. a separately cross-compiled `linux/arm64` test binary and bounded execution
-   smoke when a native arm64 or `qemu-aarch64` runner is available;
+   smoke when a native arm64 or `qemu-aarch64` runner is available; set
+   `ARM64_EXECUTION=skip` when arm64 execution is outside the selected release
+   profile, which records `skipped-disabled` without claiming or retaining an
+   execution artifact;
 7. source-boundary checks proving lneto imports remain in
    `internal/backend/lneto` and forbidden blocking/backoff APIs remain absent;
 8. standard-Go and TinyGo custom CLI builds for `register`, `tcp/register`,
@@ -115,10 +118,13 @@ preview-1 fix `16163fb8`, upstream main `ff04a6b1`, benchmark-only parent
 upstream commits change no `src/wago` file. The integrations directly invoke
 local wrapper table entries and bound forced synchronous callbacks to declared
 slots, preserving external managed-worker callbacks while the wrapper-descriptor
-WASI correction remains active. Selective networking
-review `173b38a4d5a0db0e6058544576942a46b9d543df` passes standard Go, focused race,
-vet, TinyGo, exact direct/managed/external-worker cleanup, and pack-only
-cold-cache reconstruction. The reconstructed custom CLI inspects all four keys:
+WASI correction remains active. Selective networking review
+`362ddf815904340aefc526d4bc57e1c7a24d36c9` passes standard Go, focused race,
+vet, TinyGo, and exact direct, managed, failed-setup, and external-worker socket
+cleanup. Active retained UDP data, TCP listeners and outbound streams, pending
+DNS queries, resource tables, quotas, readiness registrations, packet links,
+and attachment maps are checked through Wago lifecycle close. Pack-only
+cold-cache reconstruction retains these checks. The reconstructed custom CLI inspects all four keys:
 `net`, `net-tcp`, `net-udp`, and `net-dns`.
 
 A strict `RUN_WASI=1 FUZZTIME=1s` run passed on July 11, 2026, at plugin subject

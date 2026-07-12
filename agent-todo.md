@@ -24,7 +24,7 @@ and lneto as the first backend.
 - Reviewed Wago main base: `ff04a6b1093628e025e3c2f78aa6ba6184e78bcb` (tree `cc15e8c2eb42a396f34d0e50d2dc69b4e1722db4`, parent `bbaa494ee47ece44739aeeeda333e76e6a75cb73`, 2026-07-11). Intermediate benchmark commit `bbaa494e` (tree `4d52d41637015b021b3ec50fe23c790fe6124d20`) is a direct child of authoritative lifecycle commit `1a912c699d913fe3e398a5bc33bfdd9fbeeba391`; neither later upstream commit changes `src/wago`. Current integrated review `d556b20ff8667a8ae17b1ca399c74a949ac78f2f` (tree `457770eff0a8af628715ae1305151d5f534d0af4`) preserves lineage through exact callback-slot child `d556b20f`, managed-wrapper child `59ce1c136492be44f8f4d252096bda01d3ef4a22`, patch-equivalent preview-1 fix `16163fb8975443b599d1065cc357db77d3ae5840`, exact upstream main, the benchmark parent, and the authoritative lifecycle ancestor. The prior `5385ea0a -> f59d96c6 -> b1721328 -> 1a912c69` chain and all earlier ports remain historical evidence only.
 - Wago merged lifecycle/worker branch: `97e6f91e6c822491577faa86f3c30aa5a8fff1e8` on `net/instance-close-hooks`, with ordered parents `54499ba5135f69a062e23a7255f4a408d6cecf8c` and `ffd5ef4b122cbd019897eeea3503789ab5860e4a`.
 - External workers main: `1e9139756d8a3c631c59c00b028038c83bfa8341`, pinned as `v0.0.0-20260711080606-1e9139756d8a`. Exact Wago documentation reserves pooling for a future plugin; workers contains no pool implementation, and the refreshed `wago-org` repository inventory exposes no pool-named repository.
-- Current selective networking review: `173b38a4d5a0db0e6058544576942a46b9d543df`, parent `164ee79e98d7e51bf3553fb18b46fd2044b223aa`. It preserves protocol compile isolation against integrated Wago `d556b20f` for upstream exact-instance lifecycle, preview-1 safety, managed wrapper invocation, exact callback slots, and external workers `1e913975` for managed-child cleanup.
+- Current selective networking review: `362ddf815904340aefc526d4bc57e1c7a24d36c9` (tree `40e707389b44ccc075498d905265e3faa0407331`), with exact socket-cleanup children `e79ae21532c2a60c60d0524855db0cc38dd17598` and `4cd6ff1e22d751e4a7a112a1eadf04da3e77ef1f` above registration review `173b38a4d5a0db0e6058544576942a46b9d543df`. It preserves protocol compile isolation against integrated Wago `d556b20f` and proves active UDP, TCP listener/stream, DNS, packet-link, quota, readiness, and resource cleanup for direct, managed, failed-setup, and external-worker lifecycle paths.
 - lneto main: `ab1a0c735a8b534a1d6322a3e245bc11a09431e7` (2026-07-10).
 - WASI audit: production remains `3df6c766ad00e83b314da799dbf9a77b409ad19d`; production-line review `1a7eeb215229e05bcb0f09d5cb3280d231739def` changes only README/CI files and has an implementation-tree inventory identical to the pin. Current WASI `cbdb9b32a3f28c0e63c7ab40d9c59712162367c4` (tree `b77c7e975c29de5bcff9da4464ce50d9b8ad2c65`, parent `1a7eeb2`) adds capability-based registration required by current Wago. Production Wago `97e6f91` matches the exact four-pass/four-fault preview-1 matrix. Production-derived fix `5c7f76dba0aa82ca94a1dd644318ed062b03f7cc` and current integrated review `d556b20f` each pass their complete matching WASI suites, but all local Wago fix subjects remain unpublished and unadopted.
 
@@ -235,8 +235,9 @@ focused race, TinyGo `src/wago`, current WASI, and networking direct/managed/
 external-worker checks pass.
 
 The current selective networking review at
-`173b38a4d5a0db0e6058544576942a46b9d543df` compiles against that exact Wago
-replay. Ordinary networking requests only `host.imports` and
+`362ddf815904340aefc526d4bc57e1c7a24d36c9` compiles against that exact Wago
+replay. Its three children above `173b38a` add exact active-socket cleanup proof
+for direct, managed, failed-setup, and linked external-worker close. Ordinary networking requests only `host.imports` and
 `instance.lifecycle`, uses strict checked handlers without an arity shim, and
 does not request `instance.manage`. Direct and genuinely managed instances prove
 exact four-capability/24-import registration, distinct UDP/TCP/DNS ownership,
@@ -698,7 +699,7 @@ guest-UDP fuzz executions. Benchmarks measured 125.8 ns/op for guest UDP poll,
 and 0 allocs/op. Arm64 execution remained `skipped-no-runner`.
 
 The exact-object compatibility review is green: integrated Wago `d556b20f` and
-selective networking `173b38a` pass standard Go, focused race, vet, TinyGo,
+selective networking `362ddf81` pass standard Go, focused race, vet, TinyGo,
 exact least-authority direct/managed/external-worker lifecycle tests, granular
 custom CLI inspection, deterministic source packs, and cold-cache pack-only
 reconstruction. Dual-line review proves production fix `5c7f76db` and current
@@ -742,10 +743,10 @@ and 20.10 ns/op UDP queue, all 0 B/op and 0 allocs/op. Provenance SHA-256 was
 SHA-256 was `1c3ba2be1df84966e66ed5a7aceca02253cdd9e91f60bd2963da7c1ca8922116`, and
 statement SHA-256 was
 `9d1566adf2fb3c415fe56ca69940adf66b9c956706b9fd925fccbad46491120e`.
-Native/QEMU arm64 execution, publication of current and production subjects, and
-publication/adoption of an exact fixed production Wago input before removing the
-two exact WASI exceptions remain production activation blockers rather than
-protocol architecture gaps.
+Publication of current and production subjects, plus publication/adoption of an
+exact fixed production Wago input before removing the two exact WASI exceptions,
+remain production activation blockers rather than protocol architecture gaps.
+Arm64 execution is explicitly outside the current user-selected release profile.
 
 ## Ordered backlog
 
@@ -758,12 +759,11 @@ protocol architecture gaps.
 3. Publish production-derived Wago preview-1 fix `5c7f76db` without
    rewriting the ordered-parent `97e6f91` merge history, and select that exact
    exact production input before removing either WASI exception. Activate hosted
-   release automation only after that input is fetchable and linux/arm64 smoke
-   executes on an arm64/QEMU tier.
+   release automation only after that exact input is fetchable and selected.
 4. Rerun the strict complete release gate on each final candidate subject using
    the exact clean production Wago worktree. Keep the dirty source-audit
    preservation fixture and the integrated Wago `d556b20f`, selective networking
-   `173b38a`, protocol, granular inspection, fuzz, benchmark, cross-build, and
+   `362ddf81`, protocol, granular inspection, fuzz, benchmark, cross-build, and
    pack-only reconstruction gates unchanged.
 
 ## Blockers and discovered prerequisites
@@ -777,8 +777,8 @@ protocol architecture gaps.
   lifecycle commit `1a912c69`; Wago owns exact callback slot
   slicing, expiring caller identity, start/failure cleanup, deterministic
   panic-isolated close, preview-1 wrapper descriptors, and managed wrapper-table
-  dispatch. Selective networking `173b38a` proves complete
-  least-authority registration, exact protocol surfaces, and real
+  dispatch. Selective networking `362ddf81` proves complete
+  least-authority registration, exact protocol surfaces, active socket cleanup, and real
   external-worker composition. Deterministic packs and isolated reconstruction
   remove moving-ref dependence for review, but neither current Wago nor current
   networking review is fetchable
@@ -794,9 +794,11 @@ protocol architecture gaps.
   provisioned through the trusted channel. This repository still supplies no
   private key or publisher identity. The current production-readiness profile
   retains a checksummed denial after valid test signing, binds the exact canonical
-  trust-policy digest, and can be independently verified as blocked evidence. Its
-  exact blockers remain unpublished current/production subjects, skipped arm64
-  execution, and both accepted WASI exceptions.
+  trust-policy digest, and can be independently verified as blocked evidence. That
+  historical production-readiness/v2 profile retains its executed-arm64 condition;
+  the current user-selected release profile explicitly disables arm64 execution and
+  does not treat it as a completion blocker. The live blockers are unpublished
+  current/production subjects and both accepted WASI exceptions.
 - No fetchable external pool implementation is present. Exact Wago documentation
   reserves pooling for a future plugin, reviewed workers contains no pool source,
   and the refreshed public `wago-org` repository inventory has no pool-named
@@ -830,11 +832,10 @@ protocol architecture gaps.
   `GOWORK=off` and a TinyGo custom Wago CLI build both pass for this repository.
   This is a validated local toolchain result, not a claim that every lneto
   platform or upstream TinyGo issue is resolved.
-- The arm64 signoff now cross-compiles a bounded root test binary covering
-  metadata plus real UDP/TCP/DNS paths and can execute it natively or through
-  `qemu-aarch64`. This linux/amd64 host exposes neither runner, so the committed
-  gate truthfully records `skipped-no-runner`; `ARM64_EXECUTION=required` is the
-  fatal mode for a real arm64/QEMU tier.
+- Arm64 execution is optional for the current user-selected release profile.
+  `ARM64_EXECUTION=skip` records `skipped-disabled` without retaining or claiming
+  an executed binary; auto and required modes remain available for profiles that
+  choose native or QEMU execution.
 - WASI `origin/main` at `1a7eeb2` is audited. The two new commits change only
   `.github/workflows/ci.yml` and `README.md`; the implementation-tree inventory
   is byte-identical to the pin. Production Wago `97e6f91` must match the exact
@@ -919,7 +920,7 @@ pre-ledger-amend release gate passed at net subject
   `ff04a6b1`, benchmark-only parent `bbaa494e`, authoritative lifecycle ancestor
   `1a912c69`, patch-equivalent fix `16163fb8`, managed child `59ce1c13`, and
   exact-slot child `d556b20f`.
-- Current networking review `173b38a` passes standard Go, race, vet, and TinyGo
+- Current networking review `362ddf81` passes standard Go, race, vet, and TinyGo
   against exact Wago `d556b20f`. Inspection grants ordinary networking only
   `host.imports` and `instance.lifecycle`, retains four capabilities and 24
   imports, and proves direct/managed UDP/TCP/DNS cleanup. External workers
@@ -1080,8 +1081,8 @@ its two parent histories; publishing the exact current-main Wago/networking revi
 subjects before adoption; the absence of a separately reviewable pool plugin;
 lneto lacking a public immediate accepted-entry detach API so safe TCP slot reuse
 remains one explicitly charged service probe after close; the intentionally
-unsupported DNS-over-TCP fallback; and obtaining a real arm64/QEMU runner plus
-hosted release automation after immutable Wago publication. The release gate
+unsupported DNS-over-TCP fallback; and hosted release automation after immutable
+Wago publication. The release gate
 documents, machine-records, and narrowly checks the unchanged WASI native
 preview-1 exception rather than hiding it. The review bundle carries complete
 selected source trees and proves pack/object/tree/policy consistency; strict mode
@@ -1098,19 +1099,19 @@ trust-policy provisioning, and the signed trusted channel remain external.
 ## Next recursion
 
 1. Re-fetch publication refs and check whether exact production fix `5c7f76db`,
-   refreshed current Wago `d556b20f`, and networking `173b38a` have immutable
+   refreshed current Wago `d556b20f`, and networking `362ddf81` have immutable
    upstream refs; do not treat local review branches as publication.
 2. If production fix `5c7f76db` becomes fetchable, prepare a clean exact fixed
    production worktree, update production selection explicitly, remove the two
    exception cases only after the complete strict gate passes with zero faults,
    and preserve `97e6f91` plus its ordered parents as ancestors.
 3. Adopt current Wago/networking reviews only after immutable fetchability is
-   proven. Keep `ARM64_EXECUTION=required` blocked until a native/QEMU runner
-   executes the smoke binary.
-4. If publication and arm64 execution remain unavailable, improve only evidence
-   that can be produced locally—such as a complete strict rerun on the refreshed
-   current-review packs—without inventing publisher identity, another receipt
-   schema, or a false production-ready claim.
+   proven. Keep arm64 execution explicitly disabled unless a later release profile
+   opts back into it.
+4. If publication remains unavailable, improve only evidence that can be produced
+   locally—such as a complete strict rerun on the refreshed current-review
+   packs—without inventing publisher identity, another receipt schema, or a false
+   production-ready claim.
 
 After any supportable slice, run the committed release gate and recurse only if a
 new thread can make concrete progress toward the long-term completion criteria.

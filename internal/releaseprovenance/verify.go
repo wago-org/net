@@ -27,9 +27,9 @@ const (
 	ExpectedCurrentWagoRevision = "d556b20ff8667a8ae17b1ca399c74a949ac78f2f"
 	ExpectedCurrentWagoTree     = "457770eff0a8af628715ae1305151d5f534d0af4"
 	ExpectedCurrentWagoParent   = "59ce1c136492be44f8f4d252096bda01d3ef4a22"
-	ExpectedCurrentNetRevision  = "173b38a4d5a0db0e6058544576942a46b9d543df"
-	ExpectedCurrentNetTree      = "ca7534943e653a6c04c63ec458fc00feb6350799"
-	ExpectedCurrentNetParent    = "164ee79e98d7e51bf3553fb18b46fd2044b223aa"
+	ExpectedCurrentNetRevision  = "362ddf815904340aefc526d4bc57e1c7a24d36c9"
+	ExpectedCurrentNetTree      = "40e707389b44ccc075498d905265e3faa0407331"
+	ExpectedCurrentNetParent    = "e79ae21532c2a60c60d0524855db0cc38dd17598"
 	ExpectedWorkersRevision     = "1e9139756d8a3c631c59c00b028038c83bfa8341"
 	ExpectedWorkersTree         = "ca79d1fb02f19ae15d7b166ffc179c01f9a7c212"
 	ExpectedWorkersParent1      = "5cb4efff83f0a519311fcf03b63496433f2901f0"
@@ -353,15 +353,24 @@ func validateManifest(manifest *Manifest, opts VerifyOptions) error {
 		return fmt.Errorf("release provenance: cross-build target is not the required linux/arm64 pass")
 	}
 	arm64 := manifest.Targets.Arm64Execution
-	if arm64.GOOS != "linux" || arm64.GOARCH != "arm64" || !validSHA256(arm64.BinarySHA256) ||
-		(!strings.HasPrefix(arm64.Status, "executed-") && !strings.HasPrefix(arm64.Status, "skipped-")) {
+	if arm64.GOOS != "linux" || arm64.GOARCH != "arm64" {
 		return fmt.Errorf("release provenance: invalid arm64 execution result")
 	}
-	if strings.HasPrefix(arm64.Status, "executed-") && (arm64.Runner == "" || arm64.Runner == "none") {
-		return fmt.Errorf("release provenance: executed arm64 result has no runner")
-	}
-	if strings.HasPrefix(arm64.Status, "skipped-") && arm64.Runner != "none" {
-		return fmt.Errorf("release provenance: skipped arm64 result names runner %q", arm64.Runner)
+	switch {
+	case strings.HasPrefix(arm64.Status, "executed-"):
+		if !validSHA256(arm64.BinarySHA256) || arm64.Runner == "" || arm64.Runner == "none" {
+			return fmt.Errorf("release provenance: invalid executed arm64 result")
+		}
+	case arm64.Status == "skipped-no-runner":
+		if !validSHA256(arm64.BinarySHA256) || arm64.Runner != "none" {
+			return fmt.Errorf("release provenance: invalid no-runner arm64 result")
+		}
+	case arm64.Status == "skipped-disabled":
+		if arm64.BinarySHA256 != "" || arm64.Runner != "none" {
+			return fmt.Errorf("release provenance: disabled arm64 result retained a binary or runner")
+		}
+	default:
+		return fmt.Errorf("release provenance: invalid arm64 execution status %q", arm64.Status)
 	}
 	if err := validateChecks(manifest.Checks, arm64.Status); err != nil {
 		return err
