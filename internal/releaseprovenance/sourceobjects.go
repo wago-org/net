@@ -25,15 +25,23 @@ type SourceObjectSet struct {
 // deliberately omitted; each selected commit's complete tree/blob closure is
 // included, and selected merge parents can be supplied explicitly.
 func ExportSourceObjects(outputDir string, sets []SourceObjectSet) error {
-	if outputDir == "" {
-		return fmt.Errorf("release provenance: source-object output directory is empty")
-	}
-	if err := os.RemoveAll(outputDir); err != nil {
+	return ExportSourceObjectsWithOptions(outputDir, sets, SourceObjectExportOptions{})
+}
+
+// ExportSourceObjectsWithOptions applies centralized artifact-directory safety
+// checks before building a replacement in a temporary sibling directory and
+// promoting it into place only after successful generation.
+func ExportSourceObjectsWithOptions(outputDir string, sets []SourceObjectSet, options SourceObjectExportOptions) error {
+	prepared, err := prepareSourceObjectOutputDirectory(outputDir, sets, options)
+	if err != nil {
 		return err
 	}
-	if err := os.MkdirAll(outputDir, 0o755); err != nil {
-		return err
-	}
+	return replaceDirectoryAtomically(prepared.outputDir, func(stageDir string) error {
+		return writeSourceObjects(stageDir, sets)
+	})
+}
+
+func writeSourceObjects(outputDir string, sets []SourceObjectSet) error {
 	seen := map[string]struct{}{}
 	for _, set := range sets {
 		if set.Name == "" || filepath.Base(set.Name) != set.Name || strings.ContainsAny(set.Name, `/\\`) {

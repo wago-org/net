@@ -11,7 +11,9 @@ workers_dir=$(realpath "${WORKERS_DIR:-$root/.wago/workers-plugin}")
 fuzztime=${FUZZTIME:-3s}
 run_wasi=${RUN_WASI:-1}
 allow_dirty=${ALLOW_DIRTY:-0}
-out=${SIGNOFF_DIR:-$root/.wago/release-signoff}
+out=$(realpath -m "${SIGNOFF_DIR:-$root/.wago/release-signoff}")
+allow_outside_artifact_root=${ALLOW_SIGNOFF_DIR_OUTSIDE_WAGO:-0}
+artifact_root=$(realpath -m "$root/.wago")
 
 # shellcheck source=scripts/lib/production-wago-input.sh
 source "$root/scripts/lib/production-wago-input.sh"
@@ -30,6 +32,25 @@ readonly expected_workers=1e9139756d8a3c631c59c00b028038c83bfa8341
 
 log() { printf '\n==> %s\n' "$*"; }
 fail() { echo "release-signoff: $*" >&2; exit 1; }
+path_contains() {
+  local parent child
+  parent=$(realpath -m "$1")
+  child=$(realpath -m "$2")
+  [[ "$child" == "$parent" || "$child" == "$parent"/* ]]
+}
+validate_signoff_dir() {
+  local candidate=$1
+  [[ $candidate != / ]] || fail "refusing filesystem root as signoff directory"
+  [[ $candidate != "$HOME" ]] || fail "refusing home directory as signoff directory"
+  ! path_contains "$candidate" "$PWD" || fail "refusing signoff directory that would remove the current working directory"
+  for source in "$root" "$wago_dir" "$lneto_dir" "$wasi_dir" "$current_net_dir" "$current_wago_dir" "$workers_dir"; do
+    ! path_contains "$candidate" "$source" || fail "refusing signoff directory that would remove source repository $source"
+  done
+  if [[ $allow_outside_artifact_root != 1 ]]; then
+    [[ $candidate == "$artifact_root"/* ]] || fail "signoff output must be beneath $artifact_root; set ALLOW_SIGNOFF_DIR_OUTSIDE_WAGO=1 only for an intentional external artifact directory"
+  fi
+  [[ $candidate != "$artifact_root" ]] || fail "signoff output must be beneath $artifact_root, not the artifact root itself"
+}
 record_check() {
   local name=$1 status=$2 detail=${3:-}
   [[ "$name$status$detail" != *$'\t'* && "$name$status$detail" != *$'\n'* ]] || fail "invalid check record"
@@ -58,6 +79,7 @@ done
 for dir in "$root" "$wago_dir" "$lneto_dir" "$wasi_dir" "$current_net_dir" "$current_wago_dir" "$workers_dir"; do
   [[ -d "$dir" ]] || fail "missing repository directory: $dir"
 done
+validate_signoff_dir "$out"
 
 log "verify pinned audit repositories"
 production_wago_verify_exact_clean_merge "$wago_dir" Wago "$expected_wago" "$expected_wago_tree" \

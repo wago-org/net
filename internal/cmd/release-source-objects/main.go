@@ -10,6 +10,7 @@ import (
 
 func main() {
 	var out, plugin, subject, wago, lneto, wasi, currentNet, currentWago, workers string
+	var allowOutsideArtifactRoot bool
 	flag.StringVar(&out, "out", "", "output directory")
 	flag.StringVar(&plugin, "plugin", ".", "plugin repository")
 	flag.StringVar(&subject, "subject", "HEAD", "exact plugin subject revision")
@@ -19,12 +20,13 @@ func main() {
 	flag.StringVar(&currentNet, "current-net", "", "current networking review repository")
 	flag.StringVar(&currentWago, "current-wago", "", "current Wago review repository")
 	flag.StringVar(&workers, "workers", "", "external workers repository")
+	flag.BoolVar(&allowOutsideArtifactRoot, "allow-outside-artifact-root", false, "allow output outside the plugin .wago artifact root")
 	flag.Parse()
 	if out == "" || wago == "" || lneto == "" || wasi == "" || currentNet == "" || currentWago == "" || workers == "" {
 		fmt.Fprintln(os.Stderr, "release-source-objects: -out, -wago, -lneto, -wasi, -current-net, -current-wago, and -workers are required")
 		os.Exit(2)
 	}
-	err := releaseprovenance.ExportSourceObjects(out, []releaseprovenance.SourceObjectSet{
+	err := releaseprovenance.ExportSourceObjectsWithOptions(out, []releaseprovenance.SourceObjectSet{
 		{Name: "net", Directory: plugin, Revisions: []string{subject}},
 		{Name: "wago", Directory: wago, Revisions: []string{
 			releaseprovenance.ExpectedWagoRevision,
@@ -36,6 +38,9 @@ func main() {
 		{Name: "net-current-review", Directory: currentNet, Revisions: []string{releaseprovenance.ExpectedCurrentNetRevision}},
 		{Name: "wago-current-review", Directory: currentWago, Revisions: []string{releaseprovenance.ExpectedCurrentWagoRevision}},
 		{Name: "workers-current", Directory: workers, Revisions: []string{releaseprovenance.ExpectedWorkersRevision}},
+	}, releaseprovenance.SourceObjectExportOptions{
+		RepositoryRoot:           plugin,
+		AllowOutsideArtifactRoot: allowOutsideArtifactRoot,
 	})
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)

@@ -6,7 +6,11 @@ current Wago/networking review worktrees, and the external workers checkout. It
 writes disposable logs under `.wago/release-signoff/`. The default production
 Wago worktree is `.wago/wago-production-97e6f91`; the default current-review
 worktrees are `.wago/wago-current-plugin-lifecycle-ff04a6b1` and
-`.wago/net-current-plugin-registration-18615546`.
+`.wago/net-current-plugin-registration-18615546`. Release output paths are
+validated before replacement: by default they must stay beneath the plugin
+checkout's `.wago/` artifact root, and obvious destructive targets such as `/`,
+`$HOME`, source repositories, their ancestors, and the active working directory
+are rejected even when an explicit override is supplied.
 
 ## Pinned inputs
 
@@ -557,6 +561,12 @@ SOURCE_OBJECT_SUBJECT=$(git rev-parse HEAD) \
 SOURCE_OBJECT_DIR=.wago/release-signoff/source-objects \
   scripts/release-source-objects.sh
 ```
+
+The source-object exporter now stages a sibling temporary directory and renames
+it into place only after successful generation, preserving any previous valid
+result until the replacement is ready. Set
+`ALLOW_SOURCE_OBJECT_DIR_OUTSIDE_WAGO=1` only for an intentional external
+artifact directory; the Go path-safety policy still rejects destructive targets.
 
 To export or reproduce a bundle and its unsigned canonical statement from an existing passing evidence directory:
 

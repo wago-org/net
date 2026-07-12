@@ -1112,10 +1112,10 @@ func TestExportSourceObjectsIsDeterministic(t *testing.T) {
 	repositories := newSourceObjectFixture(t)
 	sets := fixtureSourceObjectSets(repositories)
 	first, second := filepath.Join(t.TempDir(), "first"), filepath.Join(t.TempDir(), "second")
-	if err := ExportSourceObjects(first, sets); err != nil {
+	if err := ExportSourceObjectsWithOptions(first, sets, SourceObjectExportOptions{RepositoryRoot: repositories.net.Directory, AllowOutsideArtifactRoot: true}); err != nil {
 		t.Fatal(err)
 	}
-	if err := ExportSourceObjects(second, sets); err != nil {
+	if err := ExportSourceObjectsWithOptions(second, sets, SourceObjectExportOptions{RepositoryRoot: repositories.net.Directory, AllowOutsideArtifactRoot: true}); err != nil {
 		t.Fatal(err)
 	}
 	for _, set := range sets {
@@ -1311,7 +1311,7 @@ func validReviewFixture(t *testing.T) (string, VerifyOptions) {
 	if err := readInspection(dir, &inspection); err != nil {
 		t.Fatal(err)
 	}
-	if err := ExportSourceObjects(filepath.Join(dir, "source-objects"), fixtureSourceObjectSets(repositories)); err != nil {
+	if err := ExportSourceObjectsWithOptions(filepath.Join(dir, "source-objects"), fixtureSourceObjectSets(repositories), SourceObjectExportOptions{RepositoryRoot: repositories.net.Directory, AllowOutsideArtifactRoot: true}); err != nil {
 		t.Fatal(err)
 	}
 	artifacts, err := scanArtifacts(dir)
