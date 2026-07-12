@@ -177,11 +177,20 @@ func TestDNSBoundedQueryRecordsAndQuotaLifecycle(t *testing.T) {
 	if usage.DNSWork != 0 || usage.Resources != 1 || usage.DNSResources != 1 || usage.QueuedBytes == 0 {
 		t.Fatalf("completed quota = %+v", usage)
 	}
+	workReset := query.work.ResetReleased()
+	if workReset {
+		t.Fatalf("completed query retained work graph state: reset=%v", workReset)
+	}
 	if err := query.Close(); err != nil {
 		t.Fatal(err)
 	}
 	if usage, _ := config.Quotas.Snapshot(); usage != (quota.Usage{}) {
 		t.Fatalf("closed query retained quota = %+v", usage)
+	}
+	retainedReset := query.retained.ResetReleased()
+	workReset = query.work.ResetReleased()
+	if retainedReset || workReset || query.request != (namespace.DNSRequest{}) || query.packet != nil || query.records != nil || query.failure != nil || query.cursor != 0 {
+		t.Fatalf("closed query retained graph state: retained_reset=%v work_reset=%v request=%+v packet=%v records=%v failure=%v cursor=%d", retainedReset, workReset, query.request, query.packet != nil, query.records != nil, query.failure, query.cursor)
 	}
 	if got := query.Readiness(); got != namespace.ReadyClosed {
 		t.Fatalf("closed readiness = %v", got)

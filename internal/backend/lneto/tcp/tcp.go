@@ -520,6 +520,8 @@ func (l *tcpListener) closeLocked() error {
 		removeTCPListener(l.owner, l)
 	}
 	l.retained.Release()
+	l.retained.ResetReleased()
+	l.listener = lnetotcp.Listener{}
 	return nil
 }
 
@@ -705,17 +707,22 @@ func (s *tcpStream) closeLocked() error {
 	s.closed = true
 	if s.conn != nil {
 		s.conn.Abort()
+		s.conn = nil
 	}
 	if s.outbound && s.owner != nil {
 		delete(s.owner.ports, s.local.Port)
 	}
 	if s.allocation != nil {
 		s.allocation.Release()
+		if s.allocation == &s.retained {
+			s.retained.ResetReleased()
+		}
 		s.allocation = nil
 	}
 	if s.slot != nil {
 		s.slot.resource.ResetReleased()
 		s.slot.quotaOwned = false
+		s.slot = nil
 	}
 	if s.owner != nil {
 		removeTCPStream(s.owner, s)

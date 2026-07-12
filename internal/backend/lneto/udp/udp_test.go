@@ -18,8 +18,8 @@ func TestAdapterExchangeTruncationPortLeaseAndClose(t *testing.T) {
 	bCore, bAdapter, _ := newTestAdapter(t, 32)
 	aLocal := nscore.Endpoint{Address: netip.MustParseAddr("192.0.2.31"), Port: 4031}
 	bLocal := nscore.Endpoint{Address: netip.MustParseAddr("192.0.2.32"), Port: 4032}
-	a := bindTestSocket(t, aAdapter, aLocal)
-	b := bindTestSocket(t, bAdapter, bLocal)
+	a := bindTestSocket(t, aAdapter, aLocal).(*udpSocket)
+	b := bindTestSocket(t, bAdapter, bLocal).(*udpSocket)
 	if _, _, err := aAdapter.TryBind(aLocal); err == nil {
 		t.Fatal("duplicate bind succeeded")
 	} else if failure, ok := nscore.FailureOf(err); !ok || failure != nscore.FailureAddressInUse {
@@ -68,6 +68,10 @@ func TestAdapterExchangeTruncationPortLeaseAndClose(t *testing.T) {
 	aCore.Unlock()
 	if usage, _ := aAccount.Snapshot(); usage != (quota.Usage{}) {
 		t.Fatalf("closed socket retained quota = %+v", usage)
+	}
+	retainedReset := a.retained.ResetReleased()
+	if retainedReset || a.rx.storage != nil || a.tx.storage != nil {
+		t.Fatalf("closed socket retained graph state: retained_reset=%v rx=%v tx=%v", retainedReset, a.rx.storage != nil, a.tx.storage != nil)
 	}
 }
 

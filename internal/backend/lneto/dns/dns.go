@@ -268,11 +268,14 @@ func (q *dnsQuery) closeLocked() error {
 		removeQuery(q.owner, q)
 	}
 	clear(q.packet)
+	clear(q.packetStorage[:])
 	q.packet = nil
 	for i := range q.records {
 		q.records[i] = dnsns.Record{}
 	}
+	clear(q.recordStorage[:])
 	q.records = nil
+	q.cursor = 0
 	q.request = dnsns.Request{}
 	q.failure = nil
 	q.releaseQuotaLocked()
@@ -315,11 +318,13 @@ func (q *dnsQuery) completeLocked(records []dnsns.Record) {
 
 func (q *dnsQuery) releaseWorkLocked() {
 	q.work.Release()
+	q.work.ResetReleased()
 }
 
 func (q *dnsQuery) releaseQuotaLocked() {
 	q.releaseWorkLocked()
 	q.retained.Release()
+	q.retained.ResetReleased()
 }
 
 // CloseLocked releases every DNS query and retained allocation. The caller

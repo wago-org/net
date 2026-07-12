@@ -1320,3 +1320,60 @@ Broad validation at recursion end:
 1. `fix: make DNS option ordering deterministic`
 2. `fix: clean low-level Imports surface`
 3. `fix: clear closed resource graph state`
+
+## Audit recursion update — 2026-07-12 iteration 4
+
+### Completed work
+
+1. `d970b17` — `fix: make DNS option ordering deterministic`
+   - Made DNS resolver selection commute with `WithConfig`: `Resolver(...)` now records only the explicit server choice, `WithConfig(...)` records the exact storage override, and final registration combines them deterministically.
+   - Preserved the documented special cases: resolver-only registration still installs finite defaults, while an explicit zero-valued `WithConfig(Config{})` still suppresses storage even if a resolver is supplied.
+   - Added focused DNS option regressions covering both option orders and the explicit-zero override case.
+2. `305db3e` — `fix: clean low-level Imports surface`
+   - Added explicit `InfoImports()` for the low-level stateless `abi_version` surface.
+   - Tightened `Imports(config)` so only the zero configuration remains accepted; any configured policy, quota, readiness, or namespace state now fails closed and returns no imports instead of implying a lifecycle-aware surface that the low-level path cannot provide.
+   - Updated focused root/TCP/DNS regressions and the architecture/ABI docs to make the low-level info-only surface explicit.
+3. `HEAD` — `fix: clear closed resource graph state`
+   - Cleared released quota-charge storage and retained buffers from closed UDP sockets, closed TCP listeners/streams, and terminal/closed DNS queries so finished resources stop retaining queued packet/record storage and released accounting state.
+   - Kept concurrency-safe owner/local fields intact after close where the race tests require them, while still clearing nil-able connection pointers, queue storage, packet/record retention, and reusable slot/account state.
+   - Added focused regressions proving closed UDP/TCP/DNS resources no longer retain released charge state or buffered packet/record storage.
+
+### Remaining work
+
+Unresolved P1/P2 work from the audit prompt still includes at least:
+- allocation-reduction follow-up work (resource-table close scratch removal, TCP/UDP/DNS reuse work, service composition),
+- README and documentation reorganization,
+- `wago.json` capability keyword cleanup,
+- lifecycle serialization proof or an explicit attachment state machine.
+
+### Exact tests run
+
+Targeted validation during the slice:
+- `go test ./dns -run TestResolverAndConfigComposeIndependentOfOptionOrder`
+- `go test ./... -run 'TestInfoImportsStayCoreOnlyAndRejectConfiguredState|TestTCPBindingsAreRegisteredOnlyAsCompleteTable|TestDNSBindingsAreRegisteredOnlyAsCompleteTable'`
+- `go test ./internal/backend/lneto/udp ./internal/backend/lneto/tcp ./internal/backend/lneto/dns -run 'TestAdapterExchangeTruncationPortLeaseAndClose|TestAcceptedCloseRetainsSlotUntilChargedMaintenance|TestConnectResetBeforeEstablishment|TestDNSBoundedQueryRecordsAndQuotaLifecycle'`
+
+Broad validation at recursion end:
+- `go test ./...`
+- `go test -race ./...`
+- `go vet ./...`
+- `scripts/check-source-boundaries.sh`
+- `GOOS=linux GOARCH=arm64 CGO_ENABLED=0 go build ./...`
+- `tinygo test ./...` → blocked on this host (`tinygo: command not found`)
+
+### Benchmark results
+
+- No hot-path benchmarks were rerun for this slice.
+- This slice changed DNS option folding, the host-only low-level import surface, and closed-resource cleanup state only.
+- The earlier hot-path benchmark baselines remain the latest measured numbers until the allocation-reduction slice lands.
+
+### Discovered follow-up issues / blockers
+
+- `tinygo` is still unavailable on the current host, so required TinyGo validation remains an external environment blocker.
+- An initial close-graph cleanup attempt that nulled owner/local references regressed the race suite; the final implementation keeps those concurrency-sensitive references stable while still clearing released accounting state and retained packet/record buffers.
+
+### Next three proposed atomic commits
+
+1. `perf: remove resource-table close scratch allocation`
+2. `perf: reduce protocol reuse allocations`
+3. `fix: make lifecycle serialization explicit`

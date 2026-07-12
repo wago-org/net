@@ -410,6 +410,7 @@ func (s *udpSocket) closeLocked() error {
 	s.rx.clear()
 	s.tx.clear()
 	s.retained.Release()
+	s.retained.ResetReleased()
 	return nil
 }
 

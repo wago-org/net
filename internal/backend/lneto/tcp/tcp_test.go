@@ -112,6 +112,9 @@ func TestAcceptedCloseRetainsSlotUntilChargedMaintenance(t *testing.T) {
 	if err := serverStream.Close(); err != nil {
 		t.Fatal(err)
 	}
+	if serverStream.conn != nil || serverStream.slot != nil {
+		t.Fatalf("closed accepted stream retained graph state: conn=%p slot=%p", serverStream.conn, serverStream.slot)
+	}
 	if !listener.pool.slots[0].inUse || listener.pool.slots[0].stream == nil || listener.pool.slots[0].quotaOwned {
 		t.Fatalf("close bypassed bounded maintenance: in_use=%v stream=%p quota_owned=%v", listener.pool.slots[0].inUse, listener.pool.slots[0].stream, listener.pool.slots[0].quotaOwned)
 	}
@@ -144,6 +147,10 @@ func TestAcceptedCloseRetainsSlotUntilChargedMaintenance(t *testing.T) {
 	if err := listener.Close(); err != nil {
 		t.Fatal(err)
 	}
+	listenerRetainedReset := listener.retained.ResetReleased()
+	if listenerRetainedReset {
+		t.Fatalf("closed listener retained graph state: retained_reset=%v", listenerRetainedReset)
+	}
 	if usage, _ := server.quotas.Snapshot(); usage != (quota.Usage{}) {
 		t.Fatalf("listener close quota = %+v", usage)
 	}
@@ -171,6 +178,10 @@ func TestConnectResetBeforeEstablishment(t *testing.T) {
 	}
 	if err := stream.Close(); err != nil {
 		t.Fatal(err)
+	}
+	streamRetainedReset := stream.retained.ResetReleased()
+	if stream.conn != nil || streamRetainedReset {
+		t.Fatalf("closed outbound stream retained graph state: conn=%p retained_reset=%v", stream.conn, streamRetainedReset)
 	}
 	if usage, _ := adapter.quotas.Snapshot(); usage != (quota.Usage{}) {
 		t.Fatalf("outbound close quota = %+v", usage)
