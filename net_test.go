@@ -5,12 +5,14 @@ import (
 	"errors"
 	"net/netip"
 	"reflect"
+	"sync"
 	"testing"
 
 	lnetocore "github.com/wago-org/net/internal/backend/lneto/core"
 	"github.com/wago-org/net/internal/namespace"
 	nscore "github.com/wago-org/net/internal/namespace/core"
 	"github.com/wago-org/net/internal/plugin"
+	"github.com/wago-org/net/internal/policy"
 
 	wago "github.com/wago-org/wago"
 )
@@ -116,6 +118,122 @@ func TestExtensionMetadataAndABIBinding(t *testing.T) {
 	fn(nil, []uint64{1}, malformed)
 	if malformed[0] != 0xfeedface {
 		t.Fatalf("malformed abi_version call mutated result: %#x", malformed[0])
+	}
+}
+
+func TestExtensionSnapshotsCallerConfigBeforeRegistrationAndInstantiation(t *testing.T) {
+	prefix := netip.MustParsePrefix("192.0.2.0/24")
+	limits := QuotaLimits{Resources: 8, UDPResources: 8, TCPResources: 8, DNSResources: 8, QueuedBytes: 1 << 20, DNSWork: 8, ServiceUnits: 64}
+	readiness := ReadinessConfig{MaxRegistrations: 4}
+	staticIPv4 := selectiveTestStaticIPv4()
+	config := Config{
+		Policy: PolicyConfig{Rules: []PolicyRule{{
+			Action:     PolicyAllow,
+			Transports: []PolicyTransport{PolicyTransportUDP},
+			Directions: []PolicyDirection{PolicyOutbound},
+			Prefixes:   []netip.Prefix{prefix},
+		}}},
+		Limits:     &limits,
+		Readiness:  &readiness,
+		StaticIPv4: staticIPv4,
+	}
+	extension := New(WithConfig(config))
+
+	config.Policy.Rules[0].Action = PolicyDeny
+	config.Policy.Rules[0].Prefixes[0] = netip.MustParsePrefix("198.51.100.0/24")
+	limits.Resources = 1
+	readiness.MaxRegistrations = 0
+	staticIPv4.MTU = 0
+	staticIPv4.IPv4Address = netip.Addr{}
+
+	runtime := wago.NewRuntime()
+	if err := runtime.Use(extension); err != nil {
+		t.Fatalf("Use: %v", err)
+	}
+	instance, err := runtime.Instantiate(context.Background(), emptyModule(t, runtime))
+	if err != nil {
+		t.Fatalf("Instantiate: %v", err)
+	}
+	defer instance.Close()
+	state, ok := extension.instanceManager().ForInstance(instance)
+	if !ok || state == nil {
+		t.Fatal("instance state missing")
+	}
+	if got := state.Readiness().Snapshot().Capacity; got != 4 {
+		t.Fatalf("readiness capacity = %d, want 4", got)
+	}
+	if state.NamespaceHandle() == 0 {
+		t.Fatal("configured namespace was not created")
+	}
+	if !state.Policy().CheckEndpoint(policy.OperationUDPSend, netip.MustParseAddr("192.0.2.1"), 53) {
+		t.Fatal("compiled policy changed after caller mutation")
+	}
+}
+
+func TestExtensionConfigSnapshotIsRaceSafeAgainstCallerMutation(t *testing.T) {
+	prefixA := netip.MustParsePrefix("192.0.2.0/24")
+	prefixB := netip.MustParsePrefix("198.51.100.0/24")
+	limits := QuotaLimits{Resources: 8, UDPResources: 8, TCPResources: 8, DNSResources: 8, QueuedBytes: 1 << 20, DNSWork: 8, ServiceUnits: 64}
+	readiness := ReadinessConfig{MaxRegistrations: 4}
+	staticIPv4 := selectiveTestStaticIPv4()
+	stableAddress := staticIPv4.IPv4Address
+	config := Config{
+		Policy: PolicyConfig{Rules: []PolicyRule{{
+			Action:     PolicyAllow,
+			Transports: []PolicyTransport{PolicyTransportUDP},
+			Directions: []PolicyDirection{PolicyOutbound},
+			Prefixes:   []netip.Prefix{prefixA},
+		}}},
+		Limits:     &limits,
+		Readiness:  &readiness,
+		StaticIPv4: staticIPv4,
+	}
+	extension := New(WithConfig(config))
+
+	stop := make(chan struct{})
+	var workers sync.WaitGroup
+	workers.Add(1)
+	go func() {
+		defer workers.Done()
+		for {
+			select {
+			case <-stop:
+				return
+			default:
+			}
+			config.Policy.Rules[0].Action = PolicyAllow
+			config.Policy.Rules[0].Prefixes[0] = prefixA
+			limits.Resources = 8
+			readiness.MaxRegistrations = 4
+			staticIPv4.MTU = 1500
+			staticIPv4.IPv4Address = stableAddress
+
+			config.Policy.Rules[0].Action = PolicyDeny
+			config.Policy.Rules[0].Prefixes[0] = prefixB
+			limits.Resources = 1
+			readiness.MaxRegistrations = 0
+			staticIPv4.MTU = 0
+			staticIPv4.IPv4Address = netip.Addr{}
+		}
+	}()
+	defer func() {
+		close(stop)
+		workers.Wait()
+	}()
+
+	runtime := wago.NewRuntime()
+	if err := runtime.Use(extension); err != nil {
+		t.Fatalf("Use: %v", err)
+	}
+	module := emptyModule(t, runtime)
+	for i := 0; i < 8; i++ {
+		instance, err := runtime.Instantiate(context.Background(), module)
+		if err != nil {
+			t.Fatalf("Instantiate %d: %v", i, err)
+		}
+		if err := instance.Close(); err != nil {
+			t.Fatalf("Close %d: %v", i, err)
+		}
 	}
 }
 

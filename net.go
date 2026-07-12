@@ -202,7 +202,25 @@ func New(options ...Option) *Network {
 }
 
 func newExtension(config Config) *Extension {
-	return &Extension{config: config}
+	return &Extension{config: cloneConfig(config)}
+}
+
+func cloneConfig(config Config) Config {
+	cloned := config
+	cloned.Policy = policy.Merge(config.Policy)
+	if config.Limits != nil {
+		limits := *config.Limits
+		cloned.Limits = &limits
+	}
+	if config.Readiness != nil {
+		readiness := *config.Readiness
+		cloned.Readiness = &readiness
+	}
+	if config.StaticIPv4 != nil {
+		staticIPv4 := *config.StaticIPv4
+		cloned.StaticIPv4 = &staticIPv4
+	}
+	return cloned
 }
 
 func (e *Extension) initialize(modules []plugin.Module) (*instancestate.Manager, error) {
