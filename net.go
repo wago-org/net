@@ -312,6 +312,9 @@ func (e *Extension) Register(reg *wago.Registry) error {
 		return e.configErr
 	}
 	modules := e.modules.Freeze()
+	if len(modules) == 0 {
+		return nil
+	}
 	instances, err := e.initialize(modules)
 	if err != nil {
 		return err
@@ -319,9 +322,6 @@ func (e *Extension) Register(reg *wago.Registry) error {
 	reg.RequireReinstantiation()
 	reg.Hooks().AfterInstantiate(instances.AfterInstantiate)
 	reg.Hooks().BeforeClose(instances.BeforeClose)
-	if len(modules) == 0 {
-		return nil
-	}
 	reg.Capability(CapInfo, wago.CapabilityDocs("inspect the Wago networking ABI and interfaces"))
 	registerBindings(reg.ImportModule(Module), e.bindings())
 	host := plugin.NewHost(instances)

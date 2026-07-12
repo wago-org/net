@@ -165,6 +165,40 @@ func TestExtensionInfoConcurrentCallsDoNotAlias(t *testing.T) {
 	}
 }
 
+func TestEmptyNetworkLeavesLifecycleAndResetPolicyUnchanged(t *testing.T) {
+	network := New()
+	runtime := wago.NewRuntime()
+	if err := runtime.Use(network); err != nil {
+		t.Fatalf("Use: %v", err)
+	}
+	if len(runtime.Capabilities()) != 0 || len(runtime.ProvidedImports()) != 0 {
+		t.Fatalf("empty network exported capabilities/imports: %v / %v", runtime.Capabilities(), runtime.ProvidedImports())
+	}
+	if network.instances != nil {
+		t.Fatal("empty network initialized instance state during registration")
+	}
+	class, err := runtime.Class(emptyModule(t, runtime), wago.ClassOptions{
+		Pool: wago.PoolOptions{MinInstances: 1, MaxInstances: 1, Reset: wago.ResetMemorySnapshot},
+	})
+	if err != nil {
+		t.Fatalf("Class: %v", err)
+	}
+	if got := class.ResetPolicy(); got != wago.ResetMemorySnapshot {
+		t.Fatalf("empty network reset policy = %v, want memory snapshot", got)
+	}
+	lease, err := class.Acquire(context.Background())
+	if err != nil {
+		t.Fatalf("Acquire: %v", err)
+	}
+	if network.instances != nil {
+		_ = lease.Release()
+		t.Fatal("empty network attached instance state")
+	}
+	if err := lease.Release(); err != nil {
+		t.Fatalf("Release: %v", err)
+	}
+}
+
 func TestExtensionSnapshotsCallerConfigBeforeRegistrationAndInstantiation(t *testing.T) {
 	prefix := netip.MustParsePrefix("192.0.2.0/24")
 	limits := QuotaLimits{Resources: 8, UDPResources: 8, TCPResources: 8, DNSResources: 8, QueuedBytes: 1 << 20, DNSWork: 8, ServiceUnits: 64}
