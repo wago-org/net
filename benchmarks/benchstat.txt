@@ -1,0 +1,886 @@
+goos: linux
+goarch: amd64
+cpu: AMD Ryzen 7 8845HS w/ Radeon 780M Graphics
+pkg: github.com/wago-org/net
+             │ benchmarks/baseline.txt │       benchmarks/candidate.txt       │
+             │         sec/op          │    sec/op     vs base                │
+GuestDNSPoll              94.35n ± ∞ ¹   98.11n ± ∞ ¹       ~ (p=0.250 n=3+5)
+GuestUDPPoll              116.3n ± ∞ ¹   124.9n ± ∞ ¹  +7.39% (p=0.036 n=3+5)
+GuestTCPPoll              112.5n ± ∞ ¹   113.1n ± ∞ ¹       ~ (p=0.929 n=3+5)
+geomean                   107.3n         111.5n        +3.93%
+¹ need >= 6 samples for confidence interval at level 0.95
+
+             │ benchmarks/baseline.txt │       benchmarks/candidate.txt        │
+             │          B/op           │    B/op      vs base                  │
+GuestDNSPoll               0.000 ± ∞ ¹   0.000 ± ∞ ¹       ~ (p=1.000 n=3+5) ²
+GuestUDPPoll               0.000 ± ∞ ¹   0.000 ± ∞ ¹       ~ (p=1.000 n=3+5) ²
+GuestTCPPoll               0.000 ± ∞ ¹   0.000 ± ∞ ¹       ~ (p=1.000 n=3+5) ²
+geomean                              ³                +0.00%                 ³
+¹ need >= 6 samples for confidence interval at level 0.95
+² all samples are equal
+³ summaries must be >0 to compute geomean
+
+             │ benchmarks/baseline.txt │       benchmarks/candidate.txt        │
+             │        allocs/op        │  allocs/op   vs base                  │
+GuestDNSPoll               0.000 ± ∞ ¹   0.000 ± ∞ ¹       ~ (p=1.000 n=3+5) ²
+GuestUDPPoll               0.000 ± ∞ ¹   0.000 ± ∞ ¹       ~ (p=1.000 n=3+5) ²
+GuestTCPPoll               0.000 ± ∞ ¹   0.000 ± ∞ ¹       ~ (p=1.000 n=3+5) ²
+geomean                              ³                +0.00%                 ³
+¹ need >= 6 samples for confidence interval at level 0.95
+² all samples are equal
+³ summaries must be >0 to compute geomean
+
+pkg: github.com/wago-org/net/internal/abi/core
+                              │ benchmarks/baseline.txt │       benchmarks/candidate.txt       │
+                              │         sec/op          │    sec/op     vs base                │
+Slice                                      1.718n ± ∞ ¹   1.809n ± ∞ ¹  +5.30% (p=0.036 n=3+5)
+Write                                      8.590n ± ∞ ¹   9.194n ± ∞ ¹  +7.03% (p=0.036 n=3+5)
+Zero                                       8.320n ± ∞ ¹   8.742n ± ∞ ¹  +5.07% (p=0.036 n=3+5)
+ReadUint32LE                               1.280n ± ∞ ¹   1.354n ± ∞ ¹  +5.78% (p=0.036 n=3+5)
+WriteUint32LE                              1.484n ± ∞ ¹   1.569n ± ∞ ¹  +5.73% (p=0.036 n=3+5)
+CheckRanges                                5.377n ± ∞ ¹   5.352n ± ∞ ¹       ~ (p=0.571 n=3+5)
+Elements                                   1.913n ± ∞ ¹   2.033n ± ∞ ¹  +6.27% (p=0.036 n=3+5)
+EncodeAddressV1                            11.70n ± ∞ ¹   12.49n ± ∞ ¹  +6.75% (p=0.036 n=3+5)
+DecodeAddressV1                            22.40n ± ∞ ¹   23.43n ± ∞ ¹  +4.60% (p=0.036 n=3+5)
+EncodeEndpointV1                           23.65n ± ∞ ¹   25.64n ± ∞ ¹  +8.41% (p=0.036 n=3+5)
+DecodeEndpointV1                           39.94n ± ∞ ¹   43.12n ± ∞ ¹  +7.96% (p=0.036 n=3+5)
+EncodeHandleV1                             1.490n ± ∞ ¹   1.565n ± ∞ ¹  +5.03% (p=0.036 n=3+5)
+DecodePollBudgetV1                         2.541n ± ∞ ¹   2.668n ± ∞ ¹  +5.00% (p=0.036 n=3+5)
+EncodePollEventsV1/events=1                5.268n ± ∞ ¹   5.334n ± ∞ ¹       ~ (p=0.571 n=3+5)
+EncodePollEventsV1/events=16               26.85n ± ∞ ¹   28.35n ± ∞ ¹  +5.59% (p=0.036 n=3+5)
+EncodePollEventsV1/events=256              411.8n ± ∞ ¹   433.4n ± ∞ ¹  +5.25% (p=0.036 n=3+5)
+EncodePollResultV1                         8.640n ± ∞ ¹   8.972n ± ∞ ¹       ~ (p=0.071 n=3+5)
+geomean                                    7.683n         8.081n        +5.18%
+¹ need >= 6 samples for confidence interval at level 0.95
+
+                              │ benchmarks/baseline.txt │       benchmarks/candidate.txt        │
+                              │          B/op           │    B/op      vs base                  │
+Slice                                       0.000 ± ∞ ¹   0.000 ± ∞ ¹       ~ (p=1.000 n=3+5) ²
+Write                                       0.000 ± ∞ ¹   0.000 ± ∞ ¹       ~ (p=1.000 n=3+5) ²
+Zero                                        0.000 ± ∞ ¹   0.000 ± ∞ ¹       ~ (p=1.000 n=3+5) ²
+ReadUint32LE                                0.000 ± ∞ ¹   0.000 ± ∞ ¹       ~ (p=1.000 n=3+5) ²
+WriteUint32LE                               0.000 ± ∞ ¹   0.000 ± ∞ ¹       ~ (p=1.000 n=3+5) ²
+CheckRanges                                 0.000 ± ∞ ¹   0.000 ± ∞ ¹       ~ (p=1.000 n=3+5) ²
+Elements                                    0.000 ± ∞ ¹   0.000 ± ∞ ¹       ~ (p=1.000 n=3+5) ²
+EncodeAddressV1                             0.000 ± ∞ ¹   0.000 ± ∞ ¹       ~ (p=1.000 n=3+5) ²
+DecodeAddressV1                             0.000 ± ∞ ¹   0.000 ± ∞ ¹       ~ (p=1.000 n=3+5) ²
+EncodeEndpointV1                            0.000 ± ∞ ¹   0.000 ± ∞ ¹       ~ (p=1.000 n=3+5) ²
+DecodeEndpointV1                            0.000 ± ∞ ¹   0.000 ± ∞ ¹       ~ (p=1.000 n=3+5) ²
+EncodeHandleV1                              0.000 ± ∞ ¹   0.000 ± ∞ ¹       ~ (p=1.000 n=3+5) ²
+DecodePollBudgetV1                          0.000 ± ∞ ¹   0.000 ± ∞ ¹       ~ (p=1.000 n=3+5) ²
+EncodePollEventsV1/events=1                 0.000 ± ∞ ¹   0.000 ± ∞ ¹       ~ (p=1.000 n=3+5) ²
+EncodePollEventsV1/events=16                0.000 ± ∞ ¹   0.000 ± ∞ ¹       ~ (p=1.000 n=3+5) ²
+EncodePollEventsV1/events=256               0.000 ± ∞ ¹   0.000 ± ∞ ¹       ~ (p=1.000 n=3+5) ²
+EncodePollResultV1                          0.000 ± ∞ ¹   0.000 ± ∞ ¹       ~ (p=1.000 n=3+5) ²
+geomean                                               ³                +0.00%                 ³
+¹ need >= 6 samples for confidence interval at level 0.95
+² all samples are equal
+³ summaries must be >0 to compute geomean
+
+                              │ benchmarks/baseline.txt │       benchmarks/candidate.txt        │
+                              │        allocs/op        │  allocs/op   vs base                  │
+Slice                                       0.000 ± ∞ ¹   0.000 ± ∞ ¹       ~ (p=1.000 n=3+5) ²
+Write                                       0.000 ± ∞ ¹   0.000 ± ∞ ¹       ~ (p=1.000 n=3+5) ²
+Zero                                        0.000 ± ∞ ¹   0.000 ± ∞ ¹       ~ (p=1.000 n=3+5) ²
+ReadUint32LE                                0.000 ± ∞ ¹   0.000 ± ∞ ¹       ~ (p=1.000 n=3+5) ²
+WriteUint32LE                               0.000 ± ∞ ¹   0.000 ± ∞ ¹       ~ (p=1.000 n=3+5) ²
+CheckRanges                                 0.000 ± ∞ ¹   0.000 ± ∞ ¹       ~ (p=1.000 n=3+5) ²
+Elements                                    0.000 ± ∞ ¹   0.000 ± ∞ ¹       ~ (p=1.000 n=3+5) ²
+EncodeAddressV1                             0.000 ± ∞ ¹   0.000 ± ∞ ¹       ~ (p=1.000 n=3+5) ²
+DecodeAddressV1                             0.000 ± ∞ ¹   0.000 ± ∞ ¹       ~ (p=1.000 n=3+5) ²
+EncodeEndpointV1                            0.000 ± ∞ ¹   0.000 ± ∞ ¹       ~ (p=1.000 n=3+5) ²
+DecodeEndpointV1                            0.000 ± ∞ ¹   0.000 ± ∞ ¹       ~ (p=1.000 n=3+5) ²
+EncodeHandleV1                              0.000 ± ∞ ¹   0.000 ± ∞ ¹       ~ (p=1.000 n=3+5) ²
+DecodePollBudgetV1                          0.000 ± ∞ ¹   0.000 ± ∞ ¹       ~ (p=1.000 n=3+5) ²
+EncodePollEventsV1/events=1                 0.000 ± ∞ ¹   0.000 ± ∞ ¹       ~ (p=1.000 n=3+5) ²
+EncodePollEventsV1/events=16                0.000 ± ∞ ¹   0.000 ± ∞ ¹       ~ (p=1.000 n=3+5) ²
+EncodePollEventsV1/events=256               0.000 ± ∞ ¹   0.000 ± ∞ ¹       ~ (p=1.000 n=3+5) ²
+EncodePollResultV1                          0.000 ± ∞ ¹   0.000 ± ∞ ¹       ~ (p=1.000 n=3+5) ²
+geomean                                               ³                +0.00%                 ³
+¹ need >= 6 samples for confidence interval at level 0.95
+² all samples are equal
+³ summaries must be >0 to compute geomean
+
+        │ benchmarks/baseline.txt │       benchmarks/candidate.txt        │
+        │           B/s           │      B/s       vs base                │
+Write               111.0Gi ± ∞ ¹   103.7Gi ± ∞ ¹  -6.57% (p=0.036 n=3+5)
+Zero                114.6Gi ± ∞ ¹   109.1Gi ± ∞ ¹  -4.83% (p=0.036 n=3+5)
+geomean             112.8Gi         106.4Gi        -5.70%
+¹ need >= 6 samples for confidence interval at level 0.95
+
+pkg: github.com/wago-org/net/internal/abi/dns
+                             │ benchmarks/baseline.txt │       benchmarks/candidate.txt        │
+                             │         sec/op          │    sec/op     vs base                 │
+EncodeDNSNameV1                           99.01n ± ∞ ¹   39.18n ± ∞ ¹  -60.43% (p=0.036 n=3+5)
+DecodeDNSNameV1                          155.30n ± ∞ ¹   94.42n ± ∞ ¹  -39.20% (p=0.036 n=3+5)
+EncodeDNSQueryV1                         205.60n ± ∞ ¹   40.46n ± ∞ ¹  -80.32% (p=0.036 n=3+5)
+DecodeDNSQueryV1                         249.20n ± ∞ ¹   95.13n ± ∞ ¹  -61.83% (p=0.036 n=3+5)
+CheckDNSResolveV1                         3.643n ± ∞ ¹   3.794n ± ∞ ¹   +4.14% (p=0.036 n=3+5)
+EncodeDNSRecordV1/A                      215.80n ± ∞ ¹   59.99n ± ∞ ¹  -72.20% (p=0.036 n=3+5)
+EncodeDNSRecordV1/AAAA                   224.00n ± ∞ ¹   65.20n ± ∞ ¹  -70.89% (p=0.036 n=3+5)
+EncodeDNSRecordV1/CNAME                  381.70n ± ∞ ¹   67.50n ± ∞ ¹  -82.32% (p=0.036 n=3+5)
+DecodeDNSQueryV1InvalidTypes                             2.455n ± ∞ ¹
+geomean                                   123.2n         31.98n        -64.21%
+¹ need >= 6 samples for confidence interval at level 0.95
+
+                             │ benchmarks/baseline.txt │      benchmarks/candidate.txt      │
+                             │          B/op           │    B/op      vs base               │
+EncodeDNSNameV1                            112.0 ± ∞ ¹     0.0 ± ∞ ¹  ~ (p=0.357 n=3+5)
+DecodeDNSNameV1                           136.00 ± ∞ ¹   24.00 ± ∞ ¹  ~ (p=0.357 n=3+5)
+EncodeDNSQueryV1                           224.0 ± ∞ ¹     0.0 ± ∞ ¹  ~ (p=0.357 n=3+5)
+DecodeDNSQueryV1                          248.00 ± ∞ ¹   24.00 ± ∞ ¹  ~ (p=0.357 n=3+5)
+CheckDNSResolveV1                          0.000 ± ∞ ¹   0.000 ± ∞ ¹  ~ (p=1.000 n=3+5) ²
+EncodeDNSRecordV1/A                        224.0 ± ∞ ¹     0.0 ± ∞ ¹  ~ (p=0.357 n=3+5)
+EncodeDNSRecordV1/AAAA                     224.0 ± ∞ ¹     0.0 ± ∞ ¹  ~ (p=0.357 n=3+5)
+EncodeDNSRecordV1/CNAME                    416.0 ± ∞ ¹     0.0 ± ∞ ¹  ~ (p=0.357 n=3+5)
+DecodeDNSQueryV1InvalidTypes                             0.000 ± ∞ ¹
+geomean                                              ³                ?                 ³ ⁴
+¹ need >= 6 samples for confidence interval at level 0.95
+² all samples are equal
+³ summaries must be >0 to compute geomean
+⁴ ratios must be >0 to compute geomean
+
+                             │ benchmarks/baseline.txt │      benchmarks/candidate.txt      │
+                             │        allocs/op        │  allocs/op   vs base               │
+EncodeDNSNameV1                            2.000 ± ∞ ¹   0.000 ± ∞ ¹  ~ (p=0.357 n=3+5)
+DecodeDNSNameV1                            3.000 ± ∞ ¹   1.000 ± ∞ ¹  ~ (p=0.357 n=3+5)
+EncodeDNSQueryV1                           4.000 ± ∞ ¹   0.000 ± ∞ ¹  ~ (p=0.357 n=3+5)
+DecodeDNSQueryV1                           5.000 ± ∞ ¹   1.000 ± ∞ ¹  ~ (p=0.357 n=3+5)
+CheckDNSResolveV1                          0.000 ± ∞ ¹   0.000 ± ∞ ¹  ~ (p=1.000 n=3+5) ²
+EncodeDNSRecordV1/A                        4.000 ± ∞ ¹   0.000 ± ∞ ¹  ~ (p=0.357 n=3+5)
+EncodeDNSRecordV1/AAAA                     4.000 ± ∞ ¹   0.000 ± ∞ ¹  ~ (p=0.357 n=3+5)
+EncodeDNSRecordV1/CNAME                    8.000 ± ∞ ¹   0.000 ± ∞ ¹  ~ (p=0.357 n=3+5)
+DecodeDNSQueryV1InvalidTypes                             0.000 ± ∞ ¹
+geomean                                              ³                ?                 ³ ⁴
+¹ need >= 6 samples for confidence interval at level 0.95
+² all samples are equal
+³ summaries must be >0 to compute geomean
+⁴ ratios must be >0 to compute geomean
+
+pkg: github.com/wago-org/net/internal/abi/tcp
+                 │ benchmarks/baseline.txt │       benchmarks/candidate.txt       │
+                 │         sec/op          │    sec/op     vs base                │
+CheckListenV1                 3.690n ± ∞ ¹   3.899n ± ∞ ¹  +5.66% (p=0.036 n=3+5)
+CheckCreateV1                 3.609n ± ∞ ¹   3.914n ± ∞ ¹  +8.45% (p=0.036 n=3+5)
+CheckIOV1                     3.666n ± ∞ ¹   3.899n ± ∞ ¹  +6.36% (p=0.036 n=3+5)
+EncodeStreamV1                42.44n ± ∞ ¹   45.38n ± ∞ ¹  +6.93% (p=0.036 n=3+5)
+EncodeIOResultV1              4.912n ± ∞ ¹   5.161n ± ∞ ¹  +5.07% (p=0.036 n=3+5)
+geomean                       6.332n         6.743n        +6.49%
+¹ need >= 6 samples for confidence interval at level 0.95
+
+                 │ benchmarks/baseline.txt │       benchmarks/candidate.txt        │
+                 │          B/op           │    B/op      vs base                  │
+CheckListenV1                  0.000 ± ∞ ¹   0.000 ± ∞ ¹       ~ (p=1.000 n=3+5) ²
+CheckCreateV1                  0.000 ± ∞ ¹   0.000 ± ∞ ¹       ~ (p=1.000 n=3+5) ²
+CheckIOV1                      0.000 ± ∞ ¹   0.000 ± ∞ ¹       ~ (p=1.000 n=3+5) ²
+EncodeStreamV1                 0.000 ± ∞ ¹   0.000 ± ∞ ¹       ~ (p=1.000 n=3+5) ²
+EncodeIOResultV1               0.000 ± ∞ ¹   0.000 ± ∞ ¹       ~ (p=1.000 n=3+5) ²
+geomean                                  ³                +0.00%                 ³
+¹ need >= 6 samples for confidence interval at level 0.95
+² all samples are equal
+³ summaries must be >0 to compute geomean
+
+                 │ benchmarks/baseline.txt │       benchmarks/candidate.txt        │
+                 │        allocs/op        │  allocs/op   vs base                  │
+CheckListenV1                  0.000 ± ∞ ¹   0.000 ± ∞ ¹       ~ (p=1.000 n=3+5) ²
+CheckCreateV1                  0.000 ± ∞ ¹   0.000 ± ∞ ¹       ~ (p=1.000 n=3+5) ²
+CheckIOV1                      0.000 ± ∞ ¹   0.000 ± ∞ ¹       ~ (p=1.000 n=3+5) ²
+EncodeStreamV1                 0.000 ± ∞ ¹   0.000 ± ∞ ¹       ~ (p=1.000 n=3+5) ²
+EncodeIOResultV1               0.000 ± ∞ ¹   0.000 ± ∞ ¹       ~ (p=1.000 n=3+5) ²
+geomean                                  ³                +0.00%                 ³
+¹ need >= 6 samples for confidence interval at level 0.95
+² all samples are equal
+³ summaries must be >0 to compute geomean
+
+pkg: github.com/wago-org/net/internal/abi/udp
+                      │ benchmarks/baseline.txt │       benchmarks/candidate.txt       │
+                      │         sec/op          │    sec/op     vs base                │
+EncodeReceiveResultV1              28.75n ± ∞ ¹   30.46n ± ∞ ¹  +5.95% (p=0.036 n=3+5)
+ValidReceiveFlagsV1                1.242n ± ∞ ¹   1.317n ± ∞ ¹  +6.04% (p=0.036 n=3+5)
+geomean                            5.976n         6.334n        +5.99%
+¹ need >= 6 samples for confidence interval at level 0.95
+
+                      │ benchmarks/baseline.txt │       benchmarks/candidate.txt        │
+                      │          B/op           │    B/op      vs base                  │
+EncodeReceiveResultV1               0.000 ± ∞ ¹   0.000 ± ∞ ¹       ~ (p=1.000 n=3+5) ²
+ValidReceiveFlagsV1                 0.000 ± ∞ ¹   0.000 ± ∞ ¹       ~ (p=1.000 n=3+5) ²
+geomean                                       ³                +0.00%                 ³
+¹ need >= 6 samples for confidence interval at level 0.95
+² all samples are equal
+³ summaries must be >0 to compute geomean
+
+                      │ benchmarks/baseline.txt │       benchmarks/candidate.txt        │
+                      │        allocs/op        │  allocs/op   vs base                  │
+EncodeReceiveResultV1               0.000 ± ∞ ¹   0.000 ± ∞ ¹       ~ (p=1.000 n=3+5) ²
+ValidReceiveFlagsV1                 0.000 ± ∞ ¹   0.000 ± ∞ ¹       ~ (p=1.000 n=3+5) ²
+geomean                                       ³                +0.00%                 ³
+¹ need >= 6 samples for confidence interval at level 0.95
+² all samples are equal
+³ summaries must be >0 to compute geomean
+
+pkg: github.com/wago-org/net/internal/backend/lneto/core
+                                │ benchmarks/baseline.txt │       benchmarks/candidate.txt        │
+                                │         sec/op          │    sec/op     vs base                 │
+NamespaceReadiness                           17.02n ± ∞ ¹   17.70n ± ∞ ¹   +4.00% (p=0.036 n=3+5)
+UDPPortLeaseAcquireRelease                   52.19n ± ∞ ¹   38.89n ± ∞ ¹  -25.48% (p=0.036 n=3+5)
+UDPPortLeaseRangeAcquireRelease              53.01n ± ∞ ¹   40.43n ± ∞ ¹  -23.73% (p=0.036 n=3+5)
+NamespaceTryServiceIdle                      65.50n ± ∞ ¹   67.39n ± ∞ ¹   +2.89% (p=0.036 n=3+5)
+NamespaceTryServiceIngress                   43.02n ± ∞ ¹   46.30n ± ∞ ¹   +7.62% (p=0.036 n=3+5)
+NamespaceTryServiceEgress                    63.74n ± ∞ ¹   67.29n ± ∞ ¹   +5.57% (p=0.036 n=3+5)
+geomean                                      45.14n         42.44n         -5.98%
+¹ need >= 6 samples for confidence interval at level 0.95
+
+                                │ benchmarks/baseline.txt │      benchmarks/candidate.txt      │
+                                │          B/op           │    B/op      vs base               │
+NamespaceReadiness                            0.000 ± ∞ ¹   0.000 ± ∞ ¹  ~ (p=1.000 n=3+5) ²
+UDPPortLeaseAcquireRelease                    16.00 ± ∞ ¹    0.00 ± ∞ ¹  ~ (p=0.357 n=3+5)
+UDPPortLeaseRangeAcquireRelease               16.00 ± ∞ ¹    0.00 ± ∞ ¹  ~ (p=0.357 n=3+5)
+NamespaceTryServiceIdle                       0.000 ± ∞ ¹   0.000 ± ∞ ¹  ~ (p=1.000 n=3+5) ²
+NamespaceTryServiceIngress                    0.000 ± ∞ ¹   0.000 ± ∞ ¹  ~ (p=1.000 n=3+5) ²
+NamespaceTryServiceEgress                     0.000 ± ∞ ¹   0.000 ± ∞ ¹  ~ (p=1.000 n=3+5) ²
+geomean                                                 ³                ?                 ³ ⁴
+¹ need >= 6 samples for confidence interval at level 0.95
+² all samples are equal
+³ summaries must be >0 to compute geomean
+⁴ ratios must be >0 to compute geomean
+
+                                │ benchmarks/baseline.txt │      benchmarks/candidate.txt      │
+                                │        allocs/op        │  allocs/op   vs base               │
+NamespaceReadiness                            0.000 ± ∞ ¹   0.000 ± ∞ ¹  ~ (p=1.000 n=3+5) ²
+UDPPortLeaseAcquireRelease                    1.000 ± ∞ ¹   0.000 ± ∞ ¹  ~ (p=0.357 n=3+5)
+UDPPortLeaseRangeAcquireRelease               1.000 ± ∞ ¹   0.000 ± ∞ ¹  ~ (p=0.357 n=3+5)
+NamespaceTryServiceIdle                       0.000 ± ∞ ¹   0.000 ± ∞ ¹  ~ (p=1.000 n=3+5) ²
+NamespaceTryServiceIngress                    0.000 ± ∞ ¹   0.000 ± ∞ ¹  ~ (p=1.000 n=3+5) ²
+NamespaceTryServiceEgress                     0.000 ± ∞ ¹   0.000 ± ∞ ¹  ~ (p=1.000 n=3+5) ²
+geomean                                                 ³                ?                 ³ ⁴
+¹ need >= 6 samples for confidence interval at level 0.95
+² all samples are equal
+³ summaries must be >0 to compute geomean
+⁴ ratios must be >0 to compute geomean
+
+                           │ benchmarks/baseline.txt │       benchmarks/candidate.txt        │
+                           │           B/s           │      B/s       vs base                │
+NamespaceTryServiceIngress             1.386Gi ± ∞ ¹   1.287Gi ± ∞ ¹  -7.08% (p=0.036 n=3+5)
+NamespaceTryServiceEgress              957.6Mi ± ∞ ¹   907.0Mi ± ∞ ¹  -5.28% (p=0.036 n=3+5)
+geomean                                1.138Gi         1.068Gi        -6.19%
+¹ need >= 6 samples for confidence interval at level 0.95
+
+pkg: github.com/wago-org/net/internal/backend/lneto/dns
+                                     │ benchmarks/baseline.txt │       benchmarks/candidate.txt        │
+                                     │         sec/op          │    sec/op     vs base                 │
+BuildDNSQueryPacket                               158.2n ± ∞ ¹   100.2n ± ∞ ¹  -36.66% (p=0.036 n=3+5)
+DecodeDNSName                                     96.24n ± ∞ ¹   37.68n ± ∞ ¹  -60.85% (p=0.036 n=3+5)
+ParseDNSResponse                                 1096.0n ± ∞ ¹   352.8n ± ∞ ¹  -67.81% (p=0.036 n=3+5)
+SelectDNSAnswers                                  445.7n ± ∞ ¹   116.7n ± ∞ ¹  -73.82% (p=0.036 n=3+5)
+AdapterTryResolveClose                            837.7n ± ∞ ¹   428.4n ± ∞ ¹  -48.86% (p=0.036 n=3+5)
+QueryTryNext                                      90.56n ± ∞ ¹   24.97n ± ∞ ¹  -72.43% (p=0.036 n=3+5)
+QueryReadiness                                    4.065n ± ∞ ¹   4.307n ± ∞ ¹   +5.95% (p=0.036 n=3+5)
+BuildDNSQueryPacketInto                                          81.22n ± ∞ ¹
+DecodeDNSNameInto                                                22.02n ± ∞ ¹
+ParseDNSResponseShapes/cname_depth=0                             189.6n ± ∞ ¹
+ParseDNSResponseShapes/cname_depth=1                             347.2n ± ∞ ¹
+ParseDNSResponseShapes/cname_depth=4                             860.6n ± ∞ ¹
+geomean                                           156.4n         97.36n        -56.14%
+¹ need >= 6 samples for confidence interval at level 0.95
+
+                                     │ benchmarks/baseline.txt │          benchmarks/candidate.txt          │
+                                     │          B/op           │     B/op       vs base                     │
+BuildDNSQueryPacket                               152.00 ± ∞ ¹     96.00 ± ∞ ¹        ~ (p=0.357 n=3+5)
+DecodeDNSName                                      56.00 ± ∞ ¹     24.00 ± ∞ ¹        ~ (p=0.357 n=3+5)
+ParseDNSResponse                                 1048.00 ± ∞ ¹     16.00 ± ∞ ¹        ~ (p=0.357 n=3+5)
+SelectDNSAnswers                                   592.0 ± ∞ ¹       0.0 ± ∞ ¹        ~ (p=0.357 n=3+5)
+AdapterTryResolveClose                           1.047Ki ± ∞ ¹   1.375Ki ± ∞ ¹  +31.34% (p=0.036 n=3+5)
+QueryTryNext                                       80.00 ± ∞ ¹      0.00 ± ∞ ¹        ~ (p=0.357 n=3+5)
+QueryReadiness                                     0.000 ± ∞ ¹     0.000 ± ∞ ¹        ~ (p=1.000 n=3+5) ²
+BuildDNSQueryPacketInto                                            0.000 ± ∞ ¹
+DecodeDNSNameInto                                                  0.000 ± ∞ ¹
+ParseDNSResponseShapes/cname_depth=0                               0.000 ± ∞ ¹
+ParseDNSResponseShapes/cname_depth=1                               24.00 ± ∞ ¹
+ParseDNSResponseShapes/cname_depth=4                               96.00 ± ∞ ¹
+geomean                                                      ³                  ?                       ³ ⁴
+¹ need >= 6 samples for confidence interval at level 0.95
+² all samples are equal
+³ summaries must be >0 to compute geomean
+⁴ ratios must be >0 to compute geomean
+
+                                     │ benchmarks/baseline.txt │      benchmarks/candidate.txt      │
+                                     │        allocs/op        │  allocs/op   vs base               │
+BuildDNSQueryPacket                                4.000 ± ∞ ¹   1.000 ± ∞ ¹  ~ (p=0.357 n=3+5)
+DecodeDNSName                                      5.000 ± ∞ ¹   1.000 ± ∞ ¹  ~ (p=0.357 n=3+5)
+ParseDNSResponse                                  37.000 ± ∞ ¹   1.000 ± ∞ ¹  ~ (p=0.357 n=3+5)
+SelectDNSAnswers                                   9.000 ± ∞ ¹   0.000 ± ∞ ¹  ~ (p=0.357 n=3+5)
+AdapterTryResolveClose                            17.000 ± ∞ ¹   1.000 ± ∞ ¹  ~ (p=0.357 n=3+5)
+QueryTryNext                                       2.000 ± ∞ ¹   0.000 ± ∞ ¹  ~ (p=0.357 n=3+5)
+QueryReadiness                                     0.000 ± ∞ ¹   0.000 ± ∞ ¹  ~ (p=1.000 n=3+5) ²
+BuildDNSQueryPacketInto                                          0.000 ± ∞ ¹
+DecodeDNSNameInto                                                0.000 ± ∞ ¹
+ParseDNSResponseShapes/cname_depth=0                             0.000 ± ∞ ¹
+ParseDNSResponseShapes/cname_depth=1                             1.000 ± ∞ ¹
+ParseDNSResponseShapes/cname_depth=4                             4.000 ± ∞ ¹
+geomean                                                      ³                ?                 ³ ⁴
+¹ need >= 6 samples for confidence interval at level 0.95
+² all samples are equal
+³ summaries must be >0 to compute geomean
+⁴ ratios must be >0 to compute geomean
+
+                                     │ benchmarks/baseline.txt │        benchmarks/candidate.txt         │
+                                     │           B/s           │      B/s       vs base                  │
+ParseDNSResponse                                 170.6Mi ± ∞ ¹   529.8Mi ± ∞ ¹  +210.63% (p=0.036 n=3+5)
+ParseDNSResponseShapes/cname_depth=0                             683.9Mi ± ∞ ¹
+ParseDNSResponseShapes/cname_depth=1                             521.9Mi ± ∞ ¹
+ParseDNSResponseShapes/cname_depth=4                             383.4Mi ± ∞ ¹
+geomean                                          170.6Mi         518.9Mi        +210.63%
+¹ need >= 6 samples for confidence interval at level 0.95
+
+pkg: github.com/wago-org/net/internal/backend/lneto/tcp
+                                       │ benchmarks/baseline.txt │       benchmarks/candidate.txt        │
+                                       │         sec/op          │    sec/op     vs base                 │
+AdapterTryListenClose                               533.0n ± ∞ ¹   413.6n ± ∞ ¹  -22.40% (p=0.036 n=3+5)
+TCPStreamFinishConnect                              5.414n ± ∞ ¹   5.692n ± ∞ ¹   +5.13% (p=0.036 n=3+5)
+TCPStreamReadiness                                  13.38n ± ∞ ¹   14.27n ± ∞ ¹   +6.65% (p=0.036 n=3+5)
+TCPListenerTryAcceptWouldBlock                      22.20n ± ∞ ¹   22.98n ± ∞ ¹        ~ (p=0.143 n=3+5)
+TCPStreamRoundTrip                                  1.327µ ± ∞ ¹   1.370µ ± ∞ ¹        ~ (p=0.143 n=3+5)
+AdapterTryConnectClose                                             551.5n ± ∞ ¹
+OutboundStreamCountScaling/streams=1                               1.767n ± ∞ ¹
+OutboundStreamCountScaling/streams=16                              8.399n ± ∞ ¹
+OutboundStreamCountScaling/streams=256                             116.2n ± ∞ ¹
+geomean                                             64.74n         46.45n         -1.44%
+¹ need >= 6 samples for confidence interval at level 0.95
+
+                                       │ benchmarks/baseline.txt │        benchmarks/candidate.txt         │
+                                       │          B/op           │     B/op       vs base                  │
+AdapterTryListenClose                              1.750Ki ± ∞ ¹   1.672Ki ± ∞ ¹       ~ (p=0.357 n=3+5)
+TCPStreamFinishConnect                               0.000 ± ∞ ¹     0.000 ± ∞ ¹       ~ (p=1.000 n=3+5) ²
+TCPStreamReadiness                                   0.000 ± ∞ ¹     0.000 ± ∞ ¹       ~ (p=1.000 n=3+5) ²
+TCPListenerTryAcceptWouldBlock                       0.000 ± ∞ ¹     0.000 ± ∞ ¹       ~ (p=1.000 n=3+5) ²
+TCPStreamRoundTrip                                   0.000 ± ∞ ¹     0.000 ± ∞ ¹       ~ (p=1.000 n=3+5) ²
+AdapterTryConnectClose                                             1.383Ki ± ∞ ¹
+OutboundStreamCountScaling/streams=1                                 0.000 ± ∞ ¹
+OutboundStreamCountScaling/streams=16                                0.000 ± ∞ ¹
+OutboundStreamCountScaling/streams=256                               0.000 ± ∞ ¹
+geomean                                                        ³                  -0.91%                 ³
+¹ need >= 6 samples for confidence interval at level 0.95
+² all samples are equal
+³ summaries must be >0 to compute geomean
+
+                                       │ benchmarks/baseline.txt │       benchmarks/candidate.txt        │
+                                       │        allocs/op        │  allocs/op   vs base                  │
+AdapterTryListenClose                               11.000 ± ∞ ¹   7.000 ± ∞ ¹       ~ (p=0.357 n=3+5)
+TCPStreamFinishConnect                               0.000 ± ∞ ¹   0.000 ± ∞ ¹       ~ (p=1.000 n=3+5) ²
+TCPStreamReadiness                                   0.000 ± ∞ ¹   0.000 ± ∞ ¹       ~ (p=1.000 n=3+5) ²
+TCPListenerTryAcceptWouldBlock                       0.000 ± ∞ ¹   0.000 ± ∞ ¹       ~ (p=1.000 n=3+5) ²
+TCPStreamRoundTrip                                   0.000 ± ∞ ¹   0.000 ± ∞ ¹       ~ (p=1.000 n=3+5) ²
+AdapterTryConnectClose                                             6.000 ± ∞ ¹
+OutboundStreamCountScaling/streams=1                               0.000 ± ∞ ¹
+OutboundStreamCountScaling/streams=16                              0.000 ± ∞ ¹
+OutboundStreamCountScaling/streams=256                             0.000 ± ∞ ¹
+geomean                                                        ³                -8.64%                 ³
+¹ need >= 6 samples for confidence interval at level 0.95
+² all samples are equal
+³ summaries must be >0 to compute geomean
+
+                   │ benchmarks/baseline.txt │     benchmarks/candidate.txt     │
+                   │           B/s           │      B/s       vs base           │
+TCPStreamRoundTrip             46.01Mi ± ∞ ¹   44.57Mi ± ∞ ¹  ~ (p=0.143 n=3+5)
+¹ need >= 6 samples for confidence interval at level 0.95
+
+pkg: github.com/wago-org/net/internal/backend/lneto/udp
+                                    │ benchmarks/baseline.txt │       benchmarks/candidate.txt        │
+                                    │         sec/op          │    sec/op     vs base                 │
+AdapterTryBindClose                              425.4n ± ∞ ¹   279.7n ± ∞ ¹  -34.25% (p=0.036 n=3+5)
+UDPSocketSendEgress                              146.9n ± ∞ ¹   144.1n ± ∞ ¹        ~ (p=0.286 n=3+5)
+UDPSocketReceive                                 34.14n ± ∞ ¹   35.61n ± ∞ ¹   +4.31% (p=0.036 n=3+5)
+UDPSocketReadiness                               4.437n ± ∞ ¹   4.649n ± ∞ ¹   +4.78% (p=0.036 n=3+5)
+UDPDatagramQueueRoundTrip                        20.05n ± ∞ ¹   20.18n ± ∞ ¹        ~ (p=0.500 n=3+5)
+NewSocketDatagramQueues                                         347.2n ± ∞ ¹
+AdapterTryBindCloseZeroPayload                                  247.0n ± ∞ ¹
+AdapterHasEgressScaling/sockets=1                               1.561n ± ∞ ¹
+AdapterHasEgressScaling/sockets=16                              6.996n ± ∞ ¹
+AdapterHasEgressScaling/sockets=256                             235.2n ± ∞ ¹
+geomean                                          45.25n         44.38n         -6.63%
+¹ need >= 6 samples for confidence interval at level 0.95
+
+                                    │ benchmarks/baseline.txt │        benchmarks/candidate.txt         │
+                                    │          B/op           │     B/op       vs base                  │
+AdapterTryBindClose                               832.0 ± ∞ ¹     640.0 ± ∞ ¹       ~ (p=0.357 n=3+5)
+UDPSocketSendEgress                               0.000 ± ∞ ¹     0.000 ± ∞ ¹       ~ (p=1.000 n=3+5) ²
+UDPSocketReceive                                  0.000 ± ∞ ¹     0.000 ± ∞ ¹       ~ (p=1.000 n=3+5) ²
+UDPSocketReadiness                                0.000 ± ∞ ¹     0.000 ± ∞ ¹       ~ (p=1.000 n=3+5) ²
+UDPDatagramQueueRoundTrip                         0.000 ± ∞ ¹     0.000 ± ∞ ¹       ~ (p=1.000 n=3+5) ²
+NewSocketDatagramQueues                                         4.875Ki ± ∞ ¹
+AdapterTryBindCloseZeroPayload                                    416.0 ± ∞ ¹
+AdapterHasEgressScaling/sockets=1                                 0.000 ± ∞ ¹
+AdapterHasEgressScaling/sockets=16                                0.000 ± ∞ ¹
+AdapterHasEgressScaling/sockets=256                               0.000 ± ∞ ¹
+geomean                                                     ³                  -5.11%                 ³
+¹ need >= 6 samples for confidence interval at level 0.95
+² all samples are equal
+³ summaries must be >0 to compute geomean
+
+                                    │ benchmarks/baseline.txt │        benchmarks/candidate.txt        │
+                                    │        allocs/op        │  allocs/op   vs base                   │
+AdapterTryBindClose                              12.000 ± ∞ ¹   3.000 ± ∞ ¹        ~ (p=0.357 n=3+5)
+UDPSocketSendEgress                               0.000 ± ∞ ¹   0.000 ± ∞ ¹        ~ (p=1.000 n=3+5) ²
+UDPSocketReceive                                  0.000 ± ∞ ¹   0.000 ± ∞ ¹        ~ (p=1.000 n=3+5) ²
+UDPSocketReadiness                                0.000 ± ∞ ¹   0.000 ± ∞ ¹        ~ (p=1.000 n=3+5) ²
+UDPDatagramQueueRoundTrip                         0.000 ± ∞ ¹   0.000 ± ∞ ¹        ~ (p=1.000 n=3+5) ²
+NewSocketDatagramQueues                                         2.000 ± ∞ ¹
+AdapterTryBindCloseZeroPayload                                  2.000 ± ∞ ¹
+AdapterHasEgressScaling/sockets=1                               0.000 ± ∞ ¹
+AdapterHasEgressScaling/sockets=16                              0.000 ± ∞ ¹
+AdapterHasEgressScaling/sockets=256                             0.000 ± ∞ ¹
+geomean                                                     ³                -24.21%                 ³
+¹ need >= 6 samples for confidence interval at level 0.95
+² all samples are equal
+³ summaries must be >0 to compute geomean
+
+                    │ benchmarks/baseline.txt │       benchmarks/candidate.txt        │
+                    │           B/s           │      B/s       vs base                │
+UDPSocketSendEgress             207.7Mi ± ∞ ¹   211.8Mi ± ∞ ¹       ~ (p=0.393 n=3+5)
+UDPSocketReceive                893.9Mi ± ∞ ¹   857.0Mi ± ∞ ¹  -4.13% (p=0.036 n=3+5)
+geomean                         430.9Mi         426.1Mi        -1.11%
+¹ need >= 6 samples for confidence interval at level 0.95
+
+pkg: github.com/wago-org/net/internal/guest
+                   │ benchmarks/baseline.txt │       benchmarks/candidate.txt        │
+                   │         sec/op          │    sec/op     vs base                 │
+FromProgress                    1.242n ± ∞ ¹   1.303n ± ∞ ¹   +4.91% (p=0.036 n=3+5)
+FromIOResult                    1.682n ± ∞ ¹   1.750n ± ∞ ¹   +4.04% (p=0.036 n=3+5)
+FromError/semantic             48.900n ± ∞ ¹   4.833n ± ∞ ¹  -90.12% (p=0.036 n=3+5)
+FromError/shared               50.610n ± ∞ ¹   2.490n ± ∞ ¹  -95.08% (p=0.036 n=3+5)
+geomean                         8.480n         2.289n        -73.01%
+¹ need >= 6 samples for confidence interval at level 0.95
+
+                   │ benchmarks/baseline.txt │      benchmarks/candidate.txt      │
+                   │          B/op           │    B/op      vs base               │
+FromProgress                     0.000 ± ∞ ¹   0.000 ± ∞ ¹  ~ (p=1.000 n=3+5) ²
+FromIOResult                     0.000 ± ∞ ¹   0.000 ± ∞ ¹  ~ (p=1.000 n=3+5) ²
+FromError/semantic               8.000 ± ∞ ¹   0.000 ± ∞ ¹  ~ (p=0.357 n=3+5)
+FromError/shared                 8.000 ± ∞ ¹   0.000 ± ∞ ¹  ~ (p=0.357 n=3+5)
+geomean                                    ³                ?                 ³ ⁴
+¹ need >= 6 samples for confidence interval at level 0.95
+² all samples are equal
+³ summaries must be >0 to compute geomean
+⁴ ratios must be >0 to compute geomean
+
+                   │ benchmarks/baseline.txt │      benchmarks/candidate.txt      │
+                   │        allocs/op        │  allocs/op   vs base               │
+FromProgress                     0.000 ± ∞ ¹   0.000 ± ∞ ¹  ~ (p=1.000 n=3+5) ²
+FromIOResult                     0.000 ± ∞ ¹   0.000 ± ∞ ¹  ~ (p=1.000 n=3+5) ²
+FromError/semantic               1.000 ± ∞ ¹   0.000 ± ∞ ¹  ~ (p=0.357 n=3+5)
+FromError/shared                 1.000 ± ∞ ¹   0.000 ± ∞ ¹  ~ (p=0.357 n=3+5)
+geomean                                    ³                ?                 ³ ⁴
+¹ need >= 6 samples for confidence interval at level 0.95
+² all samples are equal
+³ summaries must be >0 to compute geomean
+⁴ ratios must be >0 to compute geomean
+
+pkg: github.com/wago-org/net/internal/instance/core
+                    │ benchmarks/baseline.txt │       benchmarks/candidate.txt        │
+                    │         sec/op          │    sec/op     vs base                 │
+ManagerAttachDetach              1.248µ ± ∞ ¹   1.385µ ± ∞ ¹  +10.98% (p=0.036 n=3+5)
+ManagerForInstance               4.023n ± ∞ ¹   4.265n ± ∞ ¹   +6.02% (p=0.036 n=3+5)
+StateWithLock                    4.697n ± ∞ ¹   4.916n ± ∞ ¹   +4.66% (p=0.036 n=3+5)
+StatePollIdle                    25.78n ± ∞ ¹   26.22n ± ∞ ¹   +1.71% (p=0.036 n=3+5)
+geomean                          27.92n         29.54n         +5.79%
+¹ need >= 6 samples for confidence interval at level 0.95
+
+                    │ benchmarks/baseline.txt │        benchmarks/candidate.txt         │
+                    │          B/op           │     B/op       vs base                  │
+ManagerAttachDetach             17.73Ki ± ∞ ¹   17.73Ki ± ∞ ¹       ~ (p=1.000 n=3+5) ²
+ManagerForInstance                0.000 ± ∞ ¹     0.000 ± ∞ ¹       ~ (p=1.000 n=3+5) ²
+StateWithLock                     0.000 ± ∞ ¹     0.000 ± ∞ ¹       ~ (p=1.000 n=3+5) ²
+StatePollIdle                     0.000 ± ∞ ¹     0.000 ± ∞ ¹       ~ (p=1.000 n=3+5) ²
+geomean                                     ³                  +0.00%                 ³
+¹ need >= 6 samples for confidence interval at level 0.95
+² all samples are equal
+³ summaries must be >0 to compute geomean
+
+                    │ benchmarks/baseline.txt │       benchmarks/candidate.txt        │
+                    │        allocs/op        │  allocs/op   vs base                  │
+ManagerAttachDetach               12.00 ± ∞ ¹   12.00 ± ∞ ¹       ~ (p=1.000 n=3+5) ²
+ManagerForInstance                0.000 ± ∞ ¹   0.000 ± ∞ ¹       ~ (p=1.000 n=3+5) ²
+StateWithLock                     0.000 ± ∞ ¹   0.000 ± ∞ ¹       ~ (p=1.000 n=3+5) ²
+StatePollIdle                     0.000 ± ∞ ¹   0.000 ± ∞ ¹       ~ (p=1.000 n=3+5) ²
+geomean                                     ³                +0.00%                 ³
+¹ need >= 6 samples for confidence interval at level 0.95
+² all samples are equal
+³ summaries must be >0 to compute geomean
+
+pkg: github.com/wago-org/net/internal/instance/dns
+             │ benchmarks/baseline.txt │       benchmarks/candidate.txt        │
+             │         sec/op          │    sec/op     vs base                 │
+ResolveClose              87.02n ± ∞ ¹   91.04n ± ∞ ¹   +4.62% (p=0.036 n=3+5)
+Next                     135.10n ± ∞ ¹   53.14n ± ∞ ¹  -60.67% (p=0.036 n=3+5)
+Cancel                    15.68n ± ∞ ¹   16.11n ± ∞ ¹        ~ (p=0.571 n=3+5)
+geomean                   56.91n         42.72n        -24.95%
+¹ need >= 6 samples for confidence interval at level 0.95
+
+             │ benchmarks/baseline.txt │      benchmarks/candidate.txt      │
+             │          B/op           │    B/op      vs base               │
+ResolveClose               0.000 ± ∞ ¹   0.000 ± ∞ ¹  ~ (p=1.000 n=3+5) ²
+Next                       112.0 ± ∞ ¹     0.0 ± ∞ ¹  ~ (p=0.357 n=3+5)
+Cancel                     0.000 ± ∞ ¹   0.000 ± ∞ ¹  ~ (p=1.000 n=3+5) ²
+geomean                              ³                ?                 ³ ⁴
+¹ need >= 6 samples for confidence interval at level 0.95
+² all samples are equal
+³ summaries must be >0 to compute geomean
+⁴ ratios must be >0 to compute geomean
+
+             │ benchmarks/baseline.txt │      benchmarks/candidate.txt      │
+             │        allocs/op        │  allocs/op   vs base               │
+ResolveClose               0.000 ± ∞ ¹   0.000 ± ∞ ¹  ~ (p=1.000 n=3+5) ²
+Next                       2.000 ± ∞ ¹   0.000 ± ∞ ¹  ~ (p=0.357 n=3+5)
+Cancel                     0.000 ± ∞ ¹   0.000 ± ∞ ¹  ~ (p=1.000 n=3+5) ²
+geomean                              ³                ?                 ³ ⁴
+¹ need >= 6 samples for confidence interval at level 0.95
+² all samples are equal
+³ summaries must be >0 to compute geomean
+⁴ ratios must be >0 to compute geomean
+
+pkg: github.com/wago-org/net/internal/instance/tcp
+              │ benchmarks/baseline.txt │       benchmarks/candidate.txt       │
+              │         sec/op          │    sec/op     vs base                │
+Write                      16.95n ± ∞ ¹   17.45n ± ∞ ¹  +2.95% (p=0.036 n=3+5)
+ConnectClose               81.50n ± ∞ ¹   86.33n ± ∞ ¹  +5.93% (p=0.036 n=3+5)
+Endpoints                  44.02n ± ∞ ¹   46.23n ± ∞ ¹  +5.02% (p=0.036 n=3+5)
+FinishConnect              14.45n ± ∞ ¹   15.33n ± ∞ ¹  +6.09% (p=0.036 n=3+5)
+Read                       16.76n ± ∞ ¹   17.66n ± ∞ ¹  +5.37% (p=0.036 n=3+5)
+ShutdownWrite              14.44n ± ∞ ¹   15.30n ± ∞ ¹  +5.96% (p=0.036 n=3+5)
+geomean                    24.43n         25.70n        +5.21%
+¹ need >= 6 samples for confidence interval at level 0.95
+
+              │ benchmarks/baseline.txt │       benchmarks/candidate.txt        │
+              │          B/op           │    B/op      vs base                  │
+Write                       0.000 ± ∞ ¹   0.000 ± ∞ ¹       ~ (p=1.000 n=3+5) ²
+ConnectClose                0.000 ± ∞ ¹   0.000 ± ∞ ¹       ~ (p=1.000 n=3+5) ²
+Endpoints                   0.000 ± ∞ ¹   0.000 ± ∞ ¹       ~ (p=1.000 n=3+5) ²
+FinishConnect               0.000 ± ∞ ¹   0.000 ± ∞ ¹       ~ (p=1.000 n=3+5) ²
+Read                        0.000 ± ∞ ¹   0.000 ± ∞ ¹       ~ (p=1.000 n=3+5) ²
+ShutdownWrite               0.000 ± ∞ ¹   0.000 ± ∞ ¹       ~ (p=1.000 n=3+5) ²
+geomean                               ³                +0.00%                 ³
+¹ need >= 6 samples for confidence interval at level 0.95
+² all samples are equal
+³ summaries must be >0 to compute geomean
+
+              │ benchmarks/baseline.txt │       benchmarks/candidate.txt        │
+              │        allocs/op        │  allocs/op   vs base                  │
+Write                       0.000 ± ∞ ¹   0.000 ± ∞ ¹       ~ (p=1.000 n=3+5) ²
+ConnectClose                0.000 ± ∞ ¹   0.000 ± ∞ ¹       ~ (p=1.000 n=3+5) ²
+Endpoints                   0.000 ± ∞ ¹   0.000 ± ∞ ¹       ~ (p=1.000 n=3+5) ²
+FinishConnect               0.000 ± ∞ ¹   0.000 ± ∞ ¹       ~ (p=1.000 n=3+5) ²
+Read                        0.000 ± ∞ ¹   0.000 ± ∞ ¹       ~ (p=1.000 n=3+5) ²
+ShutdownWrite               0.000 ± ∞ ¹   0.000 ± ∞ ¹       ~ (p=1.000 n=3+5) ²
+geomean                               ³                +0.00%                 ³
+¹ need >= 6 samples for confidence interval at level 0.95
+² all samples are equal
+³ summaries must be >0 to compute geomean
+
+pkg: github.com/wago-org/net/internal/instance/udp
+          │ benchmarks/baseline.txt │       benchmarks/candidate.txt       │
+          │         sec/op          │    sec/op     vs base                │
+BindClose              80.98n ± ∞ ¹   88.85n ± ∞ ¹  +9.72% (p=0.036 n=3+5)
+Send                   17.41n ± ∞ ¹   18.29n ± ∞ ¹  +5.05% (p=0.036 n=3+5)
+Receive                28.64n ± ∞ ¹   30.11n ± ∞ ¹  +5.13% (p=0.036 n=3+5)
+geomean                34.31n         36.58n        +6.61%
+¹ need >= 6 samples for confidence interval at level 0.95
+
+          │ benchmarks/baseline.txt │       benchmarks/candidate.txt        │
+          │          B/op           │    B/op      vs base                  │
+BindClose               0.000 ± ∞ ¹   0.000 ± ∞ ¹       ~ (p=1.000 n=3+5) ²
+Send                    0.000 ± ∞ ¹   0.000 ± ∞ ¹       ~ (p=1.000 n=3+5) ²
+Receive                 0.000 ± ∞ ¹   0.000 ± ∞ ¹       ~ (p=1.000 n=3+5) ²
+geomean                           ³                +0.00%                 ³
+¹ need >= 6 samples for confidence interval at level 0.95
+² all samples are equal
+³ summaries must be >0 to compute geomean
+
+          │ benchmarks/baseline.txt │       benchmarks/candidate.txt        │
+          │        allocs/op        │  allocs/op   vs base                  │
+BindClose               0.000 ± ∞ ¹   0.000 ± ∞ ¹       ~ (p=1.000 n=3+5) ²
+Send                    0.000 ± ∞ ¹   0.000 ± ∞ ¹       ~ (p=1.000 n=3+5) ²
+Receive                 0.000 ± ∞ ¹   0.000 ± ∞ ¹       ~ (p=1.000 n=3+5) ²
+geomean                           ³                +0.00%                 ³
+¹ need >= 6 samples for confidence interval at level 0.95
+² all samples are equal
+³ summaries must be >0 to compute geomean
+
+pkg: github.com/wago-org/net/internal/namespace/core
+                         │ benchmarks/baseline.txt │       benchmarks/candidate.txt       │
+                         │         sec/op          │    sec/op     vs base                │
+EndpointValid                         2.131n ± ∞ ¹   2.233n ± ∞ ¹  +4.79% (p=0.036 n=3+5)
+IOResultValid                         1.686n ± ∞ ¹   1.525n ± ∞ ¹  -9.55% (p=0.036 n=3+5)
+ReadinessValid                        1.243n ± ∞ ¹   1.293n ± ∞ ¹       ~ (p=0.393 n=3+5)
+ServiceReportValidResult              1.707n ± ∞ ¹   1.750n ± ∞ ¹  +2.52% (p=0.036 n=3+5)
+ResolveNamespaceService               8.930n ± ∞ ¹   9.394n ± ∞ ¹  +5.20% (p=0.036 n=3+5)
+ResolveNamespaceBase                  4.171n ± ∞ ¹   3.979n ± ∞ ¹  -4.60% (p=0.036 n=3+5)
+geomean                               2.564n         2.570n        +0.24%
+¹ need >= 6 samples for confidence interval at level 0.95
+
+                         │ benchmarks/baseline.txt │       benchmarks/candidate.txt        │
+                         │          B/op           │    B/op      vs base                  │
+EndpointValid                          0.000 ± ∞ ¹   0.000 ± ∞ ¹       ~ (p=1.000 n=3+5) ²
+IOResultValid                          0.000 ± ∞ ¹   0.000 ± ∞ ¹       ~ (p=1.000 n=3+5) ²
+ReadinessValid                         0.000 ± ∞ ¹   0.000 ± ∞ ¹       ~ (p=1.000 n=3+5) ²
+ServiceReportValidResult               0.000 ± ∞ ¹   0.000 ± ∞ ¹       ~ (p=1.000 n=3+5) ²
+ResolveNamespaceService                0.000 ± ∞ ¹   0.000 ± ∞ ¹       ~ (p=1.000 n=3+5) ²
+ResolveNamespaceBase                   0.000 ± ∞ ¹   0.000 ± ∞ ¹       ~ (p=1.000 n=3+5) ²
+geomean                                          ³                +0.00%                 ³
+¹ need >= 6 samples for confidence interval at level 0.95
+² all samples are equal
+³ summaries must be >0 to compute geomean
+
+                         │ benchmarks/baseline.txt │       benchmarks/candidate.txt        │
+                         │        allocs/op        │  allocs/op   vs base                  │
+EndpointValid                          0.000 ± ∞ ¹   0.000 ± ∞ ¹       ~ (p=1.000 n=3+5) ²
+IOResultValid                          0.000 ± ∞ ¹   0.000 ± ∞ ¹       ~ (p=1.000 n=3+5) ²
+ReadinessValid                         0.000 ± ∞ ¹   0.000 ± ∞ ¹       ~ (p=1.000 n=3+5) ²
+ServiceReportValidResult               0.000 ± ∞ ¹   0.000 ± ∞ ¹       ~ (p=1.000 n=3+5) ²
+ResolveNamespaceService                0.000 ± ∞ ¹   0.000 ± ∞ ¹       ~ (p=1.000 n=3+5) ²
+ResolveNamespaceBase                   0.000 ± ∞ ¹   0.000 ± ∞ ¹       ~ (p=1.000 n=3+5) ²
+geomean                                          ³                +0.00%                 ³
+¹ need >= 6 samples for confidence interval at level 0.95
+² all samples are equal
+³ summaries must be >0 to compute geomean
+
+pkg: github.com/wago-org/net/internal/namespace/dns
+             │ benchmarks/baseline.txt │       benchmarks/candidate.txt        │
+             │         sec/op          │    sec/op     vs base                 │
+RequestValid              93.35n ± ∞ ¹   29.52n ± ∞ ¹  -68.38% (p=0.036 n=3+5)
+RecordValid               93.49n ± ∞ ¹   30.18n ± ∞ ¹  -67.72% (p=0.036 n=3+5)
+geomean                   93.42n         29.85n        -68.05%
+¹ need >= 6 samples for confidence interval at level 0.95
+
+             │ benchmarks/baseline.txt │     benchmarks/candidate.txt     │
+             │          B/op           │   B/op     vs base               │
+RequestValid               112.0 ± ∞ ¹   0.0 ± ∞ ¹  ~ (p=0.357 n=3+5)
+RecordValid                112.0 ± ∞ ¹   0.0 ± ∞ ¹  ~ (p=0.357 n=3+5)
+geomean                    112.0                    ?                 ² ³
+¹ need >= 6 samples for confidence interval at level 0.95
+² summaries must be >0 to compute geomean
+³ ratios must be >0 to compute geomean
+
+             │ benchmarks/baseline.txt │      benchmarks/candidate.txt      │
+             │        allocs/op        │  allocs/op   vs base               │
+RequestValid               2.000 ± ∞ ¹   0.000 ± ∞ ¹  ~ (p=0.357 n=3+5)
+RecordValid                2.000 ± ∞ ¹   0.000 ± ∞ ¹  ~ (p=0.357 n=3+5)
+geomean                    2.000                      ?                 ² ³
+¹ need >= 6 samples for confidence interval at level 0.95
+² summaries must be >0 to compute geomean
+³ ratios must be >0 to compute geomean
+
+pkg: github.com/wago-org/net/internal/packetlink
+                                 │ benchmarks/baseline.txt │       benchmarks/candidate.txt       │
+                                 │         sec/op          │    sec/op     vs base                │
+LinkTryEnqueueDequeue/bytes=64                24.57n ± ∞ ¹   25.75n ± ∞ ¹  +4.80% (p=0.036 n=3+5)
+LinkTryEnqueueDequeue/bytes=512               34.05n ± ∞ ¹   34.66n ± ∞ ¹       ~ (p=0.214 n=3+5)
+LinkTryEnqueueDequeue/bytes=1514              49.05n ± ∞ ¹   51.53n ± ∞ ¹  +5.06% (p=0.036 n=3+5)
+LinkTryFillDequeue                            37.00n ± ∞ ¹   39.06n ± ∞ ¹  +5.57% (p=0.036 n=3+5)
+LinkSnapshot                                  11.80n ± ∞ ¹   12.01n ± ∞ ¹       ~ (p=0.571 n=3+5)
+geomean                                       28.23n         29.29n        +3.79%
+¹ need >= 6 samples for confidence interval at level 0.95
+
+                                 │ benchmarks/baseline.txt │       benchmarks/candidate.txt        │
+                                 │          B/op           │    B/op      vs base                  │
+LinkTryEnqueueDequeue/bytes=64                 0.000 ± ∞ ¹   0.000 ± ∞ ¹       ~ (p=1.000 n=3+5) ²
+LinkTryEnqueueDequeue/bytes=512                0.000 ± ∞ ¹   0.000 ± ∞ ¹       ~ (p=1.000 n=3+5) ²
+LinkTryEnqueueDequeue/bytes=1514               0.000 ± ∞ ¹   0.000 ± ∞ ¹       ~ (p=1.000 n=3+5) ²
+LinkTryFillDequeue                             0.000 ± ∞ ¹   0.000 ± ∞ ¹       ~ (p=1.000 n=3+5) ²
+LinkSnapshot                                   0.000 ± ∞ ¹   0.000 ± ∞ ¹       ~ (p=1.000 n=3+5) ²
+geomean                                                  ³                +0.00%                 ³
+¹ need >= 6 samples for confidence interval at level 0.95
+² all samples are equal
+³ summaries must be >0 to compute geomean
+
+                                 │ benchmarks/baseline.txt │       benchmarks/candidate.txt        │
+                                 │        allocs/op        │  allocs/op   vs base                  │
+LinkTryEnqueueDequeue/bytes=64                 0.000 ± ∞ ¹   0.000 ± ∞ ¹       ~ (p=1.000 n=3+5) ²
+LinkTryEnqueueDequeue/bytes=512                0.000 ± ∞ ¹   0.000 ± ∞ ¹       ~ (p=1.000 n=3+5) ²
+LinkTryEnqueueDequeue/bytes=1514               0.000 ± ∞ ¹   0.000 ± ∞ ¹       ~ (p=1.000 n=3+5) ²
+LinkTryFillDequeue                             0.000 ± ∞ ¹   0.000 ± ∞ ¹       ~ (p=1.000 n=3+5) ²
+LinkSnapshot                                   0.000 ± ∞ ¹   0.000 ± ∞ ¹       ~ (p=1.000 n=3+5) ²
+geomean                                                  ³                +0.00%                 ³
+¹ need >= 6 samples for confidence interval at level 0.95
+² all samples are equal
+³ summaries must be >0 to compute geomean
+
+                                 │ benchmarks/baseline.txt │       benchmarks/candidate.txt        │
+                                 │           B/s           │      B/s       vs base                │
+LinkTryEnqueueDequeue/bytes=64               2.426Gi ± ∞ ¹   2.315Gi ± ∞ ¹  -4.59% (p=0.036 n=3+5)
+LinkTryEnqueueDequeue/bytes=512              14.01Gi ± ∞ ¹   13.76Gi ± ∞ ¹       ~ (p=0.250 n=3+5)
+LinkTryEnqueueDequeue/bytes=1514             28.75Gi ± ∞ ¹   27.36Gi ± ∞ ¹  -4.82% (p=0.036 n=3+5)
+LinkTryFillDequeue                           38.11Gi ± ∞ ¹   36.10Gi ± ∞ ¹  -5.28% (p=0.036 n=3+5)
+geomean                                      13.89Gi         13.32Gi        -4.12%
+¹ need >= 6 samples for confidence interval at level 0.95
+
+pkg: github.com/wago-org/net/internal/policy
+                                     │ benchmarks/baseline.txt │       benchmarks/candidate.txt        │
+                                     │         sec/op          │    sec/op     vs base                 │
+Merge                                             421.7n ± ∞ ¹   452.0n ± ∞ ¹   +7.19% (p=0.036 n=3+5)
+Compile                                           587.6n ± ∞ ¹   490.0n ± ∞ ¹  -16.61% (p=0.036 n=3+5)
+PolicyCheckEndpoint                               33.24n ± ∞ ¹   34.63n ± ∞ ¹   +4.18% (p=0.036 n=3+5)
+PolicyCheckDNS                                   134.70n ± ∞ ¹   72.42n ± ∞ ¹  -46.24% (p=0.036 n=3+5)
+PolicyCheckEndpointScaling/rules=1                               19.24n ± ∞ ¹
+PolicyCheckEndpointScaling/rules=16                              173.4n ± ∞ ¹
+PolicyCheckEndpointScaling/rules=256                             2.753µ ± ∞ ¹
+geomean                                           182.5n         175.4n        -15.88%
+¹ need >= 6 samples for confidence interval at level 0.95
+
+                                     │ benchmarks/baseline.txt │       benchmarks/candidate.txt       │
+                                     │          B/op           │     B/op       vs base               │
+Merge                                            1.109Ki ± ∞ ¹   1.109Ki ± ∞ ¹  ~ (p=1.000 n=3+5) ²
+Compile                                            792.0 ± ∞ ¹     616.0 ± ∞ ¹  ~ (p=0.357 n=3+5)
+PolicyCheckEndpoint                                0.000 ± ∞ ¹     0.000 ± ∞ ¹  ~ (p=1.000 n=3+5) ²
+PolicyCheckDNS                                     112.0 ± ∞ ¹       0.0 ± ∞ ¹  ~ (p=0.357 n=3+5)
+PolicyCheckEndpointScaling/rules=1                                 0.000 ± ∞ ¹
+PolicyCheckEndpointScaling/rules=16                                0.000 ± ∞ ¹
+PolicyCheckEndpointScaling/rules=256                               0.000 ± ∞ ¹
+geomean                                                      ³                  ?                 ³ ⁴
+¹ need >= 6 samples for confidence interval at level 0.95
+² all samples are equal
+³ summaries must be >0 to compute geomean
+⁴ ratios must be >0 to compute geomean
+
+                                     │ benchmarks/baseline.txt │      benchmarks/candidate.txt      │
+                                     │        allocs/op        │  allocs/op   vs base               │
+Merge                                              16.00 ± ∞ ¹   16.00 ± ∞ ¹  ~ (p=1.000 n=3+5) ²
+Compile                                            17.00 ± ∞ ¹   13.00 ± ∞ ¹  ~ (p=0.357 n=3+5)
+PolicyCheckEndpoint                                0.000 ± ∞ ¹   0.000 ± ∞ ¹  ~ (p=1.000 n=3+5) ²
+PolicyCheckDNS                                     2.000 ± ∞ ¹   0.000 ± ∞ ¹  ~ (p=0.357 n=3+5)
+PolicyCheckEndpointScaling/rules=1                               0.000 ± ∞ ¹
+PolicyCheckEndpointScaling/rules=16                              0.000 ± ∞ ¹
+PolicyCheckEndpointScaling/rules=256                             0.000 ± ∞ ¹
+geomean                                                      ³                ?                 ³ ⁴
+¹ need >= 6 samples for confidence interval at level 0.95
+² all samples are equal
+³ summaries must be >0 to compute geomean
+⁴ ratios must be >0 to compute geomean
+
+pkg: github.com/wago-org/net/internal/quota
+                                     │ benchmarks/baseline.txt │       benchmarks/candidate.txt       │
+                                     │         sec/op          │    sec/op     vs base                │
+ReserveResourceRollback                           44.02n ± ∞ ¹   46.75n ± ∞ ¹  +6.20% (p=0.036 n=3+5)
+ReserveResourceCommitRelease                      60.65n ± ∞ ¹   65.34n ± ∞ ¹  +7.73% (p=0.036 n=3+5)
+WithService                                       20.90n ± ∞ ¹   22.16n ± ∞ ¹  +6.03% (p=0.036 n=3+5)
+Snapshot                                          11.69n ± ∞ ¹   11.83n ± ∞ ¹  +1.20% (p=0.036 n=3+5)
+AcquireResourceAndQueuedBytesRelease                             28.90n ± ∞ ¹
+AcquireResourceParallel                                          30.81n ± ∞ ¹
+geomean                                           28.42n         29.89n        +5.26%
+¹ need >= 6 samples for confidence interval at level 0.95
+
+                                     │ benchmarks/baseline.txt │       benchmarks/candidate.txt        │
+                                     │          B/op           │    B/op      vs base                  │
+ReserveResourceRollback                            80.00 ± ∞ ¹   80.00 ± ∞ ¹       ~ (p=1.000 n=3+5) ²
+ReserveResourceCommitRelease                       88.00 ± ∞ ¹   88.00 ± ∞ ¹       ~ (p=1.000 n=3+5) ²
+WithService                                        0.000 ± ∞ ¹   0.000 ± ∞ ¹       ~ (p=1.000 n=3+5) ²
+Snapshot                                           0.000 ± ∞ ¹   0.000 ± ∞ ¹       ~ (p=1.000 n=3+5) ²
+AcquireResourceAndQueuedBytesRelease                             0.000 ± ∞ ¹
+AcquireResourceParallel                                          0.000 ± ∞ ¹
+geomean                                                      ³                +0.00%                 ³
+¹ need >= 6 samples for confidence interval at level 0.95
+² all samples are equal
+³ summaries must be >0 to compute geomean
+
+                                     │ benchmarks/baseline.txt │       benchmarks/candidate.txt        │
+                                     │        allocs/op        │  allocs/op   vs base                  │
+ReserveResourceRollback                            1.000 ± ∞ ¹   1.000 ± ∞ ¹       ~ (p=1.000 n=3+5) ²
+ReserveResourceCommitRelease                       2.000 ± ∞ ¹   2.000 ± ∞ ¹       ~ (p=1.000 n=3+5) ²
+WithService                                        0.000 ± ∞ ¹   0.000 ± ∞ ¹       ~ (p=1.000 n=3+5) ²
+Snapshot                                           0.000 ± ∞ ¹   0.000 ± ∞ ¹       ~ (p=1.000 n=3+5) ²
+AcquireResourceAndQueuedBytesRelease                             0.000 ± ∞ ¹
+AcquireResourceParallel                                          0.000 ± ∞ ¹
+geomean                                                      ³                +0.00%                 ³
+¹ need >= 6 samples for confidence interval at level 0.95
+² all samples are equal
+³ summaries must be >0 to compute geomean
+
+pkg: github.com/wago-org/net/internal/readiness
+                                     │ benchmarks/baseline.txt │       benchmarks/candidate.txt       │
+                                     │         sec/op          │    sec/op     vs base                │
+CoordinatorRegisterUnregister                     36.42n ± ∞ ¹   38.26n ± ∞ ¹  +5.05% (p=0.036 n=3+5)
+CoordinatorTryPoll/registrations=1                27.47n ± ∞ ¹   28.67n ± ∞ ¹  +4.37% (p=0.036 n=3+5)
+CoordinatorTryPoll/registrations=16               177.8n ± ∞ ¹   187.1n ± ∞ ¹  +5.23% (p=0.036 n=3+5)
+CoordinatorTryPoll/registrations=256              2.608µ ± ∞ ¹   2.725µ ± ∞ ¹  +4.49% (p=0.036 n=3+5)
+CoordinatorTryPollService                         27.48n ± ∞ ¹   28.23n ± ∞ ¹       ~ (p=0.071 n=3+5)
+CoordinatorTryPollParallel                                       186.5n ± ∞ ¹
+geomean                                           105.0n         119.7n        +4.37%
+¹ need >= 6 samples for confidence interval at level 0.95
+
+                                     │ benchmarks/baseline.txt │       benchmarks/candidate.txt        │
+                                     │          B/op           │    B/op      vs base                  │
+CoordinatorRegisterUnregister                      0.000 ± ∞ ¹   0.000 ± ∞ ¹       ~ (p=1.000 n=3+5) ²
+CoordinatorTryPoll/registrations=1                 0.000 ± ∞ ¹   0.000 ± ∞ ¹       ~ (p=1.000 n=3+5) ²
+CoordinatorTryPoll/registrations=16                0.000 ± ∞ ¹   0.000 ± ∞ ¹       ~ (p=1.000 n=3+5) ²
+CoordinatorTryPoll/registrations=256               0.000 ± ∞ ¹   0.000 ± ∞ ¹       ~ (p=1.000 n=3+5) ²
+CoordinatorTryPollService                          0.000 ± ∞ ¹   0.000 ± ∞ ¹       ~ (p=1.000 n=3+5) ²
+CoordinatorTryPollParallel                                       0.000 ± ∞ ¹
+geomean                                                      ³                +0.00%                 ³
+¹ need >= 6 samples for confidence interval at level 0.95
+² all samples are equal
+³ summaries must be >0 to compute geomean
+
+                                     │ benchmarks/baseline.txt │       benchmarks/candidate.txt        │
+                                     │        allocs/op        │  allocs/op   vs base                  │
+CoordinatorRegisterUnregister                      0.000 ± ∞ ¹   0.000 ± ∞ ¹       ~ (p=1.000 n=3+5) ²
+CoordinatorTryPoll/registrations=1                 0.000 ± ∞ ¹   0.000 ± ∞ ¹       ~ (p=1.000 n=3+5) ²
+CoordinatorTryPoll/registrations=16                0.000 ± ∞ ¹   0.000 ± ∞ ¹       ~ (p=1.000 n=3+5) ²
+CoordinatorTryPoll/registrations=256               0.000 ± ∞ ¹   0.000 ± ∞ ¹       ~ (p=1.000 n=3+5) ²
+CoordinatorTryPollService                          0.000 ± ∞ ¹   0.000 ± ∞ ¹       ~ (p=1.000 n=3+5) ²
+CoordinatorTryPollParallel                                       0.000 ± ∞ ¹
+geomean                                                      ³                +0.00%                 ³
+¹ need >= 6 samples for confidence interval at level 0.95
+² all samples are equal
+³ summaries must be >0 to compute geomean
+
+pkg: github.com/wago-org/net/internal/resource
+                              │ benchmarks/baseline.txt │       benchmarks/candidate.txt        │
+                              │         sec/op          │    sec/op     vs base                 │
+NewTable                                   22.33n ± ∞ ¹   23.71n ± ∞ ¹   +6.18% (p=0.036 n=3+5)
+TableAddCloseHandle                        12.34n ± ∞ ¹   12.73n ± ∞ ¹   +3.16% (p=0.036 n=3+5)
+TableLen                                   3.999n ± ∞ ¹   4.154n ± ∞ ¹   +3.88% (p=0.036 n=3+5)
+MakeHandle                                 1.256n ± ∞ ¹   1.262n ± ∞ ¹        ~ (p=0.821 n=3+5)
+SplitHandle                                1.483n ± ∞ ¹   1.325n ± ∞ ¹  -10.65% (p=0.036 n=3+5)
+TableLookupBadHandle                       5.348n ± ∞ ¹   5.481n ± ∞ ¹        ~ (p=0.500 n=3+5)
+TableLookup                                5.978n ± ∞ ¹   6.128n ± ∞ ¹   +2.51% (p=0.036 n=3+5)
+TableCloseLive/resources=1                 199.2n ± ∞ ¹   203.9n ± ∞ ¹   +2.36% (p=0.036 n=3+5)
+TableCloseLive/resources=64                3.014µ ± ∞ ¹   3.204µ ± ∞ ¹   +6.30% (p=0.036 n=3+5)
+TableCloseLive/resources=1024              44.36µ ± ∞ ¹   46.74µ ± ∞ ¹   +5.35% (p=0.036 n=3+5)
+TableLookupParallel                                       6.150n ± ∞ ¹
+geomean                                    33.44n         29.21n         +2.09%
+¹ need >= 6 samples for confidence interval at level 0.95
+
+                              │ benchmarks/baseline.txt │        benchmarks/candidate.txt         │
+                              │          B/op           │     B/op       vs base                  │
+NewTable                                    64.00 ± ∞ ¹     64.00 ± ∞ ¹       ~ (p=1.000 n=3+5) ²
+TableAddCloseHandle                         0.000 ± ∞ ¹     0.000 ± ∞ ¹       ~ (p=1.000 n=3+5) ²
+TableLen                                    0.000 ± ∞ ¹     0.000 ± ∞ ¹       ~ (p=1.000 n=3+5) ²
+MakeHandle                                  0.000 ± ∞ ¹     0.000 ± ∞ ¹       ~ (p=1.000 n=3+5) ²
+SplitHandle                                 0.000 ± ∞ ¹     0.000 ± ∞ ¹       ~ (p=1.000 n=3+5) ²
+TableLookupBadHandle                        0.000 ± ∞ ¹     0.000 ± ∞ ¹       ~ (p=1.000 n=3+5) ²
+TableLookup                                 0.000 ± ∞ ¹     0.000 ± ∞ ¹       ~ (p=1.000 n=3+5) ²
+TableCloseLive/resources=1                  176.0 ± ∞ ¹     176.0 ± ∞ ¹       ~ (p=1.000 n=3+5) ²
+TableCloseLive/resources=64               9.844Ki ± ∞ ¹   9.844Ki ± ∞ ¹       ~ (p=1.000 n=3+5) ²
+TableCloseLive/resources=1024             153.7Ki ± ∞ ¹   153.7Ki ± ∞ ¹       ~ (p=1.000 n=3+5) ²
+TableLookupParallel                                         0.000 ± ∞ ¹
+geomean                                               ³                  +0.00%                 ³
+¹ need >= 6 samples for confidence interval at level 0.95
+² all samples are equal
+³ summaries must be >0 to compute geomean
+
+                              │ benchmarks/baseline.txt │        benchmarks/candidate.txt        │
+                              │        allocs/op        │  allocs/op    vs base                  │
+NewTable                                    1.000 ± ∞ ¹    1.000 ± ∞ ¹       ~ (p=1.000 n=3+5) ²
+TableAddCloseHandle                         0.000 ± ∞ ¹    0.000 ± ∞ ¹       ~ (p=1.000 n=3+5) ²
+TableLen                                    0.000 ± ∞ ¹    0.000 ± ∞ ¹       ~ (p=1.000 n=3+5) ²
+MakeHandle                                  0.000 ± ∞ ¹    0.000 ± ∞ ¹       ~ (p=1.000 n=3+5) ²
+SplitHandle                                 0.000 ± ∞ ¹    0.000 ± ∞ ¹       ~ (p=1.000 n=3+5) ²
+TableLookupBadHandle                        0.000 ± ∞ ¹    0.000 ± ∞ ¹       ~ (p=1.000 n=3+5) ²
+TableLookup                                 0.000 ± ∞ ¹    0.000 ± ∞ ¹       ~ (p=1.000 n=3+5) ²
+TableCloseLive/resources=1                  4.000 ± ∞ ¹    4.000 ± ∞ ¹       ~ (p=1.000 n=3+5) ²
+TableCloseLive/resources=64                 73.00 ± ∞ ¹    73.00 ± ∞ ¹       ~ (p=1.000 n=3+5) ²
+TableCloseLive/resources=1024              1.037k ± ∞ ¹   1.037k ± ∞ ¹       ~ (p=1.000 n=3+5) ²
+TableLookupParallel                                        0.000 ± ∞ ¹
+geomean                                               ³                 +0.00%                 ³
+¹ need >= 6 samples for confidence interval at level 0.95
+² all samples are equal
+³ summaries must be >0 to compute geomean

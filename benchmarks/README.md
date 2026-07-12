@@ -46,11 +46,21 @@ BENCH_COUNT=10 BENCH_TIME=500ms BENCH_CPU=1 \
   scripts/benchmark-baseline.sh benchmarks/candidate.txt
 ```
 
-Compare two captures with `benchstat` when it is available:
+Compare two captures with `benchstat` when it is available. Ignore the capture
+metadata keys that intentionally differ between source revisions and sampling
+profiles; otherwise modern benchstat versions place the files in separate
+configuration tables instead of producing an A/B comparison:
 
 ```sh
-benchstat benchmarks/baseline.txt benchmarks/candidate.txt
+benchstat \
+  -ignore source_head,source_tree,go,kernel,gomaxprocs,samples,benchtime \
+  benchmarks/baseline.txt benchmarks/candidate.txt
 ```
+
+The current optimization run is retained in `candidate.txt`, its A/B output in
+`benchstat.txt`, and the interpreted results and focused rerun caveats in
+`candidate-summary.md`. Dedicated order-sensitivity and parallel-contention
+captures use `*-verification.txt` names.
 
 Always compare captures from equivalent hardware, power policy, Go toolchain,
 `GOMAXPROCS`, and source configuration. Allocation regressions are usually more

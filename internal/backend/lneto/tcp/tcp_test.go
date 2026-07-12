@@ -24,6 +24,9 @@ func TestAcceptedCloseRetainsSlotUntilChargedMaintenance(t *testing.T) {
 		t.Fatalf("listen = %T, %v, %v", listenerResource, progress, err)
 	}
 	listener := listenerResource.(*tcpListener)
+	if usage, closed := server.quotas.Snapshot(); closed || usage != (quota.Usage{Resources: 1, TCPResources: 1, QueuedBytes: 512}) {
+		t.Fatalf("listener quota = %+v, closed=%v", usage, closed)
+	}
 	clientResource, progress, err := client.TryConnect(serverEndpoint)
 	if err != nil || progress != nscore.ProgressInProgress {
 		t.Fatalf("connect = %T, %v, %v", clientResource, progress, err)
@@ -40,14 +43,20 @@ func TestAcceptedCloseRetainsSlotUntilChargedMaintenance(t *testing.T) {
 		t.Fatalf("accept = %T, %v, %v", serverResource, progress, err)
 	}
 	serverStream := serverResource.(*tcpStream)
+	if usage, closed := server.quotas.Snapshot(); closed || usage != (quota.Usage{Resources: 2, TCPResources: 2, QueuedBytes: 512}) {
+		t.Fatalf("accepted quota = %+v, closed=%v", usage, closed)
+	}
 	if len(listener.pool.slots) != 1 || !listener.pool.slots[0].inUse {
 		t.Fatalf("accepted pool = %+v", listener.pool.slots)
 	}
 	if err := serverStream.Close(); err != nil {
 		t.Fatal(err)
 	}
-	if !listener.pool.slots[0].inUse || listener.pool.slots[0].stream == nil || listener.pool.slots[0].resource != nil {
-		t.Fatalf("close bypassed bounded maintenance: in_use=%v stream=%p resource=%p", listener.pool.slots[0].inUse, listener.pool.slots[0].stream, listener.pool.slots[0].resource)
+	if !listener.pool.slots[0].inUse || listener.pool.slots[0].stream == nil || listener.pool.slots[0].quotaOwned {
+		t.Fatalf("close bypassed bounded maintenance: in_use=%v stream=%p quota_owned=%v", listener.pool.slots[0].inUse, listener.pool.slots[0].stream, listener.pool.slots[0].quotaOwned)
+	}
+	if usage, _ := server.quotas.Snapshot(); usage != (quota.Usage{Resources: 1, TCPResources: 1, QueuedBytes: 512}) {
+		t.Fatalf("accepted close quota = %+v", usage)
 	}
 
 	serverCore.Lock()
@@ -58,8 +67,25 @@ func TestAcceptedCloseRetainsSlotUntilChargedMaintenance(t *testing.T) {
 	if err != nil || progress != nscore.ProgressDone || report != (nscore.ServiceReport{Operations: 1}) {
 		t.Fatalf("maintenance = %+v, %v, %v", report, progress, err)
 	}
-	if listener.pool.slots[0].inUse || listener.pool.slots[0].stream != nil || listener.pool.slots[0].resource != nil {
-		t.Fatalf("maintenance retained slot: in_use=%v stream=%p resource=%p", listener.pool.slots[0].inUse, listener.pool.slots[0].stream, listener.pool.slots[0].resource)
+	if listener.pool.slots[0].inUse || listener.pool.slots[0].stream != nil || listener.pool.slots[0].quotaOwned {
+		t.Fatalf("maintenance retained slot: in_use=%v stream=%p quota_owned=%v", listener.pool.slots[0].inUse, listener.pool.slots[0].stream, listener.pool.slots[0].quotaOwned)
+	}
+	serverCore.Lock()
+	reusedConn, _, _ := listener.pool.GetTCP()
+	if reusedConn == nil || !listener.pool.slots[0].quotaOwned {
+		serverCore.Unlock()
+		t.Fatal("released embedded quota charge was not reusable")
+	}
+	listener.pool.PutTCP(reusedConn)
+	serverCore.Unlock()
+	if usage, _ := server.quotas.Snapshot(); usage != (quota.Usage{Resources: 1, TCPResources: 1, QueuedBytes: 512}) {
+		t.Fatalf("reused slot quota = %+v", usage)
+	}
+	if err := listener.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if usage, _ := server.quotas.Snapshot(); usage != (quota.Usage{}) {
+		t.Fatalf("listener close quota = %+v", usage)
 	}
 }
 
@@ -71,6 +97,9 @@ func TestConnectResetBeforeEstablishment(t *testing.T) {
 		t.Fatalf("connect = %T, %v, %v", resource, progress, err)
 	}
 	stream := resource.(*tcpStream)
+	if usage, closed := adapter.quotas.Snapshot(); closed || usage != (quota.Usage{Resources: 1, TCPResources: 1, QueuedBytes: 512}) {
+		t.Fatalf("outbound quota = %+v, closed=%v", usage, closed)
+	}
 	common.Lock()
 	stream.conn.Abort()
 	common.Unlock()
@@ -79,6 +108,12 @@ func TestConnectResetBeforeEstablishment(t *testing.T) {
 	}
 	if got := stream.Readiness(); got&nscore.ReadyError == 0 || got&nscore.ReadyClosed == 0 {
 		t.Fatalf("reset readiness = %v", got)
+	}
+	if err := stream.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if usage, _ := adapter.quotas.Snapshot(); usage != (quota.Usage{}) {
+		t.Fatalf("outbound close quota = %+v", usage)
 	}
 }
 

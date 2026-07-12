@@ -86,6 +86,65 @@ func TestReservationRollbackAndFailureDoNotLeak(t *testing.T) {
 	}
 }
 
+func TestEmbeddedAllocationCompositeCharge(t *testing.T) {
+	metadataOnly := NewAccount(Limits{Resources: 1, UDPResources: 1})
+	var metadata Charge
+	if err := metadataOnly.AcquireResourceAndQueuedBytes(&metadata, ResourceUDP, 1, 0); err != nil {
+		t.Fatalf("acquire metadata-only resource: %v", err)
+	}
+	if usage, closed := metadataOnly.Snapshot(); closed || usage != (Usage{Resources: 1, UDPResources: 1}) {
+		t.Fatalf("metadata-only usage = %+v, closed=%v", usage, closed)
+	}
+	if !metadata.Release() {
+		t.Fatal("release metadata-only resource")
+	}
+	if usage, closed := metadataOnly.Snapshot(); closed || usage != (Usage{}) {
+		t.Fatalf("metadata-only release usage = %+v, closed=%v", usage, closed)
+	}
+
+	account := NewAccount(Limits{Resources: 1, DNSResources: 1, QueuedBytes: 1024, DNSWork: 2})
+	var retained Charge
+	var work Charge
+	if err := account.AcquireResourceAndQueuedBytes(&retained, ResourceDNS, 1, 1024); err != nil {
+		t.Fatal(err)
+	}
+	if err := account.AcquireDNSWork(&work, 2); err != nil {
+		t.Fatal(err)
+	}
+	if usage, closed := account.Snapshot(); closed || usage != (Usage{Resources: 1, DNSResources: 1, QueuedBytes: 1024, DNSWork: 2}) {
+		t.Fatalf("embedded usage = %+v, closed=%v", usage, closed)
+	}
+	if err := account.AcquireDNSWork(&work, 1); !errors.Is(err, ErrInvalidUnits) {
+		t.Fatalf("reused allocation error = %v", err)
+	}
+	if work.ResetReleased() {
+		t.Fatal("active embedded allocation reset")
+	}
+	if !work.Release() || work.Release() || !work.ResetReleased() || work.ResetReleased() {
+		t.Fatal("embedded work release/reset was not exactly once")
+	}
+	if err := account.AcquireDNSWork(&work, 1); err != nil {
+		t.Fatalf("reacquire reset storage: %v", err)
+	}
+	if !work.Release() || !retained.Release() || retained.Release() {
+		t.Fatal("embedded release was not exactly once")
+	}
+	if usage, _ := account.Snapshot(); usage != (Usage{}) {
+		t.Fatalf("embedded release leaked usage: %+v", usage)
+	}
+
+	allocs := testing.AllocsPerRun(1000, func() {
+		var charge Charge
+		if err := account.AcquireResourceAndQueuedBytes(&charge, ResourceDNS, 1, 1); err != nil {
+			t.Fatal(err)
+		}
+		charge.Release()
+	})
+	if allocs != 0 {
+		t.Fatalf("embedded allocation path allocated %v times", allocs)
+	}
+}
+
 func TestWithServiceScopesChargeWithoutAllocatingTokens(t *testing.T) {
 	account := NewAccount(Limits{ServiceUnits: 2})
 	called := false

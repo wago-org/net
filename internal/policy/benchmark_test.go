@@ -1,6 +1,7 @@
 package policy
 
 import (
+	"fmt"
 	"net/netip"
 	"testing"
 )
@@ -52,6 +53,30 @@ func BenchmarkPolicyCheckEndpoint(b *testing.B) {
 	b.ReportAllocs()
 	for b.Loop() {
 		benchmarkBool = compiled.CheckEndpoint(OperationTCPConnect, address, 443)
+	}
+}
+
+func BenchmarkPolicyCheckEndpointScaling(b *testing.B) {
+	address := netip.MustParseAddr("192.0.2.42")
+	prefix := netip.MustParsePrefix("192.0.2.0/24")
+	for _, count := range []int{1, 16, 256} {
+		b.Run(fmt.Sprintf("rules=%d", count), func(b *testing.B) {
+			config := Config{Rules: make([]Rule, count)}
+			for i := range config.Rules {
+				config.Rules[i] = Rule{
+					Action: ActionAllow, Transports: []Transport{TransportTCP}, Directions: []Direction{DirectionOutbound},
+					Prefixes: []netip.Prefix{prefix}, Ports: []PortRange{{First: 443, Last: 443}},
+				}
+			}
+			compiled, err := Compile(config)
+			if err != nil {
+				b.Fatal(err)
+			}
+			b.ReportAllocs()
+			for b.Loop() {
+				benchmarkBool = compiled.CheckEndpoint(OperationTCPConnect, address, 443)
+			}
+		})
 	}
 }
 

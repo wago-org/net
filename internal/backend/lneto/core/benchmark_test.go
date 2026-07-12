@@ -12,7 +12,7 @@ var (
 	benchmarkProgress      nscore.Progress
 	benchmarkErr           error
 	benchmarkReadiness     nscore.Readiness
-	benchmarkLease         *UDPPortLease
+	benchmarkLeaseStorage  UDPPortLease
 	benchmarkPort          uint16
 	benchmarkOK            bool
 )
@@ -30,9 +30,9 @@ func BenchmarkUDPPortLeaseAcquireRelease(b *testing.B) {
 	b.ReportAllocs()
 	for b.Loop() {
 		ns.Lock()
-		benchmarkLease, benchmarkOK = ns.TryLeaseUDPPortLocked(53000)
+		benchmarkOK = ns.TryLeaseUDPPortIntoLocked(&benchmarkLeaseStorage, 53000)
 		if benchmarkOK {
-			benchmarkLease.ReleaseLocked()
+			benchmarkLeaseStorage.ReleaseLocked()
 		}
 		ns.Unlock()
 		if !benchmarkOK {
@@ -46,9 +46,9 @@ func BenchmarkUDPPortLeaseRangeAcquireRelease(b *testing.B) {
 	b.ReportAllocs()
 	for b.Loop() {
 		ns.Lock()
-		benchmarkLease, benchmarkPort, benchmarkOK = ns.TryLeaseUDPPortRangeLocked(53000, 53000, 8)
+		benchmarkPort, benchmarkOK = ns.TryLeaseUDPPortRangeIntoLocked(&benchmarkLeaseStorage, 53000, 53000, 8)
 		if benchmarkOK {
-			benchmarkLease.ReleaseLocked()
+			benchmarkLeaseStorage.ReleaseLocked()
 		}
 		ns.Unlock()
 		if !benchmarkOK || benchmarkPort == 0 {

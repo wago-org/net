@@ -4,8 +4,8 @@ package dns
 
 import (
 	"net/netip"
-	"strings"
 
+	"github.com/wago-org/net/internal/dnsname"
 	nscore "github.com/wago-org/net/internal/namespace/core"
 )
 
@@ -96,21 +96,5 @@ type Query interface {
 }
 
 func validName(name string) bool {
-	if name == "" || len(name) > 253 || name != strings.ToLower(name) || strings.HasSuffix(name, ".") {
-		return false
-	}
-	if address, err := netip.ParseAddr(name); err == nil && address.IsValid() {
-		return false
-	}
-	for _, label := range strings.Split(name, ".") {
-		if len(label) == 0 || len(label) > 63 || label[0] == '-' || label[len(label)-1] == '-' {
-			return false
-		}
-		for _, c := range []byte(label) {
-			if (c < 'a' || c > 'z') && (c < '0' || c > '9') && c != '-' {
-				return false
-			}
-		}
-	}
-	return true
+	return dnsname.ValidCanonical(name)
 }

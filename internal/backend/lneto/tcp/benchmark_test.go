@@ -1,6 +1,7 @@
 package tcp
 
 import (
+	"fmt"
 	"net/netip"
 	"testing"
 
@@ -14,6 +15,7 @@ var (
 	benchmarkIO       nscore.IOResult
 	benchmarkReady    nscore.Readiness
 	benchmarkErr      error
+	benchmarkInt      int
 )
 
 func BenchmarkAdapterTryListenClose(b *testing.B) {
@@ -28,6 +30,36 @@ func BenchmarkAdapterTryListenClose(b *testing.B) {
 		if err := value.Close(); err != nil {
 			b.Fatal(err)
 		}
+	}
+}
+
+func BenchmarkAdapterTryConnectClose(b *testing.B) {
+	_, adapter := newTestAdapter(b, 112, 0, 1)
+	remote := nscore.Endpoint{Address: netip.MustParseAddr("192.0.2.113"), Port: 4212}
+	b.ReportAllocs()
+	for b.Loop() {
+		value, progress, err := adapter.TryConnect(remote)
+		if err != nil || progress != nscore.ProgressInProgress {
+			b.Fatalf("connect = %T, %v, %v", value, progress, err)
+		}
+		if err := value.Close(); err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
+func BenchmarkOutboundStreamCountScaling(b *testing.B) {
+	for _, count := range []int{1, 16, 256} {
+		b.Run(fmt.Sprintf("streams=%d", count), func(b *testing.B) {
+			adapter := &Adapter{streams: make([]*tcpStream, count)}
+			for i := range adapter.streams {
+				adapter.streams[i] = &tcpStream{outbound: true}
+			}
+			b.ReportAllocs()
+			for b.Loop() {
+				benchmarkInt = adapter.outboundTCPStreamsLocked()
+			}
+		})
 	}
 }
 

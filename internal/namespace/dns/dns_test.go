@@ -27,6 +27,18 @@ func (q *fakeQuery) TryNext() (Record, Next, error) {
 	return q.record, NextReady, nil
 }
 
+func TestCanonicalDNSValidationDoesNotAllocate(t *testing.T) {
+	request := Request{Name: "service.api.example.com", Types: RecordsA | RecordsAAAA}
+	record := Record{Name: request.Name, Type: RecordAAAA, Address: netip.MustParseAddr("2001:db8::1")}
+	if allocs := testing.AllocsPerRun(1000, func() {
+		if !request.Valid() || !record.Valid() {
+			t.Fatal("canonical value rejected")
+		}
+	}); allocs != 0 {
+		t.Fatalf("canonical DNS validation allocated %v times", allocs)
+	}
+}
+
 func TestNarrowDNSFacetAndValueValidation(t *testing.T) {
 	request := Request{Name: "example.com", Types: RecordsA | RecordsAAAA}
 	if !request.Valid() {

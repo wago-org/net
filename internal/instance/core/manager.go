@@ -155,6 +155,7 @@ func NewManagerConfigured(config Config) (*Manager, error) {
 	if config.Readiness.MaxRegistrations <= 0 {
 		return nil, ErrInvalidConfig
 	}
+	config.Readiness.MaxRegistrations = rightSizeReadiness(config.Readiness.MaxRegistrations, config.Limits.Resources)
 	compiled, err := policy.Compile(config.Policy)
 	if err != nil {
 		return nil, fmt.Errorf("compile endpoint policy: %w", err)
@@ -166,6 +167,16 @@ func NewManagerConfigured(config Config) (*Manager, error) {
 		readiness:        config.Readiness,
 		namespaceFactory: config.NamespaceFactory,
 	}, nil
+}
+
+func rightSizeReadiness(configured int, resources uint64) int {
+	if resources == 0 {
+		return 1
+	}
+	if resources < uint64(configured) {
+		return int(resources)
+	}
+	return configured
 }
 
 // AfterInstantiate is a Wago lifecycle hook that attaches fresh state after a

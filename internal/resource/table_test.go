@@ -290,6 +290,22 @@ func BenchmarkTableLookup(b *testing.B) {
 	}
 }
 
+func BenchmarkTableLookupParallel(b *testing.B) {
+	table := newTable(b)
+	handle, err := table.Add(KindTCPStream, &testResource{})
+	if err != nil {
+		b.Fatalf("Add: %v", err)
+	}
+	b.ReportAllocs()
+	b.RunParallel(func(parallel *testing.PB) {
+		for parallel.Next() {
+			if _, err := table.Lookup(handle, KindTCPStream); err != nil {
+				panic(err)
+			}
+		}
+	})
+}
+
 func BenchmarkTableCloseLive(b *testing.B) {
 	for _, count := range []int{1, 64, 1024} {
 		b.Run(fmt.Sprintf("resources=%d", count), func(b *testing.B) {

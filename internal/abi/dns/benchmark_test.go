@@ -1,6 +1,7 @@
 package dns
 
 import (
+	"encoding/binary"
 	"net/netip"
 	"testing"
 
@@ -47,6 +48,19 @@ func BenchmarkDecodeDNSQueryV1(b *testing.B) {
 	if !EncodeDNSQueryV1(memory, 0, request) {
 		b.Fatal("encode query")
 	}
+	b.ReportAllocs()
+	for b.Loop() {
+		benchmarkRequest, benchmarkBool = DecodeDNSQueryV1(memory, 0)
+	}
+}
+
+func BenchmarkDecodeDNSQueryV1InvalidTypes(b *testing.B) {
+	memory := make([]byte, DNSQueryV1Size)
+	request := dnsns.Request{Name: "service.api.example.com", Types: dnsns.RecordsA}
+	if !EncodeDNSQueryV1(memory, 0, request) {
+		b.Fatal("encode query")
+	}
+	binary.LittleEndian.PutUint32(memory[dnsQueryTypesOffset:dnsQueryTypesOffset+4], 0)
 	b.ReportAllocs()
 	for b.Loop() {
 		benchmarkRequest, benchmarkBool = DecodeDNSQueryV1(memory, 0)

@@ -70,6 +70,12 @@ func Fail(failure Failure, cause error) error {
 
 // FailureOf extracts a semantic category through wrapped errors.
 func FailureOf(err error) (Failure, bool) {
+	if namespaceError, ok := err.(*Error); ok {
+		if namespaceError != nil && namespaceError.Failure.Valid() {
+			return namespaceError.Failure, true
+		}
+		return 0, false
+	}
 	var namespaceError *Error
 	if !errors.As(err, &namespaceError) || namespaceError == nil || !namespaceError.Failure.Valid() {
 		return 0, false

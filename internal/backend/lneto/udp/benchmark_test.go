@@ -1,6 +1,7 @@
 package udp
 
 import (
+	"fmt"
 	"net/netip"
 	"testing"
 
@@ -14,11 +15,34 @@ var (
 	benchmarkDatagram udpns.DatagramResult
 	benchmarkReady    nscore.Readiness
 	benchmarkErr      error
+	benchmarkRXQueue  datagramQueue
+	benchmarkTXQueue  datagramQueue
+	benchmarkBool     bool
 )
+
+func BenchmarkNewSocketDatagramQueues(b *testing.B) {
+	config := Config{ReceiveBytes: 2048, TransmitBytes: 2048, ReceiveDatagrams: 8, TransmitDatagrams: 8, MaxPayloadBytes: 256}
+	b.ReportAllocs()
+	for b.Loop() {
+		benchmarkRXQueue, benchmarkTXQueue = newSocketDatagramQueues(config)
+	}
+}
 
 func BenchmarkAdapterTryBindClose(b *testing.B) {
 	_, adapter, _ := newTestAdapter(b, 91)
 	local := nscore.Endpoint{Address: netip.MustParseAddr("192.0.2.91"), Port: 4091}
+	benchmarkAdapterTryBindClose(b, adapter, local)
+}
+
+func BenchmarkAdapterTryBindCloseZeroPayload(b *testing.B) {
+	config := Config{MaxSockets: 1, ReceiveDatagrams: 1, TransmitDatagrams: 1}
+	_, adapter, _ := newTestAdapterWithConfig(b, 95, config)
+	local := nscore.Endpoint{Address: netip.MustParseAddr("192.0.2.95"), Port: 4095}
+	benchmarkAdapterTryBindClose(b, adapter, local)
+}
+
+func benchmarkAdapterTryBindClose(b *testing.B, adapter *Adapter, local nscore.Endpoint) {
+	b.Helper()
 	b.ReportAllocs()
 	for b.Loop() {
 		value, progress, err := adapter.TryBind(local)
@@ -28,6 +52,21 @@ func BenchmarkAdapterTryBindClose(b *testing.B) {
 		if err := value.Close(); err != nil {
 			b.Fatal(err)
 		}
+	}
+}
+
+func BenchmarkAdapterHasEgressScaling(b *testing.B) {
+	for _, count := range []int{1, 16, 256} {
+		b.Run(fmt.Sprintf("sockets=%d", count), func(b *testing.B) {
+			adapter := &Adapter{sockets: make([]*udpSocket, count)}
+			for i := range adapter.sockets {
+				adapter.sockets[i] = &udpSocket{}
+			}
+			b.ReportAllocs()
+			for b.Loop() {
+				benchmarkBool = adapter.hasEgressLocked()
+			}
+		})
 	}
 }
 

@@ -64,6 +64,25 @@ func BenchmarkCoordinatorTryPoll(b *testing.B) {
 	}
 }
 
+func BenchmarkCoordinatorTryPollParallel(b *testing.B) {
+	table := newTable(b)
+	coordinator := newCoordinator(b, table, Config{MaxRegistrations: 16})
+	for range 16 {
+		addAndRegister(b, table, coordinator, resource.KindPollable, &benchmarkPollable{ready: nscore.ReadyReadable})
+	}
+	budget := Budget{Scans: 16, Events: 16}
+	b.ReportAllocs()
+	b.RunParallel(func(parallel *testing.PB) {
+		events := make([]Event, 16)
+		for parallel.Next() {
+			report, _, err := coordinator.TryPoll(events, budget)
+			if err != nil || report.Events != 16 {
+				panic("parallel readiness poll failed")
+			}
+		}
+	})
+}
+
 func BenchmarkCoordinatorTryPollService(b *testing.B) {
 	table := newTable(b)
 	coordinator := newCoordinator(b, table, Config{MaxRegistrations: 1})

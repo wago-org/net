@@ -84,6 +84,74 @@ func TestAdapterCloseReleasesAllSocketsDeterministically(t *testing.T) {
 	}
 }
 
+func TestSocketDatagramQueuesShareBackingStorage(t *testing.T) {
+	config := Config{ReceiveBytes: 64, TransmitBytes: 96, ReceiveDatagrams: 2, TransmitDatagrams: 3, MaxPayloadBytes: 32}
+	rx, tx := newSocketDatagramQueues(config)
+	if len(rx.storage) != 64 || cap(rx.storage) != 64 || len(tx.storage) != 96 || cap(tx.storage) != 96 {
+		t.Fatalf("payload layout = rx %d/%d tx %d/%d", len(rx.storage), cap(rx.storage), len(tx.storage), cap(tx.storage))
+	}
+	if len(rx.slots) != 2 || cap(rx.slots) != 2 || len(tx.slots) != 3 || cap(tx.slots) != 3 {
+		t.Fatalf("slot layout = rx %d/%d tx %d/%d", len(rx.slots), cap(rx.slots), len(tx.slots), cap(tx.slots))
+	}
+	endpoint := nscore.Endpoint{Address: netip.MustParseAddr("192.0.2.1"), Port: 53}
+	if !rx.push([]byte("receive"), endpoint) || !tx.push([]byte("transmit"), endpoint) {
+		t.Fatal("shared queues rejected independent payloads")
+	}
+	rxPayload, _, _ := rx.peek()
+	txPayload, _, _ := tx.peek()
+	if string(rxPayload) != "receive" || string(txPayload) != "transmit" {
+		t.Fatalf("shared queue payloads = %q, %q", rxPayload, txPayload)
+	}
+}
+
+func TestZeroPayloadSocketCreationUsesMetadataOnlyQuota(t *testing.T) {
+	config := Config{MaxSockets: 1, ReceiveDatagrams: 1, TransmitDatagrams: 1}
+	_, adapter, account := newTestAdapterWithConfig(t, 34, config)
+	local := nscore.Endpoint{Address: netip.MustParseAddr("192.0.2.34"), Port: 4034}
+	socket := bindTestSocket(t, adapter, local)
+	if usage, closed := account.Snapshot(); closed || usage != (quota.Usage{Resources: 1, UDPResources: 1}) {
+		t.Fatalf("metadata-only socket quota = %+v, closed=%v", usage, closed)
+	}
+	remote := nscore.Endpoint{Address: netip.MustParseAddr("192.0.2.35"), Port: 53}
+	if progress, err := socket.TrySend(nil, remote); err != nil || progress != nscore.ProgressDone {
+		t.Fatalf("empty datagram send = %v, %v", progress, err)
+	}
+	if err := socket.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if usage, _ := account.Snapshot(); usage != (quota.Usage{}) {
+		t.Fatalf("metadata-only socket close retained quota = %+v", usage)
+	}
+}
+
+func TestValidConfigRejectsCombinedQueueSizeOverflow(t *testing.T) {
+	maxInt := int(^uint(0) >> 1)
+	for _, test := range []struct {
+		name   string
+		config Config
+	}{
+		{
+			name: "zero-payload slot count",
+			config: Config{
+				MaxSockets: 1, ReceiveDatagrams: maxInt, TransmitDatagrams: 1,
+			},
+		},
+		{
+			name: "shared payload backing",
+			config: Config{
+				MaxSockets: 1, ReceiveBytes: maxInt - 1, TransmitBytes: maxInt - 1,
+				ReceiveDatagrams: maxInt / 2, TransmitDatagrams: maxInt / 2, MaxPayloadBytes: 2,
+			},
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			if ValidConfig(test.config, ethernet.MaxMTU, nil, nil, false) {
+				t.Fatalf("overflowing config accepted: %+v", test.config)
+			}
+		})
+	}
+}
+
 func BenchmarkUDPDatagramQueueRoundTrip(b *testing.B) {
 	queue := newDatagramQueue(8, 64, 512)
 	endpoint := nscore.Endpoint{Address: netip.MustParseAddr("192.0.2.1"), Port: 53}
@@ -112,6 +180,11 @@ func bindTestSocket(t testing.TB, adapter *Adapter, local nscore.Endpoint) udpns
 
 func newTestAdapter(t testing.TB, id byte) (*lnetocore.Namespace, *Adapter, *quota.Account) {
 	t.Helper()
+	return newTestAdapterWithConfig(t, id, Config{MaxSockets: 4, ReceiveBytes: 64, TransmitBytes: 64, ReceiveDatagrams: 2, TransmitDatagrams: 2, MaxPayloadBytes: 32})
+}
+
+func newTestAdapterWithConfig(t testing.TB, id byte, config Config) (*lnetocore.Namespace, *Adapter, *quota.Account) {
+	t.Helper()
 	compiled, err := policy.Compile(policy.Config{Rules: []policy.Rule{{
 		Action: policy.ActionAllow, Transports: []policy.Transport{policy.TransportUDP},
 		Directions: []policy.Direction{policy.DirectionInbound, policy.DirectionOutbound},
@@ -132,7 +205,7 @@ func newTestAdapter(t testing.TB, id byte) (*lnetocore.Namespace, *Adapter, *quo
 	if err != nil {
 		t.Fatal(err)
 	}
-	adapter, err := New(common, Config{MaxSockets: 4, ReceiveBytes: 64, TransmitBytes: 64, ReceiveDatagrams: 2, TransmitDatagrams: 2, MaxPayloadBytes: 32})
+	adapter, err := New(common, config)
 	if err != nil {
 		_ = common.Close()
 		t.Fatal(err)

@@ -97,7 +97,12 @@ func ValidConfig(config Config, mtu int, compiled *policy.Policy, account *quota
 		config.MaxPayloadBytes < 0 || config.MaxPayloadBytes > mtu-28 || config.MaxPayloadBytes > int(^uint16(0)) {
 		return false
 	}
-	if config.MaxPayloadBytes != 0 && (config.ReceiveDatagrams > int(^uint(0)>>1)/config.MaxPayloadBytes || config.TransmitDatagrams > int(^uint(0)>>1)/config.MaxPayloadBytes) {
+	maxInt := int(^uint(0) >> 1)
+	if config.ReceiveDatagrams > maxInt-config.TransmitDatagrams {
+		return false
+	}
+	totalDatagrams := config.ReceiveDatagrams + config.TransmitDatagrams
+	if config.MaxPayloadBytes != 0 && totalDatagrams > maxInt/config.MaxPayloadBytes {
 		return false
 	}
 	return config.ReceiveBytes >= config.ReceiveDatagrams*config.MaxPayloadBytes &&
@@ -113,16 +118,14 @@ type udpSocket struct {
 	rx    datagramQueue
 	tx    datagramQueue
 
-	portLease *lnetocore.UDPPortLease
-	resource  *quota.Allocation
-	queued    *quota.Allocation
+	portLease lnetocore.UDPPortLease
+	retained  quota.Charge
 	closed    bool
 }
 
 type datagramQueue struct {
 	storage    []byte
-	lengths    []int
-	endpoints  []nscore.Endpoint
+	slots      []datagramSlot
 	maxPayload int
 	head       int
 	count      int
@@ -130,29 +133,49 @@ type datagramQueue struct {
 	byteLimit  int
 }
 
+type datagramSlot struct {
+	length   int
+	endpoint nscore.Endpoint
+}
+
 func newDatagramQueue(datagrams, maxPayload, byteLimit int) datagramQueue {
 	return datagramQueue{
 		storage:    make([]byte, datagrams*maxPayload),
-		lengths:    make([]int, datagrams),
-		endpoints:  make([]nscore.Endpoint, datagrams),
+		slots:      make([]datagramSlot, datagrams),
 		maxPayload: maxPayload,
 		byteLimit:  byteLimit,
 	}
 }
 
+func newSocketDatagramQueues(config Config) (datagramQueue, datagramQueue) {
+	receiveDatagrams := config.ReceiveDatagrams
+	totalDatagrams := receiveDatagrams + config.TransmitDatagrams
+	storage := make([]byte, totalDatagrams*config.MaxPayloadBytes)
+	slots := make([]datagramSlot, totalDatagrams)
+	receiveBytes := receiveDatagrams * config.MaxPayloadBytes
+	return datagramQueue{
+			storage: storage[:receiveBytes:receiveBytes], slots: slots[:receiveDatagrams:receiveDatagrams],
+			maxPayload: config.MaxPayloadBytes, byteLimit: config.ReceiveBytes,
+		}, datagramQueue{
+			storage: storage[receiveBytes:], slots: slots[receiveDatagrams:],
+			maxPayload: config.MaxPayloadBytes, byteLimit: config.TransmitBytes,
+		}
+}
+
 func (q *datagramQueue) push(payload []byte, endpoint nscore.Endpoint) bool {
-	if q.count == len(q.lengths) || len(payload) > q.maxPayload || len(payload) > q.byteLimit-q.bytes {
+	if q.count == len(q.slots) || len(payload) > q.maxPayload || len(payload) > q.byteLimit-q.bytes {
 		return false
 	}
 	index := q.head + q.count
-	if index >= len(q.lengths) {
-		index -= len(q.lengths)
+	if index >= len(q.slots) {
+		index -= len(q.slots)
 	}
 	if q.maxPayload != 0 {
 		copy(q.slot(index), payload)
 	}
-	q.lengths[index] = len(payload)
-	q.endpoints[index] = endpoint
+	slot := &q.slots[index]
+	slot.length = len(payload)
+	slot.endpoint = endpoint
 	q.count++
 	q.bytes += len(payload)
 	return true
@@ -162,11 +185,11 @@ func (q *datagramQueue) peek() ([]byte, nscore.Endpoint, bool) {
 	if q.count == 0 {
 		return nil, nscore.Endpoint{}, false
 	}
-	length := q.lengths[q.head]
+	slot := &q.slots[q.head]
 	if q.maxPayload == 0 {
-		return nil, q.endpoints[q.head], true
+		return nil, slot.endpoint, true
 	}
-	return q.slot(q.head)[:length], q.endpoints[q.head], true
+	return q.slot(q.head)[:slot.length], slot.endpoint, true
 }
 
 func (q *datagramQueue) pop(dst []byte) (udpns.DatagramResult, bool) {
@@ -174,7 +197,7 @@ func (q *datagramQueue) pop(dst []byte) (udpns.DatagramResult, bool) {
 	if !ok {
 		return udpns.DatagramResult{}, false
 	}
-	length := q.lengths[q.head]
+	length := q.slots[q.head].length
 	copied := copy(dst, payload)
 	q.discardHead()
 	return udpns.DatagramResult{
@@ -187,14 +210,15 @@ func (q *datagramQueue) pop(dst []byte) (udpns.DatagramResult, bool) {
 }
 
 func (q *datagramQueue) discardHead() {
-	length := q.lengths[q.head]
-	if q.maxPayload != 0 {
-		clear(q.slot(q.head))
+	slot := &q.slots[q.head]
+	length := slot.length
+	if length != 0 {
+		clear(q.slot(q.head)[:length])
 	}
-	q.lengths[q.head] = 0
-	q.endpoints[q.head] = nscore.Endpoint{}
+	slot.length = 0
+	slot.endpoint = nscore.Endpoint{}
 	q.head++
-	if q.head == len(q.lengths) {
+	if q.head == len(q.slots) {
 		q.head = 0
 	}
 	q.count--
@@ -208,11 +232,9 @@ func (q *datagramQueue) slot(index int) []byte {
 
 func (q *datagramQueue) clear() {
 	clear(q.storage)
-	clear(q.lengths)
-	clear(q.endpoints)
+	clear(q.slots)
 	q.storage = nil
-	q.lengths = nil
-	q.endpoints = nil
+	q.slots = nil
 	q.head = 0
 	q.count = 0
 	q.bytes = 0
@@ -247,56 +269,28 @@ func (n *Adapter) TryBind(local nscore.Endpoint) (nscore.Resource, nscore.Progre
 	if len(n.sockets) == int(n.config.MaxSockets) {
 		return nil, 0, nscore.Fail(nscore.FailureResourceLimit, lneto.ErrExhausted)
 	}
-	var portLease *lnetocore.UDPPortLease
-	var ok bool
+	socket := &udpSocket{owner: n, local: local}
 	if local.Port == 0 {
 		attempts := int(n.config.MaxSockets) + n.core.UDPPortLeaseCountLocked() + 1
-		var next uint16
-		portLease, next, ok = n.core.TryLeaseUDPPortRangeLocked(n.nextPort, firstEphemeralUDPPort, attempts)
+		next, ok := n.core.TryLeaseUDPPortRangeIntoLocked(&socket.portLease, n.nextPort, firstEphemeralUDPPort, attempts)
 		if ok {
 			n.nextPort = next
-			local.Port = portLease.UDPPort()
+			local.Port = socket.portLease.UDPPort()
+			socket.local = local
 		}
-	} else {
-		portLease, ok = n.core.TryLeaseUDPPortLocked(local.Port)
+	} else if !n.core.TryLeaseUDPPortIntoLocked(&socket.portLease, local.Port) {
+		return nil, 0, nscore.Fail(nscore.FailureAddressInUse, lneto.ErrAlreadyRegistered)
 	}
-	if !ok {
+	if socket.portLease.UDPPort() == 0 {
 		return nil, 0, nscore.Fail(nscore.FailureAddressInUse, lneto.ErrAlreadyRegistered)
 	}
 
-	resourceReservation, err := n.quotas.ReserveResource(quota.ResourceUDP, 1)
-	if err != nil {
-		portLease.ReleaseLocked()
-		return nil, 0, lnetocore.MapError(err)
-	}
 	retainedBytes := uint64(n.config.MaxPayloadBytes) * uint64(n.config.ReceiveDatagrams+n.config.TransmitDatagrams)
-	queuedReservation, err := n.quotas.ReserveQueuedBytes(retainedBytes)
-	if err != nil {
-		resourceReservation.Rollback()
-		portLease.ReleaseLocked()
+	if err := n.quotas.AcquireResourceAndQueuedBytes(&socket.retained, quota.ResourceUDP, 1, retainedBytes); err != nil {
+		socket.portLease.ReleaseLocked()
 		return nil, 0, lnetocore.MapError(err)
 	}
-	resourceAllocation, ok := resourceReservation.Commit()
-	if !ok {
-		queuedReservation.Rollback()
-		portLease.ReleaseLocked()
-		return nil, 0, nscore.Fail(nscore.FailureClosed, quota.ErrClosed)
-	}
-	queuedAllocation, ok := queuedReservation.Commit()
-	if !ok {
-		resourceAllocation.Release()
-		portLease.ReleaseLocked()
-		return nil, 0, nscore.Fail(nscore.FailureClosed, quota.ErrClosed)
-	}
-	socket := &udpSocket{
-		owner:     n,
-		local:     local,
-		portLease: portLease,
-		rx:        newDatagramQueue(n.config.ReceiveDatagrams, n.config.MaxPayloadBytes, n.config.ReceiveBytes),
-		tx:        newDatagramQueue(n.config.TransmitDatagrams, n.config.MaxPayloadBytes, n.config.TransmitBytes),
-		resource:  resourceAllocation,
-		queued:    queuedAllocation,
-	}
+	socket.rx, socket.tx = newSocketDatagramQueues(n.config)
 	n.byPort[local.Port] = socket
 	n.sockets = append(n.sockets, socket)
 	return socket, nscore.ProgressDone, nil
@@ -322,7 +316,7 @@ func (s *udpSocket) Readiness() nscore.Readiness {
 	if s.rx.count > 0 {
 		ready |= nscore.ReadyReadable
 	}
-	if s.tx.count < len(s.tx.lengths) {
+	if s.tx.count < len(s.tx.slots) {
 		ready |= nscore.ReadyWritable
 	}
 	return ready
@@ -404,20 +398,10 @@ func (s *udpSocket) closeLocked() error {
 			break
 		}
 	}
-	if s.portLease != nil {
-		s.portLease.ReleaseLocked()
-		s.portLease = nil
-	}
+	s.portLease.ReleaseLocked()
 	s.rx.clear()
 	s.tx.clear()
-	if s.queued != nil {
-		s.queued.Release()
-		s.queued = nil
-	}
-	if s.resource != nil {
-		s.resource.Release()
-		s.resource = nil
-	}
+	s.retained.Release()
 	return nil
 }
 

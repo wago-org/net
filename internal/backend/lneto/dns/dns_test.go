@@ -2,7 +2,9 @@ package dns
 
 import (
 	"encoding/binary"
+	"errors"
 	"net/netip"
+	"strings"
 	"sync"
 	"testing"
 
@@ -18,6 +20,102 @@ import (
 	"github.com/wago-org/net/internal/quota"
 )
 
+func TestBuildDNSQueryPacketDirectEncoding(t *testing.T) {
+	request := namespace.DNSRequest{Name: "service.api.example.com", Types: namespace.DNSRecordsA | namespace.DNSRecordsAAAA}
+	packet, err := buildDNSQueryPacket(request, 0x1234, 1232)
+	if err != nil {
+		t.Fatal(err)
+	}
+	frame, err := lnetodns.NewFrame(packet)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if frame.TxID() != 0x1234 || frame.Flags().IsResponse() || frame.QDCount() != 2 || frame.ANCount() != 0 || frame.NSCount() != 0 || frame.ARCount() != 1 {
+		t.Fatalf("query header = txid=%x flags=%x counts=%d/%d/%d/%d", frame.TxID(), frame.Flags(), frame.QDCount(), frame.ANCount(), frame.NSCount(), frame.ARCount())
+	}
+	offset, err := validateDNSQuestions(packet, lnetodns.SizeHeader, frame.QDCount(), request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if offset+11 != len(packet) || packet[offset] != 0 || binary.BigEndian.Uint16(packet[offset+1:offset+3]) != 41 || binary.BigEndian.Uint16(packet[offset+3:offset+5]) != 1232 {
+		t.Fatalf("EDNS resource = %x", packet[offset:])
+	}
+	for _, value := range packet[offset+5:] {
+		if value != 0 {
+			t.Fatalf("nonzero EDNS tail: %x", packet[offset:])
+		}
+	}
+}
+
+func TestBuildDNSQueryPacketIntoUsesCallerStorage(t *testing.T) {
+	request := namespace.DNSRequest{Name: "service.api.example.com", Types: namespace.DNSRecordsA | namespace.DNSRecordsAAAA}
+	var storage [dnsQueryPacketCapacity]byte
+	for i := range storage {
+		storage[i] = 0xff
+	}
+	packet, err := buildDNSQueryPacketInto(storage[:], request, 0x5678, 1232)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(packet) == 0 || &packet[0] != &storage[0] {
+		t.Fatal("query packet did not retain caller-owned storage")
+	}
+	frame, err := lnetodns.NewFrame(packet)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if frame.TxID() != 0x5678 || frame.QDCount() != 2 || frame.ARCount() != 1 {
+		t.Fatalf("query header = txid=%x counts=%d/%d", frame.TxID(), frame.QDCount(), frame.ARCount())
+	}
+	if _, err := buildDNSQueryPacketInto(storage[:len(packet)-1], request, 1, 512); !errors.Is(err, lneto.ErrShortBuffer) {
+		t.Fatalf("short storage error = %v", err)
+	}
+}
+
+func TestBuildDNSQueryPacketIntoFitsMaximumCanonicalName(t *testing.T) {
+	name := strings.Repeat("a", 63) + "." + strings.Repeat("b", 63) + "." + strings.Repeat("c", 63) + "." + strings.Repeat("d", 61)
+	request := namespace.DNSRequest{Name: name, Types: namespace.DNSRecordsA | namespace.DNSRecordsAAAA}
+	if !request.Valid() || len(name) != 253 {
+		t.Fatalf("maximum request validity = %v, length=%d", request.Valid(), len(name))
+	}
+	var storage [dnsQueryPacketCapacity]byte
+	packet, err := buildDNSQueryPacketInto(storage[:], request, 0xabcd, 1232)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(packet) != len(storage) || &packet[0] != &storage[0] {
+		t.Fatalf("maximum packet length = %d, capacity=%d", len(packet), len(storage))
+	}
+	frame, err := lnetodns.NewFrame(packet)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := validateDNSQuestions(packet, lnetodns.SizeHeader, frame.QDCount(), request); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestDNSNameInterningReusesRequestAndBoundedScratch(t *testing.T) {
+	storage := make([]string, 1)
+	count := 0
+	request := "example.com"
+	name, err := internDNSName([]byte(request), request, storage, &count)
+	if err != nil || name != request || count != 0 {
+		t.Fatalf("request intern = %q, count=%d, err=%v", name, count, err)
+	}
+	first, err := internDNSName([]byte("alias.example.com"), request, storage, &count)
+	if err != nil || count != 1 {
+		t.Fatalf("first alias intern = %q, count=%d, err=%v", first, count, err)
+	}
+	second, err := internDNSName([]byte("alias.example.com"), request, storage, &count)
+	if err != nil || second != first || count != 1 {
+		t.Fatalf("reused alias intern = %q, count=%d, err=%v", second, count, err)
+	}
+	if _, err := internDNSName([]byte("other.example.com"), request, storage, &count); err == nil {
+		t.Fatal("bounded name scratch accepted a second unique name")
+	}
+}
+
 func TestDNSBoundedQueryRecordsAndQuotaLifecycle(t *testing.T) {
 	config := dnsTestConfig(t, 41)
 	ns := newTestNamespace(t, config)
@@ -27,6 +125,12 @@ func TestDNSBoundedQueryRecordsAndQuotaLifecycle(t *testing.T) {
 		t.Fatalf("resolve = %T, %v, %v", resource, progress, err)
 	}
 	query := resource.(*dnsQuery)
+	if len(query.packet) == 0 || &query.packet[0] != &query.packetStorage[0] {
+		t.Fatal("live query packet does not use embedded storage")
+	}
+	if cap(query.records) != int(config.DNS.MaxRecords) || cap(query.records) > len(query.recordStorage) {
+		t.Fatalf("live query records capacity = %d", cap(query.records))
+	}
 	if got := query.Readiness(); got != 0 {
 		t.Fatalf("initial readiness = %v", got)
 	}

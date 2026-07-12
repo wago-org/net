@@ -5,7 +5,8 @@ import (
 	"errors"
 	"net/netip"
 	"slices"
-	"strings"
+
+	"github.com/wago-org/net/internal/dnsname"
 )
 
 var ErrInvalidRule = errors.New("net: invalid policy rule")
@@ -248,7 +249,7 @@ func (r compiledRule) matches(q query) bool {
 			return true
 		}
 		for _, suffix := range r.dnsSuffixes {
-			if q.dnsName == suffix || strings.HasSuffix(q.dnsName, "."+suffix) {
+			if matchesDNSSuffix(q.dnsName, suffix) {
 				return true
 			}
 		}
@@ -353,25 +354,18 @@ func normalizeDNSSuffixes(input []string) ([]string, bool) {
 }
 
 func normalizeDNSName(name string) (string, bool) {
-	name = strings.TrimSuffix(strings.ToLower(name), ".")
-	if name == "" || len(name) > 253 {
-		return "", false
+	return dnsname.Normalize(name)
+}
+
+func matchesDNSSuffix(name, suffix string) bool {
+	if name == suffix {
+		return true
 	}
-	if address, err := netip.ParseAddr(name); err == nil && address.IsValid() {
-		return "", false
+	if len(name) <= len(suffix) {
+		return false
 	}
-	labels := strings.Split(name, ".")
-	for _, label := range labels {
-		if len(label) == 0 || len(label) > 63 || label[0] == '-' || label[len(label)-1] == '-' {
-			return "", false
-		}
-		for _, c := range []byte(label) {
-			if (c < 'a' || c > 'z') && (c < '0' || c > '9') && c != '-' {
-				return "", false
-			}
-		}
-	}
-	return name, true
+	start := len(name) - len(suffix)
+	return name[start-1] == '.' && name[start:] == suffix
 }
 
 func operationEndpoint(operation Operation) (Transport, Direction, bool) {

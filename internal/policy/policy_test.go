@@ -207,6 +207,20 @@ func TestPolicyAuthorityChangingOperationsUseTransportAndDirection(t *testing.T)
 	}
 }
 
+func TestPolicyCanonicalDNSCheckDoesNotAllocate(t *testing.T) {
+	compiled, err := Compile(Config{Rules: []Rule{{Action: ActionAllow, Transports: []Transport{TransportDNS}, DNSSuffixes: []string{"example.com"}}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if allocs := testing.AllocsPerRun(1000, func() {
+		if !compiled.CheckDNS(OperationDNSResolve, "service.api.example.com") {
+			t.Fatal("canonical DNS name denied")
+		}
+	}); allocs != 0 {
+		t.Fatalf("canonical DNS policy check allocated %v times", allocs)
+	}
+}
+
 func TestPolicyDNSWildcardAndMalformedNamesFailClosed(t *testing.T) {
 	policy, err := Compile(Config{Rules: []Rule{{Action: ActionAllow, Transports: []Transport{TransportDNS}}}})
 	if err != nil {

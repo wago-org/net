@@ -5,7 +5,6 @@ import (
 	"errors"
 	"net"
 	"net/netip"
-	"strings"
 
 	lneto "github.com/soypat/lneto"
 	lnetodns "github.com/soypat/lneto/dns"
@@ -21,7 +20,11 @@ import (
 
 var _ dnsns.Query = (*dnsQuery)(nil)
 
-const firstEphemeralDNSPort uint16 = 53000
+const (
+	firstEphemeralDNSPort   uint16 = 53000
+	dnsQueryPacketCapacity         = lnetodns.SizeHeader + 2*(253+2+4) + 11
+	inlineDNSRecordCapacity        = 8
+)
 
 var errPolicyDenied = errors.New("net: endpoint policy denied operation")
 
@@ -53,6 +56,8 @@ type Adapter struct {
 	quotas                 *quota.Account
 	queries                []*dnsQuery
 	byPort                 map[uint16]*dnsQuery
+	candidates             []dnsns.Record
+	names                  []string
 	cursor                 int
 	nextPort               uint16
 	nextTxID               uint16
@@ -73,7 +78,9 @@ func New(common *lnetocore.Namespace, config Config) (*Adapter, error) {
 		ipv4Address: common.IPv4AddressLocked(), hardwareAddress: common.HardwareAddressLocked(),
 		gatewayHardwareAddress: common.GatewayHardwareAddressLocked(), policy: common.PolicyLocked(), quotas: common.QuotasLocked(),
 		queries: make([]*dnsQuery, 0, config.MaxQueries), byPort: make(map[uint16]*dnsQuery, config.MaxQueries),
-		nextPort: firstEphemeralDNSPort, nextTxID: uint16(common.RandSeedLocked()) | 1,
+		candidates: make([]dnsns.Record, config.MaxResponseBytes/11),
+		names:      make([]string, 2*(config.MaxResponseBytes/11)),
+		nextPort:   firstEphemeralDNSPort, nextTxID: uint16(common.RandSeedLocked()) | 1,
 	}
 	common.Unlock()
 	if err := common.Install(lnetocore.Participant{
@@ -101,22 +108,23 @@ const (
 )
 
 type dnsQuery struct {
-	owner     *Adapter
-	request   dnsns.Request
-	localPort uint16
-	txid      uint16
-	packet    []byte
-	records   []dnsns.Record
-	cursor    int
-	attempts  uint16
-	retry     uint16
-	state     dnsQueryState
-	failure   error
+	owner         *Adapter
+	request       dnsns.Request
+	localPort     uint16
+	txid          uint16
+	packet        []byte
+	packetStorage [dnsQueryPacketCapacity]byte
+	records       []dnsns.Record
+	recordStorage [inlineDNSRecordCapacity]dnsns.Record
+	cursor        int
+	attempts      uint16
+	retry         uint16
+	state         dnsQueryState
+	failure       error
 
-	portLease *lnetocore.UDPPortLease
-	resource  *quota.Allocation
-	queued    *quota.Allocation
-	work      *quota.Allocation
+	portLease lnetocore.UDPPortLease
+	retained  quota.Charge
+	work      quota.Charge
 }
 
 func (n *Adapter) TryResolve(request dnsns.Request) (nscore.Resource, nscore.Progress, error) {
@@ -140,72 +148,41 @@ func (n *Adapter) TryResolve(request dnsns.Request) (nscore.Resource, nscore.Pro
 	if len(n.queries) == int(n.config.MaxQueries) {
 		return nil, 0, nscore.Fail(nscore.FailureResourceLimit, lneto.ErrExhausted)
 	}
-	portLease, ok := n.allocatePortLocked()
-	if !ok {
+	query := &dnsQuery{owner: n, request: request, txid: n.nextTxID}
+	if !n.allocatePortLocked(&query.portLease) {
 		return nil, 0, nscore.Fail(nscore.FailureResourceLimit, lneto.ErrExhausted)
 	}
-	localPort := portLease.UDPPort()
-	packet, err := buildDNSQueryPacket(request, n.nextTxID, n.config.MaxResponseBytes)
+	query.localPort = query.portLease.UDPPort()
+	packet, err := buildDNSQueryPacketInto(query.packetStorage[:], request, n.nextTxID, n.config.MaxResponseBytes)
 	if err != nil {
-		portLease.ReleaseLocked()
+		query.portLease.ReleaseLocked()
 		return nil, 0, lnetocore.MapError(err)
 	}
-
-	resourceReservation, err := n.quotas.ReserveResource(quota.ResourceDNS, 1)
-	if err != nil {
-		portLease.ReleaseLocked()
-		return nil, 0, lnetocore.MapError(err)
+	query.packet = packet
+	if int(n.config.MaxRecords) <= len(query.recordStorage) {
+		query.records = query.recordStorage[:0:n.config.MaxRecords]
+	} else {
+		query.records = make([]dnsns.Record, 0, n.config.MaxRecords)
 	}
-	retainedBytes := dnsRetainedBytes(n.config)
-	queuedReservation, err := n.quotas.ReserveQueuedBytes(retainedBytes)
-	if err != nil {
-		resourceReservation.Rollback()
-		portLease.ReleaseLocked()
+	query.state = dnsQueryPending
+	if err := n.quotas.AcquireResourceAndQueuedBytes(&query.retained, quota.ResourceDNS, 1, dnsRetainedBytes(n.config)); err != nil {
+		query.portLease.ReleaseLocked()
 		return nil, 0, lnetocore.MapError(err)
 	}
 	workUnits := uint64(1)
 	if request.Types == dnsns.RecordsA|dnsns.RecordsAAAA {
 		workUnits = 2
 	}
-	workReservation, err := n.quotas.ReserveDNSWork(workUnits)
-	if err != nil {
-		queuedReservation.Rollback()
-		resourceReservation.Rollback()
-		portLease.ReleaseLocked()
+	if err := n.quotas.AcquireDNSWork(&query.work, workUnits); err != nil {
+		query.retained.Release()
+		query.portLease.ReleaseLocked()
 		return nil, 0, lnetocore.MapError(err)
-	}
-	resourceAllocation, ok := resourceReservation.Commit()
-	if !ok {
-		workReservation.Rollback()
-		queuedReservation.Rollback()
-		portLease.ReleaseLocked()
-		return nil, 0, nscore.Fail(nscore.FailureClosed, quota.ErrClosed)
-	}
-	queuedAllocation, ok := queuedReservation.Commit()
-	if !ok {
-		workReservation.Rollback()
-		resourceAllocation.Release()
-		portLease.ReleaseLocked()
-		return nil, 0, nscore.Fail(nscore.FailureClosed, quota.ErrClosed)
-	}
-	workAllocation, ok := workReservation.Commit()
-	if !ok {
-		queuedAllocation.Release()
-		resourceAllocation.Release()
-		portLease.ReleaseLocked()
-		return nil, 0, nscore.Fail(nscore.FailureClosed, quota.ErrClosed)
-	}
-
-	query := &dnsQuery{
-		owner: n, request: request, localPort: localPort, txid: n.nextTxID, portLease: portLease,
-		packet: packet, records: make([]dnsns.Record, 0, n.config.MaxRecords),
-		state: dnsQueryPending, resource: resourceAllocation, queued: queuedAllocation, work: workAllocation,
 	}
 	n.nextTxID++
 	if n.nextTxID == 0 {
 		n.nextTxID = 1
 	}
-	n.byPort[localPort] = query
+	n.byPort[query.localPort] = query
 	n.queries = append(n.queries, query)
 	return query, nscore.ProgressInProgress, nil
 }
@@ -296,10 +273,7 @@ func (q *dnsQuery) closeLocked() error {
 	q.records = nil
 	q.request = dnsns.Request{}
 	q.failure = nil
-	if q.portLease != nil {
-		q.portLease.ReleaseLocked()
-		q.portLease = nil
-	}
+	q.portLease.ReleaseLocked()
 	q.releaseQuotaLocked()
 	return nil
 }
@@ -324,22 +298,12 @@ func (q *dnsQuery) completeLocked(records []dnsns.Record) {
 }
 
 func (q *dnsQuery) releaseWorkLocked() {
-	if q.work != nil {
-		q.work.Release()
-		q.work = nil
-	}
+	q.work.Release()
 }
 
 func (q *dnsQuery) releaseQuotaLocked() {
 	q.releaseWorkLocked()
-	if q.queued != nil {
-		q.queued.Release()
-		q.queued = nil
-	}
-	if q.resource != nil {
-		q.resource.Release()
-		q.resource = nil
-	}
+	q.retained.Release()
 }
 
 // CloseLocked releases every DNS query and retained allocation. The caller
@@ -352,8 +316,12 @@ func (n *Adapter) CloseLocked() {
 		_ = n.queries[len(n.queries)-1].closeLocked()
 	}
 	clear(n.byPort)
+	clear(n.candidates)
+	clear(n.names)
 	n.byPort = nil
 	n.queries = nil
+	n.candidates = nil
+	n.names = nil
 	n.cursor = 0
 }
 
@@ -485,7 +453,7 @@ func (n *Adapter) ingressLocked(frame []byte) (bool, error) {
 		query.failLocked(nscore.FailureMessageTooLarge, lneto.ErrShortBuffer)
 		return true, nil
 	}
-	records, response, failure, err := parseDNSResponse(payload, query.txid, query.request, int(n.config.MaxRecords))
+	records, response, failure, err := parseDNSResponseInto(query.records[:0], n.candidates, n.names, payload, query.txid, query.request, int(n.config.MaxRecords))
 	if !response {
 		return true, nil
 	}
@@ -498,24 +466,100 @@ func (n *Adapter) ingressLocked(frame []byte) (bool, error) {
 }
 
 func buildDNSQueryPacket(request dnsns.Request, txid uint16, maxResponseBytes int) ([]byte, error) {
-	name, err := lnetodns.NewName(request.Name)
+	packetBytes, err := dnsQueryPacketSize(request, maxResponseBytes)
 	if err != nil {
 		return nil, err
 	}
-	questions := make([]lnetodns.Question, 0, 2)
+	return writeDNSQueryPacket(make([]byte, packetBytes), request, txid, maxResponseBytes), nil
+}
+
+func buildDNSQueryPacketInto(storage []byte, request dnsns.Request, txid uint16, maxResponseBytes int) ([]byte, error) {
+	packetBytes, err := dnsQueryPacketSize(request, maxResponseBytes)
+	if err != nil {
+		return nil, err
+	}
+	if len(storage) < packetBytes {
+		return nil, lneto.ErrShortBuffer
+	}
+	return writeDNSQueryPacket(storage[:packetBytes], request, txid, maxResponseBytes), nil
+}
+
+func dnsQueryPacketSize(request dnsns.Request, maxResponseBytes int) (int, error) {
+	if !request.Valid() {
+		return 0, lneto.ErrInvalidAddr
+	}
+	if maxResponseBytes <= 0 || maxResponseBytes > int(^uint16(0)) {
+		return 0, lneto.ErrInvalidConfig
+	}
+	questionCount := dnsQuestionCount(request.Types)
+	wireNameBytes := len(request.Name) + 2
+	return lnetodns.SizeHeader + questionCount*(wireNameBytes+4) + 11, nil
+}
+
+func writeDNSQueryPacket(packet []byte, request dnsns.Request, txid uint16, maxResponseBytes int) []byte {
+	clear(packet)
+	questionCount := dnsQuestionCount(request.Types)
+	binary.BigEndian.PutUint16(packet[0:2], txid)
+	binary.BigEndian.PutUint16(packet[2:4], 1<<8)
+	binary.BigEndian.PutUint16(packet[4:6], uint16(questionCount))
+	binary.BigEndian.PutUint16(packet[10:12], 1)
+	offset := lnetodns.SizeHeader
 	if request.Types&dnsns.RecordsA != 0 {
-		questions = append(questions, lnetodns.Question{Name: name, Type: lnetodns.TypeA, Class: lnetodns.ClassINET})
+		offset = appendDNSQuestion(packet, offset, request.Name, lnetodns.TypeA)
 	}
 	if request.Types&dnsns.RecordsAAAA != 0 {
-		questions = append(questions, lnetodns.Question{Name: name, Type: lnetodns.TypeAAAA, Class: lnetodns.ClassINET})
+		offset = appendDNSQuestion(packet, offset, request.Name, lnetodns.TypeAAAA)
 	}
-	var edns lnetodns.Resource
-	edns.SetEDNS0(uint16(maxResponseBytes), 0, 0, nil)
-	message := lnetodns.Message{Questions: questions, Additionals: []lnetodns.Resource{edns}}
-	return message.AppendTo(make([]byte, 0, message.Len()), txid, lnetodns.NewClientHeaderFlags(lnetodns.OpCodeQuery, true))
+	packet[offset] = 0
+	binary.BigEndian.PutUint16(packet[offset+1:offset+3], 41)
+	binary.BigEndian.PutUint16(packet[offset+3:offset+5], uint16(maxResponseBytes))
+	return packet
+}
+
+func dnsQuestionCount(types dnsns.RecordTypes) int {
+	count := 0
+	if types&dnsns.RecordsA != 0 {
+		count++
+	}
+	if types&dnsns.RecordsAAAA != 0 {
+		count++
+	}
+	return count
+}
+
+func appendDNSQuestion(packet []byte, offset int, name string, typ lnetodns.Type) int {
+	labelStart := 0
+	for i := 0; i <= len(name); i++ {
+		if i != len(name) && name[i] != '.' {
+			continue
+		}
+		packet[offset] = byte(i - labelStart)
+		offset++
+		copy(packet[offset:], name[labelStart:i])
+		offset += i - labelStart
+		labelStart = i + 1
+	}
+	packet[offset] = 0
+	offset++
+	binary.BigEndian.PutUint16(packet[offset:offset+2], uint16(typ))
+	binary.BigEndian.PutUint16(packet[offset+2:offset+4], uint16(lnetodns.ClassINET))
+	return offset + 4
 }
 
 func parseDNSResponse(payload []byte, txid uint16, request dnsns.Request, maxRecords int) ([]dnsns.Record, bool, nscore.Failure, error) {
+	records := make([]dnsns.Record, 0, maxRecords)
+	candidates := make([]dnsns.Record, len(payload)/11)
+	names := make([]string, 2*len(candidates))
+	return parseDNSResponseInto(records, candidates, names, payload, txid, request, maxRecords)
+}
+
+func parseDNSResponseInto(records, candidateStorage []dnsns.Record, nameStorage []string, payload []byte, txid uint16, request dnsns.Request, maxRecords int) ([]dnsns.Record, bool, nscore.Failure, error) {
+	candidateCount := 0
+	nameCount := 0
+	defer func() {
+		clear(candidateStorage[:candidateCount])
+		clear(nameStorage[:nameCount])
+	}()
 	frame, err := lnetodns.NewFrame(payload)
 	if err != nil {
 		return nil, true, nscore.FailureIO, err
@@ -549,17 +593,24 @@ func parseDNSResponse(payload []byte, txid uint16, request dnsns.Request, maxRec
 		return nil, true, failure, rcode
 	}
 
-	candidates := make([]dnsns.Record, 0, min(int(frame.ANCount()), len(payload)/11))
 	for range int(frame.ANCount()) {
-		var record dnsns.Record
-		var recognized bool
-		record, recognized, offset, err = decodeDNSAnswer(payload, offset, request.Types)
-		if err != nil {
-			return nil, true, nscore.FailureIO, err
+		record, recognized, next, decodeErr := decodeDNSAnswer(payload, offset, request, nameStorage, &nameCount)
+		if decodeErr != nil {
+			failure := nscore.FailureIO
+			if errors.Is(decodeErr, lneto.ErrExhausted) {
+				failure = nscore.FailureResourceLimit
+			}
+			return nil, true, failure, decodeErr
 		}
-		if recognized {
-			candidates = append(candidates, record)
+		offset = next
+		if !recognized {
+			continue
 		}
+		if candidateCount == len(candidateStorage) {
+			return nil, true, nscore.FailureResourceLimit, lneto.ErrExhausted
+		}
+		candidateStorage[candidateCount] = record
+		candidateCount++
 	}
 	for range int(frame.NSCount()) + int(frame.ARCount()) {
 		offset, err = skipDNSResource(payload, offset)
@@ -570,7 +621,7 @@ func parseDNSResponse(payload []byte, txid uint16, request dnsns.Request, maxRec
 	if offset != len(payload) {
 		return nil, true, nscore.FailureIO, lneto.ErrInvalidLengthField
 	}
-	records, failure, err := selectDNSAnswers(candidates, request, maxRecords)
+	records, failure, err := selectDNSAnswersInto(records, candidateStorage[:candidateCount], request, maxRecords)
 	if err != nil {
 		return nil, true, failure, err
 	}
@@ -578,27 +629,32 @@ func parseDNSResponse(payload []byte, txid uint16, request dnsns.Request, maxRec
 }
 
 func validateDNSQuestions(payload []byte, offset int, count uint16, request dnsns.Request) (int, error) {
-	types := make([]lnetodns.Type, 0, 2)
+	expectedCount := 0
 	if request.Types&dnsns.RecordsA != 0 {
-		types = append(types, lnetodns.TypeA)
+		expectedCount++
 	}
 	if request.Types&dnsns.RecordsAAAA != 0 {
-		types = append(types, lnetodns.TypeAAAA)
+		expectedCount++
 	}
-	if int(count) != len(types) {
+	if int(count) != expectedCount {
 		return offset, lneto.ErrInvalidField
 	}
-	for _, expectedType := range types {
-		name, next, err := decodeDNSName(payload, offset)
+	var name [253]byte
+	for index := 0; index < expectedCount; index++ {
+		length, next, err := decodeDNSNameInto(name[:], payload, offset)
 		if err != nil || next+4 > len(payload) {
 			if err == nil {
 				err = lneto.ErrTruncatedFrame
 			}
 			return offset, err
 		}
+		expectedType := lnetodns.TypeA
+		if request.Types&dnsns.RecordsA == 0 || index != 0 {
+			expectedType = lnetodns.TypeAAAA
+		}
 		typ := lnetodns.Type(binary.BigEndian.Uint16(payload[next : next+2]))
 		class := lnetodns.Class(binary.BigEndian.Uint16(payload[next+2 : next+4]))
-		if name != request.Name || typ != expectedType || class != lnetodns.ClassINET {
+		if !equalDNSName(name[:length], request.Name) || typ != expectedType || class != lnetodns.ClassINET {
 			return offset, lneto.ErrInvalidField
 		}
 		offset = next + 4
@@ -606,8 +662,21 @@ func validateDNSQuestions(payload []byte, offset int, count uint16, request dnsn
 	return offset, nil
 }
 
-func decodeDNSAnswer(payload []byte, offset int, requested dnsns.RecordTypes) (record dnsns.Record, recognized bool, nextOffset int, err error) {
-	name, next, err := decodeDNSName(payload, offset)
+func equalDNSName(decoded []byte, name string) bool {
+	if len(decoded) != len(name) {
+		return false
+	}
+	for i, value := range decoded {
+		if value != name[i] {
+			return false
+		}
+	}
+	return true
+}
+
+func decodeDNSAnswer(payload []byte, offset int, request dnsns.Request, nameStorage []string, nameCount *int) (record dnsns.Record, recognized bool, nextOffset int, err error) {
+	var owner [253]byte
+	ownerLength, next, err := decodeDNSNameInto(owner[:], payload, offset)
 	if err != nil || next+10 > len(payload) {
 		if err == nil {
 			err = lneto.ErrTruncatedFrame
@@ -631,35 +700,71 @@ func decodeDNSAnswer(payload []byte, offset int, requested dnsns.RecordTypes) (r
 		if length != 4 {
 			return record, false, offset, lneto.ErrInvalidLengthField
 		}
-		if requested&dnsns.RecordsA == 0 {
+		if request.Types&dnsns.RecordsA == 0 {
 			return record, false, dataEnd, nil
 		}
-		record = dnsns.Record{Name: name, Type: dnsns.RecordA, TTLSeconds: ttl, Address: netip.AddrFrom4([4]byte(payload[dataStart:dataEnd]))}
+		ownerName, err := internDNSName(owner[:ownerLength], request.Name, nameStorage, nameCount)
+		if err != nil {
+			return record, false, offset, err
+		}
+		record = dnsns.Record{Name: ownerName, Type: dnsns.RecordA, TTLSeconds: ttl, Address: netip.AddrFrom4([4]byte(payload[dataStart:dataEnd]))}
 	case lnetodns.TypeAAAA:
 		if length != 16 {
 			return record, false, offset, lneto.ErrInvalidLengthField
 		}
-		if requested&dnsns.RecordsAAAA == 0 {
+		if request.Types&dnsns.RecordsAAAA == 0 {
 			return record, false, dataEnd, nil
 		}
-		record = dnsns.Record{Name: name, Type: dnsns.RecordAAAA, TTLSeconds: ttl, Address: netip.AddrFrom16([16]byte(payload[dataStart:dataEnd]))}
+		ownerName, err := internDNSName(owner[:ownerLength], request.Name, nameStorage, nameCount)
+		if err != nil {
+			return record, false, offset, err
+		}
+		record = dnsns.Record{Name: ownerName, Type: dnsns.RecordAAAA, TTLSeconds: ttl, Address: netip.AddrFrom16([16]byte(payload[dataStart:dataEnd]))}
 	case lnetodns.TypeCNAME:
-		canonical, consumed, err := decodeDNSName(payload, dataStart)
+		var canonical [253]byte
+		canonicalLength, consumed, err := decodeDNSNameInto(canonical[:], payload, dataStart)
 		if err != nil || consumed != dataEnd {
 			if err == nil {
 				err = lneto.ErrInvalidLengthField
 			}
 			return record, false, offset, err
 		}
-		record = dnsns.Record{Name: name, Type: dnsns.RecordCNAME, TTLSeconds: ttl, CanonicalName: canonical}
+		ownerName, err := internDNSName(owner[:ownerLength], request.Name, nameStorage, nameCount)
+		if err != nil {
+			return record, false, offset, err
+		}
+		canonicalName, err := internDNSName(canonical[:canonicalLength], request.Name, nameStorage, nameCount)
+		if err != nil {
+			return record, false, offset, err
+		}
+		record = dnsns.Record{Name: ownerName, Type: dnsns.RecordCNAME, TTLSeconds: ttl, CanonicalName: canonicalName}
 	default:
 		return record, false, dataEnd, nil
 	}
 	return record, true, dataEnd, nil
 }
 
+func internDNSName(decoded []byte, requestName string, storage []string, count *int) (string, error) {
+	if equalDNSName(decoded, requestName) {
+		return requestName, nil
+	}
+	for _, name := range storage[:*count] {
+		if equalDNSName(decoded, name) {
+			return name, nil
+		}
+	}
+	if *count == len(storage) {
+		return "", lneto.ErrExhausted
+	}
+	name := string(decoded)
+	storage[*count] = name
+	*count = *count + 1
+	return name, nil
+}
+
 func skipDNSResource(payload []byte, offset int) (int, error) {
-	_, next, err := decodeDNSName(payload, offset)
+	var name [253]byte
+	_, next, err := decodeDNSNameInto(name[:], payload, offset)
 	if err != nil || next+10 > len(payload) {
 		if err == nil {
 			err = lneto.ErrTruncatedFrame
@@ -675,13 +780,18 @@ func skipDNSResource(payload []byte, offset int) (int, error) {
 
 func selectDNSAnswers(candidates []dnsns.Record, request dnsns.Request, maxRecords int) ([]dnsns.Record, nscore.Failure, error) {
 	records := make([]dnsns.Record, 0, min(maxRecords, len(candidates)))
+	return selectDNSAnswersInto(records, candidates, request, maxRecords)
+}
+
+func selectDNSAnswersInto(records, candidates []dnsns.Record, request dnsns.Request, maxRecords int) ([]dnsns.Record, nscore.Failure, error) {
+	records = records[:0]
 	current := request.Name
-	visited := make(map[string]struct{}, len(candidates)+1)
 	for {
-		if _, exists := visited[current]; exists {
-			return nil, nscore.FailureIO, lneto.ErrInvalidField
+		for _, record := range records {
+			if record.Type == dnsns.RecordCNAME && record.Name == current {
+				return nil, nscore.FailureIO, lneto.ErrInvalidField
+			}
 		}
-		visited[current] = struct{}{}
 		var cname dnsns.Record
 		for _, candidate := range candidates {
 			if candidate.Type != dnsns.RecordCNAME || candidate.Name != current {
@@ -737,15 +847,24 @@ func appendUniqueDNSRecord(records []dnsns.Record, record dnsns.Record, maxRecor
 }
 
 func decodeDNSName(message []byte, offset int) (string, int, error) {
-	if offset < 0 || offset >= len(message) {
-		return "", offset, lneto.ErrTruncatedFrame
+	var decoded [253]byte
+	written, next, err := decodeDNSNameInto(decoded[:], message, offset)
+	if err != nil {
+		return "", offset, err
 	}
-	labels := make([]string, 0, 4)
+	return string(decoded[:written]), next, nil
+}
+
+func decodeDNSNameInto(decoded, message []byte, offset int) (int, int, error) {
+	if offset < 0 || offset >= len(message) {
+		return 0, offset, lneto.ErrTruncatedFrame
+	}
+	written := 0
 	position := offset
 	next := -1
 	for pointers := 0; ; {
 		if position >= len(message) {
-			return "", offset, lneto.ErrTruncatedFrame
+			return 0, offset, lneto.ErrTruncatedFrame
 		}
 		length := int(message[position])
 		switch length & 0xc0 {
@@ -755,20 +874,36 @@ func decodeDNSName(message []byte, offset int) (string, int, error) {
 				if next < 0 {
 					next = position
 				}
-				name := strings.ToLower(strings.Join(labels, "."))
-				if name == "" || len(name) > 253 {
-					return "", offset, lneto.ErrInvalidAddr
+				if written == 0 {
+					return 0, offset, lneto.ErrInvalidAddr
 				}
-				return name, next, nil
+				return written, next, nil
 			}
 			if length > 63 || position+length > len(message) {
-				return "", offset, lneto.ErrTruncatedFrame
+				return 0, offset, lneto.ErrTruncatedFrame
 			}
-			labels = append(labels, string(message[position:position+length]))
+			separator := 0
+			if written != 0 {
+				separator = 1
+			}
+			if written+separator+length > len(decoded) {
+				return 0, offset, lneto.ErrInvalidAddr
+			}
+			if separator != 0 {
+				decoded[written] = '.'
+				written++
+			}
+			for _, value := range message[position : position+length] {
+				if value >= 'A' && value <= 'Z' {
+					value += 'a' - 'A'
+				}
+				decoded[written] = value
+				written++
+			}
 			position += length
 		case 0xc0:
 			if position+1 >= len(message) {
-				return "", offset, lneto.ErrTruncatedFrame
+				return 0, offset, lneto.ErrTruncatedFrame
 			}
 			if next < 0 {
 				next = position + 2
@@ -776,10 +911,10 @@ func decodeDNSName(message []byte, offset int) (string, int, error) {
 			position = (length^0xc0)<<8 | int(message[position+1])
 			pointers++
 			if pointers > 10 || position >= len(message) {
-				return "", offset, lneto.ErrInvalidField
+				return 0, offset, lneto.ErrInvalidField
 			}
 		default:
-			return "", offset, lneto.ErrInvalidField
+			return 0, offset, lneto.ErrInvalidField
 		}
 	}
 }
@@ -801,13 +936,13 @@ func ValidConfig(config Config, mtu int, compiled *policy.Policy, account *quota
 		config.MaxResponseBytes <= int(^uint16(0)) && config.MaxAttempts > 0 && config.RetryServiceAttempts > 0
 }
 
-func (n *Adapter) allocatePortLocked() (*lnetocore.UDPPortLease, bool) {
+func (n *Adapter) allocatePortLocked(lease *lnetocore.UDPPortLease) bool {
 	attempts := int(n.config.MaxQueries) + n.core.UDPPortLeaseCountLocked() + 1
-	lease, next, ok := n.core.TryLeaseUDPPortRangeLocked(n.nextPort, firstEphemeralDNSPort, attempts)
+	next, ok := n.core.TryLeaseUDPPortRangeIntoLocked(lease, n.nextPort, firstEphemeralDNSPort, attempts)
 	if ok {
 		n.nextPort = next
 	}
-	return lease, ok
+	return ok
 }
 
 func removeQuery(owner *Adapter, target *dnsQuery) {

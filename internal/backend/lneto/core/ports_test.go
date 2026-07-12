@@ -35,6 +35,25 @@ func TestUDPPortLeasesShareCollisionAndReleaseDomain(t *testing.T) {
 	ns.Unlock()
 }
 
+func TestUDPPortLeaseCallerOwnedStorage(t *testing.T) {
+	ns := newTestNamespace(t, 14)
+	ns.Lock()
+	var exact UDPPortLease
+	if !ns.TryLeaseUDPPortIntoLocked(&exact, 54000) || exact.UDPPort() != 54000 {
+		ns.Unlock()
+		t.Fatal("caller-owned exact lease failed")
+	}
+	var ranged UDPPortLease
+	next, ok := ns.TryLeaseUDPPortRangeIntoLocked(&ranged, 54000, 54000, 2)
+	if !ok || ranged.UDPPort() != 54001 || next != 54002 {
+		ns.Unlock()
+		t.Fatalf("caller-owned range lease = %d, next=%d, ok=%v", ranged.UDPPort(), next, ok)
+	}
+	exact.ReleaseLocked()
+	ranged.ReleaseLocked()
+	ns.Unlock()
+}
+
 func TestUDPPortLeaseRangeExhaustionAndWrap(t *testing.T) {
 	ns := newTestNamespace(t, 12)
 	ns.Lock()

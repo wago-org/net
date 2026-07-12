@@ -81,6 +81,16 @@ func FromError(err error) Status {
 	if err == nil {
 		return StatusOK
 	}
+	switch {
+	case err == resource.ErrBadHandle:
+		return StatusBadHandle
+	case err == quota.ErrLimit, err == readiness.ErrLimit, err == resource.ErrExhausted:
+		return StatusResourceLimit
+	case err == quota.ErrInvalidUnits, err == readiness.ErrInvalidBudget, err == readiness.ErrInvalidConfig, err == readiness.ErrInvalidRegistration:
+		return StatusInvalidArgument
+	case err == quota.ErrClosed, err == readiness.ErrClosed, err == resource.ErrClosed:
+		return StatusInvalidState
+	}
 	if failure, ok := nscore.FailureOf(err); ok {
 		switch failure {
 		case nscore.FailureInvalidArgument:

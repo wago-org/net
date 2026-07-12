@@ -178,6 +178,27 @@ type fakePollable struct{}
 func (fakePollable) Close() error                   { return nil }
 func (fakePollable) Readiness() namespace.Readiness { return namespace.ReadyReadable }
 
+func TestManagerReadinessIsRightSizedToResourceQuota(t *testing.T) {
+	config := DefaultConfig()
+	config.Limits.Resources = 2
+	config.Readiness.MaxRegistrations = 16
+	manager, err := NewManagerConfigured(config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if manager.readiness.MaxRegistrations != 2 {
+		t.Fatalf("right-sized registrations = %d, want 2", manager.readiness.MaxRegistrations)
+	}
+	config.Limits.Resources = 0
+	manager, err = NewManagerConfigured(config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if manager.readiness.MaxRegistrations != 1 {
+		t.Fatalf("zero-resource registrations = %d, want 1", manager.readiness.MaxRegistrations)
+	}
+}
+
 func TestManagerConfigurationIsValidatedAndPolicyIsImmutable(t *testing.T) {
 	invalid := DefaultConfig()
 	invalid.Readiness.MaxRegistrations = 0

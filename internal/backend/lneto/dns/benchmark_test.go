@@ -1,6 +1,7 @@
 package dns
 
 import (
+	"fmt"
 	"net/netip"
 	"testing"
 
@@ -31,6 +32,18 @@ func BenchmarkBuildDNSQueryPacket(b *testing.B) {
 	}
 }
 
+func BenchmarkBuildDNSQueryPacketInto(b *testing.B) {
+	request := dnsns.Request{Name: "service.api.example.com", Types: dnsns.RecordsA | dnsns.RecordsAAAA}
+	var storage [dnsQueryPacketCapacity]byte
+	b.ReportAllocs()
+	for b.Loop() {
+		benchmarkPacket, benchmarkErr = buildDNSQueryPacketInto(storage[:], request, 17, 1232)
+		if benchmarkErr != nil {
+			b.Fatal(benchmarkErr)
+		}
+	}
+}
+
 func BenchmarkDecodeDNSName(b *testing.B) {
 	name := lnetodns.MustNewName("service.api.example.com")
 	message, err := name.AppendTo(nil)
@@ -44,6 +57,22 @@ func BenchmarkDecodeDNSName(b *testing.B) {
 		decoded, next, benchmarkErr = decodeDNSName(message, 0)
 		if benchmarkErr != nil || next != len(message) || decoded == "" {
 			b.Fatalf("decode = %q, %d, %v", decoded, next, benchmarkErr)
+		}
+	}
+}
+
+func BenchmarkDecodeDNSNameInto(b *testing.B) {
+	name := lnetodns.MustNewName("service.api.example.com")
+	message, err := name.AppendTo(nil)
+	if err != nil {
+		b.Fatal(err)
+	}
+	var decoded [253]byte
+	b.ReportAllocs()
+	for b.Loop() {
+		written, next, err := decodeDNSNameInto(decoded[:], message, 0)
+		if err != nil || next != len(message) || written == 0 {
+			b.Fatalf("decode = %d, %d, %v", written, next, err)
 		}
 	}
 }
@@ -71,13 +100,61 @@ func BenchmarkParseDNSResponse(b *testing.B) {
 	if err != nil {
 		b.Fatal(err)
 	}
+	records := make([]dnsns.Record, 0, 8)
+	candidates := make([]dnsns.Record, len(payload)/11)
+	names := make([]string, 2*len(candidates))
 	b.SetBytes(int64(len(payload)))
 	b.ReportAllocs()
 	for b.Loop() {
-		benchmarkRecords, benchmarkResponse, benchmarkFailure, benchmarkErr = parseDNSResponse(payload, 23, request, 8)
+		benchmarkRecords, benchmarkResponse, benchmarkFailure, benchmarkErr = parseDNSResponseInto(records, candidates, names, payload, 23, request, 8)
 		if benchmarkErr != nil || !benchmarkResponse || len(benchmarkRecords) != 3 {
 			b.Fatalf("parse = %d, %v, %v, %v", len(benchmarkRecords), benchmarkResponse, benchmarkFailure, benchmarkErr)
 		}
+	}
+}
+
+func BenchmarkParseDNSResponseShapes(b *testing.B) {
+	for _, depth := range []int{0, 1, 4} {
+		b.Run(fmt.Sprintf("cname_depth=%d", depth), func(b *testing.B) {
+			request := dnsns.Request{Name: "start.example.com", Types: dnsns.RecordsA | dnsns.RecordsAAAA}
+			current := lnetodns.MustNewName(request.Name)
+			answers := make([]lnetodns.Resource, 0, depth+2)
+			for i := range depth {
+				next := lnetodns.MustNewName(fmt.Sprintf("alias-%d.example.com", i))
+				data, err := next.AppendTo(nil)
+				if err != nil {
+					b.Fatal(err)
+				}
+				answers = append(answers, lnetodns.NewResource(current, lnetodns.TypeCNAME, lnetodns.ClassINET, 60, data))
+				current = next
+			}
+			answers = append(answers,
+				lnetodns.NewResource(current, lnetodns.TypeA, lnetodns.ClassINET, 60, []byte{192, 0, 2, 1}),
+				lnetodns.NewResource(current, lnetodns.TypeAAAA, lnetodns.ClassINET, 60, netip.MustParseAddr("2001:db8::1").AsSlice()),
+			)
+			name := lnetodns.MustNewName(request.Name)
+			payload, err := (&lnetodns.Message{
+				Questions: []lnetodns.Question{
+					{Name: name, Type: lnetodns.TypeA, Class: lnetodns.ClassINET},
+					{Name: name, Type: lnetodns.TypeAAAA, Class: lnetodns.ClassINET},
+				},
+				Answers: answers,
+			}).AppendTo(nil, 29, lnetodns.HeaderFlags(1<<15))
+			if err != nil {
+				b.Fatal(err)
+			}
+			records := make([]dnsns.Record, 0, depth+2)
+			candidates := make([]dnsns.Record, len(payload)/11)
+			names := make([]string, 2*len(candidates))
+			b.SetBytes(int64(len(payload)))
+			b.ReportAllocs()
+			for b.Loop() {
+				benchmarkRecords, benchmarkResponse, benchmarkFailure, benchmarkErr = parseDNSResponseInto(records, candidates, names, payload, 29, request, depth+2)
+				if benchmarkErr != nil || !benchmarkResponse || len(benchmarkRecords) != depth+2 {
+					b.Fatalf("parse = %d, %v, %v, %v", len(benchmarkRecords), benchmarkResponse, benchmarkFailure, benchmarkErr)
+				}
+			}
+		})
 	}
 }
 
@@ -88,9 +165,10 @@ func BenchmarkSelectDNSAnswers(b *testing.B) {
 		{Name: "api.example.com", Type: dnsns.RecordA, TTLSeconds: 60, Address: netip.MustParseAddr("192.0.2.1")},
 		{Name: "api.example.com", Type: dnsns.RecordAAAA, TTLSeconds: 60, Address: netip.MustParseAddr("2001:db8::1")},
 	}
+	records := make([]dnsns.Record, 0, 8)
 	b.ReportAllocs()
 	for b.Loop() {
-		benchmarkRecords, benchmarkFailure, benchmarkErr = selectDNSAnswers(candidates, request, 8)
+		benchmarkRecords, benchmarkFailure, benchmarkErr = selectDNSAnswersInto(records, candidates, request, 8)
 		if benchmarkErr != nil || len(benchmarkRecords) != 3 {
 			b.Fatalf("select = %d, %v, %v", len(benchmarkRecords), benchmarkFailure, benchmarkErr)
 		}

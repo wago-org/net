@@ -109,8 +109,7 @@ type tcpListener struct {
 	listener lnetotcp.Listener
 	pool     tcpPool
 
-	resource *quota.Allocation
-	queued   *quota.Allocation
+	retained quota.Charge
 	closed   bool
 }
 
@@ -121,13 +120,13 @@ type tcpStream struct {
 	remote nscore.Endpoint
 	slot   *tcpPoolSlot
 
-	resource  *quota.Allocation
-	queued    *quota.Allocation
-	connected bool
-	shutdown  bool
-	terminal  bool
-	closed    bool
-	outbound  bool
+	allocation *quota.Charge
+	retained   quota.Charge
+	connected  bool
+	shutdown   bool
+	terminal   bool
+	closed     bool
+	outbound   bool
 }
 
 type tcpPool struct {
@@ -137,10 +136,11 @@ type tcpPool struct {
 }
 
 type tcpPoolSlot struct {
-	conn     lnetotcp.Conn
-	resource *quota.Allocation
-	stream   *tcpStream
-	inUse    bool
+	conn       lnetotcp.Conn
+	resource   quota.Charge
+	stream     *tcpStream
+	inUse      bool
+	quotaOwned bool
 }
 
 func immediateBackoff(uint) time.Duration { return 0 }
@@ -180,16 +180,11 @@ func (p *tcpPool) GetTCP() (*lnetotcp.Conn, any, lnetotcp.Value) {
 		if slot.inUse {
 			continue
 		}
-		reservation, err := p.owner.quotas.ReserveResource(quota.ResourceTCP, 1)
-		if err != nil {
-			return nil, nil, 0
-		}
-		allocation, ok := reservation.Commit()
-		if !ok {
+		if err := p.owner.quotas.AcquireResource(&slot.resource, quota.ResourceTCP, 1); err != nil {
 			return nil, nil, 0
 		}
 		slot.inUse = true
-		slot.resource = allocation
+		slot.quotaOwned = true
 		p.nextISS += 4099
 		p.owner.nextISS = p.nextISS
 		return &slot.conn, slot, p.nextISS
@@ -210,9 +205,10 @@ func (p *tcpPool) PutTCP(conn *lnetotcp.Conn) {
 		if slot.stream != nil {
 			slot.stream.detachFromPoolLocked()
 		}
-		if slot.resource != nil {
+		if slot.quotaOwned {
 			slot.resource.Release()
-			slot.resource = nil
+			slot.resource.ResetReleased()
+			slot.quotaOwned = false
 		}
 		slot.stream = nil
 		slot.inUse = false
@@ -236,10 +232,13 @@ func (p *tcpPool) closeLocked() {
 		if slot.stream != nil {
 			slot.stream.detachFromPoolLocked()
 		}
-		if slot.resource != nil {
+		if slot.quotaOwned {
 			slot.resource.Release()
+			slot.resource.ResetReleased()
 		}
-		*slot = tcpPoolSlot{}
+		slot.stream = nil
+		slot.inUse = false
+		slot.quotaOwned = false
 	}
 	p.slots = nil
 	p.owner = nil
@@ -278,52 +277,28 @@ func (n *Adapter) TryListen(local nscore.Endpoint) (nscore.Resource, nscore.Prog
 		return nil, 0, nscore.Fail(nscore.FailureAddressInUse, lneto.ErrAlreadyRegistered)
 	}
 
-	resourceReservation, err := n.quotas.ReserveResource(quota.ResourceTCP, 1)
-	if err != nil {
-		return nil, 0, lnetocore.MapError(err)
-	}
 	retained := uint64(n.config.AcceptBacklog) * uint64(n.config.ReceiveBytes+n.config.TransmitBytes)
-	queuedReservation, err := n.quotas.ReserveQueuedBytes(retained)
-	if err != nil {
-		resourceReservation.Rollback()
+	listener := &tcpListener{owner: n, local: local}
+	if err := n.quotas.AcquireResourceAndQueuedBytes(&listener.retained, quota.ResourceTCP, 1, retained); err != nil {
 		return nil, 0, lnetocore.MapError(err)
 	}
 	pool, err := newTCPPool(n, n.config.AcceptBacklog, n.config)
 	if err != nil {
-		queuedReservation.Rollback()
-		resourceReservation.Rollback()
+		listener.retained.Release()
 		return nil, 0, lnetocore.MapError(err)
 	}
-	listener := &tcpListener{owner: n, local: local, pool: pool}
+	listener.pool = pool
 	if err := listener.listener.Reset(local.Port, &listener.pool); err != nil {
 		listener.pool.closeLocked()
-		queuedReservation.Rollback()
-		resourceReservation.Rollback()
+		listener.retained.Release()
 		return nil, 0, lnetocore.MapError(err)
 	}
 	if err := n.stack.RegisterListenerTCP(&listener.listener); err != nil {
 		_ = listener.listener.Close()
 		listener.pool.closeLocked()
-		queuedReservation.Rollback()
-		resourceReservation.Rollback()
+		listener.retained.Release()
 		return nil, 0, lnetocore.MapError(err)
 	}
-	resourceAllocation, ok := resourceReservation.Commit()
-	if !ok {
-		_ = listener.listener.Close()
-		listener.pool.closeLocked()
-		queuedReservation.Rollback()
-		return nil, 0, nscore.Fail(nscore.FailureClosed, quota.ErrClosed)
-	}
-	queuedAllocation, ok := queuedReservation.Commit()
-	if !ok {
-		_ = listener.listener.Close()
-		listener.pool.closeLocked()
-		resourceAllocation.Release()
-		return nil, 0, nscore.Fail(nscore.FailureClosed, quota.ErrClosed)
-	}
-	listener.resource = resourceAllocation
-	listener.queued = queuedAllocation
 	n.ports[local.Port] = struct{}{}
 	n.listeners = append(n.listeners, listener)
 	return listener, nscore.ProgressDone, nil
@@ -359,16 +334,16 @@ func (n *Adapter) TryConnect(remote nscore.Endpoint) (nscore.Resource, nscore.Pr
 	if !ok {
 		return nil, 0, nscore.Fail(nscore.FailureResourceLimit, lneto.ErrExhausted)
 	}
-	resourceReservation, err := n.quotas.ReserveResource(quota.ResourceTCP, 1)
-	if err != nil {
-		return nil, 0, lnetocore.MapError(err)
-	}
 	retained := uint64(n.config.ReceiveBytes + n.config.TransmitBytes)
-	queuedReservation, err := n.quotas.ReserveQueuedBytes(retained)
-	if err != nil {
-		resourceReservation.Rollback()
+	stream := &tcpStream{
+		owner:  n,
+		local:  nscore.Endpoint{Address: n.ipv4Address, Port: localPort},
+		remote: remote, outbound: true,
+	}
+	if err := n.quotas.AcquireResourceAndQueuedBytes(&stream.retained, quota.ResourceTCP, 1, retained); err != nil {
 		return nil, 0, lnetocore.MapError(err)
 	}
+	stream.allocation = &stream.retained
 	conn := new(lnetotcp.Conn)
 	storage := make([]byte, int(retained))
 	if err := conn.Configure(lnetotcp.ConnConfig{
@@ -377,34 +352,15 @@ func (n *Adapter) TryConnect(remote nscore.Endpoint) (nscore.Resource, nscore.Pr
 		TxPacketQueueSize: n.config.TransmitPackets,
 		RWBackoff:         immediateBackoff,
 	}); err != nil {
-		queuedReservation.Rollback()
-		resourceReservation.Rollback()
+		stream.allocation.Release()
 		return nil, 0, lnetocore.MapError(err)
 	}
 	if err := n.stack.DialTCP(conn, localPort, netip.AddrPortFrom(remote.Address, remote.Port)); err != nil {
 		conn.Abort()
-		queuedReservation.Rollback()
-		resourceReservation.Rollback()
+		stream.allocation.Release()
 		return nil, 0, lnetocore.MapError(err)
 	}
-	resourceAllocation, ok := resourceReservation.Commit()
-	if !ok {
-		conn.Abort()
-		queuedReservation.Rollback()
-		return nil, 0, nscore.Fail(nscore.FailureClosed, quota.ErrClosed)
-	}
-	queuedAllocation, ok := queuedReservation.Commit()
-	if !ok {
-		conn.Abort()
-		resourceAllocation.Release()
-		return nil, 0, nscore.Fail(nscore.FailureClosed, quota.ErrClosed)
-	}
-	stream := &tcpStream{
-		owner: n, conn: conn,
-		local:  nscore.Endpoint{Address: n.ipv4Address, Port: localPort},
-		remote: remote, resource: resourceAllocation, queued: queuedAllocation,
-		outbound: true,
-	}
+	stream.conn = conn
 	n.ports[localPort] = struct{}{}
 	n.streams = append(n.streams, stream)
 	return stream, nscore.ProgressInProgress, nil
@@ -449,7 +405,7 @@ func (l *tcpListener) TryAccept() (nscore.Resource, nscore.Progress, error) {
 		return nil, 0, lnetocore.MapError(err)
 	}
 	slot, ok := userData.(*tcpPoolSlot)
-	if !ok || slot == nil || conn == nil || slot.stream != nil || slot.resource == nil {
+	if !ok || slot == nil || conn == nil || slot.stream != nil || !slot.quotaOwned {
 		if conn != nil {
 			conn.Abort()
 		}
@@ -462,10 +418,10 @@ func (l *tcpListener) TryAccept() (nscore.Resource, nscore.Progress, error) {
 	}
 	stream := &tcpStream{
 		owner: l.owner, conn: conn, slot: slot,
-		local:     l.local,
-		remote:    nscore.Endpoint{Address: netip.AddrFrom4([4]byte(remoteAddress)), Port: conn.RemotePort()},
-		resource:  slot.resource,
-		connected: true,
+		local:      l.local,
+		remote:     nscore.Endpoint{Address: netip.AddrFrom4([4]byte(remoteAddress)), Port: conn.RemotePort()},
+		allocation: &slot.resource,
+		connected:  true,
 	}
 	slot.stream = stream
 	l.owner.streams = append(l.owner.streams, stream)
@@ -492,14 +448,7 @@ func (l *tcpListener) closeLocked() error {
 		delete(l.owner.ports, l.local.Port)
 		removeTCPListener(l.owner, l)
 	}
-	if l.queued != nil {
-		l.queued.Release()
-		l.queued = nil
-	}
-	if l.resource != nil {
-		l.resource.Release()
-		l.resource = nil
-	}
+	l.retained.Release()
 	return nil
 }
 
@@ -689,16 +638,13 @@ func (s *tcpStream) closeLocked() error {
 	if s.outbound && s.owner != nil {
 		delete(s.owner.ports, s.local.Port)
 	}
-	if s.resource != nil {
-		s.resource.Release()
-		s.resource = nil
-	}
-	if s.queued != nil {
-		s.queued.Release()
-		s.queued = nil
+	if s.allocation != nil {
+		s.allocation.Release()
+		s.allocation = nil
 	}
 	if s.slot != nil {
-		s.slot.resource = nil
+		s.slot.resource.ResetReleased()
+		s.slot.quotaOwned = false
 	}
 	if s.owner != nil {
 		removeTCPStream(s.owner, s)
@@ -712,11 +658,15 @@ func (s *tcpStream) detachFromPoolLocked() {
 	}
 	s.terminal = true
 	s.conn = nil
-	s.slot = nil
-	if s.resource != nil {
-		s.resource.Release()
-		s.resource = nil
+	if s.allocation != nil {
+		s.allocation.Release()
+		s.allocation = nil
 	}
+	if s.slot != nil {
+		s.slot.resource.ResetReleased()
+		s.slot.quotaOwned = false
+	}
+	s.slot = nil
 	if s.owner != nil {
 		removeTCPStream(s.owner, s)
 	}

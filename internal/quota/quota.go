@@ -94,6 +94,37 @@ func (a *Account) ReserveResource(class ResourceClass, count uint64) (*Reservati
 	return a.reserve(amount)
 }
 
+// AcquireResource commits resource accounting directly into owner-embedded
+// storage, avoiding separate reservation and allocation objects.
+func (a *Account) AcquireResource(charge *Charge, class ResourceClass, count uint64) error {
+	amount, ok := resourceUsage(class, count)
+	if !ok {
+		return ErrInvalidUnits
+	}
+	return a.acquireInto(charge, amount)
+}
+
+// AcquireResourceAndQueuedBytes atomically commits one resource charge and its
+// retained byte charge into owner-embedded storage. The byte component may be
+// zero for bounded resources that retain metadata but no payload storage.
+func (a *Account) AcquireResourceAndQueuedBytes(charge *Charge, class ResourceClass, count, bytes uint64) error {
+	amount, ok := resourceUsage(class, count)
+	if !ok {
+		return ErrInvalidUnits
+	}
+	amount.QueuedBytes = bytes
+	return a.acquireInto(charge, amount)
+}
+
+// AcquireDNSWork commits in-flight resolver work directly into owner-embedded
+// storage.
+func (a *Account) AcquireDNSWork(charge *Charge, units uint64) error {
+	if units == 0 {
+		return ErrInvalidUnits
+	}
+	return a.acquireInto(charge, Usage{DNSWork: units})
+}
+
 // ReserveQueuedBytes tentatively accounts bytes retained outside a host call.
 func (a *Account) ReserveQueuedBytes(bytes uint64) (*Reservation, error) {
 	if bytes == 0 {
@@ -163,6 +194,42 @@ func (a *Account) acquire(amount Usage) error {
 	}
 	a.used.add(amount)
 	return nil
+}
+
+func (a *Account) acquireInto(charge *Charge, amount Usage) error {
+	if a == nil {
+		return ErrClosed
+	}
+	if charge == nil || !charge.state.CompareAndSwap(0, reservationPending) {
+		return ErrInvalidUnits
+	}
+	a.mu.Lock()
+	if a.closed {
+		a.mu.Unlock()
+		charge.state.Store(0)
+		return ErrClosed
+	}
+	if !a.fitsLocked(amount) {
+		a.mu.Unlock()
+		charge.state.Store(0)
+		return ErrLimit
+	}
+	a.used.add(amount)
+	charge.account = a
+	charge.amount = amount
+	charge.state.Store(reservationCommitted)
+	a.mu.Unlock()
+	return nil
+}
+
+func (a *Account) fitsLocked(amount Usage) bool {
+	return fits(a.used.Resources, amount.Resources, a.limits.Resources) &&
+		fits(a.used.UDPResources, amount.UDPResources, a.limits.UDPResources) &&
+		fits(a.used.TCPResources, amount.TCPResources, a.limits.TCPResources) &&
+		fits(a.used.DNSResources, amount.DNSResources, a.limits.DNSResources) &&
+		fits(a.used.QueuedBytes, amount.QueuedBytes, a.limits.QueuedBytes) &&
+		fits(a.used.DNSWork, amount.DNSWork, a.limits.DNSWork) &&
+		fits(a.used.ServiceUnits, amount.ServiceUnits, a.limits.ServiceUnits)
 }
 
 // Snapshot returns current usage and whether the account has been closed.
@@ -246,7 +313,7 @@ func (r *Reservation) Rollback() bool {
 	return true
 }
 
-// Allocation is committed accounting owned by a live resource or operation.
+// Allocation is committed accounting created from a retained Reservation.
 type Allocation struct {
 	reservation *Reservation
 }
@@ -258,6 +325,55 @@ func (a *Allocation) Release() bool {
 	}
 	a.reservation.account.release(a.reservation.amount)
 	return true
+}
+
+// Charge is committed accounting stored directly in its owning resource. It
+// avoids heap-backed reservation/allocation tokens on specialized creation paths.
+type Charge struct {
+	account *Account
+	amount  Usage
+	state   atomic.Uint32
+}
+
+// Release returns an embedded charge exactly once.
+func (c *Charge) Release() bool {
+	if c == nil || c.account == nil || !c.state.CompareAndSwap(reservationCommitted, reservationReleased) {
+		return false
+	}
+	c.account.release(c.amount)
+	return true
+}
+
+// ResetReleased prepares exclusive owner-embedded storage for another direct
+// acquisition. It succeeds only after a charge was released. The owner must
+// prevent concurrent Release, ResetReleased, and Acquire calls.
+func (c *Charge) ResetReleased() bool {
+	if c == nil || !c.state.CompareAndSwap(reservationReleased, reservationPending) {
+		return false
+	}
+	c.account = nil
+	c.amount = Usage{}
+	c.state.Store(0)
+	return true
+}
+
+func resourceUsage(class ResourceClass, count uint64) (Usage, bool) {
+	if count == 0 {
+		return Usage{}, false
+	}
+	amount := Usage{Resources: count}
+	switch class {
+	case ResourceOther:
+	case ResourceUDP:
+		amount.UDPResources = count
+	case ResourceTCP:
+		amount.TCPResources = count
+	case ResourceDNS:
+		amount.DNSResources = count
+	default:
+		return Usage{}, false
+	}
+	return amount, true
 }
 
 func fits(used, amount, limit uint64) bool {

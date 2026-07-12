@@ -10,6 +10,20 @@ import (
 
 var benchmarkStatus Status
 
+func TestFromErrorFastPathsDoNotAllocate(t *testing.T) {
+	semantic := nscore.Fail(nscore.FailureConnectionReset, errors.New("reset"))
+	for name, err := range map[string]error{"semantic": semantic, "shared": resource.ErrBadHandle} {
+		t.Run(name, func(t *testing.T) {
+			allocs := testing.AllocsPerRun(1000, func() {
+				benchmarkStatus = FromError(err)
+			})
+			if allocs != 0 {
+				t.Fatalf("FromError allocations = %v, want 0", allocs)
+			}
+		})
+	}
+}
+
 func BenchmarkFromProgress(b *testing.B) {
 	b.ReportAllocs()
 	for b.Loop() {

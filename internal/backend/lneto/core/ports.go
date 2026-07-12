@@ -21,45 +21,68 @@ func (l *UDPPortLease) UDPPort() uint16 {
 // the namespace lock. A false result means the port is already owned or the
 // namespace is closed.
 func (n *Namespace) TryLeaseUDPPortLocked(port uint16) (*UDPPortLease, bool) {
-	if n == nil || n.closed || port == 0 {
+	lease := new(UDPPortLease)
+	if !n.TryLeaseUDPPortIntoLocked(lease, port) {
 		return nil, false
+	}
+	return lease, true
+}
+
+// TryLeaseUDPPortIntoLocked reserves an exact port into caller-owned storage.
+// The lease must be inactive and the caller must hold the namespace lock.
+func (n *Namespace) TryLeaseUDPPortIntoLocked(lease *UDPPortLease, port uint16) bool {
+	if n == nil || n.closed || lease == nil || lease.active || port == 0 {
+		return false
 	}
 	if n.udpPorts == nil {
 		n.udpPorts = make(map[uint16]*UDPPortLease)
 	}
 	if n.udpPorts[port] != nil {
-		return nil, false
+		return false
 	}
-	lease := &UDPPortLease{owner: n, port: port, active: true}
+	lease.owner = n
+	lease.port = port
+	lease.active = true
 	n.udpPorts[port] = lease
-	return lease, true
+	return true
 }
 
 // TryLeaseUDPPortRangeLocked deterministically searches at most attempts ports
 // beginning at start and wrapping to first when uint16 overflows or the cursor
 // falls below first. It returns the lease and the next cursor on success.
 func (n *Namespace) TryLeaseUDPPortRangeLocked(start, first uint16, attempts int) (*UDPPortLease, uint16, bool) {
-	if n == nil || n.closed || first == 0 || attempts <= 0 {
+	lease := new(UDPPortLease)
+	next, ok := n.TryLeaseUDPPortRangeIntoLocked(lease, start, first, attempts)
+	if !ok {
 		return nil, start, false
+	}
+	return lease, next, true
+}
+
+// TryLeaseUDPPortRangeIntoLocked deterministically reserves a ranged port into
+// caller-owned storage. The caller must hold the namespace lock.
+func (n *Namespace) TryLeaseUDPPortRangeIntoLocked(lease *UDPPortLease, start, first uint16, attempts int) (uint16, bool) {
+	if n == nil || n.closed || lease == nil || lease.active || first == 0 || attempts <= 0 {
+		return start, false
 	}
 	port := start
 	if port < first {
 		port = first
 	}
 	for range attempts {
-		if lease, ok := n.TryLeaseUDPPortLocked(port); ok {
+		if n.TryLeaseUDPPortIntoLocked(lease, port) {
 			next := port + 1
 			if next < first {
 				next = first
 			}
-			return lease, next, true
+			return next, true
 		}
 		port++
 		if port < first {
 			port = first
 		}
 	}
-	return nil, start, false
+	return start, false
 }
 
 // ReleaseLocked relinquishes the port exactly once. The caller must hold the

@@ -5,6 +5,7 @@ import (
 	"encoding/binary"
 
 	abicore "github.com/wago-org/net/internal/abi/core"
+	"github.com/wago-org/net/internal/dnsname"
 	nscore "github.com/wago-org/net/internal/namespace/core"
 	dnsns "github.com/wago-org/net/internal/namespace/dns"
 )
@@ -45,25 +46,12 @@ func DecodeDNSNameV1(memory []byte, ptr uint32) (string, bool) {
 	if !ok {
 		return "", false
 	}
-	length := int(binary.LittleEndian.Uint16(b[0:2]))
-	if length == 0 || length > dnsNameBytesCapacity || binary.LittleEndian.Uint16(b[2:4]) != 0 {
-		return "", false
-	}
-	for _, value := range b[dnsNameBytesOffset+length:] {
-		if value != 0 {
-			return "", false
-		}
-	}
-	name := string(b[dnsNameBytesOffset : dnsNameBytesOffset+length])
-	if !(dnsns.Request{Name: name, Types: dnsns.RecordsA}).Valid() {
-		return "", false
-	}
-	return name, true
+	return decodeDNSNameV1(b)
 }
 
 // EncodeDNSNameV1 atomically writes one normalized name with zero padding.
 func EncodeDNSNameV1(memory []byte, ptr uint32, name string) bool {
-	if !(dnsns.Request{Name: name, Types: dnsns.RecordsA}).Valid() {
+	if !dnsname.ValidCanonical(name) {
 		return false
 	}
 	output, ok := abicore.Slice(memory, ptr, DNSNameV1Size)
@@ -71,8 +59,7 @@ func EncodeDNSNameV1(memory []byte, ptr uint32, name string) bool {
 		return false
 	}
 	var encoded [DNSNameV1Size]byte
-	binary.LittleEndian.PutUint16(encoded[0:2], uint16(len(name)))
-	copy(encoded[dnsNameBytesOffset:], name)
+	putDNSNameV1(encoded[:], name)
 	copy(output, encoded[:])
 	return true
 }
@@ -81,10 +68,6 @@ func EncodeDNSNameV1(memory []byte, ptr uint32, name string) bool {
 // backend-neutral request.
 func DecodeDNSQueryV1(memory []byte, ptr uint32) (dnsns.Request, bool) {
 	b, ok := abicore.Slice(memory, ptr, DNSQueryV1Size)
-	if !ok {
-		return dnsns.Request{}, false
-	}
-	name, ok := DecodeDNSNameV1(memory, ptr)
 	if !ok || binary.LittleEndian.Uint32(b[dnsQueryReserved:dnsQueryReserved+4]) != 0 {
 		return dnsns.Request{}, false
 	}
@@ -92,8 +75,11 @@ func DecodeDNSQueryV1(memory []byte, ptr uint32) (dnsns.Request, bool) {
 	if types == 0 || types&^dnsRecordTypesMask != 0 {
 		return dnsns.Request{}, false
 	}
-	request := dnsns.Request{Name: name, Types: dnsns.RecordTypes(types)}
-	return request, request.Valid()
+	name, ok := decodeDNSNameV1(b[:DNSNameV1Size])
+	if !ok {
+		return dnsns.Request{}, false
+	}
+	return dnsns.Request{Name: name, Types: dnsns.RecordTypes(types)}, true
 }
 
 // EncodeDNSQueryV1 is used by host tooling and tests to construct one canonical
@@ -107,9 +93,7 @@ func EncodeDNSQueryV1(memory []byte, ptr uint32, request dnsns.Request) bool {
 		return false
 	}
 	var encoded [DNSQueryV1Size]byte
-	if !EncodeDNSNameV1(encoded[:], 0, request.Name) {
-		return false
-	}
+	putDNSNameV1(encoded[:DNSNameV1Size], request.Name)
 	binary.LittleEndian.PutUint32(encoded[dnsQueryTypesOffset:dnsQueryTypesOffset+4], uint32(request.Types))
 	copy(output, encoded[:])
 	return true
@@ -135,9 +119,7 @@ func EncodeDNSRecordV1(memory []byte, ptr uint32, record dnsns.Record) bool {
 		return false
 	}
 	var encoded [DNSRecordV1Size]byte
-	if !EncodeDNSNameV1(encoded[:], 0, record.Name) {
-		return false
-	}
+	putDNSNameV1(encoded[:DNSNameV1Size], record.Name)
 	binary.LittleEndian.PutUint32(encoded[dnsRecordTTLOffset:dnsRecordTTLOffset+4], record.TTLSeconds)
 	switch record.Type {
 	case dnsns.RecordA:
@@ -152,12 +134,35 @@ func EncodeDNSRecordV1(memory []byte, ptr uint32, record dnsns.Record) bool {
 		}
 	case dnsns.RecordCNAME:
 		binary.LittleEndian.PutUint32(encoded[dnsRecordTypeOffset:dnsRecordTypeOffset+4], DNSRecordTypeCNAME)
-		if !EncodeDNSNameV1(encoded[:], dnsRecordCanonical, record.CanonicalName) {
-			return false
-		}
+		putDNSNameV1(encoded[dnsRecordCanonical:dnsRecordCanonical+DNSNameV1Size], record.CanonicalName)
 	default:
 		return false
 	}
 	copy(output, encoded[:])
 	return true
+}
+
+func decodeDNSNameV1(encoded []byte) (string, bool) {
+	if len(encoded) != int(DNSNameV1Size) {
+		return "", false
+	}
+	length := int(binary.LittleEndian.Uint16(encoded[0:2]))
+	if length == 0 || length > dnsNameBytesCapacity || binary.LittleEndian.Uint16(encoded[2:4]) != 0 {
+		return "", false
+	}
+	for _, value := range encoded[dnsNameBytesOffset+length:] {
+		if value != 0 {
+			return "", false
+		}
+	}
+	nameBytes := encoded[dnsNameBytesOffset : dnsNameBytesOffset+length]
+	if !dnsname.ValidCanonicalBytes(nameBytes) {
+		return "", false
+	}
+	return string(nameBytes), true
+}
+
+func putDNSNameV1(output []byte, name string) {
+	binary.LittleEndian.PutUint16(output[0:2], uint16(len(name)))
+	copy(output[dnsNameBytesOffset:], name)
 }
