@@ -15,6 +15,7 @@ import (
 	tcpinstance "github.com/wago-org/net/internal/instance/tcp"
 	udpinstance "github.com/wago-org/net/internal/instance/udp"
 	"github.com/wago-org/net/internal/namespace"
+	"github.com/wago-org/net/internal/packetlink"
 	"github.com/wago-org/net/internal/quota"
 	"github.com/wago-org/net/internal/resource"
 	wago "github.com/wago-org/wago"
@@ -24,11 +25,10 @@ import (
 )
 
 type externalWorkerNetworkSnapshot struct {
-	instance *wago.Instance
-	state    *instancestate.State
-	udp      resource.Handle
-	tcp      resource.Handle
-	dns      resource.Handle
+	instance              *wago.Instance
+	state                 *instancestate.State
+	udp, listener, stream resource.Handle
+	dns                   resource.Handle
 }
 
 type externalWorkerCallerSnapshot struct {
@@ -85,15 +85,22 @@ func (e *externalWorkerBridge) Register(reg *wago.Registry) error {
 		if err != nil || progress != namespace.ProgressDone {
 			return fmt.Errorf("bind external-worker UDP: handle=%v progress=%v: %w", udp, progress, err)
 		}
-		tcp, progress, err := tcpinstance.Listen(state, state.NamespaceHandle(), namespace.Endpoint{Address: netip.MustParseAddr("192.0.2.91"), Port: 4491})
+		if progress, err = udpinstance.Send(state, udp, []byte("retained-worker-datagram"), namespace.Endpoint{Address: netip.MustParseAddr("192.0.2.90"), Port: 4392}); err != nil || progress != namespace.ProgressDone {
+			return fmt.Errorf("send external-worker UDP: progress=%v: %w", progress, err)
+		}
+		listener, progress, err := tcpinstance.Listen(state, state.NamespaceHandle(), namespace.Endpoint{Address: netip.MustParseAddr("192.0.2.91"), Port: 4491})
 		if err != nil || progress != namespace.ProgressDone {
-			return fmt.Errorf("listen external-worker TCP: handle=%v progress=%v: %w", tcp, progress, err)
+			return fmt.Errorf("listen external-worker TCP: handle=%v progress=%v: %w", listener, progress, err)
+		}
+		stream, progress, err := tcpinstance.Connect(state, state.NamespaceHandle(), namespace.Endpoint{Address: netip.MustParseAddr("192.0.2.90"), Port: 4492})
+		if err != nil || progress != namespace.ProgressInProgress {
+			return fmt.Errorf("connect external-worker TCP: handle=%v progress=%v: %w", stream, progress, err)
 		}
 		dns, progress, err := dnsinstance.Resolve(state, state.NamespaceHandle(), namespace.DNSRequest{Name: "example.com", Types: namespace.DNSRecordsA})
 		if err != nil || (progress != namespace.ProgressInProgress && progress != namespace.ProgressDone) {
 			return fmt.Errorf("resolve external-worker DNS: handle=%v progress=%v: %w", dns, progress, err)
 		}
-		e.created <- externalWorkerNetworkSnapshot{instance: instance, state: state, udp: udp, tcp: tcp, dns: dns}
+		e.created <- externalWorkerNetworkSnapshot{instance: instance, state: state, udp: udp, listener: listener, stream: stream, dns: dns}
 		return nil
 	})
 	lifecycle.BeforeClose(func(ctx *wago.InstanceContext) {
@@ -155,7 +162,7 @@ func (e *externalWorkerBridge) record(err error) {
 }
 
 func externalWorkerNetworkingConfig() Config {
-	limits := QuotaLimits{Resources: 8, UDPResources: 1, TCPResources: 2, DNSResources: 1, QueuedBytes: 4096, DNSWork: 1, ServiceUnits: 64}
+	limits := QuotaLimits{Resources: 8, UDPResources: 1, TCPResources: 2, DNSResources: 1, QueuedBytes: 8192, DNSWork: 1, ServiceUnits: 64}
 	ready := ReadinessConfig{MaxRegistrations: 8}
 	return Config{
 		Policy: PolicyConfig{Rules: []PolicyRule{
@@ -219,12 +226,16 @@ func assertExternalWorkerNetworkingClosed(t *testing.T, snapshot externalWorkerN
 		kind   resource.Kind
 	}{
 		{snapshot.udp, resource.KindUDPSocket},
-		{snapshot.tcp, resource.KindTCPListener},
+		{snapshot.listener, resource.KindTCPListener},
+		{snapshot.stream, resource.KindTCPStream},
 		{snapshot.dns, resource.KindDNSQuery},
 	} {
 		if _, err := snapshot.state.Resources().Lookup(owned.handle, owned.kind); !errors.Is(err, resource.ErrClosed) {
 			t.Fatalf("retired external-worker handle %v (%v) lookup = %v, want ErrClosed", owned.handle, owned.kind, err)
 		}
+	}
+	if got := snapshot.state.Resources().Len(); got != 0 {
+		t.Fatalf("external-worker resources after close = %d, want 0", got)
 	}
 	if usage, closed := snapshot.state.Quotas().Snapshot(); !closed || usage != (quota.Usage{}) {
 		t.Fatalf("external-worker quota after close = %+v, closed=%v", usage, closed)
@@ -262,7 +273,12 @@ func TestExternalWorkersPluginRetiresLinkedNetworkingState(t *testing.T) {
 	}
 	results, err := parent.Call(context.Background(), "run")
 	if err != nil || len(results) != 1 || results[0].I64() == 0 {
-		t.Fatalf("spawn result = %v, %v", results, err)
+		select {
+		case bridgeErr := <-bridge.errors:
+			t.Fatalf("spawn result = %v, %v; bridge error: %v", results, err, bridgeErr)
+		default:
+			t.Fatalf("spawn result = %v, %v", results, err)
+		}
 	}
 	workerID := workers.WorkerID(results[0].I64())
 	created := waitExternalWorkerValue(t, bridge.created, "external worker networking state")
@@ -273,6 +289,8 @@ func TestExternalWorkersPluginRetiresLinkedNetworkingState(t *testing.T) {
 	if got := network.instanceManager().Len(); got != 2 {
 		t.Fatalf("networking states with external worker = %d, want 2", got)
 	}
+	parentLink := concreteNamespace(t, parentState).Link()
+	workerLink := concreteNamespace(t, created.state).Link()
 
 	if err := parent.Close(); err != nil {
 		t.Fatalf("parent Close: %v", err)
@@ -290,6 +308,11 @@ func TestExternalWorkersPluginRetiresLinkedNetworkingState(t *testing.T) {
 	}
 	if usage, closed := parentState.Quotas().Snapshot(); !closed || usage != (quota.Usage{}) {
 		t.Fatalf("parent quota after close = %+v, closed=%v", usage, closed)
+	}
+	for label, link := range map[string]*packetlink.Link{"parent": parentLink, "worker": workerLink} {
+		if snapshot := link.Snapshot(); !snapshot.Closed || snapshot.IngressFrames != 0 || snapshot.EgressFrames != 0 {
+			t.Fatalf("%s packet link after close = %+v", label, snapshot)
+		}
 	}
 	if got := network.instanceManager().Len(); got != 0 {
 		t.Fatalf("networking states after linked close = %d, want 0", got)
