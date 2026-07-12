@@ -102,8 +102,10 @@ type TCPConfig struct {
 }
 
 // DNSConfig fixes one static IPv4 recursive resolver plus finite query,
-// response, retry, and record-retention bounds. Zero MaxQueries disables DNS
-// operations truthfully while leaving the capability-gated module inspectable.
+// response, retry, and record-retention bounds. MaxQueries limits live guest
+// query handles until close even after a terminal query has already retired its
+// transport state. Zero MaxQueries disables DNS operations truthfully while
+// leaving the capability-gated module inspectable.
 type DNSConfig struct {
 	Server               netip.Addr
 	MaxQueries           uint16

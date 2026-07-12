@@ -4,6 +4,7 @@ import (
 	"encoding/binary"
 	"errors"
 	"net/netip"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
@@ -247,6 +248,155 @@ func TestDNSRetryTimeoutPolicyLimitsAndReuse(t *testing.T) {
 	}
 	if err := reused.Close(); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestDNSTerminalCompletionRetiresTransportAndIgnoresLateResponses(t *testing.T) {
+	config := dnsTestConfig(t, 44)
+	ns := newTestNamespace(t, config)
+	request := namespace.DNSRequest{Name: "example.com", Types: namespace.DNSRecordsA | namespace.DNSRecordsAAAA}
+	resource, progress, err := ns.TryResolve(request)
+	if err != nil || progress != namespace.ProgressInProgress {
+		t.Fatalf("resolve = %T, %v, %v", resource, progress, err)
+	}
+	query := resource.(*dnsQuery)
+	outgoing := serviceDNSPacket(t, ns)
+	txid, localPort := dnsPacketIdentity(t, outgoing)
+	serviceDNSIngressFrame(t, ns, buildDNSResponseFrame(t, config, txid, localPort, request.Name))
+	if query.state != dnsQueryDone || query.Readiness() != namespace.ReadyDNSResult {
+		t.Fatalf("completion state = %v, readiness=%v", query.state, query.Readiness())
+	}
+	ns.core.Lock()
+	leaseCount := ns.core.UDPPortLeaseCountLocked()
+	stillMapped := ns.adapter.byPort[localPort] != nil
+	ns.core.Unlock()
+	if leaseCount != 0 || stillMapped || query.localPort != 0 || query.portLease.UDPPort() != 0 {
+		t.Fatalf("completion transport retained lease=%d mapped=%v local_port=%d lease_port=%d", leaseCount, stillMapped, query.localPort, query.portLease.UDPPort())
+	}
+	before := append([]namespace.DNSRecord(nil), query.records...)
+	serviceDNSIngressFrame(t, ns, buildDNSResponseFrameWithRecords(t, config, txid, localPort, request.Name, []namespace.DNSRecord{{
+		Name: "example.com", Type: namespace.DNSRecordA, TTLSeconds: 1, Address: netip.MustParseAddr("192.0.2.1"),
+	}}))
+	if !reflect.DeepEqual(query.records, before) {
+		t.Fatalf("late response mutated committed records: got %+v want %+v", query.records, before)
+	}
+	first, next, err := query.TryNext()
+	if err != nil || next != namespace.DNSNextReady || first != before[0] {
+		t.Fatalf("first record = %+v, %v, %v; want %+v", first, next, err, before[0])
+	}
+	serviceDNSIngressFrame(t, ns, buildDNSResponseFrameWithRecords(t, config, txid, localPort, request.Name, []namespace.DNSRecord{{
+		Name: "example.com", Type: namespace.DNSRecordAAAA, TTLSeconds: 1, Address: netip.MustParseAddr("2001:db8::1"),
+	}}))
+	for i, want := range before[1:] {
+		record, next, err := query.TryNext()
+		if err != nil || next != namespace.DNSNextReady || record != want {
+			t.Fatalf("remaining record %d = %+v, %v, %v; want %+v", i, record, next, err, want)
+		}
+	}
+	if _, next, err := query.TryNext(); err != nil || next != namespace.DNSNextEOF {
+		t.Fatalf("EOF = %v, %v", next, err)
+	}
+	ns.adapter.nextPort = localPort
+	reusedResource, progress, err := ns.TryResolve(request)
+	if err != nil || progress != namespace.ProgressInProgress {
+		t.Fatalf("reused resolve = %T, %v, %v", reusedResource, progress, err)
+	}
+	reused := reusedResource.(*dnsQuery)
+	if reused.localPort != localPort {
+		t.Fatalf("reused local port = %d, want %d", reused.localPort, localPort)
+	}
+	if err := query.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := query.Close(); err != nil {
+		t.Fatalf("second close = %v", err)
+	}
+	if err := reused.Close(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestDNSTerminalFailuresRetireTransportImmediately(t *testing.T) {
+	for _, test := range []struct {
+		name        string
+		expected    namespace.Failure
+		prepare     func(*testing.T, *testNamespace, *dnsQuery, namespaceTestConfig)
+		terminalize func(*testing.T, *testNamespace, *dnsQuery, namespaceTestConfig)
+	}{
+		{
+			name:     "canceled",
+			expected: namespace.FailureCanceled,
+			terminalize: func(t *testing.T, _ *testNamespace, query *dnsQuery, _ namespaceTestConfig) {
+				if err := query.Cancel(); err != nil {
+					t.Fatal(err)
+				}
+			},
+		},
+		{
+			name:     "timed out",
+			expected: namespace.FailureTimedOut,
+			prepare: func(t *testing.T, ns *testNamespace, _ *dnsQuery, _ namespaceTestConfig) {
+				_ = serviceDNSPacket(t, ns)
+				if report := serviceDNSMaintenance(t, ns); report != (namespace.ServiceReport{Operations: 1}) {
+					t.Fatalf("retry maintenance = %+v", report)
+				}
+				_ = serviceDNSPacket(t, ns)
+			},
+			terminalize: func(t *testing.T, ns *testNamespace, _ *dnsQuery, _ namespaceTestConfig) {
+				if report := serviceDNSMaintenance(t, ns); report != (namespace.ServiceReport{Operations: 1}) {
+					t.Fatalf("timeout maintenance = %+v", report)
+				}
+			},
+		},
+		{
+			name:     "parser failure",
+			expected: namespace.FailureIO,
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			config := dnsTestConfig(t, 45)
+			config.DNS.MaxQueries = 1
+			config.DNS.MaxAttempts = 2
+			config.DNS.RetryServiceAttempts = 1
+			ns := newTestNamespace(t, config)
+			request := namespace.DNSRequest{Name: "example.com", Types: namespace.DNSRecordsA | namespace.DNSRecordsAAAA}
+			resource, progress, err := ns.TryResolve(request)
+			if err != nil || progress != namespace.ProgressInProgress {
+				t.Fatalf("resolve = %T, %v, %v", resource, progress, err)
+			}
+			query := resource.(*dnsQuery)
+			localPort := query.localPort
+			if test.prepare != nil {
+				test.prepare(t, ns, query, config)
+			}
+			if test.name == "parser failure" {
+				outgoing := serviceDNSPacket(t, ns)
+				txid, destinationPort := dnsPacketIdentity(t, outgoing)
+				message := lnetodns.Message{Questions: []lnetodns.Question{{Name: lnetodns.MustNewName(request.Name), Type: lnetodns.TypeA, Class: lnetodns.ClassINET}}}
+				serviceDNSIngressFrame(t, ns, buildDNSFrame(t, config, txid, destinationPort, message, lnetodns.HeaderFlags(1<<15)))
+			} else {
+				test.terminalize(t, ns, query, config)
+			}
+			if got := query.Readiness(); got != namespace.ReadyError {
+				t.Fatalf("terminal readiness = %v", got)
+			}
+			ns.core.Lock()
+			leaseCount := ns.core.UDPPortLeaseCountLocked()
+			stillMapped := ns.adapter.byPort[localPort] != nil
+			ns.core.Unlock()
+			if leaseCount != 0 || stillMapped || query.localPort != 0 || query.portLease.UDPPort() != 0 {
+				t.Fatalf("terminal transport retained lease=%d mapped=%v local_port=%d lease_port=%d", leaseCount, stillMapped, query.localPort, query.portLease.UDPPort())
+			}
+			if _, _, err := query.TryNext(); requireFailure(t, err) != test.expected {
+				t.Fatalf("terminal failure = %v, want %v", err, test.expected)
+			}
+			if err := query.Close(); err != nil {
+				t.Fatal(err)
+			}
+			if err := query.Close(); err != nil {
+				t.Fatalf("second close = %v", err)
+			}
+		})
 	}
 }
 
@@ -638,6 +788,20 @@ func serviceDNSPacket(t testing.TB, ns *testNamespace) []byte {
 	return append([]byte(nil), buffer[:result.FrameBytes]...)
 }
 
+func serviceDNSIngressFrame(t testing.TB, ns *testNamespace, frame []byte) namespace.ServiceReport {
+	t.Helper()
+	if err := ns.Link().TryEnqueue(packetlink.Ingress, frame); err != nil {
+		t.Fatal(err)
+	}
+	setNextIngress(ns, true)
+	budget := namespace.ServiceBudget{Packets: 1, Bytes: uint32(ns.requiredFrameBytes), Operations: 1}
+	report, progress, err := ns.TryService(budget)
+	if err != nil || progress != namespace.ProgressDone || !report.ValidResult(budget, progress) {
+		t.Fatalf("DNS ingress service = %+v, %v, %v", report, progress, err)
+	}
+	return report
+}
+
 func serviceDNSMaintenance(t testing.TB, ns *testNamespace) namespace.ServiceReport {
 	t.Helper()
 	setNextIngress(ns, false)
@@ -668,24 +832,48 @@ func dnsPacketIdentity(t testing.TB, packet []byte) (uint16, uint16) {
 
 func buildDNSResponseFrame(t testing.TB, config namespaceTestConfig, txid, destinationPort uint16, question string) []byte {
 	t.Helper()
+	return buildDNSResponseFrameWithRecords(t, config, txid, destinationPort, question, []namespace.DNSRecord{
+		{Name: "example.com", Type: namespace.DNSRecordCNAME, TTLSeconds: 60, CanonicalName: "canonical.example.com"},
+		{Name: "canonical.example.com", Type: namespace.DNSRecordA, TTLSeconds: 120, Address: netip.MustParseAddr("192.0.2.99")},
+		{Name: "canonical.example.com", Type: namespace.DNSRecordAAAA, TTLSeconds: 180, Address: netip.MustParseAddr("2001:db8::99")},
+	})
+}
+
+func buildDNSResponseFrameWithRecords(t testing.TB, config namespaceTestConfig, txid, destinationPort uint16, question string, records []namespace.DNSRecord) []byte {
+	t.Helper()
 	questionName := lnetodns.MustNewName(question)
-	canonical := lnetodns.MustNewName("canonical.example.com")
-	canonicalData, err := canonical.AppendTo(nil)
-	if err != nil {
-		t.Fatal(err)
+	answers := make([]lnetodns.Resource, 0, len(records))
+	for _, record := range records {
+		name := lnetodns.MustNewName(record.Name)
+		switch record.Type {
+		case namespace.DNSRecordA:
+			answers = append(answers, lnetodns.NewResource(name, lnetodns.TypeA, lnetodns.ClassINET, record.TTLSeconds, record.Address.AsSlice()))
+		case namespace.DNSRecordAAAA:
+			answers = append(answers, lnetodns.NewResource(name, lnetodns.TypeAAAA, lnetodns.ClassINET, record.TTLSeconds, record.Address.AsSlice()))
+		case namespace.DNSRecordCNAME:
+			canonical := lnetodns.MustNewName(record.CanonicalName)
+			canonicalData, err := canonical.AppendTo(nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			answers = append(answers, lnetodns.NewResource(name, lnetodns.TypeCNAME, lnetodns.ClassINET, record.TTLSeconds, canonicalData))
+		default:
+			t.Fatalf("unsupported DNS record type %v", record.Type)
+		}
 	}
 	message := lnetodns.Message{
 		Questions: []lnetodns.Question{
 			{Name: questionName, Type: lnetodns.TypeA, Class: lnetodns.ClassINET},
 			{Name: questionName, Type: lnetodns.TypeAAAA, Class: lnetodns.ClassINET},
 		},
-		Answers: []lnetodns.Resource{
-			lnetodns.NewResource(questionName, lnetodns.TypeCNAME, lnetodns.ClassINET, 60, canonicalData),
-			lnetodns.NewResource(canonical, lnetodns.TypeA, lnetodns.ClassINET, 120, []byte{192, 0, 2, 99}),
-			lnetodns.NewResource(canonical, lnetodns.TypeAAAA, lnetodns.ClassINET, 180, netip.MustParseAddr("2001:db8::99").AsSlice()),
-		},
+		Answers: answers,
 	}
-	payload, err := message.AppendTo(nil, txid, lnetodns.HeaderFlags(1<<15|1<<8|1<<7))
+	return buildDNSFrame(t, config, txid, destinationPort, message, lnetodns.HeaderFlags(1<<15|1<<8|1<<7))
+}
+
+func buildDNSFrame(t testing.TB, config namespaceTestConfig, txid, destinationPort uint16, message lnetodns.Message, flags lnetodns.HeaderFlags) []byte {
+	t.Helper()
+	payload, err := message.AppendTo(nil, txid, flags)
 	if err != nil {
 		t.Fatal(err)
 	}

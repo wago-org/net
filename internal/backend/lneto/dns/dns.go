@@ -35,6 +35,8 @@ const (
 
 // Config fixes resolver authority, response retention, concurrency, and
 // deterministic retransmission work. Zero MaxQueries disables DNS truthfully.
+// MaxQueries continues to limit live guest query handles until they are closed,
+// even after a terminal query has already retired its transport state.
 type Config struct {
 	Server               netip.Addr
 	MaxQueries           uint16
@@ -261,8 +263,8 @@ func (q *dnsQuery) closeLocked() error {
 		return nil
 	}
 	q.state = dnsQueryClosed
+	q.retireTransportLocked()
 	if q.owner != nil {
-		delete(q.owner.byPort, q.localPort)
 		removeQuery(q.owner, q)
 	}
 	clear(q.packet)
@@ -273,15 +275,28 @@ func (q *dnsQuery) closeLocked() error {
 	q.records = nil
 	q.request = dnsns.Request{}
 	q.failure = nil
-	q.portLease.ReleaseLocked()
 	q.releaseQuotaLocked()
 	return nil
+}
+
+func (q *dnsQuery) retireTransportLocked() {
+	if q == nil {
+		return
+	}
+	if q.owner != nil && q.localPort != 0 && q.owner.byPort != nil && q.owner.byPort[q.localPort] == q {
+		delete(q.owner.byPort, q.localPort)
+	}
+	q.portLease.ReleaseLocked()
+	q.localPort = 0
+	q.retry = 0
+	q.txid = 0
 }
 
 func (q *dnsQuery) failLocked(failure nscore.Failure, cause error) {
 	if q.state == dnsQueryClosed || q.state == dnsQueryDone || q.state == dnsQueryFailed {
 		return
 	}
+	q.retireTransportLocked()
 	q.state = dnsQueryFailed
 	q.failure = nscore.Fail(failure, cause)
 	q.releaseWorkLocked()
@@ -291,6 +306,7 @@ func (q *dnsQuery) completeLocked(records []dnsns.Record) {
 	if q.state == dnsQueryClosed || q.state == dnsQueryDone || q.state == dnsQueryFailed {
 		return
 	}
+	q.retireTransportLocked()
 	q.records = append(q.records[:0], records...)
 	q.cursor = 0
 	q.state = dnsQueryDone
@@ -421,7 +437,7 @@ func (n *Adapter) ingressLocked(frame []byte) (bool, error) {
 		return false, nil
 	}
 	query := n.byPort[udpFrame.DestinationPort()]
-	if query == nil || query.state == dnsQueryClosed || netip.AddrFrom4(*ipFrame.SourceAddr()) != n.config.Server || udpFrame.SourcePort() != lnetodns.ServerPort {
+	if query == nil || (query.state != dnsQueryPending && query.state != dnsQueryWaiting) || netip.AddrFrom4(*ipFrame.SourceAddr()) != n.config.Server || udpFrame.SourcePort() != lnetodns.ServerPort {
 		return false, nil
 	}
 	var validator lneto.Validator

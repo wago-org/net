@@ -233,20 +233,25 @@ with a zero port and leave `canonical` all zero. CNAME populates only
 backend-neutral record and output range, builds a zeroed temporary structure,
 and copies it atomically. `next` validates the complete output before consuming
 a record; `AGAIN`, `EOF`, and failures leave output unchanged. Cancel makes an
-unfinished query terminal with `CANCELED` but does not retire its handle; `close`
-performs generation retirement and deterministic quota/storage cleanup.
+unfinished query terminal with `CANCELED`, retires its transport immediately,
+and does not retire its guest-visible handle; `close` performs generation
+retirement and deterministic quota/storage cleanup.
 
 The configured backend sends bounded UDP queries to one static IPv4 recursive
-resolver. A response is accepted only from that resolver and only when its UDP
-port, destination port, transaction ID, IPv4/UDP integrity, nonfragmented shape,
-and complete echoed question names/classes/types match the request. Successful
-answers preserve the first unique reachable CNAME chain in chain order, followed
-by unique requested A/AAAA records at the terminal name. Irrelevant records,
-unrequested address types, and semantic duplicates are ignored. Conflicting
-CNAME targets, CNAME loops, malformed compression, malformed resources, and
-retention-limit overflow fail closed. A successful response may contain no
-relevant records, in which case `next` returns `EOF`. Truncated UDP responses
-return `TEMPORARY_FAILURE`; ABI v1 does not implement DNS-over-TCP fallback.
+resolver. A response is accepted only from that resolver and only while the
+query remains transport-active. Terminal queries retire their UDP source port
+and response-dispatch entry before publishing success or failure, so late or
+duplicate packets cannot mutate committed results. A response is also accepted
+only when its UDP port, destination port, transaction ID, IPv4/UDP integrity,
+nonfragmented shape, and complete echoed question names/classes/types match the
+request. Successful answers preserve the first unique reachable CNAME chain in
+chain order, followed by unique requested A/AAAA records at the terminal name.
+Irrelevant records, unrequested address types, and semantic duplicates are
+ignored. Conflicting CNAME targets, CNAME loops, malformed compression,
+malformed resources, and retention-limit overflow fail closed. A successful
+response may contain no relevant records, in which case `next` returns `EOF`.
+Truncated UDP responses return `TEMPORARY_FAILURE`; ABI v1 does not implement
+DNS-over-TCP fallback.
 
 ## Bounded poll layouts
 

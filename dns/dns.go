@@ -22,7 +22,9 @@ var (
 )
 
 // Config fixes DNS resolver authority, concurrent queries, retained records,
-// response bytes, and deterministic retry bounds. Zero disables queries.
+// response bytes, and deterministic retry bounds. MaxQueries limits live guest
+// query handles until close even after a terminal query has retired its
+// transport state. Zero disables queries.
 type Config = dnsbackend.Config
 
 // DefaultConfig returns finite A/AAAA client storage for one explicit resolver.

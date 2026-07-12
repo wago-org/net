@@ -142,19 +142,26 @@ direct slot reuse, while making the finite maintenance cost and reuse point
 observable. `internal/backend/lneto/dns` owns immediate IPv4 UDP queries plus
 lneto DNS codecs, finite query/record/response bounds,
 policy and quota ownership, deterministic service-attempt retransmission and
-timeout, semantic RCode mapping, and copied A/AAAA/CNAME records. Responses must
-echo the exact requested names/classes/types. Only a unique CNAME chain reachable
-from the requested name and requested A/AAAA records at its terminal name are
-emitted; irrelevant and duplicate answers are ignored, while conflicts and loops
-fail closed. Compressed names and resource framing have direct fuzz coverage.
-Truncated UDP responses map to temporary failure because DNS-over-TCP fallback is
-not implemented. UDP sockets and DNS queries reserve local ports through one
-protocol-neutral core lease domain, preserving exact collision, release,
-deterministic allocation, and close behavior without moving datagrams or DNS
-records into core. Root namespace construction imports only the shared lneto
-core. Root, single-protocol, pair, and all-protocol dependency fixtures require
-exactly the selected adapters/facets and reject every omitted one plus the
-aggregate assembler, completing the Stage 4 compile-isolation boundary.
+timeout, semantic RCode mapping, and copied A/AAAA/CNAME records. Each query has
+an active transport phase (UDP source-port lease, `byPort` dispatch entry, retry
+state) and a guest-visible terminal phase (handle, retained records or failure,
+quota until close). Successful completion, timeout, cancellation, parser
+failure, and other terminal failures retire the transport phase before the query
+publishes its terminal result, so late packets cannot mutate committed records.
+Responses must echo the exact requested names/classes/types. Only a unique CNAME
+chain reachable from the requested name and requested A/AAAA records at its
+terminal name are emitted; irrelevant and duplicate answers are ignored, while
+conflicts and loops fail closed. Compressed names and resource framing have
+ direct fuzz coverage. Truncated UDP responses map to temporary failure because
+DNS-over-TCP fallback is not implemented. `MaxQueries` still limits live guest
+query handles until close even after terminal transport retirement. UDP sockets
+and DNS queries reserve local ports through one protocol-neutral core lease
+domain, preserving exact collision, release, deterministic allocation, and close
+behavior without moving datagrams or DNS records into core. Root namespace
+construction imports only the shared lneto core. Root, single-protocol, pair,
+and all-protocol dependency fixtures require exactly the selected
+adapters/facets and reject every omitted one plus the aggregate assembler,
+completing the Stage 4 compile-isolation boundary.
 Granular `tcp/register`, `udp/register`, and `dns/register` packages now own only
 their selected public facade and exact implementation graph. The root `register`
 package explicitly composes all three protocols in one extension rather than
