@@ -1333,7 +1333,7 @@ Broad validation at recursion end:
    - Added explicit `InfoImports()` for the low-level stateless `abi_version` surface.
    - Tightened `Imports(config)` so only the zero configuration remains accepted; any configured policy, quota, readiness, or namespace state now fails closed and returns no imports instead of implying a lifecycle-aware surface that the low-level path cannot provide.
    - Updated focused root/TCP/DNS regressions and the architecture/ABI docs to make the low-level info-only surface explicit.
-3. `HEAD` — `fix: clear closed resource graph state`
+3. `ab45b30` — `fix: clear closed resource graph state`
    - Cleared released quota-charge storage and retained buffers from closed UDP sockets, closed TCP listeners/streams, and terminal/closed DNS queries so finished resources stop retaining queued packet/record storage and released accounting state.
    - Kept concurrency-safe owner/local fields intact after close where the race tests require them, while still clearing nil-able connection pointers, queue storage, packet/record retention, and reusable slot/account state.
    - Added focused regressions proving closed UDP/TCP/DNS resources no longer retain released charge state or buffered packet/record storage.
@@ -1377,3 +1377,74 @@ Broad validation at recursion end:
 1. `perf: remove resource-table close scratch allocation`
 2. `perf: reduce protocol reuse allocations`
 3. `fix: make lifecycle serialization explicit`
+
+## Audit recursion update — 2026-07-12 iteration 5
+
+### Completed work
+
+1. `6d0f41e` — `perf: remove resource-table close scratch allocation`
+   - Reworked `internal/resource.Table.Close` to detach and close live resources incrementally instead of allocating a temporary `[]Resource` proportional to the live count.
+   - Added a focused allocation regression proving close-scratch allocation no longer scales with the live resource count and a preloaded close benchmark that now stays flat at one small allocation regardless of 1, 64, or 1024 live resources.
+   - Kept reverse-creation close order, idempotence, and concurrent exactly-once teardown semantics intact.
+2. `a8a8559` — `perf: reduce protocol reuse allocations`
+   - Reused lazily-created UDP datagram backing storage across bind/close cycles without reusing direct socket object identities, preserving stale host-pointer safety while cutting steady-state bind/close to one allocation.
+   - Reused lazily-created TCP listener pool storage and outbound stream buffer backing across close/reopen cycles without reintroducing configuration-amplified eager allocation or reusing direct listener/stream object identities.
+   - Reused DNS overflow-record backing for oversized record caps while preserving direct query identity safety and existing inline-record behavior; added focused allocation regressions for UDP, TCP, and DNS overflow reuse plus reran the allocation-sensitive open/close benchmarks.
+3. `HEAD` — `fix: make lifecycle serialization explicit`
+   - Documented that `State.mu` is the one attachment lifecycle mutex and that `Manager.Detach` intentionally unpublishes state before teardown.
+   - Added focused manager regressions proving detach removes the state from fresh lookups before teardown completes, yet still waits for in-flight `WithLock` operations and `Poll` visitors to return before closing resources.
+   - Updated the architecture notes so the attachment/teardown serialization contract is explicit evidence rather than an implicit implementation detail.
+
+### Remaining work
+
+Unresolved P1/P2 work from the audit prompt still includes at least:
+- TinyGo broad-validation repair: `tinygo test ./...` now runs on this host but currently fails in `internal/releaseprovenance/sourceobjects_test.go` because `newSourceObjectFixture` and `fixtureSourceObjectSets` are defined only in `verify_test.go`, which is guarded by `//go:build !tinygo`.
+- shared service-composition allocation follow-up work,
+- README and broader documentation reorganization/cleanup,
+- `wago.json` capability keyword cleanup.
+
+### Exact tests run
+
+Targeted validation during the slice:
+- `go test ./internal/resource`
+- `go test ./internal/resource -run 'TestTableClose(AvoidsLiveCountScratchAllocation|IsDeterministicIdempotentAndJoinsErrors|ConcurrentCloseIsExactlyOnce)$'`
+- `go test ./internal/resource -run '^$' -bench 'BenchmarkTableClose(Preloaded|Live)$' -benchmem`
+- `go test ./internal/backend/lneto/udp ./internal/backend/lneto/tcp ./internal/backend/lneto/dns`
+- `go test ./internal/backend/lneto/udp ./internal/backend/lneto/tcp ./internal/backend/lneto/dns -run 'Test(AdapterTryBindCloseReusesDatagramBacking|ListenerAndConnectReuseReduceSteadyStateAllocations|ResolveCloseReusesOverflowRecordBacking|AcceptedCloseRetainsSlotUntilChargedMaintenance|DNSRetryTimeoutPolicyLimitsAndReuse|AdapterExchangeTruncationPortLeaseAndClose)$'`
+- `go test ./internal/backend/lneto/udp ./internal/backend/lneto/tcp ./internal/backend/lneto/dns -run '^$' -bench 'Benchmark(AdapterTryBindClose|AdapterTryBindCloseZeroPayload|AdapterTryResolveClose|AdapterTryListenClose|AdapterTryConnectClose)$' -benchmem`
+- `go test ./internal/instance/core`
+- `go test ./internal/instance/core -run 'Test(DetachUnpublishesBeforeSerializedTeardownCompletes|PollVisitorSerializesDetachUntilVisitorReturns|ConfiguredNamespacesAreQuotaOwnedIsolatedAndGenerationSafe)$'`
+
+Broad validation at recursion end:
+- `go test ./...` — pass
+- `go test -race ./...` — pass
+- `go vet ./...` — pass
+- `scripts/check-source-boundaries.sh` — pass
+- `GOOS=linux GOARCH=arm64 CGO_ENABLED=0 go build ./...` — pass
+- `tinygo test ./...` — fails in `internal/releaseprovenance/sourceobjects_test.go` with undefined `newSourceObjectFixture` / `fixtureSourceObjectSets` because their only definitions live in `verify_test.go` behind `//go:build !tinygo`
+
+### Benchmark results
+
+- `go test ./internal/resource -run '^$' -bench 'BenchmarkTableClose(Preloaded|Live)$' -benchmem`
+  - `BenchmarkTableClosePreloaded/resources=1` → `37.32 ns/op`, `64 B/op`, `1 allocs/op`
+  - `BenchmarkTableClosePreloaded/resources=64` → `704.9 ns/op`, `64 B/op`, `1 allocs/op`
+  - `BenchmarkTableClosePreloaded/resources=1024` → `11176 ns/op`, `64 B/op`, `1 allocs/op`
+- `go test ./internal/backend/lneto/udp ./internal/backend/lneto/tcp ./internal/backend/lneto/dns -run '^$' -bench 'Benchmark(AdapterTryBindClose|AdapterTryBindCloseZeroPayload|AdapterTryResolveClose|AdapterTryListenClose|AdapterTryConnectClose)$' -benchmem`
+  - `BenchmarkAdapterTryBindClose` → `212.9 ns/op`, `320 B/op`, `1 allocs/op`
+  - `BenchmarkAdapterTryBindCloseZeroPayload` → `209.6 ns/op`, `320 B/op`, `1 allocs/op`
+  - `BenchmarkAdapterTryListenClose` → `231.9 ns/op`, `400 B/op`, `3 allocs/op`
+  - `BenchmarkAdapterTryConnectClose` → `444.7 ns/op`, `936 B/op`, `4 allocs/op`
+  - `BenchmarkAdapterTryResolveClose` → `505.9 ns/op`, `1408 B/op`, `1 allocs/op`
+- DNS default open/close remains at one allocation because direct query wrapper identities are still intentionally not reused; the new overflow-record reuse regression covers the formerly avoidable extra allocation when `MaxRecords` exceeds the inline storage.
+
+### Discovered follow-up issues / blockers
+
+- TinyGo is now installed on this host (`tinygo version 0.41.1 linux/amd64`), so the prior environment blocker is gone; the remaining TinyGo failure is now a concrete repository issue in the release-provenance tests.
+- Direct host-side resource pointers must remain stale after close. The allocation-reduction work therefore reuses backing storage lazily but does **not** recycle UDP socket, TCP listener/stream, or DNS query object identities.
+- Fully resolving the allocation follow-up still needs a separate pass over shared service composition and any other non-resource open/close hot spots.
+
+### Next three proposed atomic commits
+
+1. `fix: make tinygo source-object tests self-contained`
+2. `perf: reduce shared service composition allocations`
+3. `docs: clean README, ABI notes, and capability keywords`

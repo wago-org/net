@@ -5,6 +5,7 @@ import (
 	"net/netip"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/wago-org/net/internal/namespace"
 	nscore "github.com/wago-org/net/internal/namespace/core"
@@ -235,6 +236,108 @@ func TestManagerConfigurationIsValidatedAndPolicyIsImmutable(t *testing.T) {
 	}
 	if err := manager.Detach(instance); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestDetachUnpublishesBeforeSerializedTeardownCompletes(t *testing.T) {
+	manager := NewManager()
+	instance := new(wago.Instance)
+	if err := manager.Attach(instance); err != nil {
+		t.Fatal(err)
+	}
+	state, ok := manager.ForInstance(instance)
+	if !ok {
+		t.Fatal("attached state missing")
+	}
+	started := make(chan struct{})
+	release := make(chan struct{})
+	operationDone := make(chan error, 1)
+	go func() {
+		operationDone <- state.WithLock(func(LockedState) error {
+			close(started)
+			<-release
+			return nil
+		})
+	}()
+	<-started
+	detachDone := make(chan error, 1)
+	go func() { detachDone <- manager.Detach(instance) }()
+	deadline := time.After(time.Second)
+	for {
+		if _, ok := manager.ForInstance(instance); !ok {
+			break
+		}
+		select {
+		case <-deadline:
+			t.Fatal("state remained published while teardown was blocked behind an in-flight operation")
+		case <-time.After(time.Millisecond):
+		}
+	}
+	select {
+	case err := <-detachDone:
+		t.Fatalf("Detach completed before locked operation released: %v", err)
+	default:
+	}
+	close(release)
+	if err := <-operationDone; err != nil {
+		t.Fatalf("locked operation error = %v", err)
+	}
+	if err := <-detachDone; err != nil {
+		t.Fatalf("Detach error = %v", err)
+	}
+	if err := state.WithLock(func(LockedState) error { return nil }); !errors.Is(err, resource.ErrClosed) {
+		t.Fatalf("stale state WithLock error = %v, want ErrClosed", err)
+	}
+}
+
+func TestPollVisitorSerializesDetachUntilVisitorReturns(t *testing.T) {
+	manager := NewManager()
+	instance := new(wago.Instance)
+	if err := manager.Attach(instance); err != nil {
+		t.Fatal(err)
+	}
+	state, ok := manager.ForInstance(instance)
+	if !ok {
+		t.Fatal("attached state missing")
+	}
+	handle, err := state.Resources().Add(resource.KindPollable, fakePollable{})
+	if err != nil {
+		t.Fatalf("Add pollable: %v", err)
+	}
+	if err := state.Readiness().Register(handle, resource.KindPollable); err != nil {
+		t.Fatalf("Register pollable: %v", err)
+	}
+	visitorStarted := make(chan struct{})
+	visitorRelease := make(chan struct{})
+	pollDone := make(chan error, 1)
+	go func() {
+		_, _, err := state.Poll(readiness.Budget{Scans: 1, Events: 1}, func(events []readiness.Event, report readiness.Report, progress nscore.Progress) error {
+			if len(events) != 1 || report.Events != 1 || progress != nscore.ProgressDone {
+				return errors.New("unexpected poll result")
+			}
+			close(visitorStarted)
+			<-visitorRelease
+			if events[0].Handle != handle || events[0].Readiness != namespace.ReadyReadable {
+				return errors.New("visitor observed unstable readiness result")
+			}
+			return nil
+		})
+		pollDone <- err
+	}()
+	<-visitorStarted
+	detachDone := make(chan error, 1)
+	go func() { detachDone <- manager.Detach(instance) }()
+	select {
+	case err := <-detachDone:
+		t.Fatalf("Detach completed before poll visitor returned: %v", err)
+	case <-time.After(10 * time.Millisecond):
+	}
+	close(visitorRelease)
+	if err := <-pollDone; err != nil {
+		t.Fatalf("Poll error = %v", err)
+	}
+	if err := <-detachDone; err != nil {
+		t.Fatalf("Detach error = %v", err)
 	}
 }
 

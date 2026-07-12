@@ -204,10 +204,13 @@ cannot complete; AGAIN and EOF stream results leave guest outputs unchanged.
 Host imports recover exact identity through the additive
 `wago.InstanceHostModule` interface, and `BeforeClose` removes the attachment
 before polling shutdown, reverse-creation resource cleanup, and quota shutdown.
-The extension also calls `Registry.RequireReinstantiation`, so class resets that
-would reuse a physical instance are engine-downgraded to the same deterministic
-close-and-recreate path. Failed later setup and class replacement use that close
-path as well. No process-global instance map is used. The low-level
+That unpublish-before-close step is intentional: new manager lookups fail closed
+immediately, while any in-flight `State.WithLock` or `State.Poll` call still
+holds the per-state lifecycle mutex until its callback returns and teardown can
+proceed. The extension also calls `Registry.RequireReinstantiation`, so class
+resets that would reuse a physical instance are engine-downgraded to the same
+deterministic close-and-recreate path. Failed later setup and class replacement
+use that close path as well. No process-global instance map is used. The low-level
 `InfoImports` bundle remains suitable only for stateless core imports such as
 `abi_version`; resource-owning protocol extensions require the Runtime
 lifecycle path.

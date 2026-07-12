@@ -44,6 +44,10 @@ func DefaultConfig() Config {
 
 // State is the networking ownership root for one exact Wago instance.
 type State struct {
+	// mu is the one attachment lifecycle mutex. Every published operation and
+	// teardown path serializes through it. Manager.Detach removes a State from the
+	// manager before closing it, so new lookups fail closed while any in-flight
+	// operation finishes before teardown proceeds.
 	mu sync.Mutex
 
 	resources  *resource.Table
@@ -403,8 +407,10 @@ func (n *ownedNamespace) Close() error {
 	return err
 }
 
-// Detach removes state before closing it, making repeated and concurrent
-// detach calls exactly-once from the manager's perspective.
+// Detach unpublishes state before closing it, so fresh manager lookups fail
+// closed immediately while any in-flight State operation still serializes on
+// that State's lifecycle mutex until teardown completes. Repeated and
+// concurrent detach calls are exactly-once from the manager's perspective.
 func (m *Manager) Detach(instance *wago.Instance) error {
 	if m == nil || instance == nil {
 		return ErrInvalidInstance
