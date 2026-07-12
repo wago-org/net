@@ -46,6 +46,9 @@ func (option optionFunc) applyDNS(config *registration) error { return option(co
 
 type registration struct {
 	config             Config
+	configSet          bool
+	resolver           netip.Addr
+	resolverSet        bool
 	defaultAuthority   bool
 	authorityAdditions policy.Config
 }
@@ -54,6 +57,7 @@ type registration struct {
 func WithConfig(config Config) Option {
 	return optionFunc(func(target *registration) error {
 		target.config = config
+		target.configSet = true
 		return nil
 	})
 }
@@ -66,11 +70,8 @@ func Resolver(server string) Option {
 		if err != nil || !address.Is4() || address.Is4In6() || address.IsUnspecified() || address.IsMulticast() || address == netip.AddrFrom4([4]byte{255, 255, 255, 255}) {
 			return ErrInvalidResolver
 		}
-		if target.config == (Config{}) {
-			target.config = DefaultConfig(address)
-		} else {
-			target.config.Server = address
-		}
+		target.resolver = address
+		target.resolverSet = true
 		return nil
 	})
 }
@@ -123,6 +124,18 @@ func (r registration) authority() policy.Config {
 	return policy.Merge(defaultAuthority(), r.authorityAdditions)
 }
 
+func (r registration) finalConfig() Config {
+	config := r.config
+	if !r.resolverSet {
+		return config
+	}
+	if !r.configSet {
+		return DefaultConfig(r.resolver)
+	}
+	config.Server = r.resolver
+	return config
+}
+
 // Register selects only the DNS capability, wago_net_dns import table, and DNS
 // backend contribution on network. Shared wago_net.abi_version registration is
 // added by the root when the first protocol is selected.
@@ -136,13 +149,14 @@ func Register(network *wagonet.Network, options ...Option) error {
 			return err
 		}
 	}
+	resolvedConfig := config.finalConfig()
 	backend := plugin.NewBackend(plugin.BackendLnetoV1, nil,
 		func(base any) (nscore.Service, error) {
 			common, ok := base.(*lnetocore.Namespace)
 			if !ok {
 				return nscore.Service{}, plugin.ErrInvalidBackend
 			}
-			adapter, err := dnsbackend.New(common, config.config)
+			adapter, err := dnsbackend.New(common, resolvedConfig)
 			if err != nil {
 				return nscore.Service{}, err
 			}
