@@ -2,20 +2,24 @@
 set -euo pipefail
 
 root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
-wago_dir=$(realpath "${CURRENT_WAGO_DIR:-$root/.wago/wago-current-plugin-lifecycle-1a912c69}")
+wago_dir=$(realpath "${CURRENT_WAGO_DIR:-$root/.wago/wago-current-plugin-lifecycle-ff04a6b1}")
 workers_dir=$(realpath "${WORKERS_DIR:-$root/.wago/workers-plugin}")
 net_dir=$(realpath "${CURRENT_NET_DIR:-$root/.wago/net-current-plugin-registration-18615546}")
 adoption=${CURRENT_PLUGIN_ADOPTION:-review}
 require_production=${REQUIRE_PUBLISHED_WAGO_MERGE:-0}
 
-readonly wago_main=1a912c699d913fe3e398a5bc33bfdd9fbeeba391
-readonly wago_main_parent=e335cc1ef896419994df5fa2f92f9824d010cd14
-readonly wago_fix_review=b17213288cc673b8a6b4e32e29592ae776a5615e
-readonly wago_fix_parent=1a912c699d913fe3e398a5bc33bfdd9fbeeba391
-readonly wago_managed_review=f59d96c61d77a26ec054191fd74a5e1889909dd7
-readonly wago_managed_parent=b17213288cc673b8a6b4e32e29592ae776a5615e
-readonly wago_review=5385ea0a7d87332cc3926459ffb20d5cc36aff6e
-readonly wago_review_parent=f59d96c61d77a26ec054191fd74a5e1889909dd7
+readonly wago_main=ff04a6b1093628e025e3c2f78aa6ba6184e78bcb
+readonly wago_main_parent=bbaa494ee47ece44739aeeeda333e76e6a75cb73
+readonly wago_benchmark=bbaa494ee47ece44739aeeeda333e76e6a75cb73
+readonly wago_benchmark_parent=1a912c699d913fe3e398a5bc33bfdd9fbeeba391
+readonly wago_lifecycle=1a912c699d913fe3e398a5bc33bfdd9fbeeba391
+readonly wago_lifecycle_parent=e335cc1ef896419994df5fa2f92f9824d010cd14
+readonly wago_fix_review=16163fb8975443b599d1065cc357db77d3ae5840
+readonly wago_fix_parent=ff04a6b1093628e025e3c2f78aa6ba6184e78bcb
+readonly wago_managed_review=59ce1c136492be44f8f4d252096bda01d3ef4a22
+readonly wago_managed_parent=16163fb8975443b599d1065cc357db77d3ae5840
+readonly wago_review=d556b20ff8667a8ae17b1ca399c74a949ac78f2f
+readonly wago_review_parent=59ce1c136492be44f8f4d252096bda01d3ef4a22
 readonly production_merge=97e6f91e6c822491577faa86f3c30aa5a8fff1e8
 readonly production_parent1=54499ba5135f69a062e23a7255f4a408d6cecf8c
 readonly production_parent2=ffd5ef4b122cbd019897eeea3503789ab5860e4a
@@ -54,7 +58,11 @@ git -C "$net_dir" fetch --prune origin
 [[ $(parents "$wago_dir" "$wago_review") == "$wago_review_parent" ]] || fail "current Wago exact-slot integration parent drifted"
 [[ $(parents "$wago_dir" "$wago_managed_review") == "$wago_managed_parent" ]] || fail "current Wago managed-wrapper review parent drifted"
 [[ $(parents "$wago_dir" "$wago_fix_review") == "$wago_fix_parent" ]] || fail "current Wago preview-1 fix review parent drifted"
-[[ $(parents "$wago_dir" "$wago_main") == "$wago_main_parent" ]] || fail "reviewed upstream Wago lifecycle parent drifted"
+[[ $(parents "$wago_dir" "$wago_main") == "$wago_main_parent" ]] || fail "reviewed upstream Wago main parent drifted"
+[[ $(parents "$wago_dir" "$wago_benchmark") == "$wago_benchmark_parent" ]] || fail "reviewed upstream Wago benchmark parent drifted"
+[[ $(parents "$wago_dir" "$wago_lifecycle") == "$wago_lifecycle_parent" ]] || fail "authoritative upstream Wago lifecycle parent drifted"
+[[ -z $(git -C "$wago_dir" diff --name-only "$wago_lifecycle..$wago_main" -- src/wago) ]] ||
+  fail "reviewed upstream movement changed src/wago; perform a fresh semantic review"
 [[ $(parents "$net_dir" "$net_review") == "$net_review_parent" ]] || fail "current networking review parent drifted"
 [[ $(parents "$workers_dir" "$workers_review") == "$workers_parent1 $workers_parent2" ]] || fail "workers ordered parents drifted"
 [[ $(parents "$wago_dir" "$production_merge") == "$production_parent1 $production_parent2" ]] || fail "production Wago merge ordered parents drifted"
@@ -129,7 +137,7 @@ PY
 
 printf 'Wago origin/main: %s\n' "$wago_main"
 printf 'current Wago integrated fix review refs: %s\n' "${wago_review_refs:-absent}"
-printf 'current Wago integrated fix lineage: %s -> %s -> %s -> %s\n' "$wago_review" "$wago_managed_review" "$wago_fix_review" "$wago_main"
+printf 'current Wago integrated fix lineage: %s -> %s -> %s -> %s -> %s -> %s\n' "$wago_review" "$wago_managed_review" "$wago_fix_review" "$wago_main" "$wago_benchmark" "$wago_lifecycle"
 printf 'current networking review refs: %s\n' "${net_review_refs:-absent}"
 printf 'external workers refs: %s\n' "$workers_refs"
 printf 'production Wago merge refs: %s\n' "${production_refs:-absent}"

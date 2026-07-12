@@ -209,10 +209,12 @@ scripts/release-signoff.sh
 ```
 
 The current Wago review now ends at integrated subject
-`5385ea0a7d87332cc3926459ffb20d5cc36aff6e` on exact upstream lifecycle release
-`1a912c699d913fe3e398a5bc33bfdd9fbeeba391`. Patch-equivalent preview-1 fix
-`b1721328` follows upstream, `f59d96c6` preserves managed worker table callbacks
-by directly invoking local wrapper descriptors, and `5385ea0a` bounds forced
+`d556b20ff8667a8ae17b1ca399c74a949ac78f2f` on exact upstream `origin/main`
+`ff04a6b1093628e025e3c2f78aa6ba6184e78bcb`. That upstream movement passes
+through benchmark-only commit `bbaa494e` to authoritative lifecycle commit
+`1a912c69` and changes no `src/wago` file. Patch-equivalent preview-1 fix
+`16163fb8` follows upstream, `59ce1c13` preserves managed worker table callbacks
+by directly invoking local wrapper descriptors, and `d556b20f` bounds forced
 synchronous host callbacks to their declared parameter/result slots. Pack-only
 reconstruction validates aggregate plus granular registration, exact
 direct/managed/external-worker cleanup, standard Go, race, vet, and TinyGo on

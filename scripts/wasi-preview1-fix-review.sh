@@ -3,7 +3,7 @@ set -euo pipefail
 
 root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 production_wago_repo=$(realpath "${WAGO_WASI_FIX_DIR:-$root/.wago/wago-wasi-preview1-regabi-fix-97e6f91}")
-current_wago_repo=$(realpath "${CURRENT_WAGO_WASI_FIX_DIR:-$root/.wago/wago-current-plugin-lifecycle-1a912c69}")
+current_wago_repo=$(realpath "${CURRENT_WAGO_WASI_FIX_DIR:-$root/.wago/wago-current-plugin-lifecycle-ff04a6b1}")
 wasi_repo=$(realpath "${WASI_DIR:-$root/.audit/wasi}")
 out=$(realpath -m "${WASI_FIX_REVIEW_OUT:-$root/.wago/wasi-preview1-fix-review}")
 
@@ -13,15 +13,21 @@ readonly production_merge=97e6f91e6c822491577faa86f3c30aa5a8fff1e8
 readonly production_tree=adbba31c51996f1c1d6d3c2069de8ddf0afd94ee
 readonly production_parent1=54499ba5135f69a062e23a7255f4a408d6cecf8c
 readonly production_parent2=ffd5ef4b122cbd019897eeea3503789ab5860e4a
-readonly current_integration=5385ea0a7d87332cc3926459ffb20d5cc36aff6e
-readonly current_integration_tree=b01ebcbd8ffaa5cb2a3159f2d0b3cf20e35e6735
-readonly current_managed=f59d96c61d77a26ec054191fd74a5e1889909dd7
-readonly current_managed_tree=5cc1e716d03a4f390277e64471f2d7a1b405db21
-readonly current_fix=b17213288cc673b8a6b4e32e29592ae776a5615e
-readonly current_fix_tree=3371e2baeb3af5ed08c80b261f0836f21d5033a7
-readonly current_main=1a912c699d913fe3e398a5bc33bfdd9fbeeba391
-readonly current_main_tree=77f69ddfa2d574174b7534a7adedc110e7c740e4
-readonly current_main_parent=e335cc1ef896419994df5fa2f92f9824d010cd14
+readonly current_integration=d556b20ff8667a8ae17b1ca399c74a949ac78f2f
+readonly current_integration_tree=457770eff0a8af628715ae1305151d5f534d0af4
+readonly current_managed=59ce1c136492be44f8f4d252096bda01d3ef4a22
+readonly current_managed_tree=22d7b13f908b1536866538d6777d47ce4820b358
+readonly current_fix=16163fb8975443b599d1065cc357db77d3ae5840
+readonly current_fix_tree=74d64cc9faf384628483bd8b3946a1d3f1407108
+readonly current_main=ff04a6b1093628e025e3c2f78aa6ba6184e78bcb
+readonly current_main_tree=cc15e8c2eb42a396f34d0e50d2dc69b4e1722db4
+readonly current_main_parent=bbaa494ee47ece44739aeeeda333e76e6a75cb73
+readonly current_benchmark=bbaa494ee47ece44739aeeeda333e76e6a75cb73
+readonly current_benchmark_tree=4d52d41637015b021b3ec50fe23c790fe6124d20
+readonly current_benchmark_parent=1a912c699d913fe3e398a5bc33bfdd9fbeeba391
+readonly current_lifecycle=1a912c699d913fe3e398a5bc33bfdd9fbeeba391
+readonly current_lifecycle_tree=77f69ddfa2d574174b7534a7adedc110e7c740e4
+readonly current_lifecycle_parent=e335cc1ef896419994df5fa2f92f9824d010cd14
 readonly production_wasi=1a7eeb215229e05bcb0f09d5cb3280d231739def
 readonly production_wasi_tree=9108df32daccfe5a8458e6623d996bcb51f38756
 readonly production_wasi_parent=ab7d597a8517283b0399e09d967b7f02ded1772f
@@ -50,6 +56,8 @@ verify_commit "$current_wago_repo" "$current_integration" "$current_integration_
 verify_commit "$current_wago_repo" "$current_managed" "$current_managed_tree"
 verify_commit "$current_wago_repo" "$current_fix" "$current_fix_tree"
 verify_commit "$current_wago_repo" "$current_main" "$current_main_tree"
+verify_commit "$current_wago_repo" "$current_benchmark" "$current_benchmark_tree"
+verify_commit "$current_wago_repo" "$current_lifecycle" "$current_lifecycle_tree"
 verify_commit "$wasi_repo" "$production_wasi" "$production_wasi_tree"
 verify_commit "$wasi_repo" "$current_wasi" "$current_wasi_tree"
 
@@ -70,7 +78,13 @@ verify_commit "$wasi_repo" "$current_wasi" "$current_wasi_tree"
 [[ $(git -C "$current_wago_repo" show -s --format=%P "$current_fix") == "$current_main" ]] ||
   fail "current-main preview-1 fix parent mismatch"
 [[ $(git -C "$current_wago_repo" show -s --format=%P "$current_main") == "$current_main_parent" ]] ||
-  fail "reviewed upstream lifecycle parent mismatch"
+  fail "reviewed upstream main parent mismatch"
+[[ $(git -C "$current_wago_repo" show -s --format=%P "$current_benchmark") == "$current_benchmark_parent" ]] ||
+  fail "reviewed upstream benchmark parent mismatch"
+[[ $(git -C "$current_wago_repo" show -s --format=%P "$current_lifecycle") == "$current_lifecycle_parent" ]] ||
+  fail "authoritative upstream lifecycle parent mismatch"
+[[ -z $(git -C "$current_wago_repo" diff --name-only "$current_lifecycle..$current_main" -- src/wago) ]] ||
+  fail "reviewed upstream movement changed src/wago; perform a fresh semantic review"
 read -r merge_parent1 merge_parent2 extra <<<"$(git -C "$production_wago_repo" show -s --format=%P "$production_merge")"
 [[ -z ${extra:-} && "$merge_parent1" == "$production_parent1" && "$merge_parent2" == "$production_parent2" ]] ||
   fail "production Wago ordered parents changed"
@@ -220,6 +234,12 @@ current_wago_fix_parent=$current_main
 current_wago_main_revision=$current_main
 current_wago_main_tree=$current_main_tree
 current_wago_main_parent=$current_main_parent
+current_wago_benchmark_revision=$current_benchmark
+current_wago_benchmark_tree=$current_benchmark_tree
+current_wago_benchmark_parent=$current_benchmark_parent
+current_wago_lifecycle_revision=$current_lifecycle
+current_wago_lifecycle_tree=$current_lifecycle_tree
+current_wago_lifecycle_parent=$current_lifecycle_parent
 fix_patch_id=$production_patch
 production_wasi=$production_wasi
 production_wasi_tree=$production_wasi_tree

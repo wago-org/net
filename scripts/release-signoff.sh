@@ -6,7 +6,7 @@ wago_dir=$(realpath "${WAGO_DIR:-$root/.wago/wago-production-97e6f91}")
 lneto_dir=$(realpath "${LNETO_DIR:-$root/.audit/lneto}")
 wasi_dir=$(realpath "${WASI_DIR:-$root/.audit/wasi}")
 current_net_dir=$(realpath "${CURRENT_NET_DIR:-$root/.wago/net-current-plugin-registration-18615546}")
-current_wago_dir=$(realpath "${CURRENT_WAGO_DIR:-$root/.wago/wago-current-plugin-lifecycle-1a912c69}")
+current_wago_dir=$(realpath "${CURRENT_WAGO_DIR:-$root/.wago/wago-current-plugin-lifecycle-ff04a6b1}")
 workers_dir=$(realpath "${WORKERS_DIR:-$root/.wago/workers-plugin}")
 fuzztime=${FUZZTIME:-3s}
 run_wasi=${RUN_WASI:-1}
@@ -25,7 +25,7 @@ readonly expected_wago_parent_workers=$production_wago_parent_workers
 readonly expected_lneto=ab1a0c735a8b534a1d6322a3e245bc11a09431e7
 readonly expected_wasi=3df6c766ad00e83b314da799dbf9a77b409ad19d
 readonly expected_current_net=173b38a4d5a0db0e6058544576942a46b9d543df
-readonly expected_current_wago=5385ea0a7d87332cc3926459ffb20d5cc36aff6e
+readonly expected_current_wago=d556b20ff8667a8ae17b1ca399c74a949ac78f2f
 readonly expected_workers=1e9139756d8a3c631c59c00b028038c83bfa8341
 
 log() { printf '\n==> %s\n' "$*"; }
