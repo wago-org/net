@@ -171,7 +171,8 @@ func (t *Table) Len() int {
 }
 
 // Close deterministically closes all live resources in reverse creation order.
-// It is idempotent. Cleanup is O(live), not O(handle-space).
+// It is idempotent. Cleanup is O(live), not O(handle-space), and does not
+// allocate close scratch proportional to the live resource count.
 func (t *Table) Close() error {
 	if t == nil {
 		return nil
@@ -182,21 +183,19 @@ func (t *Table) Close() error {
 		return nil
 	}
 	t.closed = true
-	resources := make([]Resource, 0, t.live)
+	var errs []error
 	for t.liveHead != noSlot {
 		index := t.liveHead
 		s := &t.slots[index]
-		resources = append(resources, s.resource)
+		r := s.resource
 		t.removeLocked(index, s)
-	}
-	t.mu.Unlock()
-
-	var errs []error
-	for _, r := range resources {
+		t.mu.Unlock()
 		if err := r.Close(); err != nil {
 			errs = append(errs, err)
 		}
+		t.mu.Lock()
 	}
+	t.mu.Unlock()
 	return errors.Join(errs...)
 }
 

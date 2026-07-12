@@ -216,6 +216,64 @@ func TestTableConcurrentCloseIsExactlyOnce(t *testing.T) {
 	}
 }
 
+type preloadedCloseResource struct{ closed bool }
+
+func (r *preloadedCloseResource) Close() error {
+	if r.closed {
+		panic("preloaded resource closed more than once")
+	}
+	r.closed = true
+	return nil
+}
+
+func TestTableCloseAvoidsLiveCountScratchAllocation(t *testing.T) {
+	const count = 128
+	allocsFor := func(count int) float64 {
+		backing := make([]slot, count)
+		resources := make([]preloadedCloseResource, count)
+		missingClose := -1
+		allocs := testing.AllocsPerRun(1000, func() {
+			missingClose = -1
+			for i := range backing {
+				resources[i].closed = false
+				backing[i] = slot{
+					resource: &resources[i],
+					kind:     KindNamespace,
+					gen:      1,
+					freeNext: noSlot,
+					livePrev: noSlot,
+					liveNext: noSlot,
+				}
+				if i != 0 {
+					backing[i].livePrev = uint32(i - 1)
+				}
+				if i+1 < count {
+					backing[i].liveNext = uint32(i + 1)
+				}
+			}
+			table := Table{id: 1, slots: backing, freeHead: noSlot, liveHead: 0, live: count}
+			if err := table.Close(); err != nil {
+				panic(err)
+			}
+			for i := range resources {
+				if !resources[i].closed {
+					missingClose = i
+					return
+				}
+			}
+		})
+		if missingClose >= 0 {
+			t.Fatalf("count=%d resource %d was not closed", count, missingClose)
+		}
+		return allocs
+	}
+	smallAllocs := allocsFor(1)
+	largeAllocs := allocsFor(count)
+	if largeAllocs != smallAllocs {
+		t.Fatalf("Close allocations = %v for %d resources, want %v for 1 resource", largeAllocs, count, smallAllocs)
+	}
+}
+
 func TestConcurrentCloseHandleRemovesBeforeClosing(t *testing.T) {
 	table := newTable(t)
 	resource := &testResource{}
@@ -309,6 +367,7 @@ func BenchmarkTableLookupParallel(b *testing.B) {
 func BenchmarkTableCloseLive(b *testing.B) {
 	for _, count := range []int{1, 64, 1024} {
 		b.Run(fmt.Sprintf("resources=%d", count), func(b *testing.B) {
+			b.ReportAllocs()
 			for range b.N {
 				table := newTable(b)
 				for range count {
@@ -316,6 +375,42 @@ func BenchmarkTableCloseLive(b *testing.B) {
 						b.Fatal(err)
 					}
 				}
+				if err := table.Close(); err != nil {
+					b.Fatal(err)
+				}
+			}
+		})
+	}
+}
+
+func BenchmarkTableClosePreloaded(b *testing.B) {
+	for _, count := range []int{1, 64, 1024} {
+		b.Run(fmt.Sprintf("resources=%d", count), func(b *testing.B) {
+			backing := make([]slot, count)
+			resources := make([]preloadedCloseResource, count)
+			reset := func() Table {
+				for i := range backing {
+					resources[i].closed = false
+					backing[i] = slot{
+						resource: &resources[i],
+						kind:     KindNamespace,
+						gen:      1,
+						freeNext: noSlot,
+						livePrev: noSlot,
+						liveNext: noSlot,
+					}
+					if i != 0 {
+						backing[i].livePrev = uint32(i - 1)
+					}
+					if i+1 < count {
+						backing[i].liveNext = uint32(i + 1)
+					}
+				}
+				return Table{id: 1, slots: backing, freeHead: noSlot, liveHead: 0, live: count}
+			}
+			b.ReportAllocs()
+			for range b.N {
+				table := reset()
 				if err := table.Close(); err != nil {
 					b.Fatal(err)
 				}
