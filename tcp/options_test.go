@@ -15,6 +15,10 @@ func TestAuthorityOptionsKeepListenersAndSpecialClassesExplicit(t *testing.T) {
 		AllowListeners(wagonet.PolicyPortRange{First: 80, Last: 80}, wagonet.PolicyPortRange{First: 8080, Last: 8080}),
 		AllowWildcardBind(),
 		AllowPrivilegedBind(),
+		WithPolicy(wagonet.PolicyConfig{Rules: []wagonet.PolicyRule{{
+			Action: wagonet.PolicyAllow, Transports: []wagonet.PolicyTransport{wagonet.PolicyTransportUDP},
+			Directions: []wagonet.PolicyDirection{wagonet.PolicyInbound}, Ports: []wagonet.PolicyPortRange{{First: 80, Last: 80}},
+		}}}),
 	} {
 		if err := option.applyTCP(&config); err != nil {
 			t.Fatalf("apply option: %v", err)
@@ -36,6 +40,9 @@ func TestAuthorityOptionsKeepListenersAndSpecialClassesExplicit(t *testing.T) {
 	if compiled.CheckEndpoint(policy.OperationTCPConnect, netip.MustParseAddr("192.0.2.20"), 443) {
 		t.Fatal("default outbound authority survived suppression")
 	}
+	if compiled.CheckEndpoint(policy.OperationUDPBind, netip.IPv4Unspecified(), 80) {
+		t.Fatal("TCP wildcard/privileged grants widened UDP authority")
+	}
 }
 
 func TestAllowAllStillHonorsRawDenyRules(t *testing.T) {
@@ -44,10 +51,10 @@ func TestAllowAllStillHonorsRawDenyRules(t *testing.T) {
 	for _, option := range []Option{
 		WithoutDefaultAuthority(),
 		AllowAll(),
-		WithPolicy(wagonet.PolicyConfig{Rules: []wagonet.PolicyRule{{
-			Action: wagonet.PolicyDeny, Transports: []wagonet.PolicyTransport{wagonet.PolicyTransportTCP},
-			Directions: []wagonet.PolicyDirection{wagonet.PolicyOutbound}, Prefixes: []netip.Prefix{denied},
-		}}}),
+		WithPolicy(wagonet.PolicyConfig{Rules: []wagonet.PolicyRule{
+			{Action: wagonet.PolicyDeny, Transports: []wagonet.PolicyTransport{wagonet.PolicyTransportTCP}, Directions: []wagonet.PolicyDirection{wagonet.PolicyOutbound}, Prefixes: []netip.Prefix{denied}},
+			{Action: wagonet.PolicyAllow, Transports: []wagonet.PolicyTransport{wagonet.PolicyTransportUDP}, Directions: []wagonet.PolicyDirection{wagonet.PolicyOutbound}},
+		}}),
 	} {
 		if err := option.applyTCP(&config); err != nil {
 			t.Fatalf("apply option: %v", err)
@@ -62,5 +69,8 @@ func TestAllowAllStillHonorsRawDenyRules(t *testing.T) {
 	}
 	if compiled.CheckEndpoint(policy.OperationTCPConnect, denied.Addr(), 443) {
 		t.Fatal("raw deny did not override AllowAll")
+	}
+	if compiled.CheckEndpoint(policy.OperationUDPSend, netip.MustParseAddr("127.0.0.1"), 53) {
+		t.Fatal("TCP AllowAll widened UDP loopback authority")
 	}
 }

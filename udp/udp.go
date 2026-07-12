@@ -80,21 +80,29 @@ func AllowServer(ports ...wagonet.PolicyPortRange) Option {
 
 // AllowWildcardBind permits explicitly granted non-ephemeral server binds to
 // use an unspecified local address.
-func AllowWildcardBind() Option { return WithPolicy(wagonet.PolicyConfig{AllowWildcardBind: true}) }
+func AllowWildcardBind() Option {
+	return WithPolicy(wagonet.PolicyConfig{WildcardBindTransports: []wagonet.PolicyTransport{wagonet.PolicyTransportUDP}})
+}
 
 // AllowPrivilegedBind permits explicitly granted binds on ports 1..1023.
 func AllowPrivilegedBind() Option {
-	return WithPolicy(wagonet.PolicyConfig{AllowPrivilegedBind: true})
+	return WithPolicy(wagonet.PolicyConfig{PrivilegedBindTransports: []wagonet.PolicyTransport{wagonet.PolicyTransportUDP}})
 }
 
 // AllowLoopback permits otherwise granted loopback destinations.
-func AllowLoopback() Option { return WithPolicy(wagonet.PolicyConfig{AllowLoopback: true}) }
+func AllowLoopback() Option {
+	return WithPolicy(wagonet.PolicyConfig{LoopbackTransports: []wagonet.PolicyTransport{wagonet.PolicyTransportUDP}})
+}
 
 // AllowMulticast permits otherwise granted multicast destinations.
-func AllowMulticast() Option { return WithPolicy(wagonet.PolicyConfig{AllowMulticast: true}) }
+func AllowMulticast() Option {
+	return WithPolicy(wagonet.PolicyConfig{MulticastTransports: []wagonet.PolicyTransport{wagonet.PolicyTransportUDP}})
+}
 
 // AllowBroadcast permits otherwise granted limited-broadcast destinations.
-func AllowBroadcast() Option { return WithPolicy(wagonet.PolicyConfig{AllowBroadcast: true}) }
+func AllowBroadcast() Option {
+	return WithPolicy(wagonet.PolicyConfig{BroadcastTransports: []wagonet.PolicyTransport{wagonet.PolicyTransportUDP}})
+}
 
 // AllowAll conspicuously grants UDP authority in both directions and every
 // special endpoint class. Storage and quotas remain finite.
@@ -104,8 +112,11 @@ func AllowAll() Option {
 			Action: wagonet.PolicyAllow, Transports: []wagonet.PolicyTransport{wagonet.PolicyTransportUDP},
 			Directions: []wagonet.PolicyDirection{wagonet.PolicyInbound, wagonet.PolicyOutbound},
 		}},
-		AllowWildcardBind: true, AllowLoopback: true, AllowMulticast: true,
-		AllowBroadcast: true, AllowPrivilegedBind: true,
+		WildcardBindTransports:   []wagonet.PolicyTransport{wagonet.PolicyTransportUDP},
+		LoopbackTransports:       []wagonet.PolicyTransport{wagonet.PolicyTransportUDP},
+		MulticastTransports:      []wagonet.PolicyTransport{wagonet.PolicyTransportUDP},
+		BroadcastTransports:      []wagonet.PolicyTransport{wagonet.PolicyTransportUDP},
+		PrivilegedBindTransports: []wagonet.PolicyTransport{wagonet.PolicyTransportUDP},
 	})
 }
 
@@ -115,7 +126,7 @@ func defaultAuthority() policy.Config {
 			{Action: policy.ActionAllow, Transports: []policy.Transport{policy.TransportUDP}, Directions: []policy.Direction{policy.DirectionInbound}, Ports: []policy.PortRange{{First: 0, Last: 0}}},
 			{Action: policy.ActionAllow, Transports: []policy.Transport{policy.TransportUDP}, Directions: []policy.Direction{policy.DirectionOutbound}},
 		},
-		AllowWildcardBind: true,
+		WildcardBindTransports: []policy.Transport{policy.TransportUDP},
 	}
 }
 

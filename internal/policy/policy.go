@@ -74,11 +74,21 @@ type Rule struct {
 type Config struct {
 	Rules []Rule
 
+	// The boolean grants apply to every endpoint transport and are retained for
+	// advanced caller-authored compatibility policy. Protocol facades use the
+	// transport-scoped selectors below so enabling a UDP class cannot widen TCP
+	// authority, or vice versa.
 	AllowWildcardBind   bool
 	AllowLoopback       bool
 	AllowMulticast      bool
 	AllowBroadcast      bool
 	AllowPrivilegedBind bool
+
+	WildcardBindTransports   []Transport
+	LoopbackTransports       []Transport
+	MulticastTransports      []Transport
+	BroadcastTransports      []Transport
+	PrivilegedBindTransports []Transport
 }
 
 // Merge returns one independently owned policy configuration. Rules retain
@@ -101,6 +111,11 @@ func Merge(configs ...Config) Config {
 		merged.AllowMulticast = merged.AllowMulticast || config.AllowMulticast
 		merged.AllowBroadcast = merged.AllowBroadcast || config.AllowBroadcast
 		merged.AllowPrivilegedBind = merged.AllowPrivilegedBind || config.AllowPrivilegedBind
+		merged.WildcardBindTransports = append(merged.WildcardBindTransports, config.WildcardBindTransports...)
+		merged.LoopbackTransports = append(merged.LoopbackTransports, config.LoopbackTransports...)
+		merged.MulticastTransports = append(merged.MulticastTransports, config.MulticastTransports...)
+		merged.BroadcastTransports = append(merged.BroadcastTransports, config.BroadcastTransports...)
+		merged.PrivilegedBindTransports = append(merged.PrivilegedBindTransports, config.PrivilegedBindTransports...)
 	}
 	return merged
 }
@@ -109,12 +124,14 @@ func Merge(configs ...Config) Config {
 type Policy struct {
 	rules []compiledRule
 
-	allowWildcardBind   bool
-	allowLoopback       bool
-	allowMulticast      bool
-	allowBroadcast      bool
-	allowPrivilegedBind bool
+	allowWildcardBind   transportSet
+	allowLoopback       transportSet
+	allowMulticast      transportSet
+	allowBroadcast      transportSet
+	allowPrivilegedBind transportSet
 }
+
+type transportSet [TransportDNS + 1]bool
 
 type compiledRule struct {
 	action      Action
@@ -128,13 +145,13 @@ type compiledRule struct {
 // Compile validates, normalizes, and deep-copies config. The returned policy
 // does not retain caller-owned slices.
 func Compile(config Config) (*Policy, error) {
-	p := &Policy{
-		rules:               make([]compiledRule, 0, len(config.Rules)),
-		allowWildcardBind:   config.AllowWildcardBind,
-		allowLoopback:       config.AllowLoopback,
-		allowMulticast:      config.AllowMulticast,
-		allowBroadcast:      config.AllowBroadcast,
-		allowPrivilegedBind: config.AllowPrivilegedBind,
+	p := &Policy{rules: make([]compiledRule, 0, len(config.Rules))}
+	if !compileTransportSet(&p.allowWildcardBind, config.AllowWildcardBind, config.WildcardBindTransports) ||
+		!compileTransportSet(&p.allowLoopback, config.AllowLoopback, config.LoopbackTransports) ||
+		!compileTransportSet(&p.allowMulticast, config.AllowMulticast, config.MulticastTransports) ||
+		!compileTransportSet(&p.allowBroadcast, config.AllowBroadcast, config.BroadcastTransports) ||
+		!compileTransportSet(&p.allowPrivilegedBind, config.AllowPrivilegedBind, config.PrivilegedBindTransports) {
+		return nil, ErrInvalidRule
 	}
 	for _, input := range config.Rules {
 		rule, err := compileRule(input)
@@ -151,27 +168,47 @@ func Compile(config Config) (*Policy, error) {
 // closed before ordinary rules are evaluated.
 func (p *Policy) CheckEndpoint(operation Operation, address netip.Addr, port uint16) bool {
 	transport, direction, ok := operationEndpoint(operation)
-	if p == nil || !ok || !address.IsValid() || address.Is4In6() {
-		return false
-	}
-	if address.IsUnspecified() {
-		if direction != DirectionInbound || !p.allowWildcardBind {
-			return false
-		}
-	}
-	if address.IsLoopback() && !p.allowLoopback {
-		return false
-	}
-	if address.IsMulticast() && !p.allowMulticast {
-		return false
-	}
-	if isLimitedBroadcast(address) && !p.allowBroadcast {
-		return false
-	}
-	if direction == DirectionInbound && port > 0 && port < 1024 && !p.allowPrivilegedBind {
+	if p == nil || !ok || !p.endpointClassAllowed(transport, direction, address, port) {
 		return false
 	}
 	return p.decide(query{transport: transport, direction: direction, address: address, port: port})
+}
+
+// CheckEndpointTransition validates an authority-preserving endpoint change.
+// The requested placeholder must be ordinarily allowed, the concrete endpoint
+// must pass every special-class gate, and no deny rule may match the concrete
+// endpoint. This permits a port-zero allocation request without turning its
+// resulting ephemeral port into general explicit-bind authority.
+func (p *Policy) CheckEndpointTransition(operation Operation, requestedAddress netip.Addr, requestedPort uint16, actualAddress netip.Addr, actualPort uint16) bool {
+	if !p.CheckEndpoint(operation, requestedAddress, requestedPort) {
+		return false
+	}
+	transport, direction, ok := operationEndpoint(operation)
+	if !ok || !p.endpointClassAllowed(transport, direction, actualAddress, actualPort) {
+		return false
+	}
+	return !p.denied(query{transport: transport, direction: direction, address: actualAddress, port: actualPort})
+}
+
+func (p *Policy) endpointClassAllowed(transport Transport, direction Direction, address netip.Addr, port uint16) bool {
+	if p == nil || !address.IsValid() || address.Is4In6() {
+		return false
+	}
+	if address.IsUnspecified() {
+		if direction != DirectionInbound || !p.allowWildcardBind[transport] {
+			return false
+		}
+	}
+	if address.IsLoopback() && !p.allowLoopback[transport] {
+		return false
+	}
+	if address.IsMulticast() && !p.allowMulticast[transport] {
+		return false
+	}
+	if isLimitedBroadcast(address) && !p.allowBroadcast[transport] {
+		return false
+	}
+	return direction != DirectionInbound || port == 0 || port >= 1024 || p.allowPrivilegedBind[transport]
 }
 
 // CheckDNS decides authority to resolve a normalized DNS name. Empty names,
@@ -208,6 +245,15 @@ func (p *Policy) decide(q query) bool {
 		allowed = true
 	}
 	return allowed
+}
+
+func (p *Policy) denied(q query) bool {
+	for _, rule := range p.rules {
+		if rule.action == ActionDeny && rule.matches(q) {
+			return true
+		}
+	}
+	return false
 }
 
 func compileRule(input Rule) (compiledRule, error) {
@@ -294,6 +340,24 @@ func normalizeTransports(input []Transport) ([]Transport, bool) {
 	}
 	slices.Sort(out)
 	return slices.Compact(out), true
+}
+
+func compileTransportSet(target *transportSet, all bool, scoped []Transport) bool {
+	if target == nil {
+		return false
+	}
+	if all {
+		for transport := TransportUDP; transport <= TransportDNS; transport++ {
+			target[transport] = true
+		}
+	}
+	for _, transport := range scoped {
+		if transport < TransportUDP || transport > TransportDNS {
+			return false
+		}
+		target[transport] = true
+	}
+	return true
 }
 
 func normalizeDirections(input []Direction) ([]Direction, bool) {

@@ -69,7 +69,11 @@ outbound unicast/replies; DNS contributes valid-name query authority and becomes
 usable only with an explicit finite resolver configuration. Listener/server,
 privileged bind, loopback, multicast, broadcast, raw additions, suppression of
 default authority, and conspicuous `AllowAll` grants remain protocol-local
-options. None of these options creates a second policy or quota domain.
+options. Special-class grants are compiled per transport, so a TCP option cannot
+widen UDP authority or vice versa. Port-zero UDP binds authorize allocation only;
+the final concrete ephemeral endpoint is checked against special-class gates and
+deny rules without becoming general explicit-port authority. None of these
+options creates a second policy or quota domain.
 
 `internal/quota` provides finite per-instance total/protocol resource, queued-byte,
 DNS-work, and service-work counters. Tentative reservations must be committed or

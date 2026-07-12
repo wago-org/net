@@ -35,6 +35,55 @@ func TestMergeCopiesRulesAndPreservesDenyPrecedence(t *testing.T) {
 	}
 }
 
+func TestTransportScopedSpecialClassesDoNotCrossProtocols(t *testing.T) {
+	compiled, err := Compile(Config{
+		Rules: []Rule{
+			{Action: ActionAllow, Transports: []Transport{TransportUDP}, Directions: []Direction{DirectionOutbound}},
+			{Action: ActionAllow, Transports: []Transport{TransportTCP}, Directions: []Direction{DirectionOutbound}},
+		},
+		LoopbackTransports:  []Transport{TransportUDP},
+		MulticastTransports: []Transport{TransportUDP},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !compiled.CheckEndpoint(OperationUDPSend, mustAddr("127.0.0.1"), 53) {
+		t.Fatal("scoped UDP loopback grant was denied")
+	}
+	if compiled.CheckEndpoint(OperationTCPConnect, mustAddr("127.0.0.1"), 443) {
+		t.Fatal("scoped UDP loopback grant widened TCP authority")
+	}
+	if !compiled.CheckEndpoint(OperationUDPSend, mustAddr("224.0.0.1"), 53) {
+		t.Fatal("scoped UDP multicast grant was denied")
+	}
+}
+
+func TestEndpointTransitionPreservesAllocationAuthorityAndConcreteDenies(t *testing.T) {
+	compiled, err := Compile(Config{
+		Rules: []Rule{
+			{Action: ActionAllow, Transports: []Transport{TransportUDP}, Directions: []Direction{DirectionInbound}, Ports: []PortRange{{First: 0, Last: 0}}},
+			{Action: ActionDeny, Transports: []Transport{TransportUDP}, Directions: []Direction{DirectionInbound}, Ports: []PortRange{{First: 49152, Last: 49152}}},
+		},
+		WildcardBindTransports: []Transport{TransportUDP},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	wildcard := mustAddr("0.0.0.0")
+	if !compiled.CheckEndpoint(OperationUDPBind, wildcard, 0) {
+		t.Fatal("ephemeral allocation request was denied")
+	}
+	if compiled.CheckEndpoint(OperationUDPBind, wildcard, 49153) {
+		t.Fatal("placeholder authority became explicit ephemeral-port authority")
+	}
+	if compiled.CheckEndpointTransition(OperationUDPBind, wildcard, 0, wildcard, 49152) {
+		t.Fatal("concrete ephemeral-port deny was bypassed")
+	}
+	if !compiled.CheckEndpointTransition(OperationUDPBind, wildcard, 0, wildcard, 49153) {
+		t.Fatal("non-denied concrete ephemeral allocation was rejected")
+	}
+}
+
 func TestPolicyDenyPrecedenceIsOrderIndependent(t *testing.T) {
 	allow := Rule{
 		Action:     ActionAllow,
@@ -157,6 +206,9 @@ func TestPolicyRejectsMappedAddressesAndMalformedSelectors(t *testing.T) {
 	}
 	if _, err := Compile(Config{Rules: []Rule{{Action: ActionAllow, Prefixes: []netip.Prefix{mustPrefix("::ffff:192.0.2.0/120")}}}}); err == nil {
 		t.Fatal("IPv4-mapped IPv6 rule accepted")
+	}
+	if _, err := Compile(Config{LoopbackTransports: []Transport{99}}); err == nil {
+		t.Fatal("invalid scoped special-class transport accepted")
 	}
 	bad := []Rule{
 		{},

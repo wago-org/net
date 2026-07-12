@@ -21,8 +21,11 @@ func TestExtensionMetadataAndABIBinding(t *testing.T) {
 	if info.ID != "github.com/wago-org/net" || info.Stability != wago.Experimental {
 		t.Fatalf("Info = %+v", info)
 	}
-	if got := info.Compat.Engines["wago"]; got != ">=0.1.0" {
+	if got := info.Compat.Engines["wago"]; got != "0.1.0" {
 		t.Fatalf("wago compatibility = %q", got)
+	}
+	if !info.Private {
+		t.Fatal("experimental exact-revision plugin must remain private")
 	}
 
 	rt := wago.NewRuntime()
@@ -107,6 +110,12 @@ func TestExtensionMetadataAndABIBinding(t *testing.T) {
 	fn(nil, nil, results)
 	if got := uint32(results[0]); got != ABIVersion1 {
 		t.Fatalf("abi_version = %#x, want %#x", got, ABIVersion1)
+	}
+	fn(nil, nil, nil)
+	malformed := []uint64{0xfeedface}
+	fn(nil, []uint64{1}, malformed)
+	if malformed[0] != 0xfeedface {
+		t.Fatalf("malformed abi_version call mutated result: %#x", malformed[0])
 	}
 }
 

@@ -269,6 +269,7 @@ func (n *Adapter) TryBind(local nscore.Endpoint) (nscore.Resource, nscore.Progre
 	if len(n.sockets) == int(n.config.MaxSockets) {
 		return nil, 0, nscore.Fail(nscore.FailureResourceLimit, lneto.ErrExhausted)
 	}
+	requested := local
 	socket := &udpSocket{owner: n, local: local}
 	if local.Port == 0 {
 		attempts := int(n.config.MaxSockets) + n.core.UDPPortLeaseCountLocked() + 1
@@ -283,6 +284,13 @@ func (n *Adapter) TryBind(local nscore.Endpoint) (nscore.Resource, nscore.Progre
 	}
 	if socket.portLease.UDPPort() == 0 {
 		return nil, 0, nscore.Fail(nscore.FailureAddressInUse, lneto.ErrAlreadyRegistered)
+	}
+	// Port zero is only an allocation request. Check authority against the final
+	// concrete endpoint before publishing the socket so a deny rule for an
+	// ephemeral port cannot be bypassed by binding the placeholder port zero.
+	if requested.Port == 0 && !n.policy.CheckEndpointTransition(policy.OperationUDPBind, requested.Address, requested.Port, local.Address, local.Port) {
+		socket.portLease.ReleaseLocked()
+		return nil, 0, nscore.Fail(nscore.FailureAccessDenied, errPolicyDenied)
 	}
 
 	retainedBytes := uint64(n.config.MaxPayloadBytes) * uint64(n.config.ReceiveDatagrams+n.config.TransmitDatagrams)

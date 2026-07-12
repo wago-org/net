@@ -3,6 +3,13 @@
 Capability-gated networking plugins for the [Wago](https://github.com/wago-org/wago)
 WebAssembly runtime, backed initially by [lneto](https://github.com/soypat/lneto).
 
+> [!WARNING]
+> This module is private and experimental. Use it only with the exact Wago
+> source revision selected and verified by the repository's signoff tooling;
+> the `0.1.0` engine version alone does not identify the reviewed lifecycle and
+> callback implementation. The current recorded release decision is blocked and
+> must not be treated as production approval.
+
 The repository exposes the experimental `wago_net.abi_version` core import plus
 separately capability-gated `wago_net_udp`, `wago_net_tcp`, and `wago_net_dns`
 modules. UDP covers configured-namespace discovery, bind, send, receive, close,

@@ -71,6 +71,41 @@ func TestAdapterExchangeTruncationPortLeaseAndClose(t *testing.T) {
 	}
 }
 
+func TestEphemeralBindChecksFinalAllocatedPortAgainstPolicy(t *testing.T) {
+	config := Config{MaxSockets: 1, ReceiveBytes: 32, TransmitBytes: 32, ReceiveDatagrams: 1, TransmitDatagrams: 1, MaxPayloadBytes: 32}
+	policyConfig := policy.Config{
+		Rules: []policy.Rule{
+			{Action: policy.ActionDeny, Transports: []policy.Transport{policy.TransportUDP}, Directions: []policy.Direction{policy.DirectionInbound}, Ports: []policy.PortRange{{First: firstEphemeralUDPPort, Last: firstEphemeralUDPPort}}},
+			{Action: policy.ActionAllow, Transports: []policy.Transport{policy.TransportUDP}, Directions: []policy.Direction{policy.DirectionInbound}, Ports: []policy.PortRange{{First: 0, Last: 0}}},
+		},
+		WildcardBindTransports: []policy.Transport{policy.TransportUDP},
+	}
+	common, adapter, account := newTestAdapterWithConfigAndPolicy(t, 35, config, policyConfig)
+	local := nscore.Endpoint{Address: netip.IPv4Unspecified()}
+	if resource, progress, err := adapter.TryBind(local); err == nil || resource != nil || progress != 0 {
+		t.Fatalf("denied first ephemeral bind = %T, %v, %v", resource, progress, err)
+	} else if failure, ok := nscore.FailureOf(err); !ok || failure != nscore.FailureAccessDenied {
+		t.Fatalf("denied first ephemeral bind failure = %v", err)
+	}
+	common.Lock()
+	if leases := common.UDPPortLeaseCountLocked(); leases != 0 {
+		common.Unlock()
+		t.Fatalf("denied ephemeral bind retained %d leases", leases)
+	}
+	common.Unlock()
+	if usage, _ := account.Snapshot(); usage != (quota.Usage{}) {
+		t.Fatalf("denied ephemeral bind retained quota = %+v", usage)
+	}
+	resource, progress, err := adapter.TryBind(local)
+	if err != nil || progress != nscore.ProgressDone {
+		t.Fatalf("second ephemeral bind = %T, %v, %v", resource, progress, err)
+	}
+	socket := resource.(udpns.Socket)
+	if got := socket.LocalEndpoint().Port; got != firstEphemeralUDPPort+1 {
+		t.Fatalf("second ephemeral port = %d, want %d", got, firstEphemeralUDPPort+1)
+	}
+}
+
 func TestAdapterCloseReleasesAllSocketsDeterministically(t *testing.T) {
 	common, adapter, account := newTestAdapter(t, 33)
 	for _, port := range []uint16{4100, 4101} {
@@ -185,11 +220,16 @@ func newTestAdapter(t testing.TB, id byte) (*lnetocore.Namespace, *Adapter, *quo
 
 func newTestAdapterWithConfig(t testing.TB, id byte, config Config) (*lnetocore.Namespace, *Adapter, *quota.Account) {
 	t.Helper()
-	compiled, err := policy.Compile(policy.Config{Rules: []policy.Rule{{
+	return newTestAdapterWithConfigAndPolicy(t, id, config, policy.Config{Rules: []policy.Rule{{
 		Action: policy.ActionAllow, Transports: []policy.Transport{policy.TransportUDP},
 		Directions: []policy.Direction{policy.DirectionInbound, policy.DirectionOutbound},
 		Prefixes:   []netip.Prefix{netip.MustParsePrefix("192.0.2.0/24")},
 	}}})
+}
+
+func newTestAdapterWithConfigAndPolicy(t testing.TB, id byte, config Config, policyConfig policy.Config) (*lnetocore.Namespace, *Adapter, *quota.Account) {
+	t.Helper()
+	compiled, err := policy.Compile(policyConfig)
 	if err != nil {
 		t.Fatal(err)
 	}

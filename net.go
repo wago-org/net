@@ -354,7 +354,10 @@ func (e *Extension) bindings() []binding {
 	}
 }
 
-func abiVersion(_ wago.HostModule, _ []uint64, results []uint64) {
+func abiVersion(_ wago.HostModule, params, results []uint64) {
+	if len(params) != 0 || len(results) != 1 {
+		return
+	}
 	results[0] = uint64(ABIVersion1)
 }
 

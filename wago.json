@@ -3,12 +3,13 @@
   "module": "github.com/wago-org/net",
   "name": "Wago Networking",
   "version": "0.0.0",
-  "description": "Capability-gated networking plugins for Wago backed initially by lneto.",
+  "description": "Private experimental capability-gated networking plugins for an exactly reviewed Wago source revision, backed initially by lneto.",
   "stability": "experimental",
   "license": "Apache-2.0",
   "homepage": "https://github.com/wago-org/net",
   "repository": "https://github.com/wago-org/net",
   "authors": ["The wago authors"],
+  "private": true,
   "keywords": [
     "network",
     "tcp",
@@ -22,6 +23,6 @@
     "wasm"
   ],
   "engines": {
-    "wago": ">=0.1.0"
+    "wago": "0.1.0"
   }
 }

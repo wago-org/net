@@ -87,17 +87,17 @@ func AllowListeners(ports ...wagonet.PolicyPortRange) Option {
 // AllowWildcardBind permits explicitly granted listeners to use an unspecified
 // local address. It does not add listener storage or an inbound allow rule.
 func AllowWildcardBind() Option {
-	return WithPolicy(wagonet.PolicyConfig{AllowWildcardBind: true})
+	return WithPolicy(wagonet.PolicyConfig{WildcardBindTransports: []wagonet.PolicyTransport{wagonet.PolicyTransportTCP}})
 }
 
 // AllowPrivilegedBind permits explicitly granted listeners on ports 1..1023.
 func AllowPrivilegedBind() Option {
-	return WithPolicy(wagonet.PolicyConfig{AllowPrivilegedBind: true})
+	return WithPolicy(wagonet.PolicyConfig{PrivilegedBindTransports: []wagonet.PolicyTransport{wagonet.PolicyTransportTCP}})
 }
 
 // AllowLoopback permits otherwise granted loopback connections and listeners.
 func AllowLoopback() Option {
-	return WithPolicy(wagonet.PolicyConfig{AllowLoopback: true})
+	return WithPolicy(wagonet.PolicyConfig{LoopbackTransports: []wagonet.PolicyTransport{wagonet.PolicyTransportTCP}})
 }
 
 // AllowAll conspicuously grants TCP authority in both directions and every
@@ -109,8 +109,11 @@ func AllowAll() Option {
 			Action: wagonet.PolicyAllow, Transports: []wagonet.PolicyTransport{wagonet.PolicyTransportTCP},
 			Directions: []wagonet.PolicyDirection{wagonet.PolicyInbound, wagonet.PolicyOutbound},
 		}},
-		AllowWildcardBind: true, AllowLoopback: true, AllowMulticast: true,
-		AllowBroadcast: true, AllowPrivilegedBind: true,
+		WildcardBindTransports:   []wagonet.PolicyTransport{wagonet.PolicyTransportTCP},
+		LoopbackTransports:       []wagonet.PolicyTransport{wagonet.PolicyTransportTCP},
+		MulticastTransports:      []wagonet.PolicyTransport{wagonet.PolicyTransportTCP},
+		BroadcastTransports:      []wagonet.PolicyTransport{wagonet.PolicyTransportTCP},
+		PrivilegedBindTransports: []wagonet.PolicyTransport{wagonet.PolicyTransportTCP},
 	})
 }
 
