@@ -72,6 +72,36 @@ func TestValidConfigRejectsOverflowAndKeepsAdapterCreationBounded(t *testing.T) 
 	}
 }
 
+func TestListenerAndConnectReuseReduceSteadyStateAllocations(t *testing.T) {
+	_, adapter := newTestAdapter(t, 3, 1, 1)
+	listen := nscore.Endpoint{Address: netip.MustParseAddr("192.0.2.3"), Port: 4203}
+	listenAllocs := testing.AllocsPerRun(1000, func() {
+		value, progress, err := adapter.TryListen(listen)
+		if err != nil || progress != nscore.ProgressDone {
+			panic(err)
+		}
+		if err := value.Close(); err != nil {
+			panic(err)
+		}
+	})
+	if listenAllocs > 3 {
+		t.Fatalf("listen/close allocations = %v, want <= 3", listenAllocs)
+	}
+	remote := nscore.Endpoint{Address: netip.MustParseAddr("192.0.2.4"), Port: 4204}
+	connectAllocs := testing.AllocsPerRun(1000, func() {
+		value, progress, err := adapter.TryConnect(remote)
+		if err != nil || progress != nscore.ProgressInProgress {
+			panic(err)
+		}
+		if err := value.Close(); err != nil {
+			panic(err)
+		}
+	})
+	if connectAllocs > 4 {
+		t.Fatalf("connect/close allocations = %v, want <= 4", connectAllocs)
+	}
+}
+
 func TestAcceptedCloseRetainsSlotUntilChargedMaintenance(t *testing.T) {
 	clientCore, client := newTestAdapter(t, 1, 0, 2)
 	serverCore, server := newTestAdapter(t, 2, 1, 0)

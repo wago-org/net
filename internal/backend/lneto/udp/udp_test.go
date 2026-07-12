@@ -75,6 +75,23 @@ func TestAdapterExchangeTruncationPortLeaseAndClose(t *testing.T) {
 	}
 }
 
+func TestAdapterTryBindCloseReusesDatagramBacking(t *testing.T) {
+	_, adapter, _ := newTestAdapter(t, 90)
+	local := nscore.Endpoint{Address: netip.MustParseAddr("192.0.2.90"), Port: 4090}
+	allocs := testing.AllocsPerRun(1000, func() {
+		value, progress, err := adapter.TryBind(local)
+		if err != nil || progress != nscore.ProgressDone {
+			panic(err)
+		}
+		if err := value.Close(); err != nil {
+			panic(err)
+		}
+	})
+	if allocs > 1 {
+		t.Fatalf("bind/close allocations = %v, want <= 1", allocs)
+	}
+}
+
 func TestEphemeralBindChecksFinalAllocatedPortAgainstPolicy(t *testing.T) {
 	config := Config{MaxSockets: 1, ReceiveBytes: 32, TransmitBytes: 32, ReceiveDatagrams: 1, TransmitDatagrams: 1, MaxPayloadBytes: 32}
 	policyConfig := policy.Config{

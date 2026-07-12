@@ -57,6 +57,7 @@ type Adapter struct {
 	policy                 *policy.Policy
 	quotas                 *quota.Account
 	queries                []*dnsQuery
+	freeRecordOverflow     [][]dnsns.Record
 	byPort                 map[uint16]*dnsQuery
 	candidates             []dnsns.Record
 	names                  []string
@@ -84,6 +85,9 @@ func New(common *lnetocore.Namespace, config Config) (*Adapter, error) {
 		names:      make([]string, 2*(config.MaxResponseBytes/11)),
 		nextPort:   firstEphemeralDNSPort, nextTxID: uint16(common.RandSeedLocked()) | 1,
 	}
+	if config.MaxQueries > 0 && int(config.MaxRecords) > inlineDNSRecordCapacity {
+		n.freeRecordOverflow = make([][]dnsns.Record, 0, config.MaxQueries)
+	}
 	common.Unlock()
 	if err := common.Install(lnetocore.Participant{
 		IngressOrder: serviceOrder,
@@ -110,23 +114,44 @@ const (
 )
 
 type dnsQuery struct {
-	owner         *Adapter
-	request       dnsns.Request
-	localPort     uint16
-	txid          uint16
-	packet        []byte
-	packetStorage [dnsQueryPacketCapacity]byte
-	records       []dnsns.Record
-	recordStorage [inlineDNSRecordCapacity]dnsns.Record
-	cursor        int
-	attempts      uint16
-	retry         uint16
-	state         dnsQueryState
-	failure       error
+	owner          *Adapter
+	request        dnsns.Request
+	localPort      uint16
+	txid           uint16
+	packet         []byte
+	packetStorage  [dnsQueryPacketCapacity]byte
+	records        []dnsns.Record
+	recordStorage  [inlineDNSRecordCapacity]dnsns.Record
+	recordOverflow []dnsns.Record
+	cursor         int
+	attempts       uint16
+	retry          uint16
+	state          dnsQueryState
+	failure        error
 
 	portLease lnetocore.UDPPortLease
 	retained  quota.Charge
 	work      quota.Charge
+}
+
+func (n *Adapter) acquireRecordOverflowLocked() []dnsns.Record {
+	if n == nil {
+		return nil
+	}
+	if len(n.freeRecordOverflow) == 0 {
+		return make([]dnsns.Record, 0, n.config.MaxRecords)
+	}
+	records := n.freeRecordOverflow[len(n.freeRecordOverflow)-1]
+	n.freeRecordOverflow = n.freeRecordOverflow[:len(n.freeRecordOverflow)-1]
+	return records
+}
+
+func (n *Adapter) recycleRecordOverflowLocked(records []dnsns.Record) {
+	if n == nil || records == nil {
+		return
+	}
+	clear(records)
+	n.freeRecordOverflow = append(n.freeRecordOverflow, records[:0:cap(records)])
 }
 
 func (n *Adapter) TryResolve(request dnsns.Request) (nscore.Resource, nscore.Progress, error) {
@@ -151,24 +176,31 @@ func (n *Adapter) TryResolve(request dnsns.Request) (nscore.Resource, nscore.Pro
 		return nil, 0, nscore.Fail(nscore.FailureResourceLimit, lneto.ErrExhausted)
 	}
 	query := &dnsQuery{owner: n, request: request, txid: n.nextTxID}
+	if int(n.config.MaxRecords) <= len(query.recordStorage) {
+		query.records = query.recordStorage[:0:n.config.MaxRecords]
+	} else {
+		query.recordOverflow = n.acquireRecordOverflowLocked()
+		if query.recordOverflow == nil {
+			return nil, 0, nscore.Fail(nscore.FailureResourceLimit, lneto.ErrExhausted)
+		}
+		query.records = query.recordOverflow[:0:n.config.MaxRecords]
+	}
 	if !n.allocatePortLocked(&query.portLease) {
+		n.recycleRecordOverflowLocked(query.recordOverflow)
 		return nil, 0, nscore.Fail(nscore.FailureResourceLimit, lneto.ErrExhausted)
 	}
 	query.localPort = query.portLease.UDPPort()
 	packet, err := buildDNSQueryPacketInto(query.packetStorage[:], request, n.nextTxID, n.config.MaxResponseBytes)
 	if err != nil {
 		query.portLease.ReleaseLocked()
+		n.recycleRecordOverflowLocked(query.recordOverflow)
 		return nil, 0, lnetocore.MapError(err)
 	}
 	query.packet = packet
-	if int(n.config.MaxRecords) <= len(query.recordStorage) {
-		query.records = query.recordStorage[:0:n.config.MaxRecords]
-	} else {
-		query.records = make([]dnsns.Record, 0, n.config.MaxRecords)
-	}
 	query.state = dnsQueryPending
 	if err := n.quotas.AcquireResourceAndQueuedBytes(&query.retained, quota.ResourceDNS, 1, dnsRetainedBytes(n.config)); err != nil {
 		query.portLease.ReleaseLocked()
+		n.recycleRecordOverflowLocked(query.recordOverflow)
 		return nil, 0, lnetocore.MapError(err)
 	}
 	workUnits := uint64(1)
@@ -177,7 +209,9 @@ func (n *Adapter) TryResolve(request dnsns.Request) (nscore.Resource, nscore.Pro
 	}
 	if err := n.quotas.AcquireDNSWork(&query.work, workUnits); err != nil {
 		query.retained.Release()
+		query.retained.ResetReleased()
 		query.portLease.ReleaseLocked()
+		n.recycleRecordOverflowLocked(query.recordOverflow)
 		return nil, 0, lnetocore.MapError(err)
 	}
 	n.nextTxID++
@@ -279,6 +313,10 @@ func (q *dnsQuery) closeLocked() error {
 	q.request = dnsns.Request{}
 	q.failure = nil
 	q.releaseQuotaLocked()
+	if q.owner != nil {
+		q.owner.recycleRecordOverflowLocked(q.recordOverflow)
+	}
+	q.recordOverflow = nil
 	return nil
 }
 
@@ -339,7 +377,11 @@ func (n *Adapter) CloseLocked() {
 	clear(n.byPort)
 	clear(n.candidates)
 	clear(n.names)
+	for i := range n.freeRecordOverflow {
+		clear(n.freeRecordOverflow[i])
+	}
 	n.byPort = nil
+	n.freeRecordOverflow = nil
 	n.queries = nil
 	n.candidates = nil
 	n.names = nil

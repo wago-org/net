@@ -197,6 +197,26 @@ func TestDNSBoundedQueryRecordsAndQuotaLifecycle(t *testing.T) {
 	}
 }
 
+func TestResolveCloseReusesOverflowRecordBacking(t *testing.T) {
+	config := dnsTestConfig(t, 41)
+	config.DNS.MaxQueries = 1
+	config.DNS.MaxRecords = inlineDNSRecordCapacity + 1
+	ns := newTestNamespace(t, config)
+	request := namespace.DNSRequest{Name: "example.com", Types: namespace.DNSRecordsA}
+	allocs := testing.AllocsPerRun(1000, func() {
+		value, progress, err := ns.TryResolve(request)
+		if err != nil || progress != namespace.ProgressInProgress {
+			panic(err)
+		}
+		if err := value.Close(); err != nil {
+			panic(err)
+		}
+	})
+	if allocs > 1 {
+		t.Fatalf("resolve/close allocations = %v, want <= 1", allocs)
+	}
+}
+
 func TestDNSRetryTimeoutPolicyLimitsAndReuse(t *testing.T) {
 	config := dnsTestConfig(t, 42)
 	config.DNS.MaxQueries = 1

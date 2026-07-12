@@ -49,6 +49,7 @@ type Adapter struct {
 	quotas                 *quota.Account
 	byPort                 map[uint16]*udpSocket
 	sockets                []*udpSocket
+	freeBackings           []udpSocketBacking
 	nextPort               uint16
 	cursor                 int
 }
@@ -69,6 +70,9 @@ func New(common *lnetocore.Namespace, config Config) (*Adapter, error) {
 		gatewayHardwareAddress: common.GatewayHardwareAddressLocked(), policy: common.PolicyLocked(), quotas: common.QuotasLocked(),
 		byPort: make(map[uint16]*udpSocket, config.MaxSockets), sockets: make([]*udpSocket, 0, config.MaxSockets),
 		nextPort: firstEphemeralUDPPort,
+	}
+	if config.MaxSockets > 0 {
+		n.freeBackings = make([]udpSocketBacking, 0, config.MaxSockets)
 	}
 	common.Unlock()
 	if err := common.Install(lnetocore.Participant{
@@ -133,9 +137,51 @@ type datagramQueue struct {
 	byteLimit  int
 }
 
+func (n *Adapter) acquireSocketLocked(local nscore.Endpoint) *udpSocket {
+	if n == nil {
+		return nil
+	}
+	var backing udpSocketBacking
+	if len(n.freeBackings) == 0 {
+		backing = newSocketBackings(1, n.config)[0]
+	} else {
+		backing = n.freeBackings[len(n.freeBackings)-1]
+		n.freeBackings = n.freeBackings[:len(n.freeBackings)-1]
+	}
+	socket := &udpSocket{owner: n, local: local}
+	socket.rx.reset(backing.rxStorage, backing.rxSlots, n.config.MaxPayloadBytes, n.config.ReceiveBytes)
+	socket.tx.reset(backing.txStorage, backing.txSlots, n.config.MaxPayloadBytes, n.config.TransmitBytes)
+	return socket
+}
+
+func (n *Adapter) recycleSocketLocked(socket *udpSocket) {
+	if n == nil || socket == nil {
+		return
+	}
+	rxStorage, rxSlots := socket.rx.release()
+	txStorage, txSlots := socket.tx.release()
+	n.freeBackings = append(n.freeBackings, udpSocketBacking{
+		rxStorage: rxStorage,
+		txStorage: txStorage,
+		rxSlots:   rxSlots,
+		txSlots:   txSlots,
+	})
+	socket.local = nscore.Endpoint{}
+	socket.portLease = lnetocore.UDPPortLease{}
+	socket.retained = quota.Charge{}
+	socket.closed = true
+}
+
 type datagramSlot struct {
 	length   int
 	endpoint nscore.Endpoint
+}
+
+type udpSocketBacking struct {
+	rxStorage []byte
+	txStorage []byte
+	rxSlots   []datagramSlot
+	txSlots   []datagramSlot
 }
 
 func newDatagramQueue(datagrams, maxPayload, byteLimit int) datagramQueue {
@@ -148,18 +194,37 @@ func newDatagramQueue(datagrams, maxPayload, byteLimit int) datagramQueue {
 }
 
 func newSocketDatagramQueues(config Config) (datagramQueue, datagramQueue) {
-	receiveDatagrams := config.ReceiveDatagrams
-	totalDatagrams := receiveDatagrams + config.TransmitDatagrams
-	storage := make([]byte, totalDatagrams*config.MaxPayloadBytes)
-	slots := make([]datagramSlot, totalDatagrams)
-	receiveBytes := receiveDatagrams * config.MaxPayloadBytes
+	backing := newSocketBackings(1, config)[0]
 	return datagramQueue{
-			storage: storage[:receiveBytes:receiveBytes], slots: slots[:receiveDatagrams:receiveDatagrams],
+			storage: backing.rxStorage, slots: backing.rxSlots,
 			maxPayload: config.MaxPayloadBytes, byteLimit: config.ReceiveBytes,
 		}, datagramQueue{
-			storage: storage[receiveBytes:], slots: slots[receiveDatagrams:],
+			storage: backing.txStorage, slots: backing.txSlots,
 			maxPayload: config.MaxPayloadBytes, byteLimit: config.TransmitBytes,
 		}
+}
+
+func newSocketBackings(count int, config Config) []udpSocketBacking {
+	if count == 0 {
+		return nil
+	}
+	receiveDatagrams := config.ReceiveDatagrams
+	totalDatagrams := receiveDatagrams + config.TransmitDatagrams
+	storage := make([]byte, count*totalDatagrams*config.MaxPayloadBytes)
+	slots := make([]datagramSlot, count*totalDatagrams)
+	receiveBytes := receiveDatagrams * config.MaxPayloadBytes
+	backings := make([]udpSocketBacking, count)
+	for i := range backings {
+		storageStart := i * totalDatagrams * config.MaxPayloadBytes
+		slotStart := i * totalDatagrams
+		backings[i] = udpSocketBacking{
+			rxStorage: storage[storageStart : storageStart+receiveBytes : storageStart+receiveBytes],
+			txStorage: storage[storageStart+receiveBytes : storageStart+totalDatagrams*config.MaxPayloadBytes],
+			rxSlots:   slots[slotStart : slotStart+receiveDatagrams : slotStart+receiveDatagrams],
+			txSlots:   slots[slotStart+receiveDatagrams : slotStart+totalDatagrams],
+		}
+	}
+	return backings
 }
 
 func (q *datagramQueue) push(payload []byte, endpoint nscore.Endpoint) bool {
@@ -230,14 +295,28 @@ func (q *datagramQueue) slot(index int) []byte {
 	return q.storage[start : start+q.maxPayload]
 }
 
-func (q *datagramQueue) clear() {
-	clear(q.storage)
-	clear(q.slots)
-	q.storage = nil
-	q.slots = nil
+func (q *datagramQueue) reset(storage []byte, slots []datagramSlot, maxPayload, byteLimit int) {
+	q.storage = storage
+	q.slots = slots
+	q.maxPayload = maxPayload
 	q.head = 0
 	q.count = 0
 	q.bytes = 0
+	q.byteLimit = byteLimit
+}
+
+func (q *datagramQueue) release() (storage []byte, slots []datagramSlot) {
+	clear(q.storage)
+	clear(q.slots)
+	storage, slots = q.storage, q.slots
+	q.storage = nil
+	q.slots = nil
+	q.maxPayload = 0
+	q.head = 0
+	q.count = 0
+	q.bytes = 0
+	q.byteLimit = 0
+	return storage, slots
 }
 
 // TryBindUDP implements the narrow UDP namespace facet.
@@ -270,7 +349,10 @@ func (n *Adapter) TryBind(local nscore.Endpoint) (nscore.Resource, nscore.Progre
 		return nil, 0, nscore.Fail(nscore.FailureResourceLimit, lneto.ErrExhausted)
 	}
 	requested := local
-	socket := &udpSocket{owner: n, local: local}
+	socket := n.acquireSocketLocked(local)
+	if socket == nil {
+		return nil, 0, nscore.Fail(nscore.FailureResourceLimit, lneto.ErrExhausted)
+	}
 	if local.Port == 0 {
 		attempts := int(n.config.MaxSockets) + n.core.UDPPortLeaseCountLocked() + 1
 		next, ok := n.core.TryLeaseUDPPortRangeIntoLocked(&socket.portLease, n.nextPort, firstEphemeralUDPPort, attempts)
@@ -280,9 +362,11 @@ func (n *Adapter) TryBind(local nscore.Endpoint) (nscore.Resource, nscore.Progre
 			socket.local = local
 		}
 	} else if !n.core.TryLeaseUDPPortIntoLocked(&socket.portLease, local.Port) {
+		n.recycleSocketLocked(socket)
 		return nil, 0, nscore.Fail(nscore.FailureAddressInUse, lneto.ErrAlreadyRegistered)
 	}
 	if socket.portLease.UDPPort() == 0 {
+		n.recycleSocketLocked(socket)
 		return nil, 0, nscore.Fail(nscore.FailureAddressInUse, lneto.ErrAlreadyRegistered)
 	}
 	// Port zero is only an allocation request. Check authority against the final
@@ -290,15 +374,16 @@ func (n *Adapter) TryBind(local nscore.Endpoint) (nscore.Resource, nscore.Progre
 	// port cannot be bypassed by binding the placeholder port zero.
 	if requested.Port == 0 && !n.policy.CheckPortAllocation(policy.OperationUDPBind, requested.Address, local.Port) {
 		socket.portLease.ReleaseLocked()
+		n.recycleSocketLocked(socket)
 		return nil, 0, nscore.Fail(nscore.FailureAccessDenied, errPolicyDenied)
 	}
 
 	retainedBytes := uint64(n.config.MaxPayloadBytes) * uint64(n.config.ReceiveDatagrams+n.config.TransmitDatagrams)
 	if err := n.quotas.AcquireResourceAndQueuedBytes(&socket.retained, quota.ResourceUDP, 1, retainedBytes); err != nil {
 		socket.portLease.ReleaseLocked()
+		n.recycleSocketLocked(socket)
 		return nil, 0, lnetocore.MapError(err)
 	}
-	socket.rx, socket.tx = newSocketDatagramQueues(n.config)
 	n.byPort[local.Port] = socket
 	n.sockets = append(n.sockets, socket)
 	return socket, nscore.ProgressDone, nil
@@ -407,10 +492,11 @@ func (s *udpSocket) closeLocked() error {
 		}
 	}
 	s.portLease.ReleaseLocked()
-	s.rx.clear()
-	s.tx.clear()
 	s.retained.Release()
 	s.retained.ResetReleased()
+	if s.owner != nil {
+		s.owner.recycleSocketLocked(s)
+	}
 	return nil
 }
 
@@ -425,6 +511,8 @@ func (n *Adapter) CloseLocked() {
 	}
 	clear(n.byPort)
 	n.byPort = nil
+	clear(n.freeBackings)
+	n.freeBackings = nil
 	n.sockets = nil
 	n.cursor = 0
 }
