@@ -123,6 +123,51 @@ func TestMaintenanceCountsAsBoundedOperationWithoutFrame(t *testing.T) {
 	}
 }
 
+func TestShortEgressByteBudgetFailsClosedWithoutProbingOutput(t *testing.T) {
+	ns := newTestNamespace(t, 3)
+	called := 0
+	if err := ns.Install(Participant{
+		EgressOrder: 10,
+		HasEgress:   func() bool { return true },
+		Egress: func(dst []byte) (int, bool, error) {
+			called++
+			dst[0] = 1
+			return 60, true, nil
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	ns.Lock()
+	ns.SetNextIngressLocked(false)
+	ns.Unlock()
+	short := nscore.ServiceBudget{Packets: 1, Bytes: uint32(ns.Link().MaxFrameBytes() - 1), Operations: 1}
+	report, progress, err := ns.TryService(short)
+	if err != nil || progress != nscore.ProgressWouldBlock || report != (nscore.ServiceReport{}) {
+		t.Fatalf("short budget service = %+v, %v, %v", report, progress, err)
+	}
+	if called != 0 {
+		t.Fatalf("short budget probed egress producer %d times", called)
+	}
+	if snapshot := ns.Link().Snapshot(); snapshot.EgressFrames != 0 {
+		t.Fatalf("short budget emitted frame: %+v", snapshot)
+	}
+
+	setNext := func(next bool) {
+		ns.Lock()
+		ns.SetNextIngressLocked(next)
+		ns.Unlock()
+	}
+	setNext(false)
+	exact := nscore.ServiceBudget{Packets: 1, Bytes: uint32(ns.Link().MaxFrameBytes()), Operations: 1}
+	report, progress, err = ns.TryService(exact)
+	if err != nil || progress != nscore.ProgressDone || report != (nscore.ServiceReport{Packets: 1, Bytes: 60, Operations: 1}) {
+		t.Fatalf("exact budget service = %+v, %v, %v", report, progress, err)
+	}
+	if called != 1 {
+		t.Fatalf("exact budget probe count = %d, want 1", called)
+	}
+}
+
 func TestSharedOwnerValidationAndClose(t *testing.T) {
 	config := testConfig(3)
 	config.Link.MaxFrameBytes--

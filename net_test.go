@@ -216,6 +216,9 @@ func TestExtensionSnapshotsCallerConfigBeforeRegistrationAndInstantiation(t *tes
 		StaticIPv4: staticIPv4,
 	}
 	extension := New(WithConfig(config))
+	if err := extension.RegisterModule(plugin.NewModule(plugin.ModuleUDP, func(*wago.Registry, plugin.Host) {})); err != nil {
+		t.Fatalf("Register module: %v", err)
+	}
 
 	config.Policy.Rules[0].Action = PolicyDeny
 	config.Policy.Rules[0].Prefixes[0] = netip.MustParsePrefix("198.51.100.0/24")
@@ -267,6 +270,9 @@ func TestExtensionConfigSnapshotIsRaceSafeAgainstCallerMutation(t *testing.T) {
 		StaticIPv4: staticIPv4,
 	}
 	extension := New(WithConfig(config))
+	if err := extension.RegisterModule(plugin.NewModule(plugin.ModuleUDP, func(*wago.Registry, plugin.Host) {})); err != nil {
+		t.Fatalf("Register module: %v", err)
+	}
 
 	stop := make(chan struct{})
 	var workers sync.WaitGroup

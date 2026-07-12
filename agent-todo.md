@@ -17,7 +17,7 @@ and lneto as the first backend.
 - Protocols are independently selectable at registration and compile time: a TCP-only client exposes and compiles no UDP or DNS plugin module.
 - Endpoint policy is enforced at every authority-changing operation.
 - Instance cleanup is deterministic and never relies on guest destructors or finalizers.
-- Each recursive iteration produces exactly four bounded atomic commits unless the project completes earlier.
+- Each recursive iteration produces exactly three bounded atomic commits unless the project completes earlier.
 
 ## Pinned analysis revisions
 
@@ -1259,3 +1259,64 @@ Broad validation at recursion end:
 1. `fix: narrow endpoint transition authority`
 2. `fix: make empty-network lifecycle semantics explicit`
 3. `fix: validate service byte-budget semantics`
+
+## Audit recursion update — 2026-07-12 iteration 3
+
+### Completed work
+
+1. `3592b33` — `fix: narrow endpoint transition authority`
+   - Replaced the overly general endpoint-transition helper with a narrower `CheckPortAllocation` policy check that only widens a port-zero request on the original local bind address.
+   - Updated the UDP bind path to use the narrowed helper before publishing an ephemeral socket.
+   - Added policy regressions proving zero is not accepted as a concrete allocation result and explicit concrete-port denies still win.
+2. `42807b9` — `fix: make empty-network lifecycle semantics explicit`
+   - Made protocol-free networks return from `Register` before initializing instance state, attaching lifecycle hooks, or forcing `RequireReinstantiation`.
+   - Added regressions proving an empty network exposes no imports or capabilities, leaves reset policy unchanged, and stays lifecycle-inert across class acquisition and release.
+   - Kept configured selective networks unchanged: once any protocol module is selected, shared state still initializes normally.
+3. `HEAD` — `fix: validate service byte-budget semantics`
+   - Documented `ServiceBudget.Bytes` as a conservative full-frame bound: short egress budgets fail closed as would-block without probing pending output.
+   - Added a core regression proving short egress byte budgets neither invoke output producers nor emit frames.
+   - Added UDP, TCP, and DNS regressions proving queued egress work survives a short full-frame budget and is emitted once an exact full-frame budget is provided.
+   - Updated root config snapshot regressions to register a minimal internal protocol module now that protocol-free networks intentionally remain lifecycle-inert.
+
+### Remaining work
+
+Unresolved P1/P2 work from the audit prompt still includes at least:
+- DNS option-order determinism,
+- low-level `Imports` cleanup,
+- closed-resource graph clearing,
+- allocation-reduction follow-up work (resource-table close scratch removal, TCP/UDP/DNS reuse work, service composition),
+- README and documentation reorganization,
+- `wago.json` capability keyword cleanup,
+- lifecycle serialization proof or an explicit attachment state machine.
+
+### Exact tests run
+
+Targeted validation during the slice:
+- `go test ./internal/policy ./internal/backend/lneto/udp`
+- `go test ./... -run 'TestEmptyNetworkLeavesLifecycleAndResetPolicyUnchanged|TestPublicSelectiveCompositionMatrix'`
+- `go test ./internal/backend/lneto/core ./internal/backend/lneto -run 'TestShortEgressByteBudgetFailsClosedWithoutProbingOutput|TestProtocolEgressSurvivesShortFullFrameBudget'`
+
+Broad validation at recursion end:
+- `go test ./...`
+- `go test -race ./...`
+- `go vet ./...`
+- `scripts/check-source-boundaries.sh`
+- `GOOS=linux GOARCH=arm64 CGO_ENABLED=0 go build ./...`
+- `tinygo test ./...` → blocked on this host (`tinygo: command not found`)
+
+### Benchmark results
+
+- No hot-path benchmarks were rerun for this slice.
+- This slice changed authority validation shape, empty-network lifecycle gating, and service-budget documentation/regressions only.
+- Iteration-1 benchmark baselines remain the latest measured hot-path numbers until a later slice intentionally changes those paths.
+
+### Discovered follow-up issues / blockers
+
+- `tinygo` is still unavailable on the current host, so required TinyGo validation remains an external environment blocker.
+- The selective builder is now explicitly lifecycle-inert when no protocol is selected, but the separate low-level `Imports` helper still needs its planned cleanup so both host entry points stay equally explicit.
+
+### Next three proposed atomic commits
+
+1. `fix: make DNS option ordering deterministic`
+2. `fix: clean low-level Imports surface`
+3. `fix: clear closed resource graph state`

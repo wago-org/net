@@ -119,6 +119,119 @@ func TestTryServiceOperationBudgetBoundsDirectionAttempts(t *testing.T) {
 	}
 }
 
+func TestProtocolEgressSurvivesShortFullFrameBudget(t *testing.T) {
+	t.Run("udp", func(t *testing.T) {
+		aConfig := udpTestConfig(t, 11)
+		bConfig := udpTestConfig(t, 12)
+		aConfig.GatewayHardwareAddress = bConfig.HardwareAddress
+		bConfig.GatewayHardwareAddress = aConfig.HardwareAddress
+		a := newTestNamespace(t, aConfig)
+		b := newTestNamespace(t, bConfig)
+		t.Cleanup(func() { _ = a.Close() })
+		t.Cleanup(func() { _ = b.Close() })
+		aLocal := namespace.Endpoint{Address: aConfig.IPv4Address, Port: 4011}
+		bLocal := namespace.Endpoint{Address: bConfig.IPv4Address, Port: 4012}
+		aSocket := bindUDP(t, a, aLocal)
+		bindUDP(t, b, bLocal)
+		if progress, err := aSocket.TrySend([]byte("payload"), bLocal); err != nil || progress != namespace.ProgressDone {
+			t.Fatalf("send payload = %v, %v", progress, err)
+		}
+		setNextIngress(a, false)
+		short := namespace.ServiceBudget{Packets: 1, Bytes: uint32(a.requiredFrameBytes - 1), Operations: 1}
+		report, progress, err := a.TryService(short)
+		if err != nil || progress != namespace.ProgressWouldBlock || report != (namespace.ServiceReport{}) {
+			t.Fatalf("short UDP budget = %+v, %v, %v", report, progress, err)
+		}
+		if got := a.Link().Snapshot().EgressFrames; got != 0 {
+			t.Fatalf("short UDP budget emitted %d frames", got)
+		}
+		setNextIngress(a, false)
+		exact := namespace.ServiceBudget{Packets: 1, Bytes: uint32(a.requiredFrameBytes), Operations: 1}
+		report, progress, err = a.TryService(exact)
+		if err != nil || progress != namespace.ProgressDone || report.Packets != 1 || report.Bytes == 0 || report.Bytes > exact.Bytes {
+			t.Fatalf("exact UDP budget = %+v, %v, %v", report, progress, err)
+		}
+		if got := a.Link().Snapshot().EgressFrames; got != 1 {
+			t.Fatalf("exact UDP budget committed %d frames, want 1", got)
+		}
+	})
+
+	t.Run("tcp", func(t *testing.T) {
+		clientConfig := tcpTestConfig(t, 13)
+		serverConfig := tcpTestConfig(t, 14)
+		clientConfig.GatewayHardwareAddress = serverConfig.HardwareAddress
+		serverConfig.GatewayHardwareAddress = clientConfig.HardwareAddress
+		client := newTestNamespace(t, clientConfig)
+		server := newTestNamespace(t, serverConfig)
+		t.Cleanup(func() { _ = client.Close() })
+		t.Cleanup(func() { _ = server.Close() })
+		serverEndpoint := namespace.Endpoint{Address: serverConfig.IPv4Address, Port: 4214}
+		listener, progress, err := server.TryListenTCP(serverEndpoint)
+		if err != nil || progress != namespace.ProgressDone || listener == nil {
+			t.Fatalf("listen = %T, %v, %v", listener, progress, err)
+		}
+		stream, progress, err := client.TryConnectTCP(serverEndpoint)
+		if err != nil || progress != namespace.ProgressInProgress || stream == nil {
+			t.Fatalf("connect = %T, %v, %v", stream, progress, err)
+		}
+		setNextIngress(client, false)
+		short := namespace.ServiceBudget{Packets: 1, Bytes: uint32(client.requiredFrameBytes - 1), Operations: 1}
+		report, progress, err := client.TryService(short)
+		if err != nil || progress != namespace.ProgressWouldBlock || report != (namespace.ServiceReport{}) {
+			t.Fatalf("short TCP budget = %+v, %v, %v", report, progress, err)
+		}
+		if got := client.Link().Snapshot().EgressFrames; got != 0 {
+			t.Fatalf("short TCP budget emitted %d frames", got)
+		}
+		setNextIngress(client, false)
+		exact := namespace.ServiceBudget{Packets: 1, Bytes: uint32(client.requiredFrameBytes), Operations: 1}
+		report, progress, err = client.TryService(exact)
+		if err != nil || progress != namespace.ProgressDone || report.Packets != 1 || report.Bytes == 0 || report.Bytes > exact.Bytes {
+			t.Fatalf("exact TCP budget = %+v, %v, %v", report, progress, err)
+		}
+		if got := client.Link().Snapshot().EgressFrames; got != 1 {
+			t.Fatalf("exact TCP budget committed %d frames, want 1", got)
+		}
+	})
+
+	t.Run("dns", func(t *testing.T) {
+		config := testConfig(15)
+		compiled, err := policy.Compile(policy.Config{Rules: []policy.Rule{{
+			Action: policy.ActionAllow, Transports: []policy.Transport{policy.TransportDNS}, Directions: []policy.Direction{policy.DirectionOutbound}, DNSSuffixes: []string{"example.com"},
+		}}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		config.Policy = compiled
+		config.Quotas = quota.NewAccount(quota.Limits{Resources: 4, DNSResources: 2, QueuedBytes: 4096, DNSWork: 2})
+		config.DNS = DNSConfig{Server: netip.MustParseAddr("192.0.2.53"), MaxQueries: 1, MaxRecords: 2, MaxResponseBytes: 512, MaxAttempts: 1, RetryServiceAttempts: 1}
+		ns := newTestNamespace(t, config)
+		t.Cleanup(func() { _ = ns.Close() })
+		query, progress, err := ns.TryResolve(namespace.DNSRequest{Name: "example.com", Types: namespace.DNSRecordsA})
+		if err != nil || progress != namespace.ProgressInProgress || query == nil {
+			t.Fatalf("resolve = %T, %v, %v", query, progress, err)
+		}
+		setNextIngress(ns, false)
+		short := namespace.ServiceBudget{Packets: 1, Bytes: uint32(ns.requiredFrameBytes - 1), Operations: 1}
+		report, progress, err := ns.TryService(short)
+		if err != nil || progress != namespace.ProgressWouldBlock || report != (namespace.ServiceReport{}) {
+			t.Fatalf("short DNS budget = %+v, %v, %v", report, progress, err)
+		}
+		if got := ns.Link().Snapshot().EgressFrames; got != 0 {
+			t.Fatalf("short DNS budget emitted %d frames", got)
+		}
+		setNextIngress(ns, false)
+		exact := namespace.ServiceBudget{Packets: 1, Bytes: uint32(ns.requiredFrameBytes), Operations: 1}
+		report, progress, err = ns.TryService(exact)
+		if err != nil || progress != namespace.ProgressDone || report.Packets != 1 || report.Bytes == 0 || report.Bytes > exact.Bytes {
+			t.Fatalf("exact DNS budget = %+v, %v, %v", report, progress, err)
+		}
+		if got := ns.Link().Snapshot().EgressFrames; got != 1 {
+			t.Fatalf("exact DNS budget committed %d frames, want 1", got)
+		}
+	})
+}
+
 func TestTryServiceEmptyAndMalformedIngress(t *testing.T) {
 	ns := newTestNamespace(t, testConfig(5))
 	t.Cleanup(func() { _ = ns.Close() })

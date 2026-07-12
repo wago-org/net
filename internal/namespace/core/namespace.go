@@ -248,6 +248,10 @@ func (n *composedNamespace) Close() error {
 }
 
 // ServiceBudget bounds one manual backend service attempt in every dimension.
+// Bytes limits packet bytes reported or consumed during that attempt. Egress
+// implementations may conservatively require one full configured frame of
+// capacity before probing pending output, so shorter byte budgets fail closed as
+// would-block without consuming work.
 type ServiceBudget struct {
 	Packets    uint32
 	Bytes      uint32
