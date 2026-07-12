@@ -39,7 +39,7 @@ func (e *currentPluginManagedOwner) Register(reg *wago.Registry) error {
 
 func currentPluginNetworkConfig() Config {
 	limits := QuotaLimits{
-		Resources: 8, UDPResources: 1, TCPResources: 1, DNSResources: 1,
+		Resources: 8, UDPResources: 1, TCPResources: 2, DNSResources: 1,
 		QueuedBytes: 8192, DNSWork: 1, ServiceUnits: 128,
 	}
 	ready := ReadinessConfig{MaxRegistrations: 8}
@@ -61,7 +61,7 @@ func currentPluginNetworkConfig() Config {
 			IPv4Address: netip.MustParseAddr("192.0.2.71"), MTU: 1500,
 			Link: PacketLinkConfig{MaxFrameBytes: 1514, IngressFrames: 8, EgressFrames: 8},
 			UDP:  UDPConfig{MaxSockets: 1, ReceiveBytes: 64, TransmitBytes: 64, ReceiveDatagrams: 2, TransmitDatagrams: 2, MaxPayloadBytes: 32},
-			TCP:  TCPConfig{MaxListeners: 1, AcceptBacklog: 1, ReceiveBytes: 256, TransmitBytes: 256, TransmitPackets: 4},
+			TCP:  TCPConfig{MaxListeners: 1, MaxOutboundStreams: 1, AcceptBacklog: 1, ReceiveBytes: 256, TransmitBytes: 256, TransmitPackets: 4},
 			DNS:  DNSConfig{Server: netip.MustParseAddr("192.0.2.53"), MaxQueries: 1, MaxRecords: 2, MaxResponseBytes: 512, MaxAttempts: 1, RetryServiceAttempts: 2},
 		},
 	}
@@ -138,8 +138,9 @@ func TestCurrentPluginLeastAuthorityDirectAndManagedLifecycle(t *testing.T) {
 		t.Fatalf("direct/managed states = %p/%p, attached=%v/%v", directState, managedState, directOK, managedOK)
 	}
 	type ownedHandles struct {
-		state         *instancestate.State
-		udp, tcp, dns resource.Handle
+		state                 *instancestate.State
+		udp, listener, stream resource.Handle
+		dns                   resource.Handle
 	}
 	var owned []ownedHandles
 	for index, state := range []*instancestate.State{directState, managedState} {
@@ -147,15 +148,22 @@ func TestCurrentPluginLeastAuthorityDirectAndManagedLifecycle(t *testing.T) {
 		if opErr != nil || progress != namespace.ProgressDone {
 			t.Fatalf("state %d BindUDP = %v, %v, %v", index, udpHandle, progress, opErr)
 		}
-		tcpHandle, progress, opErr := tcpinstance.Listen(state, state.NamespaceHandle(), namespace.Endpoint{Address: netip.MustParseAddr("192.0.2.71"), Port: uint16(4200 + index)})
+		if progress, opErr = udpinstance.Send(state, udpHandle, []byte("retained"), namespace.Endpoint{Address: netip.MustParseAddr("192.0.2.90"), Port: uint16(4150 + index)}); opErr != nil || progress != namespace.ProgressDone {
+			t.Fatalf("state %d SendUDP = %v, %v", index, progress, opErr)
+		}
+		listenerHandle, progress, opErr := tcpinstance.Listen(state, state.NamespaceHandle(), namespace.Endpoint{Address: netip.MustParseAddr("192.0.2.71"), Port: uint16(4200 + index)})
 		if opErr != nil || progress != namespace.ProgressDone {
-			t.Fatalf("state %d ListenTCP = %v, %v, %v", index, tcpHandle, progress, opErr)
+			t.Fatalf("state %d ListenTCP = %v, %v, %v", index, listenerHandle, progress, opErr)
+		}
+		streamHandle, progress, opErr := tcpinstance.Connect(state, state.NamespaceHandle(), namespace.Endpoint{Address: netip.MustParseAddr("192.0.2.90"), Port: uint16(4250 + index)})
+		if opErr != nil || progress != namespace.ProgressInProgress {
+			t.Fatalf("state %d ConnectTCP = %v, %v, %v", index, streamHandle, progress, opErr)
 		}
 		dnsHandle, progress, opErr := dnsinstance.Resolve(state, state.NamespaceHandle(), namespace.DNSRequest{Name: "example.com", Types: namespace.DNSRecordsA})
 		if opErr != nil || (progress != namespace.ProgressInProgress && progress != namespace.ProgressDone) {
 			t.Fatalf("state %d ResolveDNS = %v, %v, %v", index, dnsHandle, progress, opErr)
 		}
-		owned = append(owned, ownedHandles{state: state, udp: udpHandle, tcp: tcpHandle, dns: dnsHandle})
+		owned = append(owned, ownedHandles{state: state, udp: udpHandle, listener: listenerHandle, stream: streamHandle, dns: dnsHandle})
 	}
 
 	if err := direct.Close(); err != nil {
@@ -169,14 +177,21 @@ func TestCurrentPluginLeastAuthorityDirectAndManagedLifecycle(t *testing.T) {
 	}
 	for index, item := range owned {
 		for handle, kind := range map[resource.Handle]resource.Kind{
-			item.udp: resource.KindUDPSocket, item.tcp: resource.KindTCPListener, item.dns: resource.KindDNSQuery,
+			item.udp: resource.KindUDPSocket, item.listener: resource.KindTCPListener,
+			item.stream: resource.KindTCPStream, item.dns: resource.KindDNSQuery,
 		} {
 			if _, lookupErr := item.state.Resources().Lookup(handle, kind); !errors.Is(lookupErr, resource.ErrClosed) {
 				t.Fatalf("state %d handle %v after close = %v, want ErrClosed", index, handle, lookupErr)
 			}
 		}
+		if got := item.state.Resources().Len(); got != 0 {
+			t.Fatalf("state %d resources after close = %d, want 0", index, got)
+		}
 		if usage, closed := item.state.Quotas().Snapshot(); !closed || usage != (quota.Usage{}) {
 			t.Fatalf("state %d quota after close = %+v, closed=%v", index, usage, closed)
+		}
+		if readiness := item.state.Readiness().Snapshot(); !readiness.Closed || readiness.Registrations != 0 {
+			t.Fatalf("state %d readiness after close = %+v", index, readiness)
 		}
 	}
 }
