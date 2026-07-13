@@ -27,6 +27,7 @@ const (
 	KindMDNSQuery
 	KindMDNSAnnouncement
 	KindDHCPv4Lease
+	KindLinkLocal4Claim
 	KindPollable
 )
 
@@ -279,6 +280,8 @@ func (k Kind) String() string {
 		return "mdns_announcement"
 	case KindDHCPv4Lease:
 		return "dhcpv4_lease"
+	case KindLinkLocal4Claim:
+		return "linklocal4_claim"
 	case KindPollable:
 		return "pollable"
 	default:

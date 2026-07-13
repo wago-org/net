@@ -16,62 +16,68 @@ var (
 // Limits bounds every independently accounted class. Zero denies that class;
 // there is no unbounded sentinel.
 type Limits struct {
-	Resources       uint64
-	UDPResources    uint64
-	TCPResources    uint64
-	DNSResources    uint64
-	ICMPv4Resources uint64
-	NTPResources    uint64
-	MDNSResources   uint64
-	DHCPv4Resources uint64
-	QueuedBytes     uint64
-	DNSWork         uint64
-	ICMPv4Work      uint64
-	NTPWork         uint64
-	MDNSWork        uint64
-	DHCPv4Work      uint64
-	ServiceUnits    uint64
+	Resources           uint64
+	UDPResources        uint64
+	TCPResources        uint64
+	DNSResources        uint64
+	ICMPv4Resources     uint64
+	NTPResources        uint64
+	MDNSResources       uint64
+	DHCPv4Resources     uint64
+	LinkLocal4Resources uint64
+	QueuedBytes         uint64
+	DNSWork             uint64
+	ICMPv4Work          uint64
+	NTPWork             uint64
+	MDNSWork            uint64
+	DHCPv4Work          uint64
+	LinkLocal4Work      uint64
+	ServiceUnits        uint64
 }
 
 // DefaultLimits returns conservative finite per-instance limits. Callers get a
 // value copy and may tighten individual fields before constructing an account.
 func DefaultLimits() Limits {
 	return Limits{
-		Resources:       256,
-		UDPResources:    64,
-		TCPResources:    128,
-		DNSResources:    32,
-		ICMPv4Resources: 32,
-		NTPResources:    16,
-		MDNSResources:   32,
-		DHCPv4Resources: 4,
-		QueuedBytes:     4 << 20,
-		DNSWork:         32,
-		ICMPv4Work:      32,
-		NTPWork:         16,
-		MDNSWork:        32,
-		DHCPv4Work:      4,
-		ServiceUnits:    4096,
+		Resources:           256,
+		UDPResources:        64,
+		TCPResources:        128,
+		DNSResources:        32,
+		ICMPv4Resources:     32,
+		NTPResources:        16,
+		MDNSResources:       32,
+		DHCPv4Resources:     4,
+		LinkLocal4Resources: 2,
+		QueuedBytes:         4 << 20,
+		DNSWork:             32,
+		ICMPv4Work:          32,
+		NTPWork:             16,
+		MDNSWork:            32,
+		DHCPv4Work:          4,
+		LinkLocal4Work:      2,
+		ServiceUnits:        4096,
 	}
 }
 
 // Usage is an immutable snapshot of current reservations and committed usage.
 type Usage struct {
-	Resources       uint64
-	UDPResources    uint64
-	TCPResources    uint64
-	DNSResources    uint64
-	ICMPv4Resources uint64
-	NTPResources    uint64
-	MDNSResources   uint64
-	DHCPv4Resources uint64
-	QueuedBytes     uint64
-	DNSWork         uint64
-	ICMPv4Work      uint64
-	NTPWork         uint64
-	MDNSWork        uint64
-	DHCPv4Work      uint64
-	ServiceUnits    uint64
+	Resources           uint64
+	UDPResources        uint64
+	TCPResources        uint64
+	DNSResources        uint64
+	ICMPv4Resources     uint64
+	NTPResources        uint64
+	MDNSResources       uint64
+	DHCPv4Resources     uint64
+	LinkLocal4Resources uint64
+	QueuedBytes         uint64
+	DNSWork             uint64
+	ICMPv4Work          uint64
+	NTPWork             uint64
+	MDNSWork            uint64
+	DHCPv4Work          uint64
+	LinkLocal4Work      uint64
+	ServiceUnits        uint64
 }
 
 // ResourceClass identifies a resource protocol for total-plus-protocol
@@ -87,6 +93,7 @@ const (
 	ResourceNTP
 	ResourceMDNS
 	ResourceDHCPv4
+	ResourceLinkLocal4
 )
 
 // Account is one instance's bounded, concurrently safe quota ledger.
@@ -124,6 +131,8 @@ func (a *Account) ReserveResource(class ResourceClass, count uint64) (*Reservati
 		amount.MDNSResources = count
 	case ResourceDHCPv4:
 		amount.DHCPv4Resources = count
+	case ResourceLinkLocal4:
+		amount.LinkLocal4Resources = count
 	default:
 		return nil, ErrInvalidUnits
 	}
@@ -204,6 +213,14 @@ func (a *Account) AcquireDHCPv4Work(charge *Charge, units uint64) error {
 	return a.acquireInto(charge, Usage{DHCPv4Work: units})
 }
 
+// AcquireLinkLocal4Work commits one active claim-and-defend operation.
+func (a *Account) AcquireLinkLocal4Work(charge *Charge, units uint64) error {
+	if units == 0 {
+		return ErrInvalidUnits
+	}
+	return a.acquireInto(charge, Usage{LinkLocal4Work: units})
+}
+
 // ReserveQueuedBytes tentatively accounts bytes retained outside a host call.
 func (a *Account) ReserveQueuedBytes(bytes uint64) (*Reservation, error) {
 	if bytes == 0 {
@@ -270,12 +287,14 @@ func (a *Account) acquire(amount Usage) error {
 		!fits(a.used.NTPResources, amount.NTPResources, a.limits.NTPResources) ||
 		!fits(a.used.MDNSResources, amount.MDNSResources, a.limits.MDNSResources) ||
 		!fits(a.used.DHCPv4Resources, amount.DHCPv4Resources, a.limits.DHCPv4Resources) ||
+		!fits(a.used.LinkLocal4Resources, amount.LinkLocal4Resources, a.limits.LinkLocal4Resources) ||
 		!fits(a.used.QueuedBytes, amount.QueuedBytes, a.limits.QueuedBytes) ||
 		!fits(a.used.DNSWork, amount.DNSWork, a.limits.DNSWork) ||
 		!fits(a.used.ICMPv4Work, amount.ICMPv4Work, a.limits.ICMPv4Work) ||
 		!fits(a.used.NTPWork, amount.NTPWork, a.limits.NTPWork) ||
 		!fits(a.used.MDNSWork, amount.MDNSWork, a.limits.MDNSWork) ||
 		!fits(a.used.DHCPv4Work, amount.DHCPv4Work, a.limits.DHCPv4Work) ||
+		!fits(a.used.LinkLocal4Work, amount.LinkLocal4Work, a.limits.LinkLocal4Work) ||
 		!fits(a.used.ServiceUnits, amount.ServiceUnits, a.limits.ServiceUnits) {
 		return ErrLimit
 	}
@@ -318,12 +337,14 @@ func (a *Account) fitsLocked(amount Usage) bool {
 		fits(a.used.NTPResources, amount.NTPResources, a.limits.NTPResources) &&
 		fits(a.used.MDNSResources, amount.MDNSResources, a.limits.MDNSResources) &&
 		fits(a.used.DHCPv4Resources, amount.DHCPv4Resources, a.limits.DHCPv4Resources) &&
+		fits(a.used.LinkLocal4Resources, amount.LinkLocal4Resources, a.limits.LinkLocal4Resources) &&
 		fits(a.used.QueuedBytes, amount.QueuedBytes, a.limits.QueuedBytes) &&
 		fits(a.used.DNSWork, amount.DNSWork, a.limits.DNSWork) &&
 		fits(a.used.ICMPv4Work, amount.ICMPv4Work, a.limits.ICMPv4Work) &&
 		fits(a.used.NTPWork, amount.NTPWork, a.limits.NTPWork) &&
 		fits(a.used.MDNSWork, amount.MDNSWork, a.limits.MDNSWork) &&
 		fits(a.used.DHCPv4Work, amount.DHCPv4Work, a.limits.DHCPv4Work) &&
+		fits(a.used.LinkLocal4Work, amount.LinkLocal4Work, a.limits.LinkLocal4Work) &&
 		fits(a.used.ServiceUnits, amount.ServiceUnits, a.limits.ServiceUnits)
 }
 
@@ -366,12 +387,14 @@ func (a *Account) release(amount Usage) {
 	a.used.NTPResources = subtract(a.used.NTPResources, amount.NTPResources)
 	a.used.MDNSResources = subtract(a.used.MDNSResources, amount.MDNSResources)
 	a.used.DHCPv4Resources = subtract(a.used.DHCPv4Resources, amount.DHCPv4Resources)
+	a.used.LinkLocal4Resources = subtract(a.used.LinkLocal4Resources, amount.LinkLocal4Resources)
 	a.used.QueuedBytes = subtract(a.used.QueuedBytes, amount.QueuedBytes)
 	a.used.DNSWork = subtract(a.used.DNSWork, amount.DNSWork)
 	a.used.ICMPv4Work = subtract(a.used.ICMPv4Work, amount.ICMPv4Work)
 	a.used.NTPWork = subtract(a.used.NTPWork, amount.NTPWork)
 	a.used.MDNSWork = subtract(a.used.MDNSWork, amount.MDNSWork)
 	a.used.DHCPv4Work = subtract(a.used.DHCPv4Work, amount.DHCPv4Work)
+	a.used.LinkLocal4Work = subtract(a.used.LinkLocal4Work, amount.LinkLocal4Work)
 	a.used.ServiceUnits = subtract(a.used.ServiceUnits, amount.ServiceUnits)
 }
 
@@ -481,6 +504,8 @@ func resourceUsage(class ResourceClass, count uint64) (Usage, bool) {
 		amount.MDNSResources = count
 	case ResourceDHCPv4:
 		amount.DHCPv4Resources = count
+	case ResourceLinkLocal4:
+		amount.LinkLocal4Resources = count
 	default:
 		return Usage{}, false
 	}
@@ -507,11 +532,13 @@ func (u *Usage) add(other Usage) {
 	u.NTPResources += other.NTPResources
 	u.MDNSResources += other.MDNSResources
 	u.DHCPv4Resources += other.DHCPv4Resources
+	u.LinkLocal4Resources += other.LinkLocal4Resources
 	u.QueuedBytes += other.QueuedBytes
 	u.DNSWork += other.DNSWork
 	u.ICMPv4Work += other.ICMPv4Work
 	u.NTPWork += other.NTPWork
 	u.MDNSWork += other.MDNSWork
 	u.DHCPv4Work += other.DHCPv4Work
+	u.LinkLocal4Work += other.LinkLocal4Work
 	u.ServiceUnits += other.ServiceUnits
 }

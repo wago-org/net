@@ -121,6 +121,24 @@ func TestNTPSyncKindIsExactAndNamed(t *testing.T) {
 	}
 }
 
+func TestLinkLocal4ClaimKindIsExactAndNamed(t *testing.T) {
+	table := newTable(t)
+	claim := &testResource{}
+	handle, err := table.Add(KindLinkLocal4Claim, claim)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if KindLinkLocal4Claim.String() != "linklocal4_claim" {
+		t.Fatalf("link-local kind name = %q", KindLinkLocal4Claim.String())
+	}
+	if _, err := table.Lookup(handle, KindDHCPv4Lease); !errors.Is(err, ErrBadHandle) {
+		t.Fatalf("wrong-kind lookup error = %v", err)
+	}
+	if err := table.CloseHandle(handle, KindLinkLocal4Claim); err != nil || claim.closed.Load() != 1 {
+		t.Fatalf("close = %v, count=%d", err, claim.closed.Load())
+	}
+}
+
 func TestTableReuseAdvancesGeneration(t *testing.T) {
 	table := newTable(t)
 	first := &testResource{}

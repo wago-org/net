@@ -132,6 +132,32 @@ func TestMDNSResourceQueuedBytesAndActiveWorkAccounting(t *testing.T) {
 	}
 }
 
+func TestLinkLocal4ResourceAndActiveWorkAccounting(t *testing.T) {
+	account := NewAccount(Limits{Resources: 1, LinkLocal4Resources: 1, LinkLocal4Work: 1})
+	var retained, work Charge
+	if err := account.AcquireResource(&retained, ResourceLinkLocal4, 1); err != nil {
+		t.Fatal(err)
+	}
+	if err := account.AcquireLinkLocal4Work(&work, 1); err != nil {
+		t.Fatal(err)
+	}
+	if usage, closed := account.Snapshot(); closed || usage != (Usage{Resources: 1, LinkLocal4Resources: 1, LinkLocal4Work: 1}) {
+		t.Fatalf("link-local usage = %+v, closed=%v", usage, closed)
+	}
+	var denied Charge
+	if err := account.AcquireResource(&denied, ResourceLinkLocal4, 1); !errors.Is(err, ErrLimit) {
+		t.Fatalf("link-local resource limit error = %v", err)
+	}
+	if err := account.AcquireLinkLocal4Work(&denied, 1); !errors.Is(err, ErrLimit) {
+		t.Fatalf("link-local work limit error = %v", err)
+	}
+	work.Release()
+	retained.Release()
+	if usage, _ := account.Snapshot(); usage != (Usage{}) {
+		t.Fatalf("link-local release leaked usage: %+v", usage)
+	}
+}
+
 func TestReservationRollbackAndFailureDoNotLeak(t *testing.T) {
 	account := NewAccount(Limits{QueuedBytes: 8, DNSWork: 1, ServiceUnits: 2})
 	bytes, err := account.ReserveQueuedBytes(8)

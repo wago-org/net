@@ -361,6 +361,33 @@ func TestICMPv4AddressAuthorityIsTransportScopedAndPortless(t *testing.T) {
 	}
 }
 
+func TestLinkLocal4AuthorityIsProtocolLocalAndDenyWins(t *testing.T) {
+	compiled, err := Compile(Config{Rules: []Rule{
+		{Action: ActionAllow, Transports: []Transport{TransportLinkLocal4}, Directions: []Direction{DirectionOutbound}, Prefixes: []netip.Prefix{mustPrefix("169.254.0.0/16")}},
+		{Action: ActionDeny, Transports: []Transport{TransportLinkLocal4}, Directions: []Direction{DirectionOutbound}, Prefixes: []netip.Prefix{mustPrefix("169.254.42.7/32")}},
+		{Action: ActionAllow, Transports: []Transport{TransportICMPv4}, Directions: []Direction{DirectionOutbound}},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !compiled.CheckAddress(OperationLinkLocal4Claim, mustAddr("169.254.1.1")) || !compiled.CheckAddress(OperationLinkLocal4Defend, mustAddr("169.254.1.1")) {
+		t.Fatal("authorized link-local claim/defense denied")
+	}
+	if compiled.CheckAddress(OperationLinkLocal4Claim, mustAddr("169.254.42.7")) {
+		t.Fatal("link-local deny did not win")
+	}
+	if compiled.CheckAddress(OperationLinkLocal4Claim, mustAddr("192.0.2.1")) {
+		t.Fatal("link-local authority widened outside APIPA")
+	}
+	icmpOnly, err := Compile(Config{Rules: []Rule{{Action: ActionAllow, Transports: []Transport{TransportICMPv4}, Directions: []Direction{DirectionOutbound}}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if icmpOnly.CheckAddress(OperationLinkLocal4Claim, mustAddr("169.254.1.1")) {
+		t.Fatal("ICMPv4 authority widened link-local")
+	}
+}
+
 func TestPolicyCanonicalDNSCheckDoesNotAllocate(t *testing.T) {
 	compiled, err := Compile(Config{Rules: []Rule{{Action: ActionAllow, Transports: []Transport{TransportDNS}, DNSSuffixes: []string{"example.com"}}}})
 	if err != nil {
