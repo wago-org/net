@@ -1,6 +1,6 @@
 # lneto protocol expansion plan
 
-Status: active implementation plan. ICMPv4, NTP, and mDNS are complete; later modules remain planned.
+Status: active implementation plan. ICMPv4, NTP, mDNS, and DHCPv4 are complete; later modules remain planned.
 
 ## Goal
 
@@ -24,7 +24,7 @@ DNS modules:
 | `icmpv4` | `ipv4/icmpv4` | complete: bounded copied echo requests and exact replies |
 | `ntp` | `ntp` | complete: bounded two-exchange client sampling using an explicit host clock |
 | `mdns` | `dns/mdns` | complete: bounded multicast query, response, and announcement operations |
-| `dhcpv4` | `dhcp/dhcpv4` | bounded client leases and explicitly authorized server operation |
+| `dhcpv4` | `dhcp/dhcpv4` | complete: bounded client DORA leases and explicitly authorized finite server operation |
 | `linklocal4` | `ipv4/linklocal4` | bounded RFC 3927 claim-and-defend address selection |
 | `ipv6` | `ipv6` and `x/xnet` IPv6 stack | configured IPv6 namespace and transport enablement |
 | `icmpv6` | `ipv6/icmpv6` | bounded echo and Neighbor Discovery operations |
@@ -126,7 +126,7 @@ non-basic responses, and returns offset, nonnegative round-trip delay, stratum,
 reference ID, and a corrected observation without adjusting any system clock.
 Caller deny rules win over the configured server grant, and general UDP
 authority cannot widen NTP. Selective dependency fixtures reject every omitted NTP layer; the composition
-matrix established here has since expanded to all 64 combinations of the six
+matrix established here has since expanded to all 128 combinations of the seven
 completed protocols, and granular plus aggregate registration are documented
 and tested.
 No TLS or NTS behavior is included.
@@ -152,7 +152,31 @@ quotas cover every host-retained dimension. The pinned combined high-level mDNS
 client is not used because its shallow service copy and combined query/response
 state do not provide the required ownership and correlation boundaries; only
 exported immediate DNS and packet codecs enter host paths. Selective dependency
-fixtures reject every omitted mDNS layer, runtime composition covers all 64
-combinations of the six completed protocols, and granular plus aggregate
-registration are tested. Ethernet II, ARP, IPv4, PHY/MDIO, and packet capture
-remain internal infrastructure rather than guest APIs.
+fixtures reject every omitted mDNS layer; granular plus aggregate registration
+are tested. Ethernet II, ARP, IPv4, PHY/MDIO, and packet capture remain internal
+infrastructure rather than guest APIs.
+
+DHCPv4 is exposed as independently selectable `dhcpv4.Register`, capability
+`net.dhcpv4`, and seven-function import module `wago_net_dhcpv4`. Its fixed
+checked ABI owns exact-instance lease handles, an inline 112-byte request, and an
+atomic 280-byte copied lease with at most four DNS servers. The immediate adapter
+uses the pinned exported DHCPv4 client/server state machines and Ethernet II,
+IPv4, and UDP codecs only. One client transaction owns exact UDP port 68; an
+explicit finite server owns port 67 in the same shared lease domain. Client DORA
+validates Ethernet/IP/UDP integrity, nonfragmented packets, XID, hardware address,
+message type, selected server identity, source address, option bounds, and finite
+service-attempt timeout. Accepted address/subnet identity can be applied only by
+an explicit option and only over a configured `0.0.0.0` static placeholder; the
+exact lease contribution rolls back synchronously on release or close, while all
+existing packet adapters read the shared current identity. Server mode is off by
+default, requires an exact local address, subnet, lease duration, and bounded
+client count, and checks protocol-local privileged bind plus per-offer outbound
+pool authority. General UDP authority cannot widen DHCPv4 and caller denies win.
+The pinned client implements immediate Discover/Offer/Request/Ack only: automatic
+renew/rebind and wire DHCPRELEASE are not claimed; `release` is explicitly local
+identity rollback. Resource, retained-byte, active-work, port, parser, queue, and
+service dimensions are finite. Selective dependency fixtures reject every
+omitted DHCPv4 layer, runtime composition covers all 128 combinations of the
+seven completed protocols, and granular plus aggregate registration are tested.
+No HTTP, TLS, HTTPS, NTS, raw Ethernet, ARP, IPv4, PHY/MDIO, or packet-capture
+guest API is added.

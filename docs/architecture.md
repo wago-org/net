@@ -29,6 +29,7 @@ The suite therefore uses **protocol import modules**:
 - `wago_net_icmpv4` for ICMPv4 echo;
 - `wago_net_ntp` for explicit-clock NTP synchronization;
 - `wago_net_mdns` for bounded multicast DNS queries, responses, and announcements;
+- `wago_net_dhcpv4` for bounded DORA leases and explicitly configured finite server service;
 - additional modules only when their implementations exist.
 
 This permits narrow per-protocol capabilities and independent ABI evolution
@@ -38,13 +39,14 @@ protocol modules; no process-global state or placeholder protocol module is used
 
 ## Current implementation
 
-The root extension owns seven distinct import modules: `wago_net` declares
+The root extension owns eight distinct import modules: `wago_net` declares
 `net.info` and exposes `abi_version`; `wago_net_udp` declares narrow `net.udp`
 authority; `wago_net_tcp` declares narrow `net.tcp` authority;
 `wago_net_dns` declares narrow `net.dns` authority; `wago_net_icmpv4`
 declares narrow `net.icmpv4` authority; `wago_net_ntp` declares narrow
-`net.ntp` authority; and `wago_net_mdns` declares narrow `net.mdns` authority.
-UDP, TCP, DNS, ICMPv4, NTP, and mDNS each expose complete configured-namespace
+`net.ntp` authority; `wago_net_mdns` declares narrow `net.mdns` authority; and
+`wago_net_dhcpv4` declares narrow `net.dhcpv4` authority. UDP, TCP, DNS,
+ICMPv4, NTP, mDNS, and DHCPv4 each expose complete configured-namespace
 discovery, protocol operations, kind-safe close, and independently
 capability-gated bounded poll. The explicit low-level
 `InfoImports` bundle remains core-only because protocol resources require
@@ -54,9 +56,9 @@ metadata, TinyGo-compatible slot shapes, and actual host functions do not drift.
 `internal/abi/core` provides allocation-free checked ranges, shared endpoint and
 poll layouts, disjoint multi-output validation, and common handle/memory codecs
 without exposing lneto types. `internal/abi/tcp`, `/udp`, `/dns`, `/icmpv4`,
-`/ntp`, and `/mdns` hold only TCP stream/I/O, UDP receive-result, inline DNS
-query/name/record, ICMPv4 echo, NTP sample, and mDNS query/record/announcement
-layouts, so omitted protocol ABI units stay out of selective dependency graphs.
+`/ntp`, `/mdns`, and `/dhcpv4` hold only TCP stream/I/O, UDP receive-result,
+inline DNS query/name/record, ICMPv4 echo, NTP sample, mDNS
+query/record/announcement, and DHCPv4 request/lease layouts, so omitted protocol ABI units stay out of selective dependency graphs.
 `internal/resource` provides O(1) opaque-handle lookup with exact kind checks,
 never-reused table identities, per-slot generations, rollover retirement, and
 reverse-creation O(live) cleanup. The table exists independently of protocol
@@ -86,7 +88,7 @@ deny rules without becoming general explicit-port authority. None of these
 options creates a second policy or quota domain.
 
 `internal/quota` provides finite per-instance total/protocol resource,
-queued-byte, DNS-work, active-ICMPv4-work, active-NTP-work, active-mDNS-work, and
+queued-byte, DNS-work, active-ICMPv4-work, active-NTP-work, active-mDNS-work, active-DHCPv4-work, and
 service-work counters. Tentative reservations must be committed or
 rolled back; committed allocations release exactly once. Guest poll uses a
 scoped service charge that preserves the same finite concurrent limit and panic
@@ -96,7 +98,8 @@ abandoned reservations and makes late token cleanup harmless.
 
 `internal/namespace/core` defines the backend-neutral endpoint, progress,
 stream-I/O, readiness, semantic-error, resource, namespace ownership, and bounded
-manual-service contracts. `internal/namespace/tcp`, `/udp`, `/dns`, `/icmpv4`, `/ntp`, and `/mdns` define
+manual-service contracts. `internal/namespace/tcp`, `/udp`, `/dns`, `/icmpv4`, `/ntp`, `/mdns`, and
+`/dhcpv4` define
 only their narrow creation/resource facets and protocol-local values. NTP additionally
 defines the explicit host clock contract; no ambient wall clock is available to
 the adapter. Operations
@@ -178,7 +181,15 @@ automatic response slots, finite announcement resources, mDNS resource/byte/work
 quota, cancellation, and synchronous close. It uses exported immediate DNS
 codecs rather than the pinned combined high-level mDNS client, so nested service
 slices are never retained and irrelevant records cannot complete an unrelated
-query.
+query. `internal/backend/lneto/dhcpv4` owns exact shared UDP 68 client and
+optional UDP 67 server leases, one bounded immediate DORA resource, finite
+copied options and DNS addresses, service-attempt timeout, exact XID/MAC/server
+correlation, and an optional exact transactional IPv4 identity contribution.
+Configured server mode has a finite client table and protocol-local pool
+authority. Existing packet adapters read the core's current IPv4 identity, and
+release/close restores the configured static identity synchronously. The pinned
+blocking DHCP wrapper, deadlines, sleeps, backoff, goroutines, automatic
+renew/rebind, and retained guest slices are not used.
 `internal/backend/lneto/dns` owns immediate IPv4 UDP queries plus lneto DNS
 codecs, finite query/record/response bounds,
 policy and quota ownership, deterministic service-attempt retransmission and
@@ -203,9 +214,9 @@ and all-protocol dependency fixtures require exactly the selected
 adapters/facets and reject every omitted one plus the aggregate assembler,
 completing the Stage 4 compile-isolation boundary.
 Granular `tcp/register`, `udp/register`, `dns/register`, `icmpv4/register`,
-`ntp/register`, and `mdns/register` packages own only their selected public
-facade and exact implementation graph. The root `register` package explicitly composes all six
-implemented protocols in one extension rather than
+`ntp/register`, `mdns/register`, and `dhcpv4/register` packages own only their
+selected public facade and exact implementation graph. The root `register`
+package explicitly composes all seven implemented protocols in one extension rather than
 using the aggregate compatibility constructor.
 
 `internal/readiness` attaches a finite coordinator to each instance resource
@@ -221,12 +232,12 @@ now measure the complete UDP and TCP guest poll calls at zero allocations rather
 than including a value-to-interface boxing artifact.
 
 Each `Extension` owns one private instance-state manager shared by its core,
-UDP, TCP, DNS, ICMPv4, NTP, and mDNS module bindings. Runtime instantiation attaches one resource table,
+UDP, TCP, DNS, ICMPv4, NTP, mDNS, and DHCPv4 module bindings. Runtime instantiation attaches one resource table,
 readiness coordinator, immutable policy, and finite quota ledger to the exact
 `*wago.Instance`. Optional static
 IPv4 configuration transactionally reserves namespace quota, constructs the
 backend, inserts a generation-safe handle, and registers bounded readiness before
-the state is published. UDP, TCP, DNS, ICMPv4, NTP, and mDNS creation repeat that transaction for exact
+the state is published. UDP, TCP, DNS, ICMPv4, NTP, mDNS, and DHCPv4 creation repeat that transaction for exact
 socket, listener, stream, query, echo, synchronization, or announcement handles
 and poll registration; every
 failed stage closes the backend resource and releases accounting. DNS handles

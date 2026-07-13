@@ -27,6 +27,7 @@ var protocolDependencies = map[string]protocolDependency{
 	"icmpv4": {public: modulePath + "/icmpv4", register: modulePath + "/icmpv4/register", binding: modulePath + "/internal/binding/icmpv4", operation: modulePath + "/internal/instance/icmpv4", abi: modulePath + "/internal/abi/icmpv4", namespace: modulePath + "/internal/namespace/icmpv4", adapter: modulePath + "/internal/backend/lneto/icmpv4"},
 	"ntp":    {public: modulePath + "/ntp", register: modulePath + "/ntp/register", binding: modulePath + "/internal/binding/ntp", operation: modulePath + "/internal/instance/ntp", abi: modulePath + "/internal/abi/ntp", namespace: modulePath + "/internal/namespace/ntp", adapter: modulePath + "/internal/backend/lneto/ntp"},
 	"mdns":   {public: modulePath + "/mdns", register: modulePath + "/mdns/register", binding: modulePath + "/internal/binding/mdns", operation: modulePath + "/internal/instance/mdns", abi: modulePath + "/internal/abi/mdns", namespace: modulePath + "/internal/namespace/mdns", adapter: modulePath + "/internal/backend/lneto/mdns"},
+	"dhcpv4": {public: modulePath + "/dhcpv4", register: modulePath + "/dhcpv4/register", binding: modulePath + "/internal/binding/dhcpv4", operation: modulePath + "/internal/instance/dhcpv4", abi: modulePath + "/internal/abi/dhcpv4", namespace: modulePath + "/internal/namespace/dhcpv4", adapter: modulePath + "/internal/backend/lneto/dhcpv4"},
 }
 
 func TestFixtureDependencyBoundaries(t *testing.T) {
@@ -41,10 +42,11 @@ func TestFixtureDependencyBoundaries(t *testing.T) {
 		{name: "icmpv4", selected: map[string]bool{"icmpv4": true}},
 		{name: "ntp", selected: map[string]bool{"ntp": true}},
 		{name: "mdns", selected: map[string]bool{"mdns": true}},
+		{name: "dhcpv4", selected: map[string]bool{"dhcpv4": true}},
 		{name: "tcpudp", selected: map[string]bool{"tcp": true, "udp": true}},
 		{name: "tcpdns", selected: map[string]bool{"tcp": true, "dns": true}},
 		{name: "udpdns", selected: map[string]bool{"udp": true, "dns": true}},
-		{name: "all", selected: map[string]bool{"tcp": true, "udp": true, "dns": true, "icmpv4": true, "ntp": true, "mdns": true}},
+		{name: "all", selected: map[string]bool{"tcp": true, "udp": true, "dns": true, "icmpv4": true, "ntp": true, "mdns": true, "dhcpv4": true}},
 	}
 
 	for _, test := range tests {
@@ -99,7 +101,8 @@ func TestSelfRegisterPackageDependencyBoundaries(t *testing.T) {
 		{name: "icmpv4", fixture: "../../icmpv4/register", selected: map[string]bool{"icmpv4": true}},
 		{name: "ntp", fixture: "../../ntp/register", selected: map[string]bool{"ntp": true}},
 		{name: "mdns", fixture: "../../mdns/register", selected: map[string]bool{"mdns": true}},
-		{name: "all", fixture: "../../register", selected: map[string]bool{"tcp": true, "udp": true, "dns": true, "icmpv4": true, "ntp": true, "mdns": true}},
+		{name: "dhcpv4", fixture: "../../dhcpv4/register", selected: map[string]bool{"dhcpv4": true}},
+		{name: "all", fixture: "../../register", selected: map[string]bool{"tcp": true, "udp": true, "dns": true, "icmpv4": true, "ntp": true, "mdns": true, "dhcpv4": true}},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {

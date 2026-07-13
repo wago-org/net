@@ -23,6 +23,7 @@ const (
 	ModuleICMPv4 ModuleKey = "icmpv4"
 	ModuleNTP    ModuleKey = "ntp"
 	ModuleMDNS   ModuleKey = "mdns"
+	ModuleDHCPv4 ModuleKey = "dhcpv4"
 )
 
 var (

@@ -116,6 +116,11 @@ func New(common *lnetocore.Namespace, config Config) (*Adapter, error) {
 		}
 	}
 	if serverConfigured(config.Server) {
+		if config.Server.ServerAddr != common.IPv4AddressLocked() {
+			a.clientPort.ReleaseLocked()
+			common.Unlock()
+			return nil, nscore.Fail(nscore.FailureInvalidArgument, lneto.ErrInvalidConfig)
+		}
 		if !a.policy.CheckEndpoint(policy.OperationDHCPv4ServerBind, config.Server.ServerAddr, dhcpns.ServerPort) {
 			a.clientPort.ReleaseLocked()
 			common.Unlock()
@@ -551,7 +556,7 @@ func (a *Adapter) acceptClientLocked(payload []byte, source netip.Addr) {
 		}
 	} else {
 		selected, valid := r.client.ServerAddr()
-		if message != lnetodhcp.MsgAck || !valid || source != netip.AddrFrom4(selected) || server != source {
+		if (message != lnetodhcp.MsgAck && message != lnetodhcp.MsgNack) || !valid || source != netip.AddrFrom4(selected) || server != source {
 			return
 		}
 	}

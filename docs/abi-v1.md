@@ -12,7 +12,7 @@ and minor version 0.
 Except for `abi_version`, networking imports return one `i32` status and write
 additional values through checked guest-memory output pointers. `InfoImports()`
 and the historical zero-config `Imports(Config{})` helper intentionally expose
-only `wago_net.abi_version`; every resource-owning UDP/TCP/DNS/ICMPv4/NTP/mDNS import requires
+only `wago_net.abi_version`; every resource-owning UDP/TCP/DNS/ICMPv4/NTP/mDNS/DHCPv4 import requires
 exact Runtime lifecycle identity and is therefore available only through
 extension registration. The completed `internal/backend/lneto/core` plus `/tcp`,
 `/udp`, and `/dns` adapter extraction and selective opaque contribution assembly
@@ -66,10 +66,11 @@ nonempty output ranges, and no guest-memory slice may be retained after a host
 call.
 
 The implementation keeps these shared memory, address, endpoint, handle, and
-poll codecs in `internal/abi/core`. TCP stream/I/O, UDP receive-result, DNS name/query/record, ICMPv4 echo, NTP sample, and mDNS
-name/query/record/announcement layouts are separate compilation units in
+poll codecs in `internal/abi/core`. TCP stream/I/O, UDP receive-result, DNS name/query/record, ICMPv4 echo, NTP sample, mDNS name/query/record/announcement, and DHCPv4
+request/lease layouts are separate compilation units in
 `internal/abi/tcp`, `internal/abi/udp`, `internal/abi/dns`,
-`internal/abi/icmpv4`, `internal/abi/ntp`, and `internal/abi/mdns`. This package
+`internal/abi/icmpv4`, `internal/abi/ntp`, `internal/abi/mdns`, and
+`internal/abi/dhcpv4`. This package
 split changes no guest-visible size, offset, validation rule, or numeric value.
 
 ## UDP module and signatures
@@ -399,6 +400,46 @@ exact-kind close synchronously releases retained record/packet/work quota.
 General UDP or DNS authority cannot widen mDNS, and caller denies win over the
 module's exact multicast and `.local` defaults.
 
+## DHCPv4 module, signatures, and layouts
+
+The checked DHCPv4 ABI is independently gated in `wago_net_dhcpv4` by
+`net.dhcpv4`:
+
+```text
+namespace_default(out_handle_ptr: i32) -> i32
+acquire(namespace: i64, request_ptr: i32, out_handle_ptr: i32) -> i32
+result(lease: i64, out_result_ptr: i32) -> i32
+cancel(lease: i64) -> i32
+release(lease: i64) -> i32
+close(lease: i64) -> i32
+poll(events_ptr: i32, event_capacity: i32, budget_ptr: i32, out_result_ptr: i32) -> i32
+```
+
+`wago_net_dhcpv4_request_v1` is 112 bytes. It contains a 32-byte IPv4 address
+structure with zero port at offset 0, hostname and client-ID lengths at offsets
+32 and 34, 36 inline hostname bytes at 36, 32 inline client-ID bytes at 72, and
+eight zero reserved bytes at 104. An unspecified requested address means no
+preference. Unused inline bytes are zero and no guest slice is retained.
+
+`wago_net_dhcpv4_lease_v1` is 280 bytes: assigned, server, router, and broadcast
+IPv4 address structures at offsets 0, 32, 64, and 96; subnet prefix bits at 128;
+lease, renewal, and rebind seconds at 132, 136, and 140; DNS count at 144; flags
+at 148; and four inline DNS address structures at 152. Flag bit 1 means the
+accepted address/subnet is currently applied as the namespace's exact dynamic
+identity contribution. Optional absent addresses are all-zero structures. The
+encoder validates the complete lease and output before one atomic copy.
+
+The client owns exact shared UDP port 68 and performs one bounded immediate DORA
+sequence over broadcast UDP port 67. Result publication requires exact XID,
+hardware address, selected server/source, message type, framing, checksum,
+fragmentation, and option-bound validation. Explicit identity application is
+permitted only over a configured `0.0.0.0` placeholder and rolls back on
+`release`, `close`, or instance teardown. `release` is local rollback: the pinned
+client has no immediate DHCPRELEASE, renewal, or rebinding operation, and ABI v1
+does not claim those wire operations. Explicitly configured host server mode is
+automatic bounded namespace service rather than a raw guest packet API; it owns
+port 67, a finite client pool, and protocol-local inbound/outbound authority.
+
 ## Bounded poll layouts
 
 `wago_net_poll_budget_v1` is 24 bytes, containing six consecutive `uint32_t`
@@ -411,8 +452,8 @@ Each 16-byte `wago_net_poll_event_v1` contains `uint64_t handle`, `uint32_t
 readiness`, and a zero `uint32_t reserved` field. Readiness is level-triggered:
 bit `1` readable, bit `2` writable, bit `4` accept, bit `8` connected, bit `16`
 DNS result, bit `32` error, bit `64` closed, bit `128` ICMPv4 reply, bit `256`
-NTP result, bit `512` mDNS query result, and bit `1024` mDNS announcement
-completion. Unknown bits are invalid.
+NTP result, bit `512` mDNS query result, bit `1024` mDNS announcement completion, and bit
+`2048` DHCPv4 lease result. Unknown bits are invalid.
 
 `wago_net_poll_result_v1` is 24 bytes, containing six consecutive `uint32_t`
 fields: `events`, `scanned`, `service_attempts`, `service_completed`,
@@ -468,7 +509,8 @@ bits.
 
 Endpoint-changing imports enforce immutable instance policy on every bind,
 listen, connect, datagram destination, DNS request, ICMPv4 echo destination,
-NTP server synchronization, and mDNS query/announcement/response authority.
+NTP server synchronization, mDNS query/announcement/response authority, and
+DHCPv4 client/server endpoint authority.
 Unmatched or malformed requests are denied. Wildcard binds, loopback, multicast,
 limited IPv4 broadcast, and local bind/listen ports below 1024 require separate
 explicit grants so a broad prefix rule cannot grant them accidentally.
@@ -476,7 +518,8 @@ IPv4-mapped IPv6 addresses are rejected rather than reinterpreted across policy
 families.
 
 Resource creation, retained packet bytes, DNS work, active ICMPv4 work, active
-NTP work, active mDNS query/announcement work, and manual service work are also
+NTP work, active mDNS query/announcement work, active DHCPv4 DORA work, and
+manual service work are also
 subject to finite per-instance quotas. A failed operation must roll back its
 tentative reservation, and instance teardown clears both committed allocations
 and abandoned reservations. Exact default limits remain implementation policy,
