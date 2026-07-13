@@ -677,6 +677,9 @@ func (a *Adapter) ingressLocked(frame []byte) (bool, error) {
 		return true, nil
 	}
 	if flags.IsResponse() {
+		if !flags.IsAuthorativeAnswer() || flags.ResponseCode() != lnetodns.RCodeSuccess {
+			return true, nil
+		}
 		a.acceptResponseLocked()
 	} else {
 		a.queueResponseLocked()
@@ -735,7 +738,7 @@ func (a *Adapter) validateFrame(frame []byte) ([]byte, netip.Addr, bool, error) 
 
 func (a *Adapter) acceptResponseLocked() {
 	for _, q := range a.queries {
-		if q.state != statePending && q.state != stateWaiting {
+		if (q.state != statePending && q.state != stateWaiting) || q.attempts == 0 {
 			continue
 		}
 		records := q.records[:0]
@@ -764,7 +767,8 @@ func (a *Adapter) queueResponseLocked() {
 	resources := make([]lnetodns.Resource, 0, a.config.MaxRecordsPerPacket)
 	for _, question := range a.decode.Questions {
 		questionName := canonicalName(question.Name)
-		if questionName == "" || !a.policy.CheckDNS(policy.OperationMDNSRespond, questionName) {
+		questionClass := lnetodns.Class(uint16(question.Class) &^ cacheFlush)
+		if (questionClass != lnetodns.ClassINET && questionClass != lnetodns.ClassANY) || questionName == "" || !a.policy.CheckDNS(policy.OperationMDNSRespond, questionName) {
 			continue
 		}
 		for _, service := range a.services {

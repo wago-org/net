@@ -10,6 +10,7 @@ import (
 	wagonet "github.com/wago-org/net"
 	"github.com/wago-org/net/dns"
 	"github.com/wago-org/net/icmpv4"
+	"github.com/wago-org/net/mdns"
 	"github.com/wago-org/net/ntp"
 	"github.com/wago-org/net/tcp"
 	"github.com/wago-org/net/udp"
@@ -32,6 +33,7 @@ var publicProtocols = []protocolSelection{
 	{name: "dns", module: wagonet.DNSModule, capability: wagonet.CapDNS, imports: 6, register: func(network *wagonet.Network) error { return dns.Register(network) }},
 	{name: "icmpv4", module: wagonet.ICMPv4Module, capability: wagonet.CapICMPv4, imports: 6, register: func(network *wagonet.Network) error { return icmpv4.Register(network) }},
 	{name: "ntp", module: wagonet.NTPModule, capability: wagonet.CapNTP, imports: 6, register: func(network *wagonet.Network) error { return ntp.Register(network) }},
+	{name: "mdns", module: wagonet.MDNSModule, capability: wagonet.CapMDNS, imports: 10, register: func(network *wagonet.Network) error { return mdns.Register(network) }},
 }
 
 func TestPublicSelectiveCompositionMatrix(t *testing.T) {

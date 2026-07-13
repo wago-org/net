@@ -2,8 +2,9 @@
 
 Capability-gated networking plugins for the [Wago](https://github.com/wago-org/wago)
 WebAssembly runtime, backed initially by [lneto](https://github.com/soypat/lneto).
-UDP, TCP, DNS, bounded ICMPv4 echo, and explicit-clock NTP are implemented
-today; DHCP, ICMPv6, and mDNS remain absent and are not advertised.
+UDP, TCP, DNS, bounded ICMPv4 echo, explicit-clock NTP, and bounded IPv4
+multicast DNS are implemented today; DHCP and ICMPv6 remain absent and are not
+advertised.
 
 > [!WARNING]
 > This module is private and experimental. Use it only with the exact Wago
@@ -14,7 +15,7 @@ today; DHCP, ICMPv6, and mDNS remain absent and are not advertised.
 
 The repository exposes the experimental `wago_net.abi_version` core import plus
 separately capability-gated `wago_net_udp`, `wago_net_tcp`, `wago_net_dns`,
-`wago_net_icmpv4`, and `wago_net_ntp` modules. UDP covers configured-namespace discovery, bind, send,
+`wago_net_icmpv4`, `wago_net_ntp`, and `wago_net_mdns` modules. UDP covers configured-namespace discovery, bind, send,
 receive, close, and bounded poll. TCP covers discovery, listen, nonblocking
 connect completion, accept, partial read/write, write-half shutdown,
 kind-specific close, and its own bounded poll. DNS covers configured resolver
@@ -24,7 +25,11 @@ validation, service-attempt timeout, cancellation, close, and bounded poll. NTP
 covers bounded two-exchange synchronization against one explicit IPv4 server,
 uses only an injected host clock, returns a copied offset/delay/corrected-time
 sample without adjusting the system clock, and supports cancellation, close, and
-bounded poll. The low-level `InfoImports` / zero-config `Imports(Config{})` path remains core-only
+bounded poll. mDNS owns the exact shared UDP port 5353 lease, supports copied
+`.local` A/PTR/SRV/TXT queries, automatic bounded responses from a copied host
+service set, finite service announcements, cancellation, exact-kind close, and
+bounded poll over 224.0.0.251 with TTL 255. The low-level `InfoImports` /
+zero-config `Imports(Config{})` path remains core-only
 and exposes only `wago_net.abi_version`; resource-owning protocol imports require
 Runtime lifecycle ownership.
 The stable numeric status taxonomy and fixed v1 address/result layouts use central
@@ -83,14 +88,17 @@ Caller deny rules always win over composed defaults. `WithConfig` supplies exact
 protocol storage, `WithPolicy` adds advanced raw authority, and
 `WithoutDefaultAuthority` supports fully caller-authored compatibility policy.
 Listener/server grants and the conspicuous `tcp.AllowAll()`, `udp.AllowAll()`,
-`dns.AllowAll()`, `icmpv4.AllowAll()`, and `ntp.AllowAll()` options never remove finite storage or
-quota bounds. ICMPv4 defaults provide eight exchanges, 256 copied payload bytes
+`dns.AllowAll()`, `icmpv4.AllowAll()`, `ntp.AllowAll()`, and
+`mdns.AllowAllNames()` options never remove finite storage or quota bounds.
+ICMPv4 defaults provide eight exchanges, 256 copied payload bytes
 per exchange, two attempts, and finite service-attempt retry spacing; loopback,
 multicast, and limited broadcast remain explicit grants. NTP requires an
 explicit server plus `ntp.WithClock`; its defaults provide four concurrent
 synchronizations, two attempts per exchange, and finite service-attempt spacing.
-Caller policy remains deny-wins, and NTP authority does not inherit general UDP
-authority.
+mDNS defaults provide eight queries, sixteen retained records, 1200-byte
+packets, two attempts, finite parser limits, and `.local` authority. Configured
+services add finite announcement and response queues. Caller policy remains
+deny-wins; neither NTP nor mDNS authority inherits general UDP or DNS authority.
 
 Registering only TCP exposes `net.info` and `net.tcp`, with
 `wago_net.abi_version` and the eleven `wago_net_tcp` imports. Registering only
@@ -99,36 +107,41 @@ UDP analogously exposes `net.info`, `net.udp`, the shared ABI import, and the si
 the six `wago_net_dns` imports. Registering only ICMPv4 exposes `net.info`,
 `net.icmpv4`, the shared ABI import, and the six `wago_net_icmpv4` imports.
 Registering only NTP exposes `net.info`, `net.ntp`, the shared ABI import, and the
-six `wago_net_ntp` imports. Unregistered protocol imports are absent and fail normal WebAssembly import
-resolution. The public TCP, UDP, DNS, ICMPv4, and NTP facades each construct an
-opaque descriptor, and all five checked host tables live in protocol-specific
+six `wago_net_ntp` imports. Registering only mDNS exposes `net.info`, `net.mdns`,
+the shared ABI import, and ten `wago_net_mdns` imports. Unregistered protocol
+imports are absent and fail normal WebAssembly import resolution. The public TCP,
+UDP, DNS, ICMPv4, NTP, and mDNS facades each construct an opaque descriptor, and
+all six checked host tables live in protocol-specific
 internal binding packages. The
 root package no longer imports those public or binding packages. Dependency and
-runtime-inspection fixtures cover no protocol and all 32 combinations of the
-five implemented protocols. Omitted public, binding, instance-operation, and fixed ABI
+runtime-inspection fixtures cover no protocol and all 64 combinations of the
+six implemented protocols. Omitted public, binding, instance-operation, and fixed ABI
 packages are rejected from each fixture's Go dependency graph. Shared checked
 memory, endpoint/handle codecs, and poll layouts live in `internal/abi/core`;
-TCP, UDP, DNS, ICMPv4, and NTP layouts live only in `internal/abi/tcp`, `/udp`,
-`/dns`, `/icmpv4`, and `/ntp`. The dependency matrix also rejects each omitted
-protocol's namespace facet and `internal/backend/lneto/{tcp,udp,dns,icmpv4,ntp}`
+TCP, UDP, DNS, ICMPv4, NTP, and mDNS layouts live only in
+`internal/abi/tcp`, `/udp`, `/dns`, `/icmpv4`, `/ntp`, and `/mdns`. The dependency
+matrix also rejects each omitted protocol's namespace facet and
+`internal/backend/lneto/{tcp,udp,dns,icmpv4,ntp,mdns}`
 adapter, and rejects the temporary
 aggregate lneto assembler from every selective production graph. One
 protocol-neutral instance core still owns exact attachment, resource identity,
 readiness, quotas, polling, and teardown, while
 `internal/instance/tcp`, `internal/instance/udp`, `internal/instance/dns`, and
-`internal/instance/icmpv4`, and `internal/instance/ntp` serialize their operations through that core.
+`internal/instance/icmpv4`, `internal/instance/ntp`, and
+`internal/instance/mdns` serialize their operations through that core.
 Namespace ownership is likewise split: `internal/namespace/core` owns shared
 endpoint, failure, readiness, resource, and bounded-service contracts, while
-`/tcp`, `/udp`, `/dns`, `/icmpv4`, and `/ntp` own
+`/tcp`, `/udp`, `/dns`, `/icmpv4`, `/ntp`, and `/mdns` own
 narrow protocol facets and values. Production graphs no longer reach the former
 aggregate namespace compatibility package. `internal/backend/lneto/core` now
 owns the single lifecycle lock, `StackAsync`, packet link, IPv4 identity, frame
 scratch, bounded ingress/egress scheduler, participant ordering, maintenance
 charging, shared UDP-port leases, and deterministic close. TCP listeners and
-streams, UDP sockets and queues, DNS query/wire state, ICMPv4 echo state, and NTP
-synchronization state now live independently in `internal/backend/lneto/tcp`,
-`/udp`, `/dns`, `/icmpv4`, and `/ntp`. Focused tests preserve
-immediate operations, cross-UDP/DNS port collisions, packet and maintenance
+streams, UDP sockets and queues, DNS query/wire state, ICMPv4 echo state, NTP
+synchronization state, and mDNS query/response/announcement state now live
+independently in `internal/backend/lneto/tcp`, `/udp`, `/dns`, `/icmpv4`, `/ntp`,
+and `/mdns`. Focused tests preserve immediate operations, shared UDP/DNS/NTP/mDNS
+port ownership, packet and maintenance
 accounting, response filtering, quotas, and ordered cleanup. Protocol descriptors
 now contribute only their exact adapter after registration freezes. The root
 creates one shared lneto core per exact instance, installs selected adapters

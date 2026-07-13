@@ -17,6 +17,10 @@ const (
 	ICMPv4EchoRequestV1Size uint32 = 48
 	ICMPv4EchoResultV1Size  uint32 = 48
 	NTPSampleV1Size         uint32 = 72
+	MDNSNameV1Size          uint32 = 260
+	MDNSQueryV1Size         uint32 = 268
+	MDNSRecordV1Size        uint32 = 832
+	MDNSAnnouncementV1Size  uint32 = 8
 	PollBudgetV1Size        uint32 = 24
 	PollEventV1Size         uint32 = 16
 	PollResultV1Size        uint32 = 24
@@ -28,4 +32,14 @@ const (
 	DNSRecordTypeA     uint32 = 1
 	DNSRecordTypeAAAA  uint32 = 2
 	DNSRecordTypeCNAME uint32 = 3
+
+	MDNSRecordTypesA         uint32 = 1
+	MDNSRecordTypesPTR       uint32 = 2
+	MDNSRecordTypesSRV       uint32 = 4
+	MDNSRecordTypesTXT       uint32 = 8
+	MDNSRecordTypeA          uint32 = 1
+	MDNSRecordTypePTR        uint32 = 2
+	MDNSRecordTypeSRV        uint32 = 3
+	MDNSRecordTypeTXT        uint32 = 4
+	MDNSRecordFlagCacheFlush uint32 = 1
 )

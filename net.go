@@ -1,7 +1,7 @@
 // Package net provides the core of Wago's capability-gated networking plugin
 // suite. The guest ABI is backend-neutral; lneto is the first backend and is
 // not part of the public contract. Complete UDP, TCP, bounded DNS, ICMPv4 echo,
-// and explicit-clock NTP modules are independently capability-gated. Runtime registration requires physical
+// explicit-clock NTP, and bounded mDNS modules are independently capability-gated. Runtime registration requires physical
 // reinstantiation between class leases so instance-owned network state cannot
 // survive an in-place Wasm memory reset.
 package net
@@ -36,6 +36,8 @@ const (
 	ICMPv4Module = "wago_net_icmpv4"
 	// NTPModule owns the complete checked bounded NTP client surface.
 	NTPModule = "wago_net_ntp"
+	// MDNSModule owns bounded multicast DNS query, response, and announcement operations.
+	MDNSModule = "wago_net_mdns"
 
 	// ABIVersion1 encodes ABI version 1.0 as major in the upper 16 bits and minor
 	// in the lower 16 bits.
@@ -53,6 +55,8 @@ const (
 	CapICMPv4 wago.Capability = "net.icmpv4"
 	// CapNTP permits checked nonblocking bounded NTP synchronization and poll access.
 	CapNTP wago.Capability = "net.ntp"
+	// CapMDNS permits checked bounded multicast DNS operations and poll access.
+	CapMDNS wago.Capability = "net.mdns"
 )
 
 // PolicyConfig and related aliases expose the backend-neutral authority model
@@ -73,6 +77,7 @@ const (
 	PolicyTransportDNS    = policy.TransportDNS
 	PolicyTransportICMPv4 = policy.TransportICMPv4
 	PolicyTransportNTP    = policy.TransportNTP
+	PolicyTransportMDNS   = policy.TransportMDNS
 
 	PolicyInbound  = policy.DirectionInbound
 	PolicyOutbound = policy.DirectionOutbound
@@ -162,7 +167,7 @@ var (
 )
 
 // Option configures shared network composition. Protocol-specific options live
-// in the tcp, udp, dns, icmpv4, and ntp packages rather than in the root package.
+// in the tcp, udp, dns, icmpv4, ntp, and mdns packages rather than in the root package.
 type Option interface {
 	applyNetwork(*Config) error
 }

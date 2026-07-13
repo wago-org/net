@@ -6,6 +6,7 @@ import (
 	wagonet "github.com/wago-org/net"
 	"github.com/wago-org/net/dns"
 	"github.com/wago-org/net/icmpv4"
+	"github.com/wago-org/net/mdns"
 	"github.com/wago-org/net/ntp"
 	"github.com/wago-org/net/tcp"
 	"github.com/wago-org/net/udp"
@@ -20,6 +21,7 @@ func init() {
 		mustRegister(dns.Register(network))
 		mustRegister(icmpv4.Register(network))
 		mustRegister(ntp.Register(network))
+		mustRegister(mdns.Register(network))
 		return network
 	})
 }

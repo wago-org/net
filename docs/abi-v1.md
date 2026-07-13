@@ -12,7 +12,7 @@ and minor version 0.
 Except for `abi_version`, networking imports return one `i32` status and write
 additional values through checked guest-memory output pointers. `InfoImports()`
 and the historical zero-config `Imports(Config{})` helper intentionally expose
-only `wago_net.abi_version`; every resource-owning UDP/TCP/DNS/ICMPv4/NTP import requires
+only `wago_net.abi_version`; every resource-owning UDP/TCP/DNS/ICMPv4/NTP/mDNS import requires
 exact Runtime lifecycle identity and is therefore available only through
 extension registration. The completed `internal/backend/lneto/core` plus `/tcp`,
 `/udp`, and `/dns` adapter extraction and selective opaque contribution assembly
@@ -66,10 +66,10 @@ nonempty output ranges, and no guest-memory slice may be retained after a host
 call.
 
 The implementation keeps these shared memory, address, endpoint, handle, and
-poll codecs in `internal/abi/core`. TCP stream/I/O, UDP receive-result, DNS
-name/query/record, ICMPv4 echo, and NTP sample layouts are separate compilation
-units in `internal/abi/tcp`, `internal/abi/udp`, `internal/abi/dns`,
-`internal/abi/icmpv4`, and `internal/abi/ntp`. This package
+poll codecs in `internal/abi/core`. TCP stream/I/O, UDP receive-result, DNS name/query/record, ICMPv4 echo, NTP sample, and mDNS
+name/query/record/announcement layouts are separate compilation units in
+`internal/abi/tcp`, `internal/abi/udp`, `internal/abi/dns`,
+`internal/abi/icmpv4`, `internal/abi/ntp`, and `internal/abi/mdns`. This package
 split changes no guest-visible size, offset, validation rule, or numeric value.
 
 ## UDP module and signatures
@@ -352,6 +352,53 @@ deterministic and release active-work, UDP-port, and resource quota exactly
 once. Registration without a server and clock exposes a truthful disabled
 module whose `sync` returns `NOT_SUPPORTED`.
 
+## mDNS module, signatures, and layouts
+
+The complete checked IPv4 multicast DNS ABI is independently gated in
+`wago_net_mdns` by `net.mdns`:
+
+```text
+namespace_default(out_handle_ptr: i32) -> i32
+query(namespace: i64, query_ptr: i32, out_query_ptr: i32) -> i32
+next(query: i64, out_record_ptr: i32) -> i32
+cancel_query(query: i64) -> i32
+close_query(query: i64) -> i32
+announce(namespace: i64, announcement_ptr: i32, out_announcement_ptr: i32) -> i32
+finish_announcement(announcement: i64) -> i32
+cancel_announcement(announcement: i64) -> i32
+close_announcement(announcement: i64) -> i32
+poll(events_ptr: i32, event_capacity: i32, budget_ptr: i32, out_result_ptr: i32) -> i32
+```
+
+`wago_net_mdns_name_v1` is 260 bytes and has the same length/reserved/inline
+shape as the DNS name structure, but permits lowercase ASCII underscore labels
+for DNS-SD service names. Names must end in `.local`; spaces, escapes, wildcards,
+non-ASCII labels, trailing dots, uppercase bytes, and IP literals are rejected.
+`wago_net_mdns_query_v1` is 268 bytes: one inline mDNS name, a `uint32_t` type
+bitset at offset 260, and zero reserved word at 264. Bits 1, 2, 4, and 8 request
+A, PTR, SRV, and TXT respectively.
+
+`wago_net_mdns_record_v1` is 832 bytes: name at offset 0, type at 260, TTL at
+264, address at 268, target name at 300, SRV port/priority/weight at 560/562/564,
+TXT length at 566, 255 inline TXT bytes at 568, flags at 824, and zero reserved
+word at 828. Type values 1..4 are A, PTR, SRV, and TXT. Flag bit 1 preserves the
+mDNS cache-flush class bit. Type-specific unused fields and TXT padding are
+zero. `wago_net_mdns_announcement_v1` is 8 bytes containing a zero-based
+`uint32_t` configured-service index and a zero reserved word.
+
+The adapter owns one exact shared UDP port 5353 lease for the namespace lifetime;
+a public UDP bind to that port therefore returns `ADDRESS_IN_USE`. Outgoing
+packets use 224.0.0.251, Ethernet 01:00:5e:00:00:fb, source/destination UDP port
+5353, txid zero, and IPv4 TTL 255. Query correlation uses the requested
+name/class/type because mDNS has no transaction identifier. Irrelevant and
+duplicate records are ignored; the first packet containing a relevant bounded
+record completes the query. Configured host services are deeply copied and may
+produce bounded automatic PTR/SRV/TXT/A responses. Announcements are finite
+retry resources. Query and announcement cancellation is deterministic, and
+exact-kind close synchronously releases retained record/packet/work quota.
+General UDP or DNS authority cannot widen mDNS, and caller denies win over the
+module's exact multicast and `.local` defaults.
+
 ## Bounded poll layouts
 
 `wago_net_poll_budget_v1` is 24 bytes, containing six consecutive `uint32_t`
@@ -363,9 +410,9 @@ be nonzero. The requested event count must not exceed `event_capacity`.
 Each 16-byte `wago_net_poll_event_v1` contains `uint64_t handle`, `uint32_t
 readiness`, and a zero `uint32_t reserved` field. Readiness is level-triggered:
 bit `1` readable, bit `2` writable, bit `4` accept, bit `8` connected, bit `16`
-DNS result, bit `32` error, bit `64` closed, bit `128` ICMPv4 reply, and bit `256`
-NTP result. Unknown
-bits are invalid.
+DNS result, bit `32` error, bit `64` closed, bit `128` ICMPv4 reply, bit `256`
+NTP result, bit `512` mDNS query result, and bit `1024` mDNS announcement
+completion. Unknown bits are invalid.
 
 `wago_net_poll_result_v1` is 24 bytes, containing six consecutive `uint32_t`
 fields: `events`, `scanned`, `service_attempts`, `service_completed`,
@@ -420,8 +467,8 @@ malformed values return `BAD_HANDLE`. Guests must not derive or inspect handle
 bits.
 
 Endpoint-changing imports enforce immutable instance policy on every bind,
-listen, connect, datagram destination, DNS request, ICMPv4 echo destination, and
-NTP server synchronization.
+listen, connect, datagram destination, DNS request, ICMPv4 echo destination,
+NTP server synchronization, and mDNS query/announcement/response authority.
 Unmatched or malformed requests are denied. Wildcard binds, loopback, multicast,
 limited IPv4 broadcast, and local bind/listen ports below 1024 require separate
 explicit grants so a broad prefix rule cannot grant them accidentally.
@@ -429,7 +476,8 @@ IPv4-mapped IPv6 addresses are rejected rather than reinterpreted across policy
 families.
 
 Resource creation, retained packet bytes, DNS work, active ICMPv4 work, active
-NTP work, and manual service work are also subject to finite per-instance quotas. A failed operation must roll back its
+NTP work, active mDNS query/announcement work, and manual service work are also
+subject to finite per-instance quotas. A failed operation must roll back its
 tentative reservation, and instance teardown clears both committed allocations
 and abandoned reservations. Exact default limits remain implementation policy,
 not ABI constants.

@@ -28,6 +28,7 @@ The suite therefore uses **protocol import modules**:
 - `wago_net_dns` for DNS;
 - `wago_net_icmpv4` for ICMPv4 echo;
 - `wago_net_ntp` for explicit-clock NTP synchronization;
+- `wago_net_mdns` for bounded multicast DNS queries, responses, and announcements;
 - additional modules only when their implementations exist.
 
 This permits narrow per-protocol capabilities and independent ABI evolution
@@ -37,24 +38,25 @@ protocol modules; no process-global state or placeholder protocol module is used
 
 ## Current implementation
 
-The root extension owns five distinct import modules: `wago_net` declares
+The root extension owns seven distinct import modules: `wago_net` declares
 `net.info` and exposes `abi_version`; `wago_net_udp` declares narrow `net.udp`
 authority; `wago_net_tcp` declares narrow `net.tcp` authority;
 `wago_net_dns` declares narrow `net.dns` authority; `wago_net_icmpv4`
-declares narrow `net.icmpv4` authority; and `wago_net_ntp` declares narrow
-`net.ntp` authority. UDP, TCP, DNS, ICMPv4, and NTP each expose
-complete configured-namespace discovery, protocol operations, kind-safe close,
-and independently capability-gated bounded poll. The explicit low-level
+declares narrow `net.icmpv4` authority; `wago_net_ntp` declares narrow
+`net.ntp` authority; and `wago_net_mdns` declares narrow `net.mdns` authority.
+UDP, TCP, DNS, ICMPv4, NTP, and mDNS each expose complete configured-namespace
+discovery, protocol operations, kind-safe close, and independently
+capability-gated bounded poll. The explicit low-level
 `InfoImports` bundle remains core-only because protocol resources require
 Runtime lifecycle identity.
 Registration and implementation share complete binding tables so inspection
 metadata, TinyGo-compatible slot shapes, and actual host functions do not drift.
 `internal/abi/core` provides allocation-free checked ranges, shared endpoint and
 poll layouts, disjoint multi-output validation, and common handle/memory codecs
-without exposing lneto types. `internal/abi/tcp`, `/udp`, `/dns`, `/icmpv4`, and `/ntp` hold only TCP
-stream/I/O, UDP receive-result, inline DNS query/name/record, ICMPv4 echo, and
-NTP sample layouts, so omitted protocol ABI units stay out of selective
-dependency graphs.
+without exposing lneto types. `internal/abi/tcp`, `/udp`, `/dns`, `/icmpv4`,
+`/ntp`, and `/mdns` hold only TCP stream/I/O, UDP receive-result, inline DNS
+query/name/record, ICMPv4 echo, NTP sample, and mDNS query/record/announcement
+layouts, so omitted protocol ABI units stay out of selective dependency graphs.
 `internal/resource` provides O(1) opaque-handle lookup with exact kind checks,
 never-reused table identities, per-slot generations, rollover retirement, and
 reverse-creation O(live) cleanup. The table exists independently of protocol
@@ -84,7 +86,8 @@ deny rules without becoming general explicit-port authority. None of these
 options creates a second policy or quota domain.
 
 `internal/quota` provides finite per-instance total/protocol resource,
-queued-byte, DNS-work, active-ICMPv4-work, active-NTP-work, and service-work counters. Tentative reservations must be committed or
+queued-byte, DNS-work, active-ICMPv4-work, active-NTP-work, active-mDNS-work, and
+service-work counters. Tentative reservations must be committed or
 rolled back; committed allocations release exactly once. Guest poll uses a
 scoped service charge that preserves the same finite concurrent limit and panic
 cleanup without allocating retained reservation/allocation tokens. Closing an
@@ -93,8 +96,8 @@ abandoned reservations and makes late token cleanup harmless.
 
 `internal/namespace/core` defines the backend-neutral endpoint, progress,
 stream-I/O, readiness, semantic-error, resource, namespace ownership, and bounded
-manual-service contracts. `internal/namespace/tcp`, `/udp`, `/dns`, `/icmpv4`, and `/ntp` define only
-their narrow creation/resource facets and protocol-local values. NTP additionally
+manual-service contracts. `internal/namespace/tcp`, `/udp`, `/dns`, `/icmpv4`, `/ntp`, and `/mdns` define
+only their narrow creation/resource facets and protocol-local values. NTP additionally
 defines the explicit host clock contract; no ambient wall clock is available to
 the adapter. Operations
 that may await network progress remain single `Try` calls with explicit
@@ -167,6 +170,15 @@ and service-attempt timeout, NTP resource/active-work quota, cancellation, and
 synchronous close. It uses only the exported immediate NTP codec/client state
 machine with an explicitly injected host clock; it neither adjusts the system
 clock nor uses ambient `time.Now`, deadlines, sleeps, backoff, or goroutines.
+`internal/backend/lneto/mdns` owns one namespace-lifetime exact UDP 5353 lease,
+224.0.0.251/01:00:5e:00:00:fb framing with IPv4 TTL 255, bounded copied `.local`
+A/PTR/SRV/TXT query resources, question-correlated txid-zero response selection,
+finite retries and service-attempt timeout, copied configured services, bounded
+automatic response slots, finite announcement resources, mDNS resource/byte/work
+quota, cancellation, and synchronous close. It uses exported immediate DNS
+codecs rather than the pinned combined high-level mDNS client, so nested service
+slices are never retained and irrelevant records cannot complete an unrelated
+query.
 `internal/backend/lneto/dns` owns immediate IPv4 UDP queries plus lneto DNS
 codecs, finite query/record/response bounds,
 policy and quota ownership, deterministic service-attempt retransmission and
@@ -190,9 +202,9 @@ construction imports only the shared lneto core. Root, single-protocol, pair,
 and all-protocol dependency fixtures require exactly the selected
 adapters/facets and reject every omitted one plus the aggregate assembler,
 completing the Stage 4 compile-isolation boundary.
-Granular `tcp/register`, `udp/register`, `dns/register`, `icmpv4/register`, and
-`ntp/register` packages own only their selected public facade and exact
-implementation graph. The root `register` package explicitly composes all five
+Granular `tcp/register`, `udp/register`, `dns/register`, `icmpv4/register`,
+`ntp/register`, and `mdns/register` packages own only their selected public
+facade and exact implementation graph. The root `register` package explicitly composes all six
 implemented protocols in one extension rather than
 using the aggregate compatibility constructor.
 
@@ -209,14 +221,14 @@ now measure the complete UDP and TCP guest poll calls at zero allocations rather
 than including a value-to-interface boxing artifact.
 
 Each `Extension` owns one private instance-state manager shared by its core,
-UDP, TCP, DNS, ICMPv4, and NTP module bindings. Runtime instantiation attaches one resource table,
+UDP, TCP, DNS, ICMPv4, NTP, and mDNS module bindings. Runtime instantiation attaches one resource table,
 readiness coordinator, immutable policy, and finite quota ledger to the exact
 `*wago.Instance`. Optional static
 IPv4 configuration transactionally reserves namespace quota, constructs the
 backend, inserts a generation-safe handle, and registers bounded readiness before
-the state is published. UDP, TCP, DNS, ICMPv4, and NTP creation repeat that
-transaction for exact socket, listener, stream, query, echo, or synchronization
-handles and poll registration; every
+the state is published. UDP, TCP, DNS, ICMPv4, NTP, and mDNS creation repeat that transaction for exact
+socket, listener, stream, query, echo, synchronization, or announcement handles
+and poll registration; every
 failed stage closes the backend resource and releases accounting. DNS handles
 support copied record iteration, explicit cancellation, backend service-attempt
 timeout, stale/wrong-kind/cross-instance rejection, and deterministic lifecycle

@@ -1,6 +1,6 @@
 # lneto protocol expansion plan
 
-Status: active implementation plan. ICMPv4 and NTP are complete; later modules remain planned.
+Status: active implementation plan. ICMPv4, NTP, and mDNS are complete; later modules remain planned.
 
 ## Goal
 
@@ -23,7 +23,7 @@ DNS modules:
 |---|---|---|
 | `icmpv4` | `ipv4/icmpv4` | complete: bounded copied echo requests and exact replies |
 | `ntp` | `ntp` | complete: bounded two-exchange client sampling using an explicit host clock |
-| `mdns` | `dns/mdns` | bounded multicast query, response, and announcement operations |
+| `mdns` | `dns/mdns` | complete: bounded multicast query, response, and announcement operations |
 | `dhcpv4` | `dhcp/dhcpv4` | bounded client leases and explicitly authorized server operation |
 | `linklocal4` | `ipv4/linklocal4` | bounded RFC 3927 claim-and-defend address selection |
 | `ipv6` | `ipv6` and `x/xnet` IPv6 stack | configured IPv6 namespace and transport enablement |
@@ -125,7 +125,34 @@ rejects fragmented, malformed, unsynchronized, wrong-mode, wrong-version, and
 non-basic responses, and returns offset, nonnegative round-trip delay, stratum,
 reference ID, and a corrected observation without adjusting any system clock.
 Caller deny rules win over the configured server grant, and general UDP
-authority cannot widen NTP. Selective dependency fixtures reject every omitted
-NTP layer, runtime composition covers all 32 combinations of the five completed
-protocols, and granular plus aggregate registration are documented and tested.
+authority cannot widen NTP. Selective dependency fixtures reject every omitted NTP layer; the composition
+matrix established here has since expanded to all 64 combinations of the six
+completed protocols, and granular plus aggregate registration are documented
+and tested.
 No TLS or NTS behavior is included.
+
+mDNS is exposed as independently selectable `mdns.Register`, capability
+`net.mdns`, and ten-function import module `wago_net_mdns`. Its fixed checked ABI
+owns exact-instance query and announcement handles, inline canonical `.local`
+names with DNS-SD underscore labels, A/PTR/SRV/TXT type bits, an atomic 832-byte
+record union with inline 255-byte TXT storage, and zero-based configured-service
+announcement requests. One namespace-owned adapter reserves UDP port 5353 in the
+same lease domain as public UDP, DNS, and NTP, so later conflicting binds fail
+with `ADDRESS_IN_USE`. It uses exact 224.0.0.251 and
+01:00:5e:00:00:fb framing, UDP source/destination port 5353, IPv4 TTL 255,
+checksum and nonfragmented-frame validation, txid-zero name/class/type
+correlation, finite first-relevant-response retention, duplicate and irrelevant
+record filtering, bounded attempts and service timeout, cancellation, and
+synchronous close. Configured services and TXT bytes are deeply copied;
+incoming matching questions produce only bounded queued responses, while finite
+announcement resources provide deterministic completion. mDNS has protocol-local
+`.local`, multicast, and port authority with caller deny precedence; general UDP
+or DNS grants cannot widen it. Resource, retained-byte, active-work, and service
+quotas cover every host-retained dimension. The pinned combined high-level mDNS
+client is not used because its shallow service copy and combined query/response
+state do not provide the required ownership and correlation boundaries; only
+exported immediate DNS and packet codecs enter host paths. Selective dependency
+fixtures reject every omitted mDNS layer, runtime composition covers all 64
+combinations of the six completed protocols, and granular plus aggregate
+registration are tested. Ethernet II, ARP, IPv4, PHY/MDIO, and packet capture
+remain internal infrastructure rather than guest APIs.
