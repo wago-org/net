@@ -262,6 +262,37 @@ func TestPolicyAuthorityChangingOperationsUseTransportAndDirection(t *testing.T)
 	}
 }
 
+func TestICMPv4AddressAuthorityIsTransportScopedAndPortless(t *testing.T) {
+	compiled, err := Compile(Config{
+		Rules: []Rule{
+			{Action: ActionAllow, Transports: []Transport{TransportICMPv4}, Directions: []Direction{DirectionOutbound}, Prefixes: []netip.Prefix{mustPrefix("192.0.2.0/24"), mustPrefix("127.0.0.0/8")}},
+			{Action: ActionAllow, Transports: []Transport{TransportICMPv4}, Directions: []Direction{DirectionOutbound}, Prefixes: []netip.Prefix{mustPrefix("198.51.100.0/24")}, Ports: []PortRange{{First: 0, Last: 0}}},
+		},
+		LoopbackTransports: []Transport{TransportICMPv4},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !compiled.CheckAddress(OperationICMPv4Echo, mustAddr("192.0.2.10")) {
+		t.Fatal("ordinary ICMPv4 echo destination denied")
+	}
+	if compiled.CheckAddress(OperationICMPv4Echo, mustAddr("198.51.100.10")) {
+		t.Fatal("port-constrained rule matched a portless ICMPv4 operation")
+	}
+	if !compiled.CheckAddress(OperationICMPv4Echo, mustAddr("127.0.0.1")) {
+		t.Fatal("transport-scoped ICMPv4 loopback grant denied")
+	}
+	if compiled.CheckAddress(OperationICMPv4Echo, mustAddr("203.0.113.10")) {
+		t.Fatal("unmatched ICMPv4 destination defaulted to allow")
+	}
+	if compiled.CheckAddress(OperationTCPConnect, mustAddr("192.0.2.10")) {
+		t.Fatal("endpoint operation was accepted by the address-only checker")
+	}
+	if compiled.CheckEndpoint(OperationICMPv4Echo, mustAddr("192.0.2.10"), 0) {
+		t.Fatal("address-only operation was accepted by the endpoint checker")
+	}
+}
+
 func TestPolicyCanonicalDNSCheckDoesNotAllocate(t *testing.T) {
 	compiled, err := Compile(Config{Rules: []Rule{{Action: ActionAllow, Transports: []Transport{TransportDNS}, DNSSuffixes: []string{"example.com"}}}})
 	if err != nil {

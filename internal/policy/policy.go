@@ -27,6 +27,10 @@ const (
 	TransportUDP Transport = iota + 1
 	TransportTCP
 	TransportDNS
+	TransportICMPv4
+
+	transportFirst = TransportUDP
+	transportLast  = TransportICMPv4
 )
 
 // Direction identifies whether authority accepts local inbound traffic or
@@ -48,6 +52,7 @@ const (
 	OperationTCPListen
 	OperationTCPConnect
 	OperationDNSResolve
+	OperationICMPv4Echo
 )
 
 // PortRange is an inclusive port selector.
@@ -131,7 +136,7 @@ type Policy struct {
 	allowPrivilegedBind transportSet
 }
 
-type transportSet [TransportDNS + 1]bool
+type transportSet [transportLast + 1]bool
 
 type compiledRule struct {
 	action      Action
@@ -171,7 +176,7 @@ func (p *Policy) CheckEndpoint(operation Operation, address netip.Addr, port uin
 	if p == nil || !ok || !p.endpointClassAllowed(transport, direction, address, port) {
 		return false
 	}
-	return p.decide(query{transport: transport, direction: direction, address: address, port: port})
+	return p.decide(query{transport: transport, direction: direction, address: address, port: port, hasPort: true})
 }
 
 // CheckPortAllocation validates an authority-preserving local port allocation.
@@ -179,6 +184,17 @@ func (p *Policy) CheckEndpoint(operation Operation, address netip.Addr, port uin
 // widened, the concrete port must pass every special-class gate, and no deny
 // rule may match the final endpoint. This permits a port-zero allocation
 // request without turning it into general explicit-bind authority.
+// CheckAddress decides authority for operations such as ICMP echo that select
+// an address but have no transport port. Port-constrained rules never match an
+// address-only operation.
+func (p *Policy) CheckAddress(operation Operation, address netip.Addr) bool {
+	transport, direction, ok := operationAddress(operation)
+	if p == nil || !ok || !p.endpointClassAllowed(transport, direction, address, 0) {
+		return false
+	}
+	return p.decide(query{transport: transport, direction: direction, address: address})
+}
+
 func (p *Policy) CheckPortAllocation(operation Operation, address netip.Addr, actualPort uint16) bool {
 	if actualPort == 0 || !p.CheckEndpoint(operation, address, 0) {
 		return false
@@ -187,7 +203,7 @@ func (p *Policy) CheckPortAllocation(operation Operation, address netip.Addr, ac
 	if !ok || !p.endpointClassAllowed(transport, direction, address, actualPort) {
 		return false
 	}
-	return !p.denied(query{transport: transport, direction: direction, address: address, port: actualPort})
+	return !p.denied(query{transport: transport, direction: direction, address: address, port: actualPort, hasPort: true})
 }
 
 func (p *Policy) endpointClassAllowed(transport Transport, direction Direction, address netip.Addr, port uint16) bool {
@@ -230,6 +246,7 @@ type query struct {
 	direction Direction
 	address   netip.Addr
 	port      uint16
+	hasPort   bool
 	dnsName   string
 }
 
@@ -317,6 +334,9 @@ func (r compiledRule) matches(q query) bool {
 		}
 	}
 	if len(r.ports) != 0 {
+		if !q.hasPort {
+			return false
+		}
 		matched := false
 		for _, ports := range r.ports {
 			if q.port >= ports.First && q.port <= ports.Last {
@@ -334,7 +354,7 @@ func (r compiledRule) matches(q query) bool {
 func normalizeTransports(input []Transport) ([]Transport, bool) {
 	out := append([]Transport(nil), input...)
 	for _, value := range out {
-		if value < TransportUDP || value > TransportDNS {
+		if value < transportFirst || value > transportLast {
 			return nil, false
 		}
 	}
@@ -347,12 +367,12 @@ func compileTransportSet(target *transportSet, all bool, scoped []Transport) boo
 		return false
 	}
 	if all {
-		for transport := TransportUDP; transport <= TransportDNS; transport++ {
+		for transport := transportFirst; transport <= transportLast; transport++ {
 			target[transport] = true
 		}
 	}
 	for _, transport := range scoped {
-		if transport < TransportUDP || transport > TransportDNS {
+		if transport < transportFirst || transport > transportLast {
 			return false
 		}
 		target[transport] = true
@@ -445,6 +465,13 @@ func operationEndpoint(operation Operation) (Transport, Direction, bool) {
 	default:
 		return 0, 0, false
 	}
+}
+
+func operationAddress(operation Operation) (Transport, Direction, bool) {
+	if operation == OperationICMPv4Echo {
+		return TransportICMPv4, DirectionOutbound, true
+	}
+	return 0, 0, false
 }
 
 func operationDNS(operation Operation) (Transport, Direction, bool) {

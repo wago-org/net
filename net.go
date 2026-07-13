@@ -60,9 +60,10 @@ const (
 	PolicyDeny  = policy.ActionDeny
 	PolicyAllow = policy.ActionAllow
 
-	PolicyTransportUDP = policy.TransportUDP
-	PolicyTransportTCP = policy.TransportTCP
-	PolicyTransportDNS = policy.TransportDNS
+	PolicyTransportUDP    = policy.TransportUDP
+	PolicyTransportTCP    = policy.TransportTCP
+	PolicyTransportDNS    = policy.TransportDNS
+	PolicyTransportICMPv4 = policy.TransportICMPv4
 
 	PolicyInbound  = policy.DirectionInbound
 	PolicyOutbound = policy.DirectionOutbound
