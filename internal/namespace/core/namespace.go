@@ -99,8 +99,9 @@ const (
 	ReadyError
 	ReadyClosed
 	ReadyICMPv4Reply
+	ReadyNTPResult
 
-	readinessMask = ReadyReadable | ReadyWritable | ReadyAccept | ReadyConnected | ReadyDNSResult | ReadyICMPv4Reply | ReadyError | ReadyClosed
+	readinessMask = ReadyReadable | ReadyWritable | ReadyAccept | ReadyConnected | ReadyDNSResult | ReadyICMPv4Reply | ReadyNTPResult | ReadyError | ReadyClosed
 )
 
 // Valid reports whether no unknown readiness bits are set.

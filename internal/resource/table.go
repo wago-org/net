@@ -23,6 +23,7 @@ const (
 	KindTCPStream
 	KindDNSQuery
 	KindICMPv4Echo
+	KindNTPSync
 	KindPollable
 )
 
@@ -267,6 +268,8 @@ func (k Kind) String() string {
 		return "dns_query"
 	case KindICMPv4Echo:
 		return "icmpv4_echo"
+	case KindNTPSync:
+		return "ntp_sync"
 	case KindPollable:
 		return "pollable"
 	default:

@@ -262,6 +262,38 @@ func TestPolicyAuthorityChangingOperationsUseTransportAndDirection(t *testing.T)
 	}
 }
 
+func TestNTPAuthorityIsProtocolLocalPortAwareAndDenyWins(t *testing.T) {
+	compiled, err := Compile(Config{
+		Rules: []Rule{
+			{Action: ActionAllow, Transports: []Transport{TransportNTP}, Directions: []Direction{DirectionOutbound}, Prefixes: []netip.Prefix{mustPrefix("192.0.2.0/24")}, Ports: []PortRange{{First: 123, Last: 123}}},
+			{Action: ActionDeny, Transports: []Transport{TransportNTP}, Directions: []Direction{DirectionOutbound}, Prefixes: []netip.Prefix{mustPrefix("192.0.2.9/32")}},
+			{Action: ActionAllow, Transports: []Transport{TransportUDP}, Directions: []Direction{DirectionOutbound}},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !compiled.CheckEndpoint(OperationNTPSync, mustAddr("192.0.2.8"), 123) {
+		t.Fatal("authorized NTP server denied")
+	}
+	if compiled.CheckEndpoint(OperationNTPSync, mustAddr("192.0.2.8"), 124) {
+		t.Fatal("NTP authority widened beyond server port 123")
+	}
+	if compiled.CheckEndpoint(OperationNTPSync, mustAddr("192.0.2.9"), 123) {
+		t.Fatal("NTP deny did not win")
+	}
+	if compiled.CheckEndpoint(OperationUDPSend, mustAddr("192.0.2.8"), 123) == false {
+		t.Fatal("independent UDP authority unexpectedly denied")
+	}
+	udpOnly, err := Compile(Config{Rules: []Rule{{Action: ActionAllow, Transports: []Transport{TransportUDP}, Directions: []Direction{DirectionOutbound}}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if udpOnly.CheckEndpoint(OperationNTPSync, mustAddr("192.0.2.8"), 123) {
+		t.Fatal("general UDP authority widened NTP")
+	}
+}
+
 func TestICMPv4AddressAuthorityIsTransportScopedAndPortless(t *testing.T) {
 	compiled, err := Compile(Config{
 		Rules: []Rule{

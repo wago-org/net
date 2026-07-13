@@ -28,9 +28,10 @@ const (
 	TransportTCP
 	TransportDNS
 	TransportICMPv4
+	TransportNTP
 
 	transportFirst = TransportUDP
-	transportLast  = TransportICMPv4
+	transportLast  = TransportNTP
 )
 
 // Direction identifies whether authority accepts local inbound traffic or
@@ -53,6 +54,7 @@ const (
 	OperationTCPConnect
 	OperationDNSResolve
 	OperationICMPv4Echo
+	OperationNTPSync
 )
 
 // PortRange is an inclusive port selector.
@@ -462,6 +464,8 @@ func operationEndpoint(operation Operation) (Transport, Direction, bool) {
 		return TransportTCP, DirectionInbound, true
 	case OperationTCPConnect:
 		return TransportTCP, DirectionOutbound, true
+	case OperationNTPSync:
+		return TransportNTP, DirectionOutbound, true
 	default:
 		return 0, 0, false
 	}

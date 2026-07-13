@@ -70,6 +70,33 @@ func TestICMPv4ResourceWorkAndRetainedByteAccounting(t *testing.T) {
 	}
 }
 
+func TestNTPResourceAndActiveWorkAccounting(t *testing.T) {
+	account := NewAccount(Limits{Resources: 1, NTPResources: 1, NTPWork: 1})
+	var retained, work Charge
+	if err := account.AcquireResource(&retained, ResourceNTP, 1); err != nil {
+		t.Fatal(err)
+	}
+	if err := account.AcquireNTPWork(&work, 1); err != nil {
+		t.Fatal(err)
+	}
+	if usage, closed := account.Snapshot(); closed || usage != (Usage{Resources: 1, NTPResources: 1, NTPWork: 1}) {
+		t.Fatalf("NTP usage = %+v, closed=%v", usage, closed)
+	}
+	var denied Charge
+	if err := account.AcquireResource(&denied, ResourceNTP, 1); !errors.Is(err, ErrLimit) {
+		t.Fatalf("NTP resource limit error = %v", err)
+	}
+	if err := account.AcquireNTPWork(&denied, 1); !errors.Is(err, ErrLimit) {
+		t.Fatalf("NTP work limit error = %v", err)
+	}
+	if !work.Release() || !retained.Release() {
+		t.Fatal("NTP charges did not release")
+	}
+	if usage, _ := account.Snapshot(); usage != (Usage{}) {
+		t.Fatalf("NTP release leaked usage: %+v", usage)
+	}
+}
+
 func TestReservationRollbackAndFailureDoNotLeak(t *testing.T) {
 	account := NewAccount(Limits{QueuedBytes: 8, DNSWork: 1, ServiceUnits: 2})
 	bytes, err := account.ReserveQueuedBytes(8)
@@ -225,6 +252,7 @@ func TestAccountRejectsInvalidZeroAndOverflowingUnits(t *testing.T) {
 		func() error { _, err := account.ReserveResource(ResourceUDP, 0); return err },
 		func() error { _, err := account.ReserveQueuedBytes(0); return err },
 		func() error { _, err := account.ReserveDNSWork(0); return err },
+		func() error { return account.AcquireNTPWork(new(Charge), 0) },
 		func() error { _, err := account.ReserveService(0); return err },
 		func() error { return account.WithService(0, func() {}) },
 		func() error { return account.WithService(1, nil) },

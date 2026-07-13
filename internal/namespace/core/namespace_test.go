@@ -37,9 +37,12 @@ func TestEndpointStructuralValidation(t *testing.T) {
 	}
 }
 
-func TestICMPv4ReplyReadinessIsKnown(t *testing.T) {
+func TestProtocolResultReadinessIsKnown(t *testing.T) {
 	if !ReadyICMPv4Reply.Valid() || !(ReadyICMPv4Reply | ReadyError | ReadyClosed).Valid() {
 		t.Fatal("ICMPv4 reply readiness rejected")
+	}
+	if !ReadyNTPResult.Valid() || !(ReadyNTPResult | ReadyError | ReadyClosed).Valid() {
+		t.Fatal("NTP result readiness rejected")
 	}
 	if Readiness(1 << 31).Valid() {
 		t.Fatal("unknown readiness bit accepted")

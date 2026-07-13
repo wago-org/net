@@ -103,6 +103,24 @@ func TestICMPv4EchoKindIsExactAndNamed(t *testing.T) {
 	}
 }
 
+func TestNTPSyncKindIsExactAndNamed(t *testing.T) {
+	table := newTable(t)
+	sync := &testResource{}
+	handle, err := table.Add(KindNTPSync, sync)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if KindNTPSync.String() != "ntp_sync" {
+		t.Fatalf("NTP kind name = %q", KindNTPSync.String())
+	}
+	if _, err := table.Lookup(handle, KindICMPv4Echo); !errors.Is(err, ErrBadHandle) {
+		t.Fatalf("wrong-kind lookup error = %v", err)
+	}
+	if err := table.CloseHandle(handle, KindNTPSync); err != nil || sync.closed.Load() != 1 {
+		t.Fatalf("close = %v, count=%d", err, sync.closed.Load())
+	}
+}
+
 func TestTableReuseAdvancesGeneration(t *testing.T) {
 	table := newTable(t)
 	first := &testResource{}
