@@ -26,6 +26,7 @@ const (
 	KindNTPSync
 	KindMDNSQuery
 	KindMDNSAnnouncement
+	KindDHCPv4Lease
 	KindPollable
 )
 
@@ -276,6 +277,8 @@ func (k Kind) String() string {
 		return "mdns_query"
 	case KindMDNSAnnouncement:
 		return "mdns_announcement"
+	case KindDHCPv4Lease:
+		return "dhcpv4_lease"
 	case KindPollable:
 		return "pollable"
 	default:

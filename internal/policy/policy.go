@@ -31,9 +31,10 @@ const (
 	TransportICMPv4
 	TransportNTP
 	TransportMDNS
+	TransportDHCPv4
 
 	transportFirst = TransportUDP
-	transportLast  = TransportMDNS
+	transportLast  = TransportDHCPv4
 )
 
 // Direction identifies whether authority accepts local inbound traffic or
@@ -60,6 +61,10 @@ const (
 	OperationMDNSQuery
 	OperationMDNSRespond
 	OperationMDNSSend
+	OperationDHCPv4ClientBind
+	OperationDHCPv4ClientSend
+	OperationDHCPv4ServerBind
+	OperationDHCPv4ServerSend
 )
 
 // PortRange is an inclusive port selector.
@@ -486,6 +491,10 @@ func operationEndpoint(operation Operation) (Transport, Direction, bool) {
 		return TransportNTP, DirectionOutbound, true
 	case OperationMDNSSend:
 		return TransportMDNS, DirectionOutbound, true
+	case OperationDHCPv4ClientBind, OperationDHCPv4ServerBind:
+		return TransportDHCPv4, DirectionInbound, true
+	case OperationDHCPv4ClientSend, OperationDHCPv4ServerSend:
+		return TransportDHCPv4, DirectionOutbound, true
 	default:
 		return 0, 0, false
 	}

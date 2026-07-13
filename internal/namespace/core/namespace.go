@@ -102,8 +102,9 @@ const (
 	ReadyNTPResult
 	ReadyMDNSResult
 	ReadyMDNSAnnouncement
+	ReadyDHCPv4Lease
 
-	readinessMask = ReadyReadable | ReadyWritable | ReadyAccept | ReadyConnected | ReadyDNSResult | ReadyICMPv4Reply | ReadyNTPResult | ReadyMDNSResult | ReadyMDNSAnnouncement | ReadyError | ReadyClosed
+	readinessMask = ReadyReadable | ReadyWritable | ReadyAccept | ReadyConnected | ReadyDNSResult | ReadyICMPv4Reply | ReadyNTPResult | ReadyMDNSResult | ReadyMDNSAnnouncement | ReadyDHCPv4Lease | ReadyError | ReadyClosed
 )
 
 // Valid reports whether no unknown readiness bits are set.

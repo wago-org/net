@@ -84,6 +84,8 @@ type Namespace struct {
 	randSeed               int64
 	nextIPv4ID             uint16
 	ipv4Address            netip.Addr
+	staticIPv4Address      netip.Addr
+	ipv4IdentityLease      *IPv4IdentityLease
 	hardwareAddress        [6]byte
 	gatewayHardwareAddress [6]byte
 	policy                 *policy.Policy
@@ -139,6 +141,7 @@ func New(config Config) (*Namespace, error) {
 		randSeed:               config.RandSeed,
 		nextIPv4ID:             uint16(config.RandSeed),
 		ipv4Address:            config.IPv4Address,
+		staticIPv4Address:      config.IPv4Address,
 		hardwareAddress:        config.HardwareAddress,
 		gatewayHardwareAddress: config.GatewayHardwareAddress,
 		policy:                 config.Policy,
@@ -269,6 +272,11 @@ func (n *Namespace) Close() error {
 		closer.close()
 	}
 	n.closers = nil
+	if n.ipv4IdentityLease != nil {
+		n.ipv4IdentityLease.owner = nil
+		n.ipv4IdentityLease.active = false
+		n.ipv4IdentityLease = nil
+	}
 	for _, lease := range n.udpPorts {
 		lease.owner = nil
 		lease.port = 0
