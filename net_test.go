@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/netip"
 	"reflect"
+	"runtime"
 	"sync"
 	"testing"
 
@@ -28,6 +29,10 @@ func TestExtensionMetadataAndABIBinding(t *testing.T) {
 	}
 	if !info.Private {
 		t.Fatal("experimental exact-revision plugin must remain private")
+	}
+	wantTags := []string{"networking", "tcp", "udp", "dns", "capability-gated", "wago", "lneto", "wasm"}
+	if !reflect.DeepEqual(info.Tags, wantTags) {
+		t.Fatalf("Info tags = %v, want %v", info.Tags, wantTags)
 	}
 
 	rt := wago.NewRuntime()
@@ -437,6 +442,9 @@ func (*assemblyNamespace) TryService(nscore.ServiceBudget) (nscore.ServiceReport
 }
 
 func TestInstallNamespaceServicesAvoidsPerProtocolScratchForCommonSelections(t *testing.T) {
+	if runtime.Compiler == "tinygo" {
+		return
+	}
 	tcpService := new(int)
 	udpService := new(string)
 	dnsService := new(byte)

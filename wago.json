@@ -11,14 +11,12 @@
   "authors": ["The wago authors"],
   "private": true,
   "keywords": [
-    "network",
+    "networking",
     "tcp",
     "udp",
     "dns",
-    "dhcp",
-    "icmp",
-    "ntp",
-    "mdns",
+    "capability-gated",
+    "wago",
     "lneto",
     "wasm"
   ],

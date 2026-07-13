@@ -10,14 +10,18 @@ recorded in the durable ledger and release notes.
 and minor version 0.
 
 Except for `abi_version`, networking imports return one `i32` status and write
-additional values through checked guest-memory output pointers. The completed
-`internal/backend/lneto/core` plus `/tcp`, `/udp`, and `/dns` adapter extraction
-and selective opaque contribution assembly change only Go implementation
-ownership. Unregistered adapters/facets are now absent from the Go dependency
-graph as well as the Wasm import surface. The shared UDP-port lease domain used
-by UDP binds and DNS source ports is likewise internal: import names, signatures,
-numeric statuses, fixed sizes/offsets, checked-range rules, output atomicity, and
-handle semantics in this document remain unchanged.
+additional values through checked guest-memory output pointers. `InfoImports()`
+and the historical zero-config `Imports(Config{})` helper intentionally expose
+only `wago_net.abi_version`; every resource-owning UDP/TCP/DNS import requires
+exact Runtime lifecycle identity and is therefore available only through
+extension registration. The completed `internal/backend/lneto/core` plus `/tcp`,
+`/udp`, and `/dns` adapter extraction and selective opaque contribution assembly
+change only Go implementation ownership. Unregistered adapters/facets are now
+absent from the Go dependency graph as well as the Wasm import surface. The
+shared UDP-port lease domain used by UDP binds and DNS source ports is likewise
+internal: import names, signatures, numeric statuses, fixed sizes/offsets,
+checked-range rules, output atomicity, and handle semantics in this document
+remain unchanged.
 
 ## Scalar conventions
 

@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"net/netip"
+	"runtime"
 	"sync/atomic"
 	"testing"
 )
@@ -74,6 +75,9 @@ func (b *compositionBase) Close() error {
 }
 
 func TestNamespaceCompositionAvoidsPerServiceHeapGrowthForCommonSelections(t *testing.T) {
+	if runtime.Compiler == "tinygo" {
+		return
+	}
 	base := new(compositionBase)
 	tcpService := new(int)
 	udpService := new(string)

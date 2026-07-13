@@ -1448,3 +1448,62 @@ Broad validation at recursion end:
 1. `fix: make tinygo source-object tests self-contained`
 2. `perf: reduce shared service composition allocations`
 3. `docs: clean README, ABI notes, and capability keywords`
+
+## Audit recursion update — 2026-07-12 iteration 6
+
+### Completed work
+
+1. `617ab35` — `fix: keep source-object provenance tests off tinygo`
+   - Extracted the Git-backed source-object fixture helpers into a dedicated standard-Go helper file and gated `internal/releaseprovenance/sourceobjects_test.go` with `//go:build !tinygo`, matching the rest of the release-provenance integration suite.
+   - Revalidated the source-object directory-safety and deterministic replacement/export tests under standard Go.
+   - Reran `tinygo test ./internal/releaseprovenance`; the package now passes because TinyGo keeps compiling the release-provenance package while excluding the Git/exec integration tests that its test runtime cannot execute.
+2. `4655565` — `perf: reduce shared service composition allocations`
+   - Reworked `internal/namespace/core.ComposeNamespace` so the common empty, single-protocol, and UDP/TCP/DNS three-protocol cases keep services inline instead of allocating a per-service map.
+   - Reworked root backend assembly to collect installed protocol services in stack-backed inline scratch for the current three-module surface before publishing the immutable composed namespace.
+   - Added exact allocation regressions plus focused composition benchmarks proving the common compose path now stays at one allocation, with the map-backed overflow path retained for larger future compositions.
+3. `HEAD` — `docs: clean README, ABI notes, and capability keywords`
+   - Cleaned README low-level import wording so the core-only `InfoImports` / zero-config `Imports(Config{})` path is explicitly limited to `wago_net.abi_version`, while configured UDP/TCP/DNS resources remain Runtime-owned.
+   - Updated `docs/abi-v1.md` and `docs/architecture.md` to reflect the split ABI packages and the inline common-case namespace-composition storage used by the current three-protocol surface.
+   - Normalized `wago.json` capability keywords to the actually shipped surfaces only and added a metadata regression that rejects reintroducing unsupported protocol tags.
+
+### Remaining work
+
+- No remaining July 12, 2026 audit P1/P2 items are currently known. The release publication/adoption backlog above remains real, but it is separate from this networking audit completion gate.
+
+### Exact tests run
+
+Targeted validation during the slice:
+- `go test ./internal/releaseprovenance -run 'Test(PrepareSourceObjectOutputDirectoryRejectsUnsafePaths|PrepareSourceObjectOutputDirectoryAllowsArtifactSubdirectory|ExportSourceObjects(ReplacesExistingDirectoryAtomically|IsDeterministic)|ReplaceDirectoryAtomicallyPreservesPreviousOutputOnFailure)$'`
+- `tinygo test ./internal/releaseprovenance`
+- `go test ./internal/namespace/core ./... -run 'Test(NamespaceCompositionAvoidsPerServiceHeapGrowthForCommonSelections|InstallNamespaceServicesAvoidsPerProtocolScratchForCommonSelections)$'`
+- `go test ./internal/namespace/core -run '^$' -bench 'Benchmark(ComposeNamespace|ResolveNamespace(Service|Base))$' -benchmem`
+- `go test ./ -run 'TestExtensionMetadataAndABIBinding$'`
+
+Broad validation at recursion end:
+- `go test ./...` — pass
+- `go test -race ./...` — pass
+- `go vet ./...` — pass
+- `scripts/check-source-boundaries.sh` — pass
+- `GOOS=linux GOARCH=arm64 CGO_ENABLED=0 go build ./...` — pass
+- `tinygo test ./...` — pass
+
+### Benchmark results
+
+- `go test ./internal/namespace/core -run '^$' -bench 'Benchmark(ComposeNamespace|ResolveNamespace(Service|Base))$' -benchmem`
+  - `BenchmarkComposeNamespace/empty` → `29.60 ns/op`, `128 B/op`, `1 allocs/op`
+  - `BenchmarkComposeNamespace/single` → `29.16 ns/op`, `128 B/op`, `1 allocs/op`
+  - `BenchmarkComposeNamespace/three` → `39.86 ns/op`, `128 B/op`, `1 allocs/op`
+  - `BenchmarkComposeNamespace/overflow` → `154.6 ns/op`, `464 B/op`, `3 allocs/op`
+  - `BenchmarkResolveNamespaceService` → `5.037 ns/op`, `0 B/op`, `0 allocs/op`
+  - `BenchmarkResolveNamespaceBase` → `4.317 ns/op`, `0 B/op`, `0 allocs/op`
+
+### Discovered follow-up issues / blockers
+
+- TinyGo broad validation is no longer blocked, but its test runtime still cannot execute the Git-backed release-provenance integration fixtures directly: before the `!tinygo` gate, `tinygo test ./internal/releaseprovenance` failed with repeated `files setting not implemented` errors while the source-object tests tried to drive temporary Git repositories.
+- The new allocation regressions are intentionally standard-Go-only. TinyGo's test runtime does not provide comparable allocation accounting, so those tests return early there while the full TinyGo package matrix still passes.
+- Direct host-side resource pointers must remain stale after close. The shared-composition allocation reduction therefore reuses only service-selection scratch and immutable inline service storage; it does **not** revive closed UDP/TCP/DNS direct object identities.
+- No further July 12 audit blockers are known after the final broad validation below.
+
+### Next three proposed atomic commits
+
+- None required for the July 12, 2026 networking audit. If work continues, resume from the longer-term release publication/adoption backlog tracked earlier in this file.

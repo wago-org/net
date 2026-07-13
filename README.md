@@ -2,6 +2,8 @@
 
 Capability-gated networking plugins for the [Wago](https://github.com/wago-org/wago)
 WebAssembly runtime, backed initially by [lneto](https://github.com/soypat/lneto).
+Only UDP, TCP, and DNS are implemented today; DHCP, ICMP, NTP, and mDNS remain
+absent and are not advertised in extension metadata.
 
 > [!WARNING]
 > This module is private and experimental. Use it only with the exact Wago
@@ -16,7 +18,10 @@ modules. UDP covers configured-namespace discovery, bind, send, receive, close,
 and bounded poll. TCP covers discovery, listen, nonblocking connect completion,
 accept, partial read/write, write-half shutdown, kind-specific close, and its own
 bounded poll. DNS covers configured resolver discovery, bounded A/AAAA queries,
-copied A/AAAA/CNAME iteration, cancellation, close, and bounded poll.
+copied A/AAAA/CNAME iteration, cancellation, close, and bounded poll. The
+low-level `InfoImports` / zero-config `Imports(Config{})` path remains core-only
+and exposes only `wago_net.abi_version`; resource-owning protocol imports require
+Runtime lifecycle ownership.
 The stable numeric status taxonomy and fixed v1 address/result layouts use central
 checked guest memory; exact instance identity, generation/kind-checked handles,
 immutable endpoint policy, finite quotas, and deterministic lifecycle cleanup
@@ -164,7 +169,10 @@ import _ "github.com/wago-org/net/register" // extension key: net
 The granular packages install protocol defaults but do not invent deployment
 IPv4 identity/link configuration; DNS resolver storage also remains disabled in
 the zero-configuration self-registering form. Applications needing those values
-should use explicit `wagonet.New` composition.
+should use explicit `wagonet.New` composition. Likewise, low-level `InfoImports`
+and `Imports(Config{})` stay limited to the stateless core ABI-version surface
+rather than attempting to expose configured protocol resources without exact
+instance ownership.
 
 The guest ABI is custom to Wago. It may follow WASI socket semantics where useful,
 but it is not binary-compatible with WASI Component Model resources.

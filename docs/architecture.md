@@ -45,9 +45,11 @@ and independently capability-gated bounded poll. The explicit low-level
 Runtime lifecycle identity.
 Registration and implementation share complete binding tables so inspection
 metadata, TinyGo-compatible slot shapes, and actual host functions do not drift.
-`internal/abi` provides allocation-free checked ranges, fixed-width endpoint,
-UDP receive, TCP stream/I/O, inline DNS query/name/record layouts, disjoint
-multi-output validation, and bounded poll codecs without exposing lneto types.
+`internal/abi/core` provides allocation-free checked ranges, shared endpoint and
+poll layouts, disjoint multi-output validation, and common handle/memory codecs
+without exposing lneto types. `internal/abi/tcp`, `/udp`, and `/dns` hold only
+TCP stream/I/O, UDP receive-result, and inline DNS query/name/record layouts, so
+omitted protocol ABI units stay out of selective dependency graphs.
 `internal/resource` provides O(1) opaque-handle lookup with exact kind checks,
 never-reused table identities, per-slot generations, rollover retirement, and
 reverse-creation O(live) cleanup. The table exists independently of protocol
@@ -95,9 +97,11 @@ instance manager stores one quota-owned core namespace resource and protocol
 operation packages recover their selected facet through an immutable,
 protocol-neutral keyed service composition. The composition imports no protocol
 facet itself and retains one protocol-neutral base namespace for trusted link and
-service integration. This preserves one namespace handle, one lifecycle lock,
-one readiness/service owner, and one teardown path without forcing omitted
-protocol facets into the dependency graph.
+service integration. The common UDP/TCP/DNS cases use inline service storage, so
+shared composition avoids per-selected-protocol heap growth while preserving a
+map-backed overflow path for future larger compositions. This preserves one
+namespace handle, one lifecycle lock, one readiness/service owner, and one
+teardown path without forcing omitted protocol facets into the dependency graph.
 
 `internal/packetlink` owns fixed ingress and egress frame slots. Enqueue copies
 caller data, dequeue has explicit truncation and byte-budget rollback semantics,
