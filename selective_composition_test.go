@@ -7,6 +7,7 @@ import (
 
 	wagonet "github.com/wago-org/net"
 	"github.com/wago-org/net/dns"
+	"github.com/wago-org/net/icmpv4"
 	"github.com/wago-org/net/tcp"
 	"github.com/wago-org/net/udp"
 	wago "github.com/wago-org/wago"
@@ -26,6 +27,7 @@ var publicProtocols = []protocolSelection{
 	{name: "tcp", module: wagonet.TCPModule, capability: wagonet.CapTCP, imports: 11, register: func(network *wagonet.Network) error { return tcp.Register(network) }},
 	{name: "udp", module: wagonet.UDPModule, capability: wagonet.CapUDP, imports: 6, register: func(network *wagonet.Network) error { return udp.Register(network) }},
 	{name: "dns", module: wagonet.DNSModule, capability: wagonet.CapDNS, imports: 6, register: func(network *wagonet.Network) error { return dns.Register(network) }},
+	{name: "icmpv4", module: wagonet.ICMPv4Module, capability: wagonet.CapICMPv4, imports: 6, register: func(network *wagonet.Network) error { return icmpv4.Register(network) }},
 }
 
 func TestPublicSelectiveCompositionMatrix(t *testing.T) {
@@ -39,10 +41,18 @@ func TestPublicSelectiveCompositionMatrix(t *testing.T) {
 		{name: "tcp", selected: []string{"tcp"}, caps: []wago.Capability{wagonet.CapInfo, wagonet.CapTCP}, imports: map[string]int{wagonet.Module: 1, wagonet.TCPModule: 11}},
 		{name: "udp", selected: []string{"udp"}, caps: []wago.Capability{wagonet.CapInfo, wagonet.CapUDP}, imports: map[string]int{wagonet.Module: 1, wagonet.UDPModule: 6}},
 		{name: "dns", selected: []string{"dns"}, caps: []wago.Capability{wagonet.CapDNS, wagonet.CapInfo}, imports: map[string]int{wagonet.Module: 1, wagonet.DNSModule: 6}},
+		{name: "icmpv4", selected: []string{"icmpv4"}, caps: []wago.Capability{wagonet.CapICMPv4, wagonet.CapInfo}, imports: map[string]int{wagonet.Module: 1, wagonet.ICMPv4Module: 6}},
 		{name: "tcp_udp", selected: []string{"tcp", "udp"}, caps: []wago.Capability{wagonet.CapInfo, wagonet.CapTCP, wagonet.CapUDP}, imports: map[string]int{wagonet.Module: 1, wagonet.TCPModule: 11, wagonet.UDPModule: 6}},
 		{name: "tcp_dns", selected: []string{"tcp", "dns"}, caps: []wago.Capability{wagonet.CapDNS, wagonet.CapInfo, wagonet.CapTCP}, imports: map[string]int{wagonet.Module: 1, wagonet.TCPModule: 11, wagonet.DNSModule: 6}},
 		{name: "udp_dns", selected: []string{"udp", "dns"}, caps: []wago.Capability{wagonet.CapDNS, wagonet.CapInfo, wagonet.CapUDP}, imports: map[string]int{wagonet.Module: 1, wagonet.UDPModule: 6, wagonet.DNSModule: 6}},
-		{name: "all", selected: []string{"tcp", "udp", "dns"}, caps: []wago.Capability{wagonet.CapDNS, wagonet.CapInfo, wagonet.CapTCP, wagonet.CapUDP}, imports: map[string]int{wagonet.Module: 1, wagonet.TCPModule: 11, wagonet.UDPModule: 6, wagonet.DNSModule: 6}},
+		{name: "tcp_icmpv4", selected: []string{"tcp", "icmpv4"}, caps: []wago.Capability{wagonet.CapICMPv4, wagonet.CapInfo, wagonet.CapTCP}, imports: map[string]int{wagonet.Module: 1, wagonet.TCPModule: 11, wagonet.ICMPv4Module: 6}},
+		{name: "udp_icmpv4", selected: []string{"udp", "icmpv4"}, caps: []wago.Capability{wagonet.CapICMPv4, wagonet.CapInfo, wagonet.CapUDP}, imports: map[string]int{wagonet.Module: 1, wagonet.UDPModule: 6, wagonet.ICMPv4Module: 6}},
+		{name: "dns_icmpv4", selected: []string{"dns", "icmpv4"}, caps: []wago.Capability{wagonet.CapDNS, wagonet.CapICMPv4, wagonet.CapInfo}, imports: map[string]int{wagonet.Module: 1, wagonet.DNSModule: 6, wagonet.ICMPv4Module: 6}},
+		{name: "tcp_udp_icmpv4", selected: []string{"tcp", "udp", "icmpv4"}, caps: []wago.Capability{wagonet.CapICMPv4, wagonet.CapInfo, wagonet.CapTCP, wagonet.CapUDP}, imports: map[string]int{wagonet.Module: 1, wagonet.TCPModule: 11, wagonet.UDPModule: 6, wagonet.ICMPv4Module: 6}},
+		{name: "tcp_dns_icmpv4", selected: []string{"tcp", "dns", "icmpv4"}, caps: []wago.Capability{wagonet.CapDNS, wagonet.CapICMPv4, wagonet.CapInfo, wagonet.CapTCP}, imports: map[string]int{wagonet.Module: 1, wagonet.TCPModule: 11, wagonet.DNSModule: 6, wagonet.ICMPv4Module: 6}},
+		{name: "udp_dns_icmpv4", selected: []string{"udp", "dns", "icmpv4"}, caps: []wago.Capability{wagonet.CapDNS, wagonet.CapICMPv4, wagonet.CapInfo, wagonet.CapUDP}, imports: map[string]int{wagonet.Module: 1, wagonet.UDPModule: 6, wagonet.DNSModule: 6, wagonet.ICMPv4Module: 6}},
+		{name: "tcp_udp_dns", selected: []string{"tcp", "udp", "dns"}, caps: []wago.Capability{wagonet.CapDNS, wagonet.CapInfo, wagonet.CapTCP, wagonet.CapUDP}, imports: map[string]int{wagonet.Module: 1, wagonet.TCPModule: 11, wagonet.UDPModule: 6, wagonet.DNSModule: 6}},
+		{name: "all", selected: []string{"tcp", "udp", "dns", "icmpv4"}, caps: []wago.Capability{wagonet.CapDNS, wagonet.CapICMPv4, wagonet.CapInfo, wagonet.CapTCP, wagonet.CapUDP}, imports: map[string]int{wagonet.Module: 1, wagonet.TCPModule: 11, wagonet.UDPModule: 6, wagonet.DNSModule: 6, wagonet.ICMPv4Module: 6}},
 	}
 
 	for _, test := range tests {

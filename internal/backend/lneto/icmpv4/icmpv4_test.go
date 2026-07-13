@@ -90,7 +90,7 @@ func TestICMPv4PolicyLimitsTimeoutCancelAndClose(t *testing.T) {
 	if _, _, err := adapter.TryEcho(icmpns.Request{Destination: netip.MustParseAddr("198.51.100.1")}); failureOf(t, err) != nscore.FailureAccessDenied {
 		t.Fatalf("policy denial = %v", err)
 	}
-	if _, _, err := adapter.TryEcho(icmpns.Request{Destination: netip.MustParseAddr("192.0.2.99"), Payload: make([]byte, 5)}); failureOf(t, err) != nscore.FailureInvalidArgument {
+	if _, _, err := adapter.TryEcho(icmpns.Request{Destination: netip.MustParseAddr("192.0.2.99"), Payload: make([]byte, 5)}); failureOf(t, err) != nscore.FailureMessageTooLarge {
 		t.Fatalf("payload limit = %v", err)
 	}
 	resource, _, err := adapter.TryEcho(icmpns.Request{Destination: netip.MustParseAddr("192.0.2.99")})

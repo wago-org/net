@@ -257,6 +257,49 @@ response may contain no relevant records, in which case `next` returns `EOF`.
 Truncated UDP responses return `TEMPORARY_FAILURE`; ABI v1 does not implement
 DNS-over-TCP fallback.
 
+## ICMPv4 module, signatures, and layouts
+
+The complete checked ICMPv4 ABI is independently gated in the
+`wago_net_icmpv4` module by `net.icmpv4`:
+
+```text
+namespace_default(out_handle_ptr: i32) -> i32
+echo(namespace: i64, request_ptr: i32, out_echo_ptr: i32) -> i32
+result(echo: i64, payload_ptr: i32, payload_capacity: i32, out_result_ptr: i32) -> i32
+cancel(echo: i64) -> i32
+close(echo: i64) -> i32
+poll(events_ptr: i32, event_capacity: i32, budget_ptr: i32, out_result_ptr: i32) -> i32
+```
+
+`wago_net_icmpv4_echo_request_v1` is 48 bytes: a `wago_net_addr_v1`
+IPv4 destination with zero port at offset 0, little-endian `uint32_t payload_ptr`
+and `uint32_t payload_len` at offsets 32 and 36, and a zero `uint64_t reserved`
+at offset 40. The fixed request, indirect payload, and handle output must be
+pairwise disjoint and completely in bounds before policy, quota, or backend
+work. The backend copies the payload during `echo`; no guest slice is retained.
+
+`wago_net_icmpv4_echo_result_v1` is 48 bytes:
+
+```c
+struct wago_net_icmpv4_echo_result_v1 {
+    struct wago_net_addr_v1 source;  // offset 0, IPv4 with zero port
+    uint16_t identifier;             // offset 32
+    uint16_t sequence;               // offset 34
+    uint32_t copied;                 // offset 36
+    uint32_t payload_bytes;          // offset 40
+    uint32_t reserved;               // offset 44, written zero
+};
+```
+
+`result` validates disjoint payload/result outputs before lookup. On `OK`, it
+copies at most `payload_capacity` bytes and reports both the copied prefix and
+complete echoed payload size. `AGAIN`, cancellation, timeout, and failures leave
+both outputs unchanged. Echo replies must match the exact destination,
+identifier, sequence, checksum, and copied request payload. Attempts and retry
+countdowns advance only through bounded service calls; cancellation and close
+are deterministic and release active-work or retained-resource quota exactly
+once.
+
 ## Bounded poll layouts
 
 `wago_net_poll_budget_v1` is 24 bytes, containing six consecutive `uint32_t`
@@ -268,7 +311,8 @@ be nonzero. The requested event count must not exceed `event_capacity`.
 Each 16-byte `wago_net_poll_event_v1` contains `uint64_t handle`, `uint32_t
 readiness`, and a zero `uint32_t reserved` field. Readiness is level-triggered:
 bit `1` readable, bit `2` writable, bit `4` accept, bit `8` connected, bit `16`
-DNS result, bit `32` error, and bit `64` closed. Unknown bits are invalid.
+DNS result, bit `32` error, bit `64` closed, and bit `128` ICMPv4 reply. Unknown
+bits are invalid.
 
 `wago_net_poll_result_v1` is 24 bytes, containing six consecutive `uint32_t`
 fields: `events`, `scanned`, `service_attempts`, `service_completed`,
@@ -322,16 +366,16 @@ Handles from another instance, stale handles, wrong-kind handles, zero, and
 malformed values return `BAD_HANDLE`. Guests must not derive or inspect handle
 bits.
 
-Future endpoint-changing imports are required to enforce immutable instance
-policy on every bind, listen, connect, datagram destination, and DNS request.
+Endpoint-changing imports enforce immutable instance policy on every bind,
+listen, connect, datagram destination, DNS request, and ICMPv4 echo destination.
 Unmatched or malformed requests are denied. Wildcard binds, loopback, multicast,
 limited IPv4 broadcast, and local bind/listen ports below 1024 require separate
 explicit grants so a broad prefix rule cannot grant them accidentally.
 IPv4-mapped IPv6 addresses are rejected rather than reinterpreted across policy
 families.
 
-Resource creation, retained packet bytes, DNS work, and manual service work are
-also subject to finite per-instance quotas. A failed operation must roll back its
+Resource creation, retained packet bytes, DNS and active ICMPv4 work, and manual
+service work are also subject to finite per-instance quotas. A failed operation must roll back its
 tentative reservation, and instance teardown clears both committed allocations
 and abandoned reservations. Exact default limits remain implementation policy,
 not ABI constants.

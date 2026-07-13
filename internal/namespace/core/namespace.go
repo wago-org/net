@@ -96,9 +96,9 @@ const (
 	ReadyAccept
 	ReadyConnected
 	ReadyDNSResult
-	ReadyICMPv4Reply
 	ReadyError
 	ReadyClosed
+	ReadyICMPv4Reply
 
 	readinessMask = ReadyReadable | ReadyWritable | ReadyAccept | ReadyConnected | ReadyDNSResult | ReadyICMPv4Reply | ReadyError | ReadyClosed
 )

@@ -26,6 +26,7 @@ The suite therefore uses **protocol import modules**:
 - `wago_net_udp` for UDP;
 - `wago_net_tcp` for TCP;
 - `wago_net_dns` for DNS;
+- `wago_net_icmpv4` for ICMPv4 echo;
 - additional modules only when their implementations exist.
 
 This permits narrow per-protocol capabilities and independent ABI evolution
@@ -35,10 +36,11 @@ protocol modules; no process-global state or placeholder protocol module is used
 
 ## Current implementation
 
-The root extension owns four distinct import modules: `wago_net` declares
+The root extension owns five distinct import modules: `wago_net` declares
 `net.info` and exposes `abi_version`; `wago_net_udp` declares narrow `net.udp`
-authority; `wago_net_tcp` declares narrow `net.tcp` authority; and
-`wago_net_dns` declares narrow `net.dns` authority. UDP, TCP, and DNS each expose
+authority; `wago_net_tcp` declares narrow `net.tcp` authority;
+`wago_net_dns` declares narrow `net.dns` authority; and `wago_net_icmpv4`
+declares narrow `net.icmpv4` authority. UDP, TCP, DNS, and ICMPv4 each expose
 complete configured-namespace discovery, protocol operations, kind-safe close,
 and independently capability-gated bounded poll. The explicit low-level
 `InfoImports` bundle remains core-only because protocol resources require
@@ -47,9 +49,9 @@ Registration and implementation share complete binding tables so inspection
 metadata, TinyGo-compatible slot shapes, and actual host functions do not drift.
 `internal/abi/core` provides allocation-free checked ranges, shared endpoint and
 poll layouts, disjoint multi-output validation, and common handle/memory codecs
-without exposing lneto types. `internal/abi/tcp`, `/udp`, and `/dns` hold only
-TCP stream/I/O, UDP receive-result, and inline DNS query/name/record layouts, so
-omitted protocol ABI units stay out of selective dependency graphs.
+without exposing lneto types. `internal/abi/tcp`, `/udp`, `/dns`, and `/icmpv4` hold only TCP stream/I/O, UDP
+receive-result, inline DNS query/name/record, and ICMPv4 echo request/result
+layouts, so omitted protocol ABI units stay out of selective dependency graphs.
 `internal/resource` provides O(1) opaque-handle lookup with exact kind checks,
 never-reused table identities, per-slot generations, rollover retirement, and
 reverse-creation O(live) cleanup. The table exists independently of protocol
@@ -78,8 +80,8 @@ the final concrete ephemeral endpoint is checked against special-class gates and
 deny rules without becoming general explicit-port authority. None of these
 options creates a second policy or quota domain.
 
-`internal/quota` provides finite per-instance total/protocol resource, queued-byte,
-DNS-work, and service-work counters. Tentative reservations must be committed or
+`internal/quota` provides finite per-instance total/protocol resource,
+queued-byte, DNS-work, active-ICMPv4-work, and service-work counters. Tentative reservations must be committed or
 rolled back; committed allocations release exactly once. Guest poll uses a
 scoped service charge that preserves the same finite concurrent limit and panic
 cleanup without allocating retained reservation/allocation tokens. Closing an
@@ -88,8 +90,8 @@ abandoned reservations and makes late token cleanup harmless.
 
 `internal/namespace/core` defines the backend-neutral endpoint, progress,
 stream-I/O, readiness, semantic-error, resource, namespace ownership, and bounded
-manual-service contracts. `internal/namespace/tcp`, `/udp`, and `/dns` define
-only their narrow creation/resource facets and protocol-local values. Operations
+manual-service contracts. `internal/namespace/tcp`, `/udp`, `/dns`, and `/icmpv4` define only their narrow
+creation/resource facets and protocol-local values. Operations
 that may await network progress remain single `Try` calls with explicit
 would-block or in-progress results. Focused fake backends exercise each contract
 without importing lneto; no lneto type is part of these layers. The exact
@@ -148,8 +150,13 @@ egress service probe reclaims that entry and now reports one charged service
 operation even when no frame is
 emitted. This preserves lneto's private accepted-list bookkeeping without unsafe
 direct slot reuse, while making the finite maintenance cost and reuse point
-observable. `internal/backend/lneto/dns` owns immediate IPv4 UDP queries plus
-lneto DNS codecs, finite query/record/response bounds,
+observable. `internal/backend/lneto/icmpv4` owns immediate Ethernet/IPv4/ICMP echo codecs,
+finite copied payload and exchange storage, address-only deny-wins policy,
+resource/byte/active-work quota, deterministic service-attempt retry and timeout,
+exact source/identifier/sequence/checksum/payload correlation, cancellation, and
+synchronous close. It does not use lneto's blocking ICMP client.
+`internal/backend/lneto/dns` owns immediate IPv4 UDP queries plus lneto DNS
+codecs, finite query/record/response bounds,
 policy and quota ownership, deterministic service-attempt retransmission and
 timeout, semantic RCode mapping, and copied A/AAAA/CNAME records. Each query has
 an active transport phase (UDP source-port lease, `byPort` dispatch entry, retry
@@ -171,9 +178,10 @@ construction imports only the shared lneto core. Root, single-protocol, pair,
 and all-protocol dependency fixtures require exactly the selected
 adapters/facets and reject every omitted one plus the aggregate assembler,
 completing the Stage 4 compile-isolation boundary.
-Granular `tcp/register`, `udp/register`, and `dns/register` packages now own only
-their selected public facade and exact implementation graph. The root `register`
-package explicitly composes all three protocols in one extension rather than
+Granular `tcp/register`, `udp/register`, `dns/register`, and
+`icmpv4/register` packages own only their selected public facade and exact
+implementation graph. The root `register` package explicitly composes all four
+implemented protocols in one extension rather than
 using the aggregate compatibility constructor.
 
 `internal/readiness` attaches a finite coordinator to each instance resource
@@ -188,14 +196,14 @@ path eliminates quota-token allocations; pointer-backed host-module benchmarks
 now measure the complete UDP and TCP guest poll calls at zero allocations rather
 than including a value-to-interface boxing artifact.
 
-Each `Extension` owns one private instance-state manager shared by its core, UDP,
-TCP, and DNS module bindings. Runtime instantiation attaches one resource table,
+Each `Extension` owns one private instance-state manager shared by its core,
+UDP, TCP, DNS, and ICMPv4 module bindings. Runtime instantiation attaches one resource table,
 readiness coordinator, immutable policy, and finite quota ledger to the exact
 `*wago.Instance`. Optional static
 IPv4 configuration transactionally reserves namespace quota, constructs the
 backend, inserts a generation-safe handle, and registers bounded readiness before
-the state is published. UDP, TCP, and DNS creation repeat that transaction for
-exact socket, listener, stream, or query handles and poll registration; every
+the state is published. UDP, TCP, DNS, and ICMPv4 creation repeat that transaction for exact socket,
+listener, stream, query, or echo handles and poll registration; every
 failed stage closes the backend resource and releases accounting. DNS handles
 support copied record iteration, explicit cancellation, backend service-attempt
 timeout, stale/wrong-kind/cross-instance rejection, and deterministic lifecycle

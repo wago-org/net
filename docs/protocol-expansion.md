@@ -1,6 +1,6 @@
 # lneto protocol expansion plan
 
-Status: active implementation plan.
+Status: active implementation plan. ICMPv4 is complete; later modules remain planned.
 
 ## Goal
 
@@ -21,7 +21,7 @@ DNS modules:
 
 | Planned submodule | lneto package or facility | Initial guest scope |
 |---|---|---|
-| `icmpv4` | `ipv4/icmpv4` | bounded echo requests and replies |
+| `icmpv4` | `ipv4/icmpv4` | complete: bounded copied echo requests and exact replies |
 | `ntp` | `ntp` | bounded client synchronization using an explicit host clock |
 | `mdns` | `dns/mdns` | bounded multicast query, response, and announcement operations |
 | `dhcpv4` | `dhcp/dhcpv4` | bounded client leases and explicitly authorized server operation |
@@ -95,3 +95,18 @@ retry, queue, scan, and operation dimension must have a finite configured bound.
 The order is dependency-driven. Later modules may reuse only backend-neutral
 contracts established by earlier modules; they must not import another public
 protocol facade or binding package.
+
+## Completion ledger
+
+ICMPv4 is exposed as independently selectable `icmpv4.Register`, capability
+`net.icmpv4`, and import module `wago_net_icmpv4`. Its fixed request ABI checks
+the inline destination, indirect payload, and handle output before work and the
+backend copies payload bytes immediately. Exact-instance echo handles have a
+protocol resource kind, reply readiness bit, finite resource/queued-byte/active
+work quota, bounded service-attempt retries and timeout, cancellation, and
+synchronous generation-safe close. The immediate adapter uses only exported
+Ethernet II, IPv4, and ICMPv4 frame codecs; it validates source, identifier,
+sequence, checksums, fragmentation, and exact echoed bytes. Selective dependency
+fixtures reject the adapter, namespace facet, instance operations, ABI, binding,
+and public facade whenever ICMPv4 is omitted. Ethernet II, ARP, IPv4, PHY/MDIO,
+and packet capture remain internal infrastructure rather than guest APIs.

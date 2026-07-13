@@ -21,9 +21,10 @@ type protocolDependency struct {
 }
 
 var protocolDependencies = map[string]protocolDependency{
-	"tcp": {public: modulePath + "/tcp", register: modulePath + "/tcp/register", binding: modulePath + "/internal/binding/tcp", operation: modulePath + "/internal/instance/tcp", abi: modulePath + "/internal/abi/tcp", namespace: modulePath + "/internal/namespace/tcp", adapter: modulePath + "/internal/backend/lneto/tcp"},
-	"udp": {public: modulePath + "/udp", register: modulePath + "/udp/register", binding: modulePath + "/internal/binding/udp", operation: modulePath + "/internal/instance/udp", abi: modulePath + "/internal/abi/udp", namespace: modulePath + "/internal/namespace/udp", adapter: modulePath + "/internal/backend/lneto/udp"},
-	"dns": {public: modulePath + "/dns", register: modulePath + "/dns/register", binding: modulePath + "/internal/binding/dns", operation: modulePath + "/internal/instance/dns", abi: modulePath + "/internal/abi/dns", namespace: modulePath + "/internal/namespace/dns", adapter: modulePath + "/internal/backend/lneto/dns"},
+	"tcp":    {public: modulePath + "/tcp", register: modulePath + "/tcp/register", binding: modulePath + "/internal/binding/tcp", operation: modulePath + "/internal/instance/tcp", abi: modulePath + "/internal/abi/tcp", namespace: modulePath + "/internal/namespace/tcp", adapter: modulePath + "/internal/backend/lneto/tcp"},
+	"udp":    {public: modulePath + "/udp", register: modulePath + "/udp/register", binding: modulePath + "/internal/binding/udp", operation: modulePath + "/internal/instance/udp", abi: modulePath + "/internal/abi/udp", namespace: modulePath + "/internal/namespace/udp", adapter: modulePath + "/internal/backend/lneto/udp"},
+	"dns":    {public: modulePath + "/dns", register: modulePath + "/dns/register", binding: modulePath + "/internal/binding/dns", operation: modulePath + "/internal/instance/dns", abi: modulePath + "/internal/abi/dns", namespace: modulePath + "/internal/namespace/dns", adapter: modulePath + "/internal/backend/lneto/dns"},
+	"icmpv4": {public: modulePath + "/icmpv4", register: modulePath + "/icmpv4/register", binding: modulePath + "/internal/binding/icmpv4", operation: modulePath + "/internal/instance/icmpv4", abi: modulePath + "/internal/abi/icmpv4", namespace: modulePath + "/internal/namespace/icmpv4", adapter: modulePath + "/internal/backend/lneto/icmpv4"},
 }
 
 func TestFixtureDependencyBoundaries(t *testing.T) {
@@ -35,10 +36,11 @@ func TestFixtureDependencyBoundaries(t *testing.T) {
 		{name: "tcp", selected: map[string]bool{"tcp": true}},
 		{name: "udp", selected: map[string]bool{"udp": true}},
 		{name: "dns", selected: map[string]bool{"dns": true}},
+		{name: "icmpv4", selected: map[string]bool{"icmpv4": true}},
 		{name: "tcpudp", selected: map[string]bool{"tcp": true, "udp": true}},
 		{name: "tcpdns", selected: map[string]bool{"tcp": true, "dns": true}},
 		{name: "udpdns", selected: map[string]bool{"udp": true, "dns": true}},
-		{name: "all", selected: map[string]bool{"tcp": true, "udp": true, "dns": true}},
+		{name: "all", selected: map[string]bool{"tcp": true, "udp": true, "dns": true, "icmpv4": true}},
 	}
 
 	for _, test := range tests {
@@ -90,7 +92,8 @@ func TestSelfRegisterPackageDependencyBoundaries(t *testing.T) {
 		{name: "tcp", fixture: "../../tcp/register", selected: map[string]bool{"tcp": true}},
 		{name: "udp", fixture: "../../udp/register", selected: map[string]bool{"udp": true}},
 		{name: "dns", fixture: "../../dns/register", selected: map[string]bool{"dns": true}},
-		{name: "all", fixture: "../../register", selected: map[string]bool{"tcp": true, "udp": true, "dns": true}},
+		{name: "icmpv4", fixture: "../../icmpv4/register", selected: map[string]bool{"icmpv4": true}},
+		{name: "all", fixture: "../../register", selected: map[string]bool{"tcp": true, "udp": true, "dns": true, "icmpv4": true}},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {

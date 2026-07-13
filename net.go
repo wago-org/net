@@ -1,7 +1,7 @@
 // Package net provides the core of Wago's capability-gated networking plugin
 // suite. The guest ABI is backend-neutral; lneto is the first backend and is
-// not part of the public contract. Complete UDP, TCP, and bounded DNS modules
-// are independently capability-gated. Runtime registration requires physical
+// not part of the public contract. Complete UDP, TCP, bounded DNS, and bounded
+// ICMPv4 echo modules are independently capability-gated. Runtime registration requires physical
 // reinstantiation between class leases so instance-owned network state cannot
 // survive an in-place Wasm memory reset.
 package net
@@ -32,6 +32,8 @@ const (
 	TCPModule = "wago_net_tcp"
 	// DNSModule owns the complete checked bounded DNS surface.
 	DNSModule = "wago_net_dns"
+	// ICMPv4Module owns the complete checked bounded ICMPv4 echo surface.
+	ICMPv4Module = "wago_net_icmpv4"
 
 	// ABIVersion1 encodes ABI version 1.0 as major in the upper 16 bits and minor
 	// in the lower 16 bits.
@@ -45,6 +47,8 @@ const (
 	CapTCP wago.Capability = "net.tcp"
 	// CapDNS permits checked nonblocking bounded DNS queries and poll access.
 	CapDNS wago.Capability = "net.dns"
+	// CapICMPv4 permits checked nonblocking bounded ICMPv4 echo and poll access.
+	CapICMPv4 wago.Capability = "net.icmpv4"
 )
 
 // PolicyConfig and related aliases expose the backend-neutral authority model
@@ -153,7 +157,7 @@ var (
 )
 
 // Option configures shared network composition. Protocol-specific options live
-// in the tcp, udp, and dns packages rather than in the root package.
+// in the tcp, udp, dns, and icmpv4 packages rather than in the root package.
 type Option interface {
 	applyNetwork(*Config) error
 }

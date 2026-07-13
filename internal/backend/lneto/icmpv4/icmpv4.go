@@ -136,8 +136,11 @@ func (a *Adapter) TryEcho(request icmpns.Request) (nscore.Resource, nscore.Progr
 	if a.core.ClosedLocked() {
 		return nil, 0, nscore.Fail(nscore.FailureClosed, net.ErrClosed)
 	}
-	if !request.Valid() || len(request.Payload) > a.config.MaxPayloadBytes {
+	if !request.Valid() {
 		return nil, 0, nscore.Fail(nscore.FailureInvalidArgument, lneto.ErrInvalidAddr)
+	}
+	if len(request.Payload) > a.config.MaxPayloadBytes {
+		return nil, 0, nscore.Fail(nscore.FailureMessageTooLarge, lneto.ErrShortBuffer)
 	}
 	if a.config.MaxEchoes == 0 {
 		return nil, 0, nscore.Fail(nscore.FailureNotSupported, lneto.ErrUnsupported)

@@ -21,7 +21,7 @@ func TestAllProtocolFactoryHasExactRuntimeSurface(t *testing.T) {
 	if err := runtime.Use(extension); err != nil {
 		t.Fatalf("Use: %v", err)
 	}
-	wantCapabilities := []wago.Capability{wagonet.CapDNS, wagonet.CapInfo, wagonet.CapTCP, wagonet.CapUDP}
+	wantCapabilities := []wago.Capability{wagonet.CapDNS, wagonet.CapICMPv4, wagonet.CapInfo, wagonet.CapTCP, wagonet.CapUDP}
 	if got := runtime.Capabilities(); !reflect.DeepEqual(got, wantCapabilities) {
 		t.Fatalf("capabilities = %v, want %v", got, wantCapabilities)
 	}
@@ -29,7 +29,7 @@ func TestAllProtocolFactoryHasExactRuntimeSurface(t *testing.T) {
 	for _, spec := range runtime.ProvidedImports() {
 		gotImports[spec.Module]++
 	}
-	wantImports := map[string]int{wagonet.Module: 1, wagonet.DNSModule: 6, wagonet.TCPModule: 11, wagonet.UDPModule: 6}
+	wantImports := map[string]int{wagonet.Module: 1, wagonet.DNSModule: 6, wagonet.ICMPv4Module: 6, wagonet.TCPModule: 11, wagonet.UDPModule: 6}
 	if !reflect.DeepEqual(gotImports, wantImports) {
 		t.Fatalf("import modules = %v, want %v", gotImports, wantImports)
 	}
