@@ -1,7 +1,7 @@
 // Package net provides the core of Wago's capability-gated networking plugin
 // suite. The guest ABI is backend-neutral; lneto is the first backend and is
-// not part of the public contract. Complete UDP, TCP, bounded DNS, and bounded
-// ICMPv4 echo modules are independently capability-gated. Runtime registration requires physical
+// not part of the public contract. Complete UDP, TCP, bounded DNS, ICMPv4 echo,
+// and explicit-clock NTP modules are independently capability-gated. Runtime registration requires physical
 // reinstantiation between class leases so instance-owned network state cannot
 // survive an in-place Wasm memory reset.
 package net
@@ -34,6 +34,8 @@ const (
 	DNSModule = "wago_net_dns"
 	// ICMPv4Module owns the complete checked bounded ICMPv4 echo surface.
 	ICMPv4Module = "wago_net_icmpv4"
+	// NTPModule owns the complete checked bounded NTP client surface.
+	NTPModule = "wago_net_ntp"
 
 	// ABIVersion1 encodes ABI version 1.0 as major in the upper 16 bits and minor
 	// in the lower 16 bits.
@@ -49,6 +51,8 @@ const (
 	CapDNS wago.Capability = "net.dns"
 	// CapICMPv4 permits checked nonblocking bounded ICMPv4 echo and poll access.
 	CapICMPv4 wago.Capability = "net.icmpv4"
+	// CapNTP permits checked nonblocking bounded NTP synchronization and poll access.
+	CapNTP wago.Capability = "net.ntp"
 )
 
 // PolicyConfig and related aliases expose the backend-neutral authority model
@@ -68,6 +72,7 @@ const (
 	PolicyTransportTCP    = policy.TransportTCP
 	PolicyTransportDNS    = policy.TransportDNS
 	PolicyTransportICMPv4 = policy.TransportICMPv4
+	PolicyTransportNTP    = policy.TransportNTP
 
 	PolicyInbound  = policy.DirectionInbound
 	PolicyOutbound = policy.DirectionOutbound
@@ -157,7 +162,7 @@ var (
 )
 
 // Option configures shared network composition. Protocol-specific options live
-// in the tcp, udp, dns, and icmpv4 packages rather than in the root package.
+// in the tcp, udp, dns, icmpv4, and ntp packages rather than in the root package.
 type Option interface {
 	applyNetwork(*Config) error
 }

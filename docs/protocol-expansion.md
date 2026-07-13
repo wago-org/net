@@ -1,6 +1,6 @@
 # lneto protocol expansion plan
 
-Status: active implementation plan. ICMPv4 is complete; later modules remain planned.
+Status: active implementation plan. ICMPv4 and NTP are complete; later modules remain planned.
 
 ## Goal
 
@@ -22,7 +22,7 @@ DNS modules:
 | Planned submodule | lneto package or facility | Initial guest scope |
 |---|---|---|
 | `icmpv4` | `ipv4/icmpv4` | complete: bounded copied echo requests and exact replies |
-| `ntp` | `ntp` | bounded client synchronization using an explicit host clock |
+| `ntp` | `ntp` | complete: bounded two-exchange client sampling using an explicit host clock |
 | `mdns` | `dns/mdns` | bounded multicast query, response, and announcement operations |
 | `dhcpv4` | `dhcp/dhcpv4` | bounded client leases and explicitly authorized server operation |
 | `linklocal4` | `ipv4/linklocal4` | bounded RFC 3927 claim-and-defend address selection |
@@ -110,3 +110,22 @@ sequence, checksums, fragmentation, and exact echoed bytes. Selective dependency
 fixtures reject the adapter, namespace facet, instance operations, ABI, binding,
 and public facade whenever ICMPv4 is omitted. Ethernet II, ARP, IPv4, PHY/MDIO,
 and packet capture remain internal infrastructure rather than guest APIs.
+
+NTP is exposed as independently selectable `ntp.Register`, capability `net.ntp`,
+and import module `wago_net_ntp`. Registration requires one explicit unicast
+IPv4 server and injected host clock before finite defaults become active; the
+zero configuration remains a truthful disabled module. Its fixed checked ABI
+owns exact-instance synchronization handles, atomic 72-byte samples, NTP result
+readiness, finite resource/active-work/service quota, bounded attempts and
+service-attempt timeout, cancellation, and synchronous generation-safe close.
+The immediate adapter uses exported Ethernet II, IPv4, UDP, and NTP codecs plus
+the nonblocking NTP client state machine only. It leases shared UDP ports,
+validates exact server/port/origin correlation, checks IPv4/UDP integrity,
+rejects fragmented, malformed, unsynchronized, wrong-mode, wrong-version, and
+non-basic responses, and returns offset, nonnegative round-trip delay, stratum,
+reference ID, and a corrected observation without adjusting any system clock.
+Caller deny rules win over the configured server grant, and general UDP
+authority cannot widen NTP. Selective dependency fixtures reject every omitted
+NTP layer, runtime composition covers all 32 combinations of the five completed
+protocols, and granular plus aggregate registration are documented and tested.
+No TLS or NTS behavior is included.

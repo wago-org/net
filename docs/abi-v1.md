@@ -12,7 +12,7 @@ and minor version 0.
 Except for `abi_version`, networking imports return one `i32` status and write
 additional values through checked guest-memory output pointers. `InfoImports()`
 and the historical zero-config `Imports(Config{})` helper intentionally expose
-only `wago_net.abi_version`; every resource-owning UDP/TCP/DNS import requires
+only `wago_net.abi_version`; every resource-owning UDP/TCP/DNS/ICMPv4/NTP import requires
 exact Runtime lifecycle identity and is therefore available only through
 extension registration. The completed `internal/backend/lneto/core` plus `/tcp`,
 `/udp`, and `/dns` adapter extraction and selective opaque contribution assembly
@@ -66,9 +66,10 @@ nonempty output ranges, and no guest-memory slice may be retained after a host
 call.
 
 The implementation keeps these shared memory, address, endpoint, handle, and
-poll codecs in `internal/abi/core`. TCP stream/I/O, UDP receive-result, and DNS
-name/query/record layouts are separate compilation units in
-`internal/abi/tcp`, `internal/abi/udp`, and `internal/abi/dns`. This package
+poll codecs in `internal/abi/core`. TCP stream/I/O, UDP receive-result, DNS
+name/query/record, ICMPv4 echo, and NTP sample layouts are separate compilation
+units in `internal/abi/tcp`, `internal/abi/udp`, `internal/abi/dns`,
+`internal/abi/icmpv4`, and `internal/abi/ntp`. This package
 split changes no guest-visible size, offset, validation rule, or numeric value.
 
 ## UDP module and signatures
@@ -300,6 +301,57 @@ countdowns advance only through bounded service calls; cancellation and close
 are deterministic and release active-work or retained-resource quota exactly
 once.
 
+## NTP module, signatures, and sample layout
+
+The complete checked NTP ABI is independently gated in the `wago_net_ntp`
+module by `net.ntp`:
+
+```text
+namespace_default(out_handle_ptr: i32) -> i32
+sync(namespace: i64, out_sync_ptr: i32) -> i32
+result(sync: i64, out_sample_ptr: i32) -> i32
+cancel(sync: i64) -> i32
+close(sync: i64) -> i32
+poll(events_ptr: i32, event_capacity: i32, budget_ptr: i32, out_result_ptr: i32) -> i32
+```
+
+`sync` validates the complete handle output before policy, quota, clock, or
+backend work and writes it only on `OK` or `IN_PROGRESS`. Each handle owns one
+bounded two-exchange NTPv4 client synchronization against the module's explicit
+IPv4 server on UDP port 123. The adapter timestamps packets only through the
+host-injected clock supplied during registration; it has no ambient wall-clock
+authority and never adjusts the host system clock. General UDP authority does
+not grant NTP authority. Exact server address, source/destination ports, echoed
+origin timestamp, IPv4/UDP integrity, unfragmented shape, server mode, version,
+leap indicator, stratum, and fixed 48-byte basic response shape are validated.
+
+`wago_net_ntp_sample_v1` is 72 bytes:
+
+```c
+struct wago_net_ntp_sample_v1 {
+    struct wago_net_addr_v1 server; // offset 0, IPv4 with zero port
+    int64_t  corrected_unix_seconds; // offset 32
+    uint32_t corrected_nanoseconds;  // offset 40, 0..999999999
+    uint8_t  stratum;                // offset 44, 1..15
+    uint8_t  leap;                   // offset 45, 0..2
+    uint8_t  version;                // offset 46, exactly 4
+    uint8_t  reserved_flags;         // offset 47, zero
+    int64_t  offset_nanoseconds;     // offset 48
+    int64_t  round_trip_nanoseconds; // offset 56, nonnegative
+    uint8_t  reference_id[4];        // offset 64
+    uint32_t reserved;               // offset 68, zero
+};
+```
+
+The corrected instant is the explicit host clock sampled at completion plus the
+calculated offset. It is a returned observation, not a claim that any clock was
+set. `result` writes the structure atomically only on `OK`; `AGAIN`, timeout,
+cancellation, and failures leave it unchanged. Attempts and retry countdowns
+advance only through bounded service calls. Cancellation and close are
+deterministic and release active-work, UDP-port, and resource quota exactly
+once. Registration without a server and clock exposes a truthful disabled
+module whose `sync` returns `NOT_SUPPORTED`.
+
 ## Bounded poll layouts
 
 `wago_net_poll_budget_v1` is 24 bytes, containing six consecutive `uint32_t`
@@ -311,7 +363,8 @@ be nonzero. The requested event count must not exceed `event_capacity`.
 Each 16-byte `wago_net_poll_event_v1` contains `uint64_t handle`, `uint32_t
 readiness`, and a zero `uint32_t reserved` field. Readiness is level-triggered:
 bit `1` readable, bit `2` writable, bit `4` accept, bit `8` connected, bit `16`
-DNS result, bit `32` error, bit `64` closed, and bit `128` ICMPv4 reply. Unknown
+DNS result, bit `32` error, bit `64` closed, bit `128` ICMPv4 reply, and bit `256`
+NTP result. Unknown
 bits are invalid.
 
 `wago_net_poll_result_v1` is 24 bytes, containing six consecutive `uint32_t`
@@ -367,15 +420,16 @@ malformed values return `BAD_HANDLE`. Guests must not derive or inspect handle
 bits.
 
 Endpoint-changing imports enforce immutable instance policy on every bind,
-listen, connect, datagram destination, DNS request, and ICMPv4 echo destination.
+listen, connect, datagram destination, DNS request, ICMPv4 echo destination, and
+NTP server synchronization.
 Unmatched or malformed requests are denied. Wildcard binds, loopback, multicast,
 limited IPv4 broadcast, and local bind/listen ports below 1024 require separate
 explicit grants so a broad prefix rule cannot grant them accidentally.
 IPv4-mapped IPv6 addresses are rejected rather than reinterpreted across policy
 families.
 
-Resource creation, retained packet bytes, DNS and active ICMPv4 work, and manual
-service work are also subject to finite per-instance quotas. A failed operation must roll back its
+Resource creation, retained packet bytes, DNS work, active ICMPv4 work, active
+NTP work, and manual service work are also subject to finite per-instance quotas. A failed operation must roll back its
 tentative reservation, and instance teardown clears both committed allocations
 and abandoned reservations. Exact default limits remain implementation policy,
 not ABI constants.

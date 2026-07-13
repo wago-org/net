@@ -72,14 +72,15 @@ const (
 )
 
 type syncResource struct {
-	owner    *Adapter
-	client   lnetontp.Client
-	request  [lnetontp.SizeHeader]byte
-	sample   ntpns.Sample
-	failure  error
-	state    syncState
-	attempts uint16
-	retry    uint16
+	owner       *Adapter
+	client      lnetontp.Client
+	clockSample time.Time
+	request     [lnetontp.SizeHeader]byte
+	sample      ntpns.Sample
+	failure     error
+	state       syncState
+	attempts    uint16
+	retry       uint16
 
 	portLease lnetocore.UDPPortLease
 	retained  quota.Charge
@@ -178,7 +179,7 @@ func (a *Adapter) TrySync() (nscore.Resource, nscore.Progress, error) {
 }
 
 func (s *syncResource) clockNow() time.Time {
-	return s.owner.config.Clock.Now().UTC()
+	return s.clockSample
 }
 
 func (s *syncResource) Readiness() nscore.Readiness {
@@ -253,6 +254,7 @@ func (s *syncResource) closeLocked() error {
 	}
 	clear(s.request[:])
 	s.sample = ntpns.Sample{}
+	s.clockSample = time.Time{}
 	s.failure = nil
 	s.attempts = 0
 	s.releaseWorkLocked()
@@ -355,6 +357,11 @@ func (a *Adapter) egressLocked(dst []byte) (written int, worked bool, err error)
 			return 0, true, nil
 		}
 		if sync.state == syncPrepare {
+			sync.clockSample = a.config.Clock.Now().UTC()
+			if _, clockErr := lnetontp.TimestampFromTime(sync.clockSample); clockErr != nil {
+				sync.failLocked(nscore.FailureInvalidState, clockErr)
+				return 0, true, nil
+			}
 			clear(sync.request[:])
 			n, encodeErr := sync.client.Encapsulate(sync.request[:], 0, 0)
 			if encodeErr != nil {
@@ -468,6 +475,16 @@ func (a *Adapter) ingressLocked(frame []byte) (bool, error) {
 		sync.failLocked(nscore.FailureTemporary, lneto.ErrInvalidField)
 		return true, nil
 	}
+	sync.clockSample = a.config.Clock.Now().UTC()
+	if _, clockErr := lnetontp.TimestampFromTime(sync.clockSample); clockErr != nil {
+		sync.failLocked(nscore.FailureInvalidState, clockErr)
+		return true, nil
+	}
+	requestFrame, _ := lnetontp.NewFrame(sync.request[:])
+	if sync.clockSample.Before(requestFrame.TransmitTime().Time()) {
+		sync.failLocked(nscore.FailureInvalidState, errors.New("NTP host clock moved backward during exchange"))
+		return true, nil
+	}
 	if err := sync.client.Demux(payload, 0); err != nil {
 		if errors.Is(err, lneto.ErrPacketDrop) {
 			return true, nil
@@ -483,7 +500,7 @@ func (a *Adapter) ingressLocked(frame []byte) (bool, error) {
 	}
 	rtt := sync.client.RoundTripDelay()
 	offset := sync.client.Offset()
-	corrected := a.config.Clock.Now().UTC().Add(offset)
+	corrected := sync.clockSample.Add(offset)
 	sample := ntpns.Sample{
 		Server: a.config.Server, CorrectedTime: corrected, Offset: offset, RoundTripDelay: rtt,
 		Stratum: uint8(stratum), Leap: uint8(leap), Version: ntpVersion, ReferenceID: *ntpFrame.ReferenceID(),

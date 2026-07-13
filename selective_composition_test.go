@@ -3,11 +3,14 @@ package net_test
 import (
 	"context"
 	"reflect"
+	"slices"
+	"strings"
 	"testing"
 
 	wagonet "github.com/wago-org/net"
 	"github.com/wago-org/net/dns"
 	"github.com/wago-org/net/icmpv4"
+	"github.com/wago-org/net/ntp"
 	"github.com/wago-org/net/tcp"
 	"github.com/wago-org/net/udp"
 	wago "github.com/wago-org/wago"
@@ -28,79 +31,70 @@ var publicProtocols = []protocolSelection{
 	{name: "udp", module: wagonet.UDPModule, capability: wagonet.CapUDP, imports: 6, register: func(network *wagonet.Network) error { return udp.Register(network) }},
 	{name: "dns", module: wagonet.DNSModule, capability: wagonet.CapDNS, imports: 6, register: func(network *wagonet.Network) error { return dns.Register(network) }},
 	{name: "icmpv4", module: wagonet.ICMPv4Module, capability: wagonet.CapICMPv4, imports: 6, register: func(network *wagonet.Network) error { return icmpv4.Register(network) }},
+	{name: "ntp", module: wagonet.NTPModule, capability: wagonet.CapNTP, imports: 6, register: func(network *wagonet.Network) error { return ntp.Register(network) }},
 }
 
 func TestPublicSelectiveCompositionMatrix(t *testing.T) {
-	tests := []struct {
-		name     string
-		selected []string
-		caps     []wago.Capability
-		imports  map[string]int
-	}{
-		{name: "none", imports: map[string]int{}},
-		{name: "tcp", selected: []string{"tcp"}, caps: []wago.Capability{wagonet.CapInfo, wagonet.CapTCP}, imports: map[string]int{wagonet.Module: 1, wagonet.TCPModule: 11}},
-		{name: "udp", selected: []string{"udp"}, caps: []wago.Capability{wagonet.CapInfo, wagonet.CapUDP}, imports: map[string]int{wagonet.Module: 1, wagonet.UDPModule: 6}},
-		{name: "dns", selected: []string{"dns"}, caps: []wago.Capability{wagonet.CapDNS, wagonet.CapInfo}, imports: map[string]int{wagonet.Module: 1, wagonet.DNSModule: 6}},
-		{name: "icmpv4", selected: []string{"icmpv4"}, caps: []wago.Capability{wagonet.CapICMPv4, wagonet.CapInfo}, imports: map[string]int{wagonet.Module: 1, wagonet.ICMPv4Module: 6}},
-		{name: "tcp_udp", selected: []string{"tcp", "udp"}, caps: []wago.Capability{wagonet.CapInfo, wagonet.CapTCP, wagonet.CapUDP}, imports: map[string]int{wagonet.Module: 1, wagonet.TCPModule: 11, wagonet.UDPModule: 6}},
-		{name: "tcp_dns", selected: []string{"tcp", "dns"}, caps: []wago.Capability{wagonet.CapDNS, wagonet.CapInfo, wagonet.CapTCP}, imports: map[string]int{wagonet.Module: 1, wagonet.TCPModule: 11, wagonet.DNSModule: 6}},
-		{name: "udp_dns", selected: []string{"udp", "dns"}, caps: []wago.Capability{wagonet.CapDNS, wagonet.CapInfo, wagonet.CapUDP}, imports: map[string]int{wagonet.Module: 1, wagonet.UDPModule: 6, wagonet.DNSModule: 6}},
-		{name: "tcp_icmpv4", selected: []string{"tcp", "icmpv4"}, caps: []wago.Capability{wagonet.CapICMPv4, wagonet.CapInfo, wagonet.CapTCP}, imports: map[string]int{wagonet.Module: 1, wagonet.TCPModule: 11, wagonet.ICMPv4Module: 6}},
-		{name: "udp_icmpv4", selected: []string{"udp", "icmpv4"}, caps: []wago.Capability{wagonet.CapICMPv4, wagonet.CapInfo, wagonet.CapUDP}, imports: map[string]int{wagonet.Module: 1, wagonet.UDPModule: 6, wagonet.ICMPv4Module: 6}},
-		{name: "dns_icmpv4", selected: []string{"dns", "icmpv4"}, caps: []wago.Capability{wagonet.CapDNS, wagonet.CapICMPv4, wagonet.CapInfo}, imports: map[string]int{wagonet.Module: 1, wagonet.DNSModule: 6, wagonet.ICMPv4Module: 6}},
-		{name: "tcp_udp_icmpv4", selected: []string{"tcp", "udp", "icmpv4"}, caps: []wago.Capability{wagonet.CapICMPv4, wagonet.CapInfo, wagonet.CapTCP, wagonet.CapUDP}, imports: map[string]int{wagonet.Module: 1, wagonet.TCPModule: 11, wagonet.UDPModule: 6, wagonet.ICMPv4Module: 6}},
-		{name: "tcp_dns_icmpv4", selected: []string{"tcp", "dns", "icmpv4"}, caps: []wago.Capability{wagonet.CapDNS, wagonet.CapICMPv4, wagonet.CapInfo, wagonet.CapTCP}, imports: map[string]int{wagonet.Module: 1, wagonet.TCPModule: 11, wagonet.DNSModule: 6, wagonet.ICMPv4Module: 6}},
-		{name: "udp_dns_icmpv4", selected: []string{"udp", "dns", "icmpv4"}, caps: []wago.Capability{wagonet.CapDNS, wagonet.CapICMPv4, wagonet.CapInfo, wagonet.CapUDP}, imports: map[string]int{wagonet.Module: 1, wagonet.UDPModule: 6, wagonet.DNSModule: 6, wagonet.ICMPv4Module: 6}},
-		{name: "tcp_udp_dns", selected: []string{"tcp", "udp", "dns"}, caps: []wago.Capability{wagonet.CapDNS, wagonet.CapInfo, wagonet.CapTCP, wagonet.CapUDP}, imports: map[string]int{wagonet.Module: 1, wagonet.TCPModule: 11, wagonet.UDPModule: 6, wagonet.DNSModule: 6}},
-		{name: "all", selected: []string{"tcp", "udp", "dns", "icmpv4"}, caps: []wago.Capability{wagonet.CapDNS, wagonet.CapICMPv4, wagonet.CapInfo, wagonet.CapTCP, wagonet.CapUDP}, imports: map[string]int{wagonet.Module: 1, wagonet.TCPModule: 11, wagonet.UDPModule: 6, wagonet.DNSModule: 6, wagonet.ICMPv4Module: 6}},
-	}
-
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
+	combinations := 1 << len(publicProtocols)
+	for mask := 0; mask < combinations; mask++ {
+		mask := mask
+		name := selectionName(mask)
+		t.Run(name, func(t *testing.T) {
 			network := wagonet.New()
-			selected := make(map[string]bool, len(test.selected))
-			for _, name := range test.selected {
-				protocol := publicProtocol(t, name)
-				if err := protocol.register(network); err != nil {
-					t.Fatalf("register %s: %v", name, err)
-				}
-				selected[name] = true
+			selected := make(map[string]bool, len(publicProtocols))
+			wantImports := make(map[string]int)
+			var wantCaps []wago.Capability
+			if mask != 0 {
+				wantImports[wagonet.Module] = 1
+				wantCaps = append(wantCaps, wagonet.CapInfo)
 			}
+			for i, protocol := range publicProtocols {
+				if mask&(1<<i) == 0 {
+					continue
+				}
+				if err := protocol.register(network); err != nil {
+					t.Fatalf("register %s: %v", protocol.name, err)
+				}
+				selected[protocol.name] = true
+				wantImports[protocol.module] = protocol.imports
+				wantCaps = append(wantCaps, protocol.capability)
+			}
+			slices.Sort(wantCaps)
 
 			runtime := wago.NewRuntime()
 			if err := runtime.Use(network); err != nil {
 				t.Fatalf("Use: %v", err)
 			}
-			if got := runtime.Capabilities(); !reflect.DeepEqual(got, test.caps) {
-				t.Fatalf("Capabilities = %v, want %v", got, test.caps)
+			if got := runtime.Capabilities(); !reflect.DeepEqual(got, wantCaps) {
+				t.Fatalf("Capabilities = %v, want %v", got, wantCaps)
 			}
 			gotImports := make(map[string]int)
 			for _, spec := range runtime.ProvidedImports() {
 				gotImports[spec.Module]++
 			}
-			if !reflect.DeepEqual(gotImports, test.imports) {
-				t.Fatalf("import modules = %v, want %v", gotImports, test.imports)
+			if !reflect.DeepEqual(gotImports, wantImports) {
+				t.Fatalf("import modules = %v, want %v", gotImports, wantImports)
 			}
-
 			for _, protocol := range publicProtocols {
-				if selected[protocol.name] {
-					continue
+				if !selected[protocol.name] {
+					assertUnresolvedProtocolImport(t, runtime, protocol)
 				}
-				assertUnresolvedProtocolImport(t, runtime, protocol)
 			}
 		})
 	}
 }
 
-func publicProtocol(t *testing.T, name string) protocolSelection {
-	t.Helper()
-	for _, protocol := range publicProtocols {
-		if protocol.name == name {
-			return protocol
+func selectionName(mask int) string {
+	if mask == 0 {
+		return "none"
+	}
+	names := make([]string, 0, len(publicProtocols))
+	for i, protocol := range publicProtocols {
+		if mask&(1<<i) != 0 {
+			names = append(names, protocol.name)
 		}
 	}
-	t.Fatalf("unknown protocol %q", name)
-	return protocolSelection{}
+	return strings.Join(names, "_")
 }
 
 func assertUnresolvedProtocolImport(t *testing.T, runtime *wago.Runtime, protocol protocolSelection) {
