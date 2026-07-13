@@ -43,6 +43,33 @@ func TestAccountExactLimitsAndProtocolTotals(t *testing.T) {
 	}
 }
 
+func TestICMPv4ResourceWorkAndRetainedByteAccounting(t *testing.T) {
+	account := NewAccount(Limits{Resources: 1, ICMPv4Resources: 1, QueuedBytes: 64, ICMPv4Work: 1})
+	var retained, work Charge
+	if err := account.AcquireResourceAndQueuedBytes(&retained, ResourceICMPv4, 1, 64); err != nil {
+		t.Fatal(err)
+	}
+	if err := account.AcquireICMPv4Work(&work, 1); err != nil {
+		t.Fatal(err)
+	}
+	if usage, closed := account.Snapshot(); closed || usage != (Usage{Resources: 1, ICMPv4Resources: 1, QueuedBytes: 64, ICMPv4Work: 1}) {
+		t.Fatalf("ICMPv4 usage = %+v, closed=%v", usage, closed)
+	}
+	var denied Charge
+	if err := account.AcquireResource(&denied, ResourceICMPv4, 1); !errors.Is(err, ErrLimit) {
+		t.Fatalf("ICMPv4 resource limit error = %v", err)
+	}
+	if err := account.AcquireICMPv4Work(&denied, 1); !errors.Is(err, ErrLimit) {
+		t.Fatalf("ICMPv4 work limit error = %v", err)
+	}
+	if !work.Release() || !retained.Release() {
+		t.Fatal("ICMPv4 charges did not release")
+	}
+	if usage, _ := account.Snapshot(); usage != (Usage{}) {
+		t.Fatalf("ICMPv4 release leaked usage: %+v", usage)
+	}
+}
+
 func TestReservationRollbackAndFailureDoNotLeak(t *testing.T) {
 	account := NewAccount(Limits{QueuedBytes: 8, DNSWork: 1, ServiceUnits: 2})
 	bytes, err := account.ReserveQueuedBytes(8)

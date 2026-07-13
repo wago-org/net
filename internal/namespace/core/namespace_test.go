@@ -37,6 +37,15 @@ func TestEndpointStructuralValidation(t *testing.T) {
 	}
 }
 
+func TestICMPv4ReplyReadinessIsKnown(t *testing.T) {
+	if !ReadyICMPv4Reply.Valid() || !(ReadyICMPv4Reply | ReadyError | ReadyClosed).Valid() {
+		t.Fatal("ICMPv4 reply readiness rejected")
+	}
+	if Readiness(1 << 31).Valid() {
+		t.Fatal("unknown readiness bit accepted")
+	}
+}
+
 func TestSharedResultAndServiceContracts(t *testing.T) {
 	for _, result := range []IOResult{{Bytes: 3, State: IOReady}, {State: IOWouldBlock}, {State: IOEOF}} {
 		if !result.Valid(3) {

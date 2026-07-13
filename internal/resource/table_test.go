@@ -85,6 +85,24 @@ func TestTableRejectsInvalidStaleWrongKindAndCrossTableHandles(t *testing.T) {
 	}
 }
 
+func TestICMPv4EchoKindIsExactAndNamed(t *testing.T) {
+	table := newTable(t)
+	echo := &testResource{}
+	handle, err := table.Add(KindICMPv4Echo, echo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if KindICMPv4Echo.String() != "icmpv4_echo" {
+		t.Fatalf("ICMPv4 kind name = %q", KindICMPv4Echo.String())
+	}
+	if _, err := table.Lookup(handle, KindDNSQuery); !errors.Is(err, ErrBadHandle) {
+		t.Fatalf("wrong-kind lookup error = %v", err)
+	}
+	if err := table.CloseHandle(handle, KindICMPv4Echo); err != nil || echo.closed.Load() != 1 {
+		t.Fatalf("close = %v, count=%d", err, echo.closed.Load())
+	}
+}
+
 func TestTableReuseAdvancesGeneration(t *testing.T) {
 	table := newTable(t)
 	first := &testResource{}
