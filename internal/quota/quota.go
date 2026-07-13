@@ -22,10 +22,12 @@ type Limits struct {
 	DNSResources    uint64
 	ICMPv4Resources uint64
 	NTPResources    uint64
+	MDNSResources   uint64
 	QueuedBytes     uint64
 	DNSWork         uint64
 	ICMPv4Work      uint64
 	NTPWork         uint64
+	MDNSWork        uint64
 	ServiceUnits    uint64
 }
 
@@ -39,10 +41,12 @@ func DefaultLimits() Limits {
 		DNSResources:    32,
 		ICMPv4Resources: 32,
 		NTPResources:    16,
+		MDNSResources:   32,
 		QueuedBytes:     4 << 20,
 		DNSWork:         32,
 		ICMPv4Work:      32,
 		NTPWork:         16,
+		MDNSWork:        32,
 		ServiceUnits:    4096,
 	}
 }
@@ -55,10 +59,12 @@ type Usage struct {
 	DNSResources    uint64
 	ICMPv4Resources uint64
 	NTPResources    uint64
+	MDNSResources   uint64
 	QueuedBytes     uint64
 	DNSWork         uint64
 	ICMPv4Work      uint64
 	NTPWork         uint64
+	MDNSWork        uint64
 	ServiceUnits    uint64
 }
 
@@ -73,6 +79,7 @@ const (
 	ResourceDNS
 	ResourceICMPv4
 	ResourceNTP
+	ResourceMDNS
 )
 
 // Account is one instance's bounded, concurrently safe quota ledger.
@@ -106,6 +113,8 @@ func (a *Account) ReserveResource(class ResourceClass, count uint64) (*Reservati
 		amount.ICMPv4Resources = count
 	case ResourceNTP:
 		amount.NTPResources = count
+	case ResourceMDNS:
+		amount.MDNSResources = count
 	default:
 		return nil, ErrInvalidUnits
 	}
@@ -159,6 +168,14 @@ func (a *Account) AcquireNTPWork(charge *Charge, units uint64) error {
 		return ErrInvalidUnits
 	}
 	return a.acquireInto(charge, Usage{NTPWork: units})
+}
+
+// AcquireMDNSWork commits one active multicast query or announcement.
+func (a *Account) AcquireMDNSWork(charge *Charge, units uint64) error {
+	if units == 0 {
+		return ErrInvalidUnits
+	}
+	return a.acquireInto(charge, Usage{MDNSWork: units})
 }
 
 // ReserveQueuedBytes tentatively accounts bytes retained outside a host call.
@@ -225,10 +242,12 @@ func (a *Account) acquire(amount Usage) error {
 		!fits(a.used.DNSResources, amount.DNSResources, a.limits.DNSResources) ||
 		!fits(a.used.ICMPv4Resources, amount.ICMPv4Resources, a.limits.ICMPv4Resources) ||
 		!fits(a.used.NTPResources, amount.NTPResources, a.limits.NTPResources) ||
+		!fits(a.used.MDNSResources, amount.MDNSResources, a.limits.MDNSResources) ||
 		!fits(a.used.QueuedBytes, amount.QueuedBytes, a.limits.QueuedBytes) ||
 		!fits(a.used.DNSWork, amount.DNSWork, a.limits.DNSWork) ||
 		!fits(a.used.ICMPv4Work, amount.ICMPv4Work, a.limits.ICMPv4Work) ||
 		!fits(a.used.NTPWork, amount.NTPWork, a.limits.NTPWork) ||
+		!fits(a.used.MDNSWork, amount.MDNSWork, a.limits.MDNSWork) ||
 		!fits(a.used.ServiceUnits, amount.ServiceUnits, a.limits.ServiceUnits) {
 		return ErrLimit
 	}
@@ -269,10 +288,12 @@ func (a *Account) fitsLocked(amount Usage) bool {
 		fits(a.used.DNSResources, amount.DNSResources, a.limits.DNSResources) &&
 		fits(a.used.ICMPv4Resources, amount.ICMPv4Resources, a.limits.ICMPv4Resources) &&
 		fits(a.used.NTPResources, amount.NTPResources, a.limits.NTPResources) &&
+		fits(a.used.MDNSResources, amount.MDNSResources, a.limits.MDNSResources) &&
 		fits(a.used.QueuedBytes, amount.QueuedBytes, a.limits.QueuedBytes) &&
 		fits(a.used.DNSWork, amount.DNSWork, a.limits.DNSWork) &&
 		fits(a.used.ICMPv4Work, amount.ICMPv4Work, a.limits.ICMPv4Work) &&
 		fits(a.used.NTPWork, amount.NTPWork, a.limits.NTPWork) &&
+		fits(a.used.MDNSWork, amount.MDNSWork, a.limits.MDNSWork) &&
 		fits(a.used.ServiceUnits, amount.ServiceUnits, a.limits.ServiceUnits)
 }
 
@@ -313,10 +334,12 @@ func (a *Account) release(amount Usage) {
 	a.used.DNSResources = subtract(a.used.DNSResources, amount.DNSResources)
 	a.used.ICMPv4Resources = subtract(a.used.ICMPv4Resources, amount.ICMPv4Resources)
 	a.used.NTPResources = subtract(a.used.NTPResources, amount.NTPResources)
+	a.used.MDNSResources = subtract(a.used.MDNSResources, amount.MDNSResources)
 	a.used.QueuedBytes = subtract(a.used.QueuedBytes, amount.QueuedBytes)
 	a.used.DNSWork = subtract(a.used.DNSWork, amount.DNSWork)
 	a.used.ICMPv4Work = subtract(a.used.ICMPv4Work, amount.ICMPv4Work)
 	a.used.NTPWork = subtract(a.used.NTPWork, amount.NTPWork)
+	a.used.MDNSWork = subtract(a.used.MDNSWork, amount.MDNSWork)
 	a.used.ServiceUnits = subtract(a.used.ServiceUnits, amount.ServiceUnits)
 }
 
@@ -422,6 +445,8 @@ func resourceUsage(class ResourceClass, count uint64) (Usage, bool) {
 		amount.ICMPv4Resources = count
 	case ResourceNTP:
 		amount.NTPResources = count
+	case ResourceMDNS:
+		amount.MDNSResources = count
 	default:
 		return Usage{}, false
 	}
@@ -446,9 +471,11 @@ func (u *Usage) add(other Usage) {
 	u.DNSResources += other.DNSResources
 	u.ICMPv4Resources += other.ICMPv4Resources
 	u.NTPResources += other.NTPResources
+	u.MDNSResources += other.MDNSResources
 	u.QueuedBytes += other.QueuedBytes
 	u.DNSWork += other.DNSWork
 	u.ICMPv4Work += other.ICMPv4Work
 	u.NTPWork += other.NTPWork
+	u.MDNSWork += other.MDNSWork
 	u.ServiceUnits += other.ServiceUnits
 }

@@ -294,6 +294,42 @@ func TestNTPAuthorityIsProtocolLocalPortAwareAndDenyWins(t *testing.T) {
 	}
 }
 
+func TestMDNSAuthorityIsProtocolLocalMulticastAndDenyWins(t *testing.T) {
+	multicast := mustAddr("224.0.0.251")
+	compiled, err := Compile(Config{
+		Rules: []Rule{
+			{Action: ActionAllow, Transports: []Transport{TransportMDNS}, Directions: []Direction{DirectionOutbound}, Prefixes: []netip.Prefix{mustPrefix("224.0.0.251/32")}, Ports: []PortRange{{First: 5353, Last: 5353}}},
+			{Action: ActionAllow, Transports: []Transport{TransportMDNS}, Directions: []Direction{DirectionOutbound}, DNSSuffixes: []string{"local"}},
+			{Action: ActionAllow, Transports: []Transport{TransportMDNS}, Directions: []Direction{DirectionInbound}, DNSSuffixes: []string{"local"}},
+			{Action: ActionDeny, Transports: []Transport{TransportMDNS}, Directions: []Direction{DirectionOutbound}, DNSSuffixes: []string{"secret.local"}},
+			{Action: ActionAllow, Transports: []Transport{TransportUDP}, Directions: []Direction{DirectionOutbound}},
+		},
+		MulticastTransports: []Transport{TransportMDNS},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !compiled.CheckEndpoint(OperationMDNSSend, multicast, 5353) {
+		t.Fatal("exact mDNS multicast endpoint denied")
+	}
+	if compiled.CheckEndpoint(OperationMDNSSend, multicast, 5354) || compiled.CheckEndpoint(OperationUDPSend, multicast, 5353) {
+		t.Fatal("mDNS authority crossed port or transport boundary")
+	}
+	if !compiled.CheckDNS(OperationMDNSQuery, "printer.local") || !compiled.CheckDNS(OperationMDNSRespond, "printer.local") {
+		t.Fatal("local query/response name denied")
+	}
+	if compiled.CheckDNS(OperationMDNSQuery, "secret.local") {
+		t.Fatal("caller mDNS deny did not win")
+	}
+	udpOnly, err := Compile(Config{Rules: []Rule{{Action: ActionAllow, Transports: []Transport{TransportUDP}, Directions: []Direction{DirectionOutbound}}}, AllowMulticast: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if udpOnly.CheckEndpoint(OperationMDNSSend, multicast, 5353) || udpOnly.CheckDNS(OperationMDNSQuery, "printer.local") {
+		t.Fatal("general UDP authority widened mDNS")
+	}
+}
+
 func TestICMPv4AddressAuthorityIsTransportScopedAndPortless(t *testing.T) {
 	compiled, err := Compile(Config{
 		Rules: []Rule{

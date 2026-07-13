@@ -7,6 +7,7 @@ import (
 	"slices"
 
 	"github.com/wago-org/net/internal/dnsname"
+	"github.com/wago-org/net/internal/mdnsname"
 )
 
 var ErrInvalidRule = errors.New("net: invalid policy rule")
@@ -29,9 +30,10 @@ const (
 	TransportDNS
 	TransportICMPv4
 	TransportNTP
+	TransportMDNS
 
 	transportFirst = TransportUDP
-	transportLast  = TransportNTP
+	transportLast  = TransportMDNS
 )
 
 // Direction identifies whether authority accepts local inbound traffic or
@@ -55,6 +57,9 @@ const (
 	OperationDNSResolve
 	OperationICMPv4Echo
 	OperationNTPSync
+	OperationMDNSQuery
+	OperationMDNSRespond
+	OperationMDNSSend
 )
 
 // PortRange is an inclusive port selector.
@@ -236,7 +241,11 @@ func (p *Policy) CheckDNS(operation Operation, name string) bool {
 	if p == nil || !ok {
 		return false
 	}
-	name, ok = normalizeDNSName(name)
+	if transport == TransportMDNS {
+		name, ok = mdnsname.Normalize(name)
+	} else {
+		name, ok = normalizeDNSName(name)
+	}
 	if !ok {
 		return false
 	}
@@ -293,7 +302,7 @@ func compileRule(input Rule) (compiledRule, error) {
 	if rule.ports, ok = normalizePorts(input.Ports); !ok {
 		return compiledRule{}, ErrInvalidRule
 	}
-	if rule.dnsSuffixes, ok = normalizeDNSSuffixes(input.DNSSuffixes); !ok {
+	if rule.dnsSuffixes, ok = normalizeDNSSuffixes(input.Transports, input.DNSSuffixes); !ok {
 		return compiledRule{}, ErrInvalidRule
 	}
 	return rule, nil
@@ -306,7 +315,7 @@ func (r compiledRule) matches(q query) bool {
 	if len(r.directions) != 0 && !slices.Contains(r.directions, q.direction) {
 		return false
 	}
-	if q.transport == TransportDNS {
+	if q.dnsName != "" {
 		if len(r.prefixes) != 0 || len(r.ports) != 0 {
 			return false
 		}
@@ -426,10 +435,10 @@ func normalizePorts(input []PortRange) ([]PortRange, bool) {
 	return slices.Compact(out), true
 }
 
-func normalizeDNSSuffixes(input []string) ([]string, bool) {
+func normalizeDNSSuffixes(transports []Transport, input []string) ([]string, bool) {
 	out := make([]string, 0, len(input))
 	for _, suffix := range input {
-		normalized, ok := normalizeDNSName(suffix)
+		normalized, ok := normalizePolicySuffix(transports, suffix)
 		if !ok {
 			return nil, false
 		}
@@ -437,6 +446,15 @@ func normalizeDNSSuffixes(input []string) ([]string, bool) {
 	}
 	slices.Sort(out)
 	return slices.Compact(out), true
+}
+
+func normalizePolicySuffix(transports []Transport, name string) (string, bool) {
+	for _, transport := range transports {
+		if transport == TransportMDNS {
+			return mdnsname.Normalize(name)
+		}
+	}
+	return dnsname.Normalize(name)
 }
 
 func normalizeDNSName(name string) (string, bool) {
@@ -466,6 +484,8 @@ func operationEndpoint(operation Operation) (Transport, Direction, bool) {
 		return TransportTCP, DirectionOutbound, true
 	case OperationNTPSync:
 		return TransportNTP, DirectionOutbound, true
+	case OperationMDNSSend:
+		return TransportMDNS, DirectionOutbound, true
 	default:
 		return 0, 0, false
 	}
@@ -479,10 +499,16 @@ func operationAddress(operation Operation) (Transport, Direction, bool) {
 }
 
 func operationDNS(operation Operation) (Transport, Direction, bool) {
-	if operation == OperationDNSResolve {
+	switch operation {
+	case OperationDNSResolve:
 		return TransportDNS, DirectionOutbound, true
+	case OperationMDNSQuery:
+		return TransportMDNS, DirectionOutbound, true
+	case OperationMDNSRespond:
+		return TransportMDNS, DirectionInbound, true
+	default:
+		return 0, 0, false
 	}
-	return 0, 0, false
 }
 
 func isLimitedBroadcast(address netip.Addr) bool {

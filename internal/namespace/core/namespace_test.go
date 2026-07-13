@@ -44,6 +44,9 @@ func TestProtocolResultReadinessIsKnown(t *testing.T) {
 	if !ReadyNTPResult.Valid() || !(ReadyNTPResult | ReadyError | ReadyClosed).Valid() {
 		t.Fatal("NTP result readiness rejected")
 	}
+	if !ReadyMDNSResult.Valid() || !ReadyMDNSAnnouncement.Valid() || !(ReadyMDNSResult | ReadyMDNSAnnouncement | ReadyError | ReadyClosed).Valid() {
+		t.Fatal("mDNS readiness rejected")
+	}
 	if Readiness(1 << 31).Valid() {
 		t.Fatal("unknown readiness bit accepted")
 	}
