@@ -143,6 +143,15 @@ func (a *Account) AcquireResourceAndQueuedBytes(charge *Charge, class ResourceCl
 	return a.acquireInto(charge, amount)
 }
 
+// AcquireQueuedBytes commits bounded retained storage directly into
+// owner-embedded storage without creating a resource charge.
+func (a *Account) AcquireQueuedBytes(charge *Charge, bytes uint64) error {
+	if bytes == 0 {
+		return ErrInvalidUnits
+	}
+	return a.acquireInto(charge, Usage{QueuedBytes: bytes})
+}
+
 // AcquireDNSWork commits in-flight resolver work directly into owner-embedded
 // storage.
 func (a *Account) AcquireDNSWork(charge *Charge, units uint64) error {

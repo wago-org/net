@@ -98,8 +98,11 @@ func TestNTPResourceAndActiveWorkAccounting(t *testing.T) {
 }
 
 func TestMDNSResourceQueuedBytesAndActiveWorkAccounting(t *testing.T) {
-	account := NewAccount(Limits{Resources: 2, MDNSResources: 2, QueuedBytes: 512, MDNSWork: 2})
-	var queryRetained, queryWork, announceRetained, announceWork Charge
+	account := NewAccount(Limits{Resources: 2, MDNSResources: 2, QueuedBytes: 768, MDNSWork: 2})
+	var queue, queryRetained, queryWork, announceRetained, announceWork Charge
+	if err := account.AcquireQueuedBytes(&queue, 256); err != nil {
+		t.Fatal(err)
+	}
 	if err := account.AcquireResourceAndQueuedBytes(&queryRetained, ResourceMDNS, 1, 384); err != nil {
 		t.Fatal(err)
 	}
@@ -112,7 +115,7 @@ func TestMDNSResourceQueuedBytesAndActiveWorkAccounting(t *testing.T) {
 	if err := account.AcquireMDNSWork(&announceWork, 1); err != nil {
 		t.Fatal(err)
 	}
-	if usage, closed := account.Snapshot(); closed || usage != (Usage{Resources: 2, MDNSResources: 2, QueuedBytes: 512, MDNSWork: 2}) {
+	if usage, closed := account.Snapshot(); closed || usage != (Usage{Resources: 2, MDNSResources: 2, QueuedBytes: 768, MDNSWork: 2}) {
 		t.Fatalf("mDNS usage = %+v, closed=%v", usage, closed)
 	}
 	var denied Charge
@@ -123,6 +126,7 @@ func TestMDNSResourceQueuedBytesAndActiveWorkAccounting(t *testing.T) {
 	announceRetained.Release()
 	queryWork.Release()
 	queryRetained.Release()
+	queue.Release()
 	if usage, _ := account.Snapshot(); usage != (Usage{}) {
 		t.Fatalf("mDNS release leaked usage: %+v", usage)
 	}
