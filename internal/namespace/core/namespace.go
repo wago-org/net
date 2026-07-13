@@ -153,7 +153,10 @@ type BaseCarrier interface {
 	NamespaceBase() Namespace
 }
 
-const inlineNamespaceServiceCapacity = 3
+// InlineServiceCapacity keeps the complete planned selective protocol suite in
+// one immutable allocation. Larger experimental compositions fall back to a
+// map without changing lookup semantics.
+const InlineServiceCapacity = 16
 
 // ComposeNamespace publishes one immutable namespace over base. The base owns
 // readiness, bounded service, and close; selected protocol adapters remain
@@ -163,7 +166,7 @@ func ComposeNamespace(base Namespace, services ...Service) (Namespace, error) {
 		return nil, ErrInvalidNamespaceComposition
 	}
 	composed := &composedNamespace{base: base}
-	if len(services) <= inlineNamespaceServiceCapacity {
+	if len(services) <= InlineServiceCapacity {
 		for i, service := range services {
 			if service.Key == "" || service.Value == nil {
 				return nil, ErrInvalidNamespaceComposition
@@ -228,7 +231,7 @@ func ResolveNamespaceService(value any, key ServiceKey) any {
 type composedNamespace struct {
 	base        Namespace
 	inlineCount uint8
-	inline      [inlineNamespaceServiceCapacity]Service
+	inline      [InlineServiceCapacity]Service
 	services    map[ServiceKey]any
 }
 

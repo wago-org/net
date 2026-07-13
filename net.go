@@ -280,7 +280,7 @@ func (e *Extension) buildManager(modules []plugin.Module) (*instancestate.Manage
 }
 
 func installNamespaceServices(common nscore.Namespace, modules []plugin.Module) (nscore.Namespace, error) {
-	var inline [3]nscore.Service
+	var inline [nscore.InlineServiceCapacity]nscore.Service
 	services := inline[:0]
 	for _, module := range modules {
 		service, installed, err := module.InstallBackend(plugin.BackendLnetoV1, common)

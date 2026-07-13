@@ -74,23 +74,23 @@ func (b *compositionBase) Close() error {
 	return nil
 }
 
-func TestNamespaceCompositionAvoidsPerServiceHeapGrowthForCommonSelections(t *testing.T) {
+func TestNamespaceCompositionAvoidsPerServiceHeapGrowthForPlannedSuite(t *testing.T) {
 	if runtime.Compiler == "tinygo" {
 		return
 	}
 	base := new(compositionBase)
-	tcpService := new(int)
-	udpService := new(string)
-	dnsService := new(byte)
+	one := compositionServices(1)
+	planned := compositionServices(11)
+	overflow := compositionServices(InlineServiceCapacity + 1)
 	for _, test := range []struct {
 		name     string
 		services []Service
 		want     float64
 	}{
 		{name: "empty", want: 1},
-		{name: "single", services: []Service{{Key: "tcp", Value: tcpService}}, want: 1},
-		{name: "three", services: []Service{{Key: "tcp", Value: tcpService}, {Key: "udp", Value: udpService}, {Key: "dns", Value: dnsService}}, want: 1},
-		{name: "overflow", services: []Service{{Key: "tcp", Value: tcpService}, {Key: "udp", Value: udpService}, {Key: "dns", Value: dnsService}, {Key: "test", Value: new(bool)}}, want: 3},
+		{name: "single", services: one, want: 1},
+		{name: "planned", services: planned, want: 1},
+		{name: "overflow", services: overflow, want: 5},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			allocs := testing.AllocsPerRun(1000, func() {
@@ -113,6 +113,16 @@ func TestNamespaceCompositionAvoidsPerServiceHeapGrowthForCommonSelections(t *te
 			}
 		})
 	}
+}
+
+func compositionServices(count int) []Service {
+	services := make([]Service, count)
+	for i := range services {
+		value := new(int)
+		*value = i
+		services[i] = Service{Key: ServiceKey(fmt.Sprintf("service-%d", i)), Value: value}
+	}
+	return services
 }
 
 func TestNamespaceCompositionExactServicesAndLifecycle(t *testing.T) {
