@@ -42,7 +42,6 @@ type Config struct {
 type Adapter struct {
 	core                   *lnetocore.Namespace
 	config                 Config
-	ipv4Address            netip.Addr
 	hardwareAddress        [6]byte
 	gatewayHardwareAddress [6]byte
 	policy                 *policy.Policy
@@ -66,7 +65,7 @@ func New(common *lnetocore.Namespace, config Config) (*Adapter, error) {
 	}
 	n := &Adapter{
 		core: common, config: config,
-		ipv4Address: common.IPv4AddressLocked(), hardwareAddress: common.HardwareAddressLocked(),
+		hardwareAddress:        common.HardwareAddressLocked(),
 		gatewayHardwareAddress: common.GatewayHardwareAddressLocked(), policy: common.PolicyLocked(), quotas: common.QuotasLocked(),
 		byPort: make(map[uint16]*udpSocket, config.MaxSockets), sockets: make([]*udpSocket, 0, config.MaxSockets),
 		nextPort: firstEphemeralUDPPort,
@@ -339,7 +338,7 @@ func (n *Adapter) TryBind(local nscore.Endpoint) (nscore.Resource, nscore.Progre
 	if n.config.MaxSockets == 0 {
 		return nil, 0, nscore.Fail(nscore.FailureNotSupported, lneto.ErrUnsupported)
 	}
-	if !local.Address.IsUnspecified() && local.Address != n.ipv4Address {
+	if !local.Address.IsUnspecified() && local.Address != n.core.IPv4AddressLocked() {
 		return nil, 0, nscore.Fail(nscore.FailureAddressUnavailable, lneto.ErrInvalidAddr)
 	}
 	if !n.policy.CheckEndpoint(policy.OperationUDPBind, local.Address, local.Port) {
@@ -567,7 +566,7 @@ func (n *Adapter) egressLocked(dst []byte) (int, error) {
 	ipFrame.SetFlags(ipv4.FlagDontFragment)
 	ipFrame.SetTTL(64)
 	ipFrame.SetProtocol(lneto.IPProtoUDP)
-	*ipFrame.SourceAddr() = n.ipv4Address.As4()
+	*ipFrame.SourceAddr() = n.core.IPv4AddressLocked().As4()
 	*ipFrame.DestinationAddr() = remote.Address.As4()
 	ipFrame.SetCRC(0)
 	ipFrame.SetCRC(ipFrame.CalculateHeaderCRC())
@@ -594,7 +593,7 @@ func (n *Adapter) ingressLocked(frame []byte) (bool, error) {
 		return false, err
 	}
 	version, headerWords := ipFrame.VersionAndIHL()
-	if version != 4 || headerWords < 5 || ipFrame.Protocol() != lneto.IPProtoUDP || netip.AddrFrom4(*ipFrame.DestinationAddr()) != n.ipv4Address {
+	if version != 4 || headerWords < 5 || ipFrame.Protocol() != lneto.IPProtoUDP || netip.AddrFrom4(*ipFrame.DestinationAddr()) != n.core.IPv4AddressLocked() {
 		return false, nil
 	}
 	var validator lneto.Validator

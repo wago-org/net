@@ -30,7 +30,6 @@ var ErrPolicyDenied = errors.New("net: endpoint policy denied operation")
 type Adapter struct {
 	core                *lnetocore.Namespace
 	stack               interfaceStack
-	ipv4Address         netip.Addr
 	policy              *policy.Policy
 	quotas              *quota.Account
 	config              Config
@@ -60,7 +59,7 @@ func New(common *lnetocore.Namespace, config Config) (*Adapter, error) {
 		return nil, nscore.Fail(nscore.FailureInvalidArgument, lneto.ErrInvalidConfig)
 	}
 	n := &Adapter{
-		core: common, stack: common.StackLocked(), ipv4Address: common.IPv4AddressLocked(),
+		core: common, stack: common.StackLocked(),
 		policy: common.PolicyLocked(), quotas: common.QuotasLocked(), config: config,
 		listeners: make([]*tcpListener, 0, config.MaxListeners),
 		streams:   make([]*tcpStream, 0, streamCapacityHint(config)),
@@ -444,7 +443,7 @@ func (n *Adapter) TryListen(local nscore.Endpoint) (nscore.Resource, nscore.Prog
 	if n.config.MaxListeners == 0 {
 		return nil, 0, nscore.Fail(nscore.FailureNotSupported, lneto.ErrUnsupported)
 	}
-	if !local.Address.IsUnspecified() && local.Address != n.ipv4Address {
+	if !local.Address.IsUnspecified() && local.Address != n.core.IPv4AddressLocked() {
 		return nil, 0, nscore.Fail(nscore.FailureAddressUnavailable, lneto.ErrInvalidAddr)
 	}
 	if !n.policy.CheckEndpoint(policy.OperationTCPListen, local.Address, local.Port) {
@@ -515,7 +514,7 @@ func (n *Adapter) TryConnect(remote nscore.Endpoint) (nscore.Resource, nscore.Pr
 		return nil, 0, nscore.Fail(nscore.FailureResourceLimit, lneto.ErrExhausted)
 	}
 	retained, _ := tcpStreamStorageBytes(n.config)
-	stream := n.acquireOutboundStreamLocked(nscore.Endpoint{Address: n.ipv4Address, Port: localPort}, remote)
+	stream := n.acquireOutboundStreamLocked(nscore.Endpoint{Address: n.core.IPv4AddressLocked(), Port: localPort}, remote)
 	if stream == nil {
 		return nil, 0, nscore.Fail(nscore.FailureResourceLimit, lneto.ErrExhausted)
 	}

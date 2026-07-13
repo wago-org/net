@@ -42,7 +42,6 @@ type Config struct {
 type Adapter struct {
 	core                   *lnetocore.Namespace
 	config                 Config
-	ipv4Address            netip.Addr
 	hardwareAddress        [6]byte
 	gatewayHardwareAddress [6]byte
 	policy                 *policy.Policy
@@ -94,7 +93,7 @@ func New(common *lnetocore.Namespace, config Config) (*Adapter, error) {
 	}
 	adapter := &Adapter{
 		core: common, config: config,
-		ipv4Address: common.IPv4AddressLocked(), hardwareAddress: common.HardwareAddressLocked(),
+		hardwareAddress:        common.HardwareAddressLocked(),
 		gatewayHardwareAddress: common.GatewayHardwareAddressLocked(), policy: common.PolicyLocked(), quotas: common.QuotasLocked(),
 		echoes: make([]*echo, 0, config.MaxEchoes), byIdentity: make(map[uint32]*echo, config.MaxEchoes),
 		nextIdentifier: seed, nextSequence: 1,
@@ -371,7 +370,7 @@ func (a *Adapter) egressLocked(dst []byte) (written int, worked bool, err error)
 		ipFrame.SetFlags(0)
 		ipFrame.SetTTL(64)
 		ipFrame.SetProtocol(lneto.IPProtoICMP)
-		*ipFrame.SourceAddr() = a.ipv4Address.As4()
+		*ipFrame.SourceAddr() = a.core.IPv4AddressLocked().As4()
 		*ipFrame.DestinationAddr() = exchange.destination.As4()
 		ipFrame.SetCRC(0)
 		ipFrame.SetCRC(ipFrame.CalculateHeaderCRC())
@@ -403,7 +402,7 @@ func (a *Adapter) ingressLocked(frame []byte) (bool, error) {
 		return false, err
 	}
 	version, headerWords := ipFrame.VersionAndIHL()
-	if version != 4 || headerWords < 5 || ipFrame.Protocol() != lneto.IPProtoICMP || netip.AddrFrom4(*ipFrame.DestinationAddr()) != a.ipv4Address {
+	if version != 4 || headerWords < 5 || ipFrame.Protocol() != lneto.IPProtoICMP || netip.AddrFrom4(*ipFrame.DestinationAddr()) != a.core.IPv4AddressLocked() {
 		return false, nil
 	}
 	var validator lneto.Validator

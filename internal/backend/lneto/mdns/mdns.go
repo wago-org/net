@@ -60,7 +60,6 @@ type Config struct {
 type Adapter struct {
 	core            *lnetocore.Namespace
 	config          Config
-	ipv4Address     netip.Addr
 	hardwareAddress [6]byte
 	policy          *policy.Policy
 	quotas          *quota.Account
@@ -125,7 +124,7 @@ func New(common *lnetocore.Namespace, config Config) (*Adapter, error) {
 		return nil, nscore.Fail(nscore.FailureInvalidArgument, lneto.ErrInvalidConfig)
 	}
 	a := &Adapter{
-		core: common, config: cloneConfig(config), ipv4Address: common.IPv4AddressLocked(), hardwareAddress: common.HardwareAddressLocked(),
+		core: common, config: cloneConfig(config), hardwareAddress: common.HardwareAddressLocked(),
 		policy: common.PolicyLocked(), quotas: common.QuotasLocked(), queries: make([]*query, 0, config.MaxQueries),
 		announcements: make([]*announcement, 0, config.MaxAnnouncements),
 	}
@@ -633,7 +632,7 @@ func (a *Adapter) writeFrame(dst, packet []byte) (int, error) {
 	ip.SetFlags(0)
 	ip.SetTTL(255)
 	ip.SetProtocol(lneto.IPProtoUDP)
-	*ip.SourceAddr() = a.ipv4Address.As4()
+	*ip.SourceAddr() = a.core.IPv4AddressLocked().As4()
 	*ip.DestinationAddr() = multicastAddress.As4()
 	ip.SetCRC(0)
 	ip.SetCRC(ip.CalculateHeaderCRC())
@@ -702,7 +701,7 @@ func (a *Adapter) validateFrame(frame []byte) ([]byte, netip.Addr, bool, error) 
 	}
 	version, ihl := ip.VersionAndIHL()
 	destination := netip.AddrFrom4(*ip.DestinationAddr())
-	if version != 4 || ihl < 5 || ip.Protocol() != lneto.IPProtoUDP || ip.TTL() != 255 || (destination != multicastAddress && destination != a.ipv4Address) {
+	if version != 4 || ihl < 5 || ip.Protocol() != lneto.IPProtoUDP || ip.TTL() != 255 || (destination != multicastAddress && destination != a.core.IPv4AddressLocked()) {
 		return nil, netip.Addr{}, false, nil
 	}
 	udp, err := lnetoudp.NewFrame(ip.Payload())
