@@ -160,6 +160,10 @@ func FinishConnect(state *core.State, handle resource.Handle) (progress nscore.P
 			return lookupErr
 		}
 		progress, err = stream.TryFinishConnect()
+		if err == nil && !progress.Valid() {
+			progress = 0
+			return nscore.Fail(nscore.FailureIO, core.ErrInvalidBackendResult)
+		}
 		return err
 	})
 	return
@@ -207,6 +211,10 @@ func ShutdownWrite(state *core.State, handle resource.Handle) (progress nscore.P
 			return lookupErr
 		}
 		progress, err = stream.TryShutdownWrite()
+		if err == nil && !progress.Valid() {
+			progress = 0
+			return nscore.Fail(nscore.FailureIO, core.ErrInvalidBackendResult)
+		}
 		return err
 	})
 	return
