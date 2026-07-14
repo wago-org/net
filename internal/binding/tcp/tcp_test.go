@@ -82,6 +82,7 @@ type fakeStream struct {
 	remote           nscore.Endpoint
 	finishProgress   nscore.Progress
 	finishFailure    error
+	finishCalls      int
 	readResult       nscore.IOResult
 	readFailure      error
 	readData         []byte
@@ -92,6 +93,7 @@ type fakeStream struct {
 	writeCalls       int
 	shutdownProgress nscore.Progress
 	shutdownFailure  error
+	shutdownCalls    int
 	closeCalls       int
 }
 
@@ -102,6 +104,7 @@ func (*fakeStream) Readiness() nscore.Readiness {
 func (s *fakeStream) LocalEndpoint() nscore.Endpoint  { return s.local }
 func (s *fakeStream) RemoteEndpoint() nscore.Endpoint { return s.remote }
 func (s *fakeStream) TryFinishConnect() (nscore.Progress, error) {
+	s.finishCalls++
 	return s.finishProgress, s.finishFailure
 }
 func (s *fakeStream) TryRead(dst []byte) (nscore.IOResult, error) {
@@ -117,6 +120,7 @@ func (s *fakeStream) TryWrite(src []byte) (nscore.IOResult, error) {
 	return s.writeResult, s.writeFailure
 }
 func (s *fakeStream) TryShutdownWrite() (nscore.Progress, error) {
+	s.shutdownCalls++
 	return s.shutdownProgress, s.shutdownFailure
 }
 
@@ -160,7 +164,13 @@ func TestBindingsConnectStreamIOAtomicStatusesAndLifecycle(t *testing.T) {
 		t.Fatalf("failed connect = %v, calls=%d", status, backend.connectCalls)
 	}
 	backend.connectFailure = nil
-	if status := callBinding(t, bindingByName(t, bindings, "connect"), host, uint64(namespaceHandle), 0, 64); status != guest.StatusInProgress || backend.connectCalls != 2 || backend.connectRemote != remote {
+	var typedNil *fakeStream
+	backend.stream = typedNil
+	if status := callBinding(t, bindingByName(t, bindings, "connect"), host, uint64(namespaceHandle), 0, 64); status != guest.StatusIO || backend.connectCalls != 2 || !bytes.Equal(host.memory[64:64+tcpabi.StreamV1Size], streamBefore) {
+		t.Fatalf("typed-nil connect = %v, calls=%d", status, backend.connectCalls)
+	}
+	backend.stream = stream
+	if status := callBinding(t, bindingByName(t, bindings, "connect"), host, uint64(namespaceHandle), 0, 64); status != guest.StatusInProgress || backend.connectCalls != 3 || backend.connectRemote != remote {
 		t.Fatalf("connect = %v, calls=%d remote=%+v", status, backend.connectCalls, backend.connectRemote)
 	}
 	streamHandle := resource.Handle(binary.LittleEndian.Uint64(host.memory[64:72]))
@@ -245,6 +255,49 @@ func TestBindingsConnectStreamIOAtomicStatusesAndLifecycle(t *testing.T) {
 	if status := callBinding(t, bindingByName(t, bindings, "read"), host, uint64(streamHandle), payloadPtr, payloadLen, resultPtr); status != guest.StatusBadHandle {
 		t.Fatalf("stale read = %v", status)
 	}
+
+	fresh := &fakeStream{
+		local: local, remote: remote,
+		finishProgress:   nscore.ProgressDone,
+		readResult:       nscore.IOResult{State: nscore.IOWouldBlock},
+		writeResult:      nscore.IOResult{Bytes: 6, State: nscore.IOReady},
+		shutdownProgress: nscore.ProgressDone,
+	}
+	backend.stream = fresh
+	if status := callBinding(t, bindingByName(t, bindings, "connect"), host, uint64(namespaceHandle), 0, 320); status != guest.StatusInProgress {
+		t.Fatalf("fresh connect = %v", status)
+	}
+	freshHandle := resource.Handle(binary.LittleEndian.Uint64(host.memory[320:328]))
+	if freshHandle == streamHandle || uint16(freshHandle) != uint16(streamHandle) {
+		t.Fatalf("generation-safe stream slot reuse = old %v, fresh %v", streamHandle, freshHandle)
+	}
+	if status := callBinding(t, bindingByName(t, bindings, "finish_connect"), host, uint64(streamHandle)); status != guest.StatusBadHandle || fresh.finishCalls != 0 {
+		t.Fatalf("stale finish_connect after reuse = %v, fresh calls=%d", status, fresh.finishCalls)
+	}
+	if status := callBinding(t, bindingByName(t, bindings, "read"), host, uint64(streamHandle), payloadPtr, payloadLen, resultPtr); status != guest.StatusBadHandle || fresh.readCalls != 0 {
+		t.Fatalf("stale read after reuse = %v, fresh calls=%d", status, fresh.readCalls)
+	}
+	if status := callBinding(t, bindingByName(t, bindings, "write"), host, uint64(streamHandle), 224, 6, 240); status != guest.StatusBadHandle || fresh.writeCalls != 0 {
+		t.Fatalf("stale write after reuse = %v, fresh calls=%d", status, fresh.writeCalls)
+	}
+	if status := callBinding(t, bindingByName(t, bindings, "shutdown_write"), host, uint64(streamHandle)); status != guest.StatusBadHandle || fresh.shutdownCalls != 0 {
+		t.Fatalf("stale shutdown_write after reuse = %v, fresh calls=%d", status, fresh.shutdownCalls)
+	}
+	if status := callBinding(t, bindingByName(t, bindings, "close_stream"), host, uint64(streamHandle)); status != guest.StatusBadHandle || fresh.closeCalls != 0 {
+		t.Fatalf("stale close after reuse = %v, fresh calls=%d", status, fresh.closeCalls)
+	}
+	if status := callBinding(t, bindingByName(t, bindings, "finish_connect"), host, uint64(freshHandle)); status != guest.StatusOK || fresh.finishCalls != 1 {
+		t.Fatalf("fresh finish_connect = %v, calls=%d", status, fresh.finishCalls)
+	}
+	if status := callBinding(t, bindingByName(t, bindings, "write"), host, uint64(freshHandle), 224, 6, 240); status != guest.StatusOK || fresh.writeCalls != 1 {
+		t.Fatalf("fresh write = %v, calls=%d", status, fresh.writeCalls)
+	}
+	if status := callBinding(t, bindingByName(t, bindings, "shutdown_write"), host, uint64(freshHandle)); status != guest.StatusOK || fresh.shutdownCalls != 1 {
+		t.Fatalf("fresh shutdown_write = %v, calls=%d", status, fresh.shutdownCalls)
+	}
+	if status := callBinding(t, bindingByName(t, bindings, "close_stream"), host, uint64(freshHandle)); status != guest.StatusOK || fresh.closeCalls != 1 {
+		t.Fatalf("fresh close = %v, calls=%d", status, fresh.closeCalls)
+	}
 }
 
 func TestBindingsListenAcceptAtomicStatusesAndLifecycle(t *testing.T) {
@@ -265,7 +318,13 @@ func TestBindingsListenAcceptAtomicStatusesAndLifecycle(t *testing.T) {
 	if status := callBinding(t, bindingByName(t, bindings, "listen"), host, uint64(state.NamespaceHandle()), 0, 16); status != guest.StatusInvalidArgument || backend.listenCalls != 0 {
 		t.Fatalf("overlap listen = %v, calls=%d", status, backend.listenCalls)
 	}
-	if status := callBinding(t, bindingByName(t, bindings, "listen"), host, uint64(state.NamespaceHandle()), 0, 32); status != guest.StatusOK || backend.listenCalls != 1 || backend.listenLocal != local || bytes.Equal(host.memory[32:40], listenerBefore) {
+	var typedNilListener *fakeListener
+	backend.listener = typedNilListener
+	if status := callBinding(t, bindingByName(t, bindings, "listen"), host, uint64(state.NamespaceHandle()), 0, 32); status != guest.StatusIO || backend.listenCalls != 1 || !bytes.Equal(host.memory[32:40], listenerBefore) {
+		t.Fatalf("typed-nil listen = %v, calls=%d", status, backend.listenCalls)
+	}
+	backend.listener = listener
+	if status := callBinding(t, bindingByName(t, bindings, "listen"), host, uint64(state.NamespaceHandle()), 0, 32); status != guest.StatusOK || backend.listenCalls != 2 || backend.listenLocal != local || bytes.Equal(host.memory[32:40], listenerBefore) {
 		t.Fatalf("listen = %v, calls=%d local=%+v", status, backend.listenCalls, backend.listenLocal)
 	}
 	listenerHandle := resource.Handle(binary.LittleEndian.Uint64(host.memory[32:40]))
@@ -273,7 +332,12 @@ func TestBindingsListenAcceptAtomicStatusesAndLifecycle(t *testing.T) {
 	if status := callBinding(t, bindingByName(t, bindings, "accept"), host, uint64(listenerHandle), 64); status != guest.StatusAgain || listener.accepts != 1 || !bytes.Equal(host.memory[64:64+tcpabi.StreamV1Size], streamBefore) {
 		t.Fatalf("would-block accept = %v, calls=%d", status, listener.accepts)
 	}
-	listener.stream, listener.progress = accepted, nscore.ProgressDone
+	var typedNilStream *fakeStream
+	listener.stream, listener.progress = typedNilStream, nscore.ProgressDone
+	if status := callBinding(t, bindingByName(t, bindings, "accept"), host, uint64(listenerHandle), 64); status != guest.StatusIO || listener.accepts != 2 || !bytes.Equal(host.memory[64:64+tcpabi.StreamV1Size], streamBefore) {
+		t.Fatalf("typed-nil accept = %v, calls=%d", status, listener.accepts)
+	}
+	listener.stream = accepted
 	if status := callBinding(t, bindingByName(t, bindings, "accept"), host, uint64(listenerHandle), 64); status != guest.StatusOK {
 		t.Fatalf("accept = %v", status)
 	}
