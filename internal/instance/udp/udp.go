@@ -80,12 +80,21 @@ func Receive(state *core.State, handle resource.Handle, dst []byte) (result udpn
 		if lookupErr != nil {
 			return lookupErr
 		}
-		result, err = socket.TryReceive(dst)
-		if err == nil && !result.Valid(len(dst)) {
+		scratchSize := min(len(dst), udpns.MaxDatagramPayloadBytes)
+		scratch := locked.OutputScratch(scratchSize)
+		result, err = socket.TryReceive(scratch)
+		if err != nil {
+			result = udpns.DatagramResult{}
+			return err
+		}
+		if !result.Valid(scratchSize) {
 			result = udpns.DatagramResult{}
 			return nscore.Fail(nscore.FailureIO, core.ErrInvalidBackendResult)
 		}
-		return err
+		if result.Ready {
+			copy(dst, scratch[:result.Copied])
+		}
+		return nil
 	})
 	return
 }

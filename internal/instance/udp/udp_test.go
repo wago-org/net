@@ -9,6 +9,7 @@ import (
 	core "github.com/wago-org/net/internal/instance/core"
 	"github.com/wago-org/net/internal/namespace"
 	nscore "github.com/wago-org/net/internal/namespace/core"
+	udpns "github.com/wago-org/net/internal/namespace/udp"
 	"github.com/wago-org/net/internal/policy"
 	"github.com/wago-org/net/internal/quota"
 	"github.com/wago-org/net/internal/readiness"
@@ -37,17 +38,24 @@ func (*fakeNamespace) TryService(namespace.ServiceBudget) (namespace.ServiceRepo
 }
 
 type fakeSocket struct {
-	closed atomic.Int32
-	local  namespace.Endpoint
-	result namespace.DatagramResult
+	closed      atomic.Int32
+	local       namespace.Endpoint
+	result      namespace.DatagramResult
+	payload     []byte
+	failure     error
+	receiveSize int
 }
 
 func (s *fakeSocket) Close() error { s.closed.Add(1); return nil }
 func (*fakeSocket) Readiness() namespace.Readiness {
 	return namespace.ReadyReadable | namespace.ReadyWritable
 }
-func (s *fakeSocket) LocalEndpoint() namespace.Endpoint                   { return s.local }
-func (s *fakeSocket) TryReceive([]byte) (namespace.DatagramResult, error) { return s.result, nil }
+func (s *fakeSocket) LocalEndpoint() namespace.Endpoint { return s.local }
+func (s *fakeSocket) TryReceive(dst []byte) (namespace.DatagramResult, error) {
+	s.receiveSize = len(dst)
+	copy(dst, s.payload)
+	return s.result, s.failure
+}
 func (*fakeSocket) TrySend([]byte, namespace.Endpoint) (namespace.Progress, error) {
 	return namespace.ProgressDone, nil
 }
@@ -85,6 +93,60 @@ func TestOperationsAndRegistrationRollback(t *testing.T) {
 	if rollbackSocket.closed.Load() != 1 || rollbackState.Resources().Len() != 1 || rollbackState.Readiness().Snapshot().Registrations != 1 {
 		t.Fatalf("rollback retained state: closes=%d resources=%d readiness=%+v", rollbackSocket.closed.Load(), rollbackState.Resources().Len(), rollbackState.Readiness().Snapshot())
 	}
+}
+
+func TestReceiveCommitsOnlyValidReadyPayloads(t *testing.T) {
+	local := namespace.Endpoint{Address: netip.MustParseAddr("192.0.2.1"), Port: 4200}
+	remote := namespace.Endpoint{Address: netip.MustParseAddr("192.0.2.2"), Port: 53}
+	socket := &fakeSocket{local: local, payload: []byte("reply")}
+	state, manager, instance := attachState(t, &fakeNamespace{socket: socket}, 2)
+	defer manager.Detach(instance)
+	handle, _, err := Bind(state, state.NamespaceHandle(), local)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	dst := []byte{0xa5, 0xa5, 0xa5, 0xa5, 0xa5}
+	wantUnchanged := append([]byte(nil), dst...)
+	socket.result = namespace.DatagramResult{Ready: true, Copied: 5, DatagramBytes: 5, Source: remote}
+	socket.failure = namespace.Fail(namespace.FailureTemporary, errors.New("receive"))
+	if result, err := Receive(state, handle, dst); failureOf(t, err) != namespace.FailureTemporary || result != (namespace.DatagramResult{}) || string(dst) != string(wantUnchanged) {
+		t.Fatalf("failed receive = %+v, %v, dst=%x", result, err, dst)
+	}
+
+	socket.failure = nil
+	socket.result = namespace.DatagramResult{}
+	if result, err := Receive(state, handle, dst); err != nil || result != (namespace.DatagramResult{}) || string(dst) != string(wantUnchanged) {
+		t.Fatalf("would-block receive = %+v, %v, dst=%x", result, err, dst)
+	}
+
+	socket.result = namespace.DatagramResult{Ready: true, Copied: len(dst) + 1, DatagramBytes: len(dst) + 1, Source: remote}
+	if result, err := Receive(state, handle, dst); failureOf(t, err) != namespace.FailureIO || result != (namespace.DatagramResult{}) || string(dst) != string(wantUnchanged) {
+		t.Fatalf("malformed receive = %+v, %v, dst=%x", result, err, dst)
+	}
+
+	socket.result = namespace.DatagramResult{Ready: true, Copied: 3, DatagramBytes: 3, Source: remote}
+	if result, err := Receive(state, handle, dst); err != nil || !result.Ready || string(dst) != "rep\xa5\xa5" {
+		t.Fatalf("ready receive = %+v, %v, dst=%x", result, err, dst)
+	}
+
+	largeDst := make([]byte, udpns.MaxDatagramPayloadBytes+32)
+	for i := range largeDst[:5] {
+		largeDst[i] = 0xa5
+	}
+	socket.result = namespace.DatagramResult{}
+	if result, err := Receive(state, handle, largeDst); err != nil || result.Ready || socket.receiveSize != udpns.MaxDatagramPayloadBytes || string(largeDst[:5]) != "\xa5\xa5\xa5\xa5\xa5" {
+		t.Fatalf("bounded receive = %+v, %v, size=%d dst=%x", result, err, socket.receiveSize, largeDst[:5])
+	}
+}
+
+func failureOf(t testing.TB, err error) namespace.Failure {
+	t.Helper()
+	failure, ok := namespace.FailureOf(err)
+	if !ok {
+		t.Fatalf("uncategorized error: %v", err)
+	}
+	return failure
 }
 
 func attachState(t testing.TB, backend namespace.Namespace, maxRegistrations int) (*core.State, *core.Manager, *wago.Instance) {

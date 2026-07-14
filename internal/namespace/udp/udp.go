@@ -8,6 +8,10 @@ import nscore "github.com/wago-org/net/internal/namespace/core"
 // shared composed namespace.
 const ServiceKey nscore.ServiceKey = "udp"
 
+// MaxDatagramPayloadBytes bounds one UDP payload in the narrow namespace
+// contract and the instance-owned scratch used for atomic receive commits.
+const MaxDatagramPayloadBytes = 1<<16 - 1
+
 // Namespace creates UDP sockets on the shared namespace object. The returned
 // shared resource must satisfy Socket before callers publish it.
 type Namespace interface {
@@ -37,7 +41,7 @@ type DatagramResult struct {
 // Valid reports whether the receive result is internally consistent. Ready
 // distinguishes an empty datagram from no datagram.
 func (r DatagramResult) Valid(size int) bool {
-	if size < 0 || r.Copied < 0 || r.DatagramBytes < 0 || r.Copied > size || r.Copied > r.DatagramBytes {
+	if size < 0 || r.Copied < 0 || r.DatagramBytes < 0 || r.DatagramBytes > MaxDatagramPayloadBytes || r.Copied > size || r.Copied > r.DatagramBytes {
 		return false
 	}
 	if !r.Ready {
