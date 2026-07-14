@@ -6,6 +6,7 @@ import (
 	"net/netip"
 	"testing"
 
+	lneto "github.com/soypat/lneto"
 	"github.com/soypat/lneto/ethernet"
 	lnetoipv6 "github.com/soypat/lneto/ipv6"
 	lnetoicmp "github.com/soypat/lneto/ipv6/icmpv6"
@@ -221,6 +222,83 @@ func TestMalformedCorrelatedEchoRepliesAreDroppedWithoutRetiringExchange(t *test
 	}
 	if usage, _ := a.quotas.Snapshot(); usage.ICMPv6Work != 0 {
 		t.Fatalf("valid reply retained work quota: %+v", usage)
+	}
+}
+
+func TestQueuedEchoResponsesPreserveQuotaAcrossSaturationRetryDrainAndClose(t *testing.T) {
+	coreA, a := newTestAdapter(t, 25, "2001:db8::25")
+	coreB, b := newTestAdapter(t, 26, "2001:db8::26")
+	defer coreA.Close()
+	if err := a.SeedNeighbor(icmpns.Neighbor{Address: b.address, MAC: b.hardwareAddress}); err != nil {
+		t.Fatal(err)
+	}
+	resource, _, err := a.TryEcho(icmpns.EchoRequest{Destination: b.address, Payload: []byte("queued")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resource.Close()
+	var storage [1514]byte
+	n, worked, err := a.egressLocked(storage[:])
+	if err != nil || !worked || n == 0 {
+		t.Fatalf("echo request = %d, %v, %v", n, worked, err)
+	}
+	request := append([]byte(nil), storage[:n]...)
+	for i := 0; i < int(b.config.MaxQueuedResponses)+1; i++ {
+		frame := append([]byte(nil), request...)
+		ethernetFrame, _ := ethernet.NewFrame(frame)
+		ipFrame, _ := lnetoipv6.NewFrame(ethernetFrame.Payload())
+		icmpFrame, _ := lnetoicmp.NewFrame(ipFrame.Payload())
+		echoFrame := lnetoicmp.FrameEcho{Frame: icmpFrame}
+		echoFrame.SetSequenceNumber(uint16(i + 1))
+		setChecksum(ipFrame, icmpFrame, ipFrame.Payload())
+		if handled, err := b.ingressLocked(frame); err != nil || !handled {
+			t.Fatalf("echo request %d ingress = %v, %v", i, handled, err)
+		}
+	}
+	queued := int(b.config.MaxQueuedResponses)
+	if len(b.responses) != queued {
+		t.Fatalf("queued responses = %d, want %d", len(b.responses), queued)
+	}
+	wantUsage := quota.Usage{Resources: uint64(queued), ICMPv6Resources: uint64(queued), QueuedBytes: uint64(queued * len("queued"))}
+	if usage, _ := b.quotas.Snapshot(); usage != wantUsage {
+		t.Fatalf("saturated response quota = %+v, want %+v", usage, wantUsage)
+	}
+
+	first := b.responses[0]
+	frameBytes := 14 + 40 + icmpHeader + len(first.payload)
+	short := bytes.Repeat([]byte{0xa5}, frameBytes-1)
+	if n, worked, err := b.egressLocked(short); !errors.Is(err, lneto.ErrShortBuffer) || worked || n != 0 {
+		t.Fatalf("short response egress = %d, %v, %v", n, worked, err)
+	}
+	if !bytes.Equal(short, bytes.Repeat([]byte{0xa5}, len(short))) || len(b.responses) != queued || b.responses[0] != first {
+		t.Fatalf("short response egress mutated output or queue: responses=%d first=%p", len(b.responses), b.responses[0])
+	}
+	if usage, _ := b.quotas.Snapshot(); usage != wantUsage {
+		t.Fatalf("short response egress changed quota = %+v, want %+v", usage, wantUsage)
+	}
+
+	n, worked, err = b.egressLocked(storage[:])
+	if err != nil || !worked || n != frameBytes {
+		t.Fatalf("response retry = %d, %v, %v", n, worked, err)
+	}
+	wantUsage.Resources--
+	wantUsage.ICMPv6Resources--
+	wantUsage.QueuedBytes -= uint64(len("queued"))
+	if len(b.responses) != queued-1 || first.payload != nil || first.retained.ResetReleased() {
+		t.Fatalf("drained response retained state: queued=%d response=%+v", len(b.responses), first)
+	}
+	if usage, _ := b.quotas.Snapshot(); usage != wantUsage {
+		t.Fatalf("drained response quota = %+v, want %+v", usage, wantUsage)
+	}
+
+	if err := coreB.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if len(b.responses) != 0 || b.responses != nil {
+		t.Fatalf("closed response queue = %#v", b.responses)
+	}
+	if usage, _ := b.quotas.Snapshot(); usage != (quota.Usage{}) {
+		t.Fatalf("closed response quota = %+v", usage)
 	}
 }
 
