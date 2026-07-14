@@ -138,6 +138,46 @@ func TestEchoAndNDPExchange(t *testing.T) {
 	}
 }
 
+func TestEchoReplyAcceptsNonzeroIPv6FlowLabel(t *testing.T) {
+	coreA, a := newTestAdapter(t, 11, "2001:db8::11")
+	coreB, b := newTestAdapter(t, 12, "2001:db8::12")
+	defer coreA.Close()
+	defer coreB.Close()
+	if err := a.SeedNeighbor(icmpns.Neighbor{Address: b.address, MAC: b.hardwareAddress}); err != nil {
+		t.Fatal(err)
+	}
+	resource, progress, err := a.TryEcho(icmpns.EchoRequest{Destination: b.address, Payload: []byte("flow label")})
+	if err != nil || progress != nscore.ProgressInProgress {
+		t.Fatalf("TryEcho = %T %v %v", resource, progress, err)
+	}
+	exchange := resource.(*echo)
+	var frame [1514]byte
+	n, worked, err := a.egressLocked(frame[:])
+	if err != nil || !worked || n == 0 {
+		t.Fatalf("echo request egress = %d %v %v", n, worked, err)
+	}
+	if handled, err := b.ingressLocked(frame[:n]); err != nil || !handled {
+		t.Fatalf("echo request ingress = %v %v", handled, err)
+	}
+	n, worked, err = b.egressLocked(frame[:])
+	if err != nil || !worked || n == 0 {
+		t.Fatalf("echo reply egress = %d %v %v", n, worked, err)
+	}
+	ipFrame, err := lnetoipv6.NewFrame(frame[14:n])
+	if err != nil {
+		t.Fatal(err)
+	}
+	version, traffic, _ := ipFrame.VersionTrafficAndFlow()
+	ipFrame.SetVersionTrafficAndFlow(version, traffic, 0xabcde)
+	if handled, err := a.ingressLocked(frame[:n]); err != nil || !handled {
+		t.Fatalf("echo reply ingress = %v %v", handled, err)
+	}
+	result, next, err := exchange.TryResult(nil)
+	if err != nil || next != icmpns.NextReady || result.Source != b.address || exchange.Readiness() != nscore.ReadyICMPv6Reply {
+		t.Fatalf("echo result = %+v %v %v readiness=%v", result, next, err, exchange.Readiness())
+	}
+}
+
 func TestEchoShortBufferPreservesRoundRobinStateAndPendingExchanges(t *testing.T) {
 	core, adapter := newTestAdapter(t, 31, "2001:db8::31")
 	defer core.Close()

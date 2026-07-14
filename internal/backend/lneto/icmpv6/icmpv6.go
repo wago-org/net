@@ -755,8 +755,8 @@ func (a *Adapter) ingressLocked(frame []byte) (bool, error) {
 	if err != nil {
 		return true, nil
 	}
-	version, _, flow := ipFrame.VersionTrafficAndFlow()
-	if version != 6 || flow != 0 || ipFrame.NextHeader() != lneto.IPProtoIPv6ICMP || int(ipFrame.PayloadLength())+40 > len(ethernetFrame.Payload()) {
+	version, _, _ := ipFrame.VersionTrafficAndFlow()
+	if version != 6 || ipFrame.NextHeader() != lneto.IPProtoIPv6ICMP || int(ipFrame.PayloadLength())+40 > len(ethernetFrame.Payload()) {
 		return ipFrame.NextHeader() == lneto.IPProtoIPv6ICMP, nil
 	}
 	source, destination := netip.AddrFrom16(*ipFrame.SourceAddr()), netip.AddrFrom16(*ipFrame.DestinationAddr())
