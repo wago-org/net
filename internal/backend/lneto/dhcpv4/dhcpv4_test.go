@@ -4,6 +4,7 @@ import (
 	"net/netip"
 	"testing"
 
+	lnetodhcp "github.com/soypat/lneto/dhcp/dhcpv4"
 	lnetocore "github.com/wago-org/net/internal/backend/lneto/core"
 	nscore "github.com/wago-org/net/internal/namespace/core"
 	dhcpns "github.com/wago-org/net/internal/namespace/dhcpv4"
@@ -182,4 +183,59 @@ func serviceNoFrame(t testing.TB, core *lnetocore.Namespace) {
 func failureOf(err error) nscore.Failure {
 	failure, _ := nscore.FailureOf(err)
 	return failure
+}
+
+func TestServerClientIdentityUsesIdentifierKindAndLength(t *testing.T) {
+	mac := [6]byte{2, 0, 0, 0, 0, 7}
+	short := clientKey(testClientFrame(t, mac, lnetodhcp.OptClientIdentifier1, []byte{1}))
+	trailingZero := clientKey(testClientFrame(t, mac, lnetodhcp.OptClientIdentifier1, []byte{1, 0}))
+	if short == trailingZero {
+		t.Fatal("client identifiers with distinct lengths collided")
+	}
+
+	hardware := clientKey(testClientFrame(t, mac, lnetodhcp.OptEnd, nil))
+	identifier := clientKey(testClientFrame(t, mac, lnetodhcp.OptClientIdentifier1, mac[:]))
+	if hardware == identifier {
+		t.Fatal("hardware fallback collided with an explicit client identifier")
+	}
+
+	legacy := clientKey(testClientFrame(t, mac, lnetodhcp.OptClientIdentifier, []byte("client")))
+	canonical := clientKey(testClientFrame(t, mac, lnetodhcp.OptClientIdentifier1, []byte("client")))
+	if legacy != canonical {
+		t.Fatal("legacy and canonical client identifier options produced different identities")
+	}
+}
+
+func testClientFrame(t testing.TB, mac [6]byte, option lnetodhcp.OptNum, identifier []byte) lnetodhcp.Frame {
+	t.Helper()
+	optionBytes := 1
+	if option != lnetodhcp.OptEnd {
+		optionBytes += 2 + len(identifier)
+	}
+	payload := make([]byte, lnetodhcp.OptionsOffset+optionBytes)
+	frame, err := lnetodhcp.NewFrame(payload)
+	if err != nil {
+		t.Fatal(err)
+	}
+	frame.ClearHeader()
+	frame.SetMagicCookie(lnetodhcp.MagicCookie)
+	*frame.CHAddrAs6() = mac
+	options := frame.OptionsPayload()
+	if option == lnetodhcp.OptEnd {
+		options[0] = byte(lnetodhcp.OptEnd)
+		return frame
+	}
+	options[0] = byte(option)
+	options[1] = byte(len(identifier))
+	copy(options[2:], identifier)
+	options[2+len(identifier)] = byte(lnetodhcp.OptEnd)
+	return frame
+}
+
+func BenchmarkClientKey(b *testing.B) {
+	frame := testClientFrame(b, [6]byte{2, 0, 0, 0, 0, 7}, lnetodhcp.OptClientIdentifier1, []byte("bounded-client"))
+	b.ReportAllocs()
+	for b.Loop() {
+		_ = clientKey(frame)
+	}
 }

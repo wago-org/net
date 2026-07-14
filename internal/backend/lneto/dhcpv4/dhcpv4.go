@@ -71,7 +71,7 @@ type Adapter struct {
 
 	server        lnetodhcp.Server
 	serverEnabled bool
-	serverClients [][36]byte
+	serverClients []serverClientKey
 	serverPending uint16
 }
 
@@ -149,7 +149,7 @@ func New(common *lnetocore.Namespace, config Config) (*Adapter, error) {
 			return nil, lnetocore.MapError(err)
 		}
 		a.serverEnabled = true
-		a.serverClients = make([][36]byte, 0, sv.MaxClients)
+		a.serverClients = make([]serverClientKey, 0, sv.MaxClients)
 	}
 	common.Unlock()
 	if err := common.Install(lnetocore.Participant{IngressOrder: serviceOrder, Ingress: a.ingressLocked, EgressOrder: serviceOrder, HasEgress: a.hasWorkLocked, Egress: a.egressLocked, CloseOrder: closeOrder, Close: a.CloseLocked}); err != nil {
@@ -674,22 +674,43 @@ func (a *Adapter) acceptServerLocked(payload []byte) {
 	}
 }
 
-func clientKey(frame lnetodhcp.Frame) (key [36]byte) {
-	found := false
+type serverClientKey struct {
+	value      [36]byte
+	length     uint8
+	identifier bool
+}
+
+func clientKey(frame lnetodhcp.Frame) serverClientKey {
+	var canonical, legacy serverClientKey
 	_ = frame.ForEachOption(func(_ int, option lnetodhcp.OptNum, data []byte) error {
-		if option == lnetodhcp.OptClientIdentifier && len(data) <= len(key) {
-			copy(key[:], data)
-			found = true
+		if len(data) == 0 || len(data) > len(canonical.value) {
+			return nil
 		}
+		var key *serverClientKey
+		switch option {
+		case lnetodhcp.OptClientIdentifier1:
+			key = &canonical
+		case lnetodhcp.OptClientIdentifier:
+			key = &legacy
+		default:
+			return nil
+		}
+		*key = serverClientKey{length: uint8(len(data)), identifier: true}
+		copy(key.value[:], data)
 		return nil
 	})
-	if !found {
-		copy(key[:], frame.CHAddrAs6()[:])
+	if canonical.identifier {
+		return canonical
 	}
+	if legacy.identifier {
+		return legacy
+	}
+	key := serverClientKey{length: 6}
+	copy(key.value[:], frame.CHAddrAs6()[:])
 	return key
 }
 
-func keyIndex(keys [][36]byte, key [36]byte) int {
+func keyIndex(keys []serverClientKey, key serverClientKey) int {
 	for i := range keys {
 		if keys[i] == key {
 			return i
