@@ -230,6 +230,9 @@ func (n *Namespace) IPv6EnabledLocked() bool               { return n.ipv6Addres
 func (n *Namespace) RandSeedLocked() int64                 { return n.randSeed }
 func (n *Namespace) HardwareAddressLocked() [6]byte        { return n.hardwareAddress }
 func (n *Namespace) GatewayHardwareAddressLocked() [6]byte { return n.gatewayHardwareAddress }
+func (n *Namespace) GatewayHardwareAddressUsableLocked() bool {
+	return n != nil && validUnicastHardwareAddress(n.gatewayHardwareAddress)
+}
 func (n *Namespace) RequiredFrameBytesLocked() int         { return n.requiredFrameBytes }
 func (n *Namespace) MarkMaintenanceLocked()                { n.maintenanceEpoch++ }
 func (n *Namespace) SetNextIngressLocked(nextIngress bool) { n.nextIngress = nextIngress }

@@ -17,6 +17,26 @@ import (
 	"github.com/wago-org/net/internal/quota"
 )
 
+func TestAdapterRequiresUnicastGatewayHardwareAddressWhenEnabled(t *testing.T) {
+	config := Config{MaxOutboundStreams: 1, ReceiveBytes: 256, TransmitBytes: 256, TransmitPackets: 4}
+	for name, gateway := range map[string][6]byte{
+		"zero":      {},
+		"multicast": {0x01, 0, 0, 0, 0, 1},
+		"broadcast": {0xff, 0xff, 0xff, 0xff, 0xff, 0xff},
+	} {
+		t.Run(name, func(t *testing.T) {
+			common := newConfigTestCoreWithGateway(t, 1, gateway)
+			defer common.Close()
+			if _, err := New(common, config); err == nil {
+				t.Fatalf("enabled TCP accepted gateway hardware address %v", gateway)
+			}
+			if _, err := New(common, Config{}); err != nil {
+				t.Fatalf("disabled TCP rejected irrelevant gateway hardware address %v: %v", gateway, err)
+			}
+		})
+	}
+}
+
 func TestValidConfigRejectsOverflowAndKeepsAdapterCreationBounded(t *testing.T) {
 	compiled, err := policy.Compile(policy.Config{Rules: []policy.Rule{{
 		Action: policy.ActionAllow, Transports: []policy.Transport{policy.TransportTCP},
@@ -1074,6 +1094,11 @@ func newTestAdapterWithBacklog(t testing.TB, id byte, listeners, outbound, backl
 
 func newConfigTestCore(t testing.TB, maxActiveTCPPorts uint16) *lnetocore.Namespace {
 	t.Helper()
+	return newConfigTestCoreWithGateway(t, maxActiveTCPPorts, [6]byte{0x02, 0, 0, 0, 0, 98})
+}
+
+func newConfigTestCoreWithGateway(t testing.TB, maxActiveTCPPorts uint16, gateway [6]byte) *lnetocore.Namespace {
+	t.Helper()
 	compiled, err := policy.Compile(policy.Config{Rules: []policy.Rule{{
 		Action: policy.ActionAllow, Transports: []policy.Transport{policy.TransportTCP},
 		Directions: []policy.Direction{policy.DirectionInbound, policy.DirectionOutbound},
@@ -1086,7 +1111,7 @@ func newConfigTestCore(t testing.TB, maxActiveTCPPorts uint16) *lnetocore.Namesp
 	common, err := lnetocore.New(lnetocore.Config{
 		Hostname: "tcp-config", RandSeed: 99,
 		HardwareAddress:        [6]byte{0x02, 0, 0, 0, 0, 99},
-		GatewayHardwareAddress: [6]byte{0x02, 0, 0, 0, 0, 98},
+		GatewayHardwareAddress: gateway,
 		IPv4Address:            netip.AddrFrom4([4]byte{192, 0, 2, 99}), MTU: mtu,
 		Link:              packetlink.Config{MaxFrameBytes: int(mtu) + 14, IngressFrames: 4, EgressFrames: 4},
 		MaxActiveTCPPorts: maxActiveTCPPorts,
