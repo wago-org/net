@@ -138,7 +138,7 @@ func ValidConfig(config Config, compiled *policy.Policy, account *quota.Account,
 		return false
 	}
 	limitedBroadcast := netip.AddrFrom4([4]byte{255, 255, 255, 255})
-	return config.Server.Is4() && !config.Server.Is4In6() && !config.Server.IsUnspecified() && config.Server.Zone() == "" &&
+	return config.Server.Is4() && !config.Server.Is4In6() && !config.Server.IsUnspecified() && !config.Server.IsLoopback() && config.Server.Zone() == "" &&
 		!config.Server.IsMulticast() && config.Server != limitedBroadcast && usableClock(config.Clock) &&
 		config.MaxAttempts > 0 && config.RetryServiceAttempts > 0 && config.Precision >= -30 && config.Precision <= 0
 }

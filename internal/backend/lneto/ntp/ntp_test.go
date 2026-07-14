@@ -533,6 +533,7 @@ func TestNTPConfigIsFiniteExplicitClockAndZeroDisables(t *testing.T) {
 	clock := &manualClock{now: time.Now().UTC()}
 	for _, invalid := range []Config{
 		{MaxSyncs: 1},
+		{Server: netip.MustParseAddr("127.0.0.1"), Clock: clock, MaxSyncs: 1, MaxAttempts: 1, RetryServiceAttempts: 1, Precision: -20},
 		{Server: netip.MustParseAddr("224.0.0.1"), Clock: clock, MaxSyncs: 1, MaxAttempts: 1, RetryServiceAttempts: 1, Precision: -20},
 		{Server: netip.MustParseAddr("192.0.2.1"), Clock: clock, MaxSyncs: 1, RetryServiceAttempts: 1, Precision: -20},
 		{Server: netip.MustParseAddr("192.0.2.1"), Clock: clock, MaxSyncs: 1, MaxAttempts: 1, Precision: 1},
