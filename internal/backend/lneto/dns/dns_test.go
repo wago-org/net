@@ -474,6 +474,69 @@ func TestDNSIngressRequiresLocalEthernetDestinationAndValidSource(t *testing.T) 
 	}
 }
 
+func TestDNSIngressDropsInvalidIPv4LengthsWithoutMutatingQuery(t *testing.T) {
+	for _, test := range []struct {
+		name        string
+		totalLength uint16
+		headerWords uint8
+	}{
+		{name: "shorter than header", totalLength: 19},
+		{name: "beyond frame", totalLength: 1501},
+		{name: "header beyond total length", totalLength: 59, headerWords: 15},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			config := dnsTestConfig(t, 47)
+			ns := newTestNamespace(t, config)
+			request := namespace.DNSRequest{Name: "example.com", Types: namespace.DNSRecordsA | namespace.DNSRecordsAAAA}
+			resource, progress, err := ns.TryResolve(request)
+			if err != nil || progress != namespace.ProgressInProgress {
+				t.Fatalf("resolve = %T, %v, %v", resource, progress, err)
+			}
+			query := resource.(*dnsQuery)
+			outgoing := serviceDNSPacket(t, ns)
+			txid, localPort := dnsPacketIdentity(t, outgoing)
+			valid := buildDNSResponseFrame(t, config, txid, localPort, request.Name)
+			malformed := append([]byte(nil), valid...)
+			ethernetFrame, err := ethernet.NewFrame(malformed)
+			if err != nil {
+				t.Fatal(err)
+			}
+			ipFrame, err := ipv4.NewFrame(ethernetFrame.Payload())
+			if err != nil {
+				t.Fatal(err)
+			}
+			if test.headerWords != 0 {
+				ipFrame.SetVersionAndIHL(4, test.headerWords)
+			}
+			ipFrame.SetTotalLength(test.totalLength)
+			ipFrame.SetCRC(0)
+			ipFrame.SetCRC(ipFrame.CalculateHeaderCRC())
+
+			var handled bool
+			var ingressErr error
+			var state dnsQueryState
+			var mapped *dnsQuery
+			func() {
+				ns.core.Lock()
+				defer ns.core.Unlock()
+				handled, ingressErr = ns.adapter.ingressLocked(malformed)
+				state = query.state
+				mapped = ns.adapter.byPort[localPort]
+			}()
+			if ingressErr != nil || handled || state != dnsQueryWaiting || mapped != query || query.Readiness() != 0 {
+				t.Fatalf("malformed response = handled:%v err:%v state:%v mapped:%p readiness:%v", handled, ingressErr, state, mapped, query.Readiness())
+			}
+
+			ns.core.Lock()
+			handled, ingressErr = ns.adapter.ingressLocked(valid)
+			ns.core.Unlock()
+			if ingressErr != nil || !handled || query.state != dnsQueryDone || query.Readiness() != namespace.ReadyDNSResult {
+				t.Fatalf("valid ingress after malformed length = handled:%v err:%v state:%v readiness:%v", handled, ingressErr, query.state, query.Readiness())
+			}
+		})
+	}
+}
+
 func TestDNSIngressDropsMalformedCorrelatedTransportAndAcceptsFollowingValidResponse(t *testing.T) {
 	for _, test := range []struct {
 		name   string

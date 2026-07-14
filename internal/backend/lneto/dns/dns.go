@@ -495,6 +495,11 @@ func (n *Adapter) ingressLocked(frame []byte) (bool, error) {
 	if version != 4 || headerWords < 5 || ipFrame.Protocol() != lneto.IPProtoUDP || netip.AddrFrom4(*ipFrame.DestinationAddr()) != n.core.IPv4AddressLocked() {
 		return false, nil
 	}
+	var validator lneto.Validator
+	ipFrame.ValidateSize(&validator)
+	if validator.ErrPop() != nil {
+		return false, nil
+	}
 	udpFrame, err := lnetoudp.NewFrame(ipFrame.Payload())
 	if err != nil {
 		return false, nil
@@ -506,7 +511,6 @@ func (n *Adapter) ingressLocked(frame []byte) (bool, error) {
 	if !validUnicastMAC(*ethernetFrame.SourceHardwareAddr()) {
 		return true, nil
 	}
-	var validator lneto.Validator
 	ipFrame.ValidateExceptCRC(&validator)
 	if err := validator.ErrPop(); err != nil {
 		return true, nil
