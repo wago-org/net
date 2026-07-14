@@ -89,8 +89,13 @@ func TestBindingsSyncResultAtomicStatusesAndLifecycle(t *testing.T) {
 	}
 
 	synchronization := &fakeSync{next: ntpns.NextWouldBlock}
-	backend.next, backend.progress, backend.failure = synchronization, nscore.ProgressDone, nil
-	if status := callBinding(t, bindingByName(t, bindings, "sync"), host, uint64(namespaceHandle), 32); status != guest.StatusOK || backend.calls != 2 {
+	var typedNil *fakeSync
+	backend.next, backend.progress, backend.failure = typedNil, nscore.ProgressDone, nil
+	if status := callBinding(t, bindingByName(t, bindings, "sync"), host, uint64(namespaceHandle), 32); status != guest.StatusIO || backend.calls != 2 || !bytes.Equal(host.memory[32:40], handleBefore) {
+		t.Fatalf("typed-nil sync = %v, calls=%d", status, backend.calls)
+	}
+	backend.next = synchronization
+	if status := callBinding(t, bindingByName(t, bindings, "sync"), host, uint64(namespaceHandle), 32); status != guest.StatusOK || backend.calls != 3 {
 		t.Fatalf("sync = %v, calls=%d", status, backend.calls)
 	}
 	handle := resource.Handle(binary.LittleEndian.Uint64(host.memory[32:40]))
@@ -145,6 +150,28 @@ func TestBindingsSyncResultAtomicStatusesAndLifecycle(t *testing.T) {
 	}
 	if status := callBinding(t, bindingByName(t, bindings, "result"), host, uint64(handle), 128); status != guest.StatusBadHandle {
 		t.Fatalf("stale result = %v", status)
+	}
+
+	fresh := &fakeSync{next: ntpns.NextWouldBlock}
+	backend.next, backend.progress = fresh, nscore.ProgressInProgress
+	if status := callBinding(t, bindingByName(t, bindings, "sync"), host, uint64(namespaceHandle), 48); status != guest.StatusInProgress {
+		t.Fatalf("fresh sync = %v", status)
+	}
+	freshHandle := resource.Handle(binary.LittleEndian.Uint64(host.memory[48:56]))
+	if freshHandle == handle || uint16(freshHandle) != uint16(handle) {
+		t.Fatalf("generation-safe slot reuse = old %v, fresh %v", handle, freshHandle)
+	}
+	if status := callBinding(t, bindingByName(t, bindings, "cancel"), host, uint64(handle)); status != guest.StatusBadHandle || fresh.cancelCalls != 0 {
+		t.Fatalf("stale cancel = %v, fresh calls=%d", status, fresh.cancelCalls)
+	}
+	if status := callBinding(t, bindingByName(t, bindings, "close"), host, uint64(handle)); status != guest.StatusBadHandle || fresh.closeCalls != 0 {
+		t.Fatalf("stale close = %v, fresh calls=%d", status, fresh.closeCalls)
+	}
+	if status := callBinding(t, bindingByName(t, bindings, "result"), host, uint64(freshHandle), 128); status != guest.StatusAgain || fresh.resultCalls != 1 {
+		t.Fatalf("fresh result = %v, calls=%d", status, fresh.resultCalls)
+	}
+	if status := callBinding(t, bindingByName(t, bindings, "close"), host, uint64(freshHandle)); status != guest.StatusOK || fresh.closeCalls != 1 {
+		t.Fatalf("fresh close = %v, calls=%d", status, fresh.closeCalls)
 	}
 	if status := callBinding(t, bindingByName(t, bindings, "close"), host, uint64(pendingHandle)); status != guest.StatusOK || pending.closeCalls != 1 {
 		t.Fatalf("close pending = %v, calls=%d", status, pending.closeCalls)
