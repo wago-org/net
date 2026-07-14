@@ -162,6 +162,29 @@ func TestCoordinatorSeparatesStaleAndFreshGenerationsInReusedSlot(t *testing.T) 
 	}
 }
 
+func TestServiceAttemptLimitDoesNotSuppressIndependentReadyScan(t *testing.T) {
+	table := newTable(t)
+	coordinator := newCoordinator(t, table, Config{MaxRegistrations: 2})
+	service := &testService{}
+	ready := &testPollable{ready: namespace.ReadyWritable}
+	addAndRegister(t, table, coordinator, resource.KindNamespace, service)
+	readyHandle := addAndRegister(t, table, coordinator, resource.KindTCPStream, ready)
+	budget := Budget{
+		Scans:           2,
+		Events:          1,
+		ServiceAttempts: 1,
+		Service:         namespace.ServiceBudget{Packets: 1, Bytes: 64, Operations: 1},
+	}
+	events := make([]Event, 1)
+	report, progress, err := coordinator.TryPoll(events, budget)
+	if err != nil || progress != namespace.ProgressDone || !report.ValidFor(budget) {
+		t.Fatalf("poll = %+v, %v, %v", report, progress, err)
+	}
+	if report != (Report{Scanned: 2, Events: 1, ServiceAttempts: 1}) || events[0] != (Event{Handle: readyHandle, Readiness: namespace.ReadyWritable}) || service.attempts.Load() != 1 {
+		t.Fatalf("independent bounds = report %+v events %+v attempts %d", report, events, service.attempts.Load())
+	}
+}
+
 func TestCoordinatorBoundsServiceAttemptsAndRotatesCursor(t *testing.T) {
 	table := newTable(t)
 	coordinator := newCoordinator(t, table, Config{MaxRegistrations: 2})
@@ -181,7 +204,7 @@ func TestCoordinatorBoundsServiceAttemptsAndRotatesCursor(t *testing.T) {
 	if err != nil || progress != namespace.ProgressDone || !report.ValidFor(budget) {
 		t.Fatalf("first service poll = %+v, %v, %v", report, progress, err)
 	}
-	if report.Scanned != 1 || report.ServiceAttempts != 1 || report.ServiceCompleted != 1 || report.Events != 1 || events[0].Handle != firstHandle {
+	if report.Scanned != 2 || report.ServiceAttempts != 1 || report.ServiceCompleted != 1 || report.Events != 1 || events[0].Handle != firstHandle {
 		t.Fatalf("first service bound = %+v, %+v", report, events)
 	}
 	if first.attempts.Load() != 1 || second.attempts.Load() != 0 {
@@ -190,7 +213,7 @@ func TestCoordinatorBoundsServiceAttemptsAndRotatesCursor(t *testing.T) {
 
 	clear(events)
 	report, progress, err = coordinator.TryPoll(events, budget)
-	if err != nil || progress != namespace.ProgressDone || events[0].Handle != secondHandle {
+	if err != nil || progress != namespace.ProgressDone || report.Scanned != 2 || report.ServiceAttempts != 1 || report.ServiceCompleted != 1 || report.Events != 2 || events[0].Handle != firstHandle || events[1].Handle != secondHandle {
 		t.Fatalf("second service poll = %+v, %v, %v, %+v", report, progress, err, events)
 	}
 	if first.attempts.Load() != 1 || second.attempts.Load() != 1 {

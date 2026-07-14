@@ -85,12 +85,13 @@ type Snapshot struct {
 type Coordinator struct {
 	mu sync.Mutex
 
-	table  *resource.Table
-	regs   []registration
-	index  map[resource.Handle]int
-	cursor int
-	limit  int
-	closed bool
+	table         *resource.Table
+	regs          []registration
+	index         map[resource.Handle]int
+	cursor        int
+	serviceCursor int
+	limit         int
+	closed        bool
 }
 
 type registration struct {
@@ -214,11 +215,9 @@ func (c *Coordinator) TryPoll(events []Event, budget Budget) (Report, nscore.Pro
 			continue
 		}
 
-		stopAfterCurrent := false
-		if report.ServiceAttempts < budget.ServiceAttempts {
+		if report.ServiceAttempts < budget.ServiceAttempts && c.cursor == c.serviceCursor {
 			if service, ok := value.(serviceable); ok {
 				report.ServiceAttempts++
-				stopAfterCurrent = report.ServiceAttempts == budget.ServiceAttempts
 				serviceReport, progress, serviceErr := service.TryService(budget.Service)
 				if serviceErr != nil {
 					if failure, ok := nscore.FailureOf(serviceErr); !ok || failure != nscore.FailureClosed {
@@ -230,6 +229,7 @@ func (c *Coordinator) TryPoll(events []Event, budget Budget) (Report, nscore.Pro
 					report.ServiceCompleted++
 				}
 			}
+			c.advanceServiceCursor()
 		}
 
 		ready := pollable.Readiness()
@@ -244,9 +244,6 @@ func (c *Coordinator) TryPoll(events []Event, budget Budget) (Report, nscore.Pro
 			}
 			events[report.Events] = event
 			report.Events++
-		}
-		if stopAfterCurrent {
-			break
 		}
 	}
 	return report, pollProgress(report), nil
@@ -280,6 +277,7 @@ func (c *Coordinator) Close() error {
 	c.index = nil
 	c.table = nil
 	c.cursor = 0
+	c.serviceCursor = 0
 	return nil
 }
 
@@ -298,15 +296,28 @@ func (c *Coordinator) removeAt(index int) {
 		moved := c.regs[last]
 		c.regs[index] = moved
 		c.index[moved.handle] = index
+		if c.serviceCursor == last {
+			c.serviceCursor = index
+		}
 	}
 	c.regs[last] = registration{}
 	c.regs = c.regs[:last]
+	if len(c.regs) == 0 || c.serviceCursor >= len(c.regs) {
+		c.serviceCursor = 0
+	}
 }
 
 func (c *Coordinator) advanceCursor() {
 	c.cursor++
 	if c.cursor == len(c.regs) {
 		c.cursor = 0
+	}
+}
+
+func (c *Coordinator) advanceServiceCursor() {
+	c.serviceCursor++
+	if c.serviceCursor == len(c.regs) {
+		c.serviceCursor = 0
 	}
 }
 
