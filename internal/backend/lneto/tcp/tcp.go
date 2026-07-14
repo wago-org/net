@@ -22,7 +22,10 @@ const (
 	maxTCPStreamCapacityHint               = 16
 )
 
-var ErrPolicyDenied = errors.New("net: endpoint policy denied operation")
+var (
+	ErrPolicyDenied         = errors.New("net: endpoint policy denied operation")
+	limitedBroadcastAddress = netip.AddrFrom4([4]byte{255, 255, 255, 255})
+)
 
 // Adapter owns only TCP listeners, streams, ports, and fixed buffers while the
 // protocol-neutral core owns the shared lock, stack, link, identity, policy,
@@ -525,7 +528,7 @@ func (n *Adapter) TryConnect(remote nscore.Endpoint) (nscore.Resource, nscore.Pr
 	if n.core.ClosedLocked() || n.stack == nil {
 		return nil, 0, nscore.Fail(nscore.FailureClosed, net.ErrClosed)
 	}
-	if !remote.Valid() || remote.Address.IsUnspecified() || remote.Address.IsMulticast() || remote.Port == 0 || (!remote.Address.Is4() && !remote.Address.Is6()) {
+	if !remote.Valid() || remote.Address.IsUnspecified() || remote.Address.IsLoopback() || remote.Address.IsMulticast() || remote.Address == limitedBroadcastAddress || remote.Port == 0 || (!remote.Address.Is4() && !remote.Address.Is6()) {
 		return nil, 0, nscore.Fail(nscore.FailureInvalidArgument, lneto.ErrInvalidAddr)
 	}
 	if remote.Address.Is6() && !n.core.IPv6EnabledLocked() {

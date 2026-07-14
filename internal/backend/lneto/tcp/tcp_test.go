@@ -449,6 +449,55 @@ func TestIPv6EndpointScopeAndFlowFailClosed(t *testing.T) {
 	}
 }
 
+func TestConnectRejectsNonWireUnicastDestinationsBeforeOwnership(t *testing.T) {
+	allowAllTCP, err := policy.Compile(policy.Config{
+		Rules: []policy.Rule{{
+			Action: policy.ActionAllow, Transports: []policy.Transport{policy.TransportTCP},
+			Directions: []policy.Direction{policy.DirectionOutbound},
+			Prefixes:   []netip.Prefix{netip.MustParsePrefix("0.0.0.0/0"), netip.MustParsePrefix("::/0")},
+		}},
+		LoopbackTransports:  []policy.Transport{policy.TransportTCP},
+		BroadcastTransports: []policy.Transport{policy.TransportTCP},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, test := range []struct {
+		name    string
+		address netip.Addr
+		new     func(testing.TB) *Adapter
+	}{
+		{name: "IPv4 loopback", address: netip.MustParseAddr("127.0.0.1"), new: func(t testing.TB) *Adapter {
+			_, adapter := newTestAdapter(t, 44, 0, 1)
+			return adapter
+		}},
+		{name: "IPv4 limited broadcast", address: netip.AddrFrom4([4]byte{255, 255, 255, 255}), new: func(t testing.TB) *Adapter {
+			_, adapter := newTestAdapter(t, 45, 0, 1)
+			return adapter
+		}},
+		{name: "IPv6 loopback", address: netip.IPv6Loopback(), new: func(t testing.TB) *Adapter {
+			_, adapter := newIPv6TestAdapter(t, 46, netip.MustParseAddr("2001:db8::46"), 0, 1)
+			return adapter
+		}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			adapter := test.new(t)
+			adapter.policy = allowAllTCP
+			nextPort := adapter.nextPort
+			usageBefore, closedBefore := adapter.quotas.Snapshot()
+			if resource, progress, err := adapter.TryConnect(nscore.Endpoint{Address: test.address, Port: 443}); resource != nil || progress != 0 || failureOf(t, err) != nscore.FailureInvalidArgument {
+				t.Fatalf("connect = %T, %v, %v", resource, progress, err)
+			}
+			if adapter.nextPort != nextPort || len(adapter.ports) != 0 || len(adapter.streams) != 0 || adapter.outboundStreams != 0 || len(adapter.freeOutboundStorage) != 0 {
+				t.Fatalf("rejected connect mutated state: next_port=%d ports=%d streams=%d outbound=%d storage=%d", adapter.nextPort, len(adapter.ports), len(adapter.streams), adapter.outboundStreams, len(adapter.freeOutboundStorage))
+			}
+			if usage, closed := adapter.quotas.Snapshot(); closed != closedBefore || usage != usageBefore {
+				t.Fatalf("rejected connect quota = %+v, closed=%v; want %+v, closed=%v", usage, closed, usageBefore, closedBefore)
+			}
+		})
+	}
+}
+
 func TestConnectResetBeforeEstablishment(t *testing.T) {
 	common, adapter := newTestAdapter(t, 3, 0, 1)
 	remote := nscore.Endpoint{Address: netip.MustParseAddr("192.0.2.4"), Port: 4299}
