@@ -1,6 +1,7 @@
 package core
 
 import (
+	"encoding/binary"
 	"errors"
 	"net/netip"
 	"reflect"
@@ -123,6 +124,75 @@ func TestParticipantOrderingAndDeterministicClose(t *testing.T) {
 	}
 	if len(closed) != 3 {
 		t.Fatalf("idempotent close repeated callbacks: %v", closed)
+	}
+}
+
+func TestEgressRoundRobinBoundsParticipantsAndSharedStack(t *testing.T) {
+	ns := newTestNamespace(t, 34)
+	active := [...]bool{true, true, true, true}
+	for i := range active {
+		index := i
+		if err := ns.Install(Participant{
+			EgressOrder: index,
+			HasEgress:   func() bool { return active[index] },
+			Egress: func(dst []byte) (int, bool, error) {
+				dst[0] = byte(index + 1)
+				return 60, false, nil
+			},
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	ns.Lock()
+	if err := ns.StackLocked().StartResolveHardwareAddress6(netip.MustParseAddr("192.0.2.200")); err != nil {
+		ns.Unlock()
+		t.Fatal(err)
+	}
+	ns.SetNextIngressLocked(false)
+	ns.Unlock()
+
+	var schedule []byte
+	buffer := make([]byte, ns.Link().MaxFrameBytes())
+	budget := nscore.ServiceBudget{Packets: 1, Bytes: uint32(len(buffer)), Operations: 1}
+	for range 6 {
+		ns.Lock()
+		ns.SetNextIngressLocked(false)
+		ns.Unlock()
+		report, progress, err := ns.TryService(budget)
+		if err != nil || progress != nscore.ProgressDone || report.Packets != 1 || report.Operations != 1 {
+			t.Fatalf("service = %+v, %v, %v", report, progress, err)
+		}
+		result, err := ns.Link().TryDequeue(packetlink.Egress, buffer)
+		if err != nil || !result.Ready {
+			t.Fatalf("dequeue = %+v, %v", result, err)
+		}
+		if result.FrameBytes >= 14 && binary.BigEndian.Uint16(buffer[12:14]) == uint16(ethernet.TypeARP) {
+			schedule = append(schedule, 0)
+		} else {
+			schedule = append(schedule, buffer[0])
+		}
+	}
+	if want := []byte{1, 2, 3, 4, 0, 1}; !reflect.DeepEqual(schedule, want) {
+		t.Fatalf("egress schedule = %v, want %v", schedule, want)
+	}
+
+	active[1] = false
+	active[2] = false
+	for range 2 {
+		ns.Lock()
+		ns.SetNextIngressLocked(false)
+		ns.Unlock()
+		if report, progress, err := ns.TryService(budget); err != nil || progress != nscore.ProgressDone || report.Packets != 1 {
+			t.Fatalf("dynamic service = %+v, %v, %v", report, progress, err)
+		}
+		result, err := ns.Link().TryDequeue(packetlink.Egress, buffer)
+		if err != nil || !result.Ready {
+			t.Fatalf("dynamic dequeue = %+v, %v", result, err)
+		}
+		schedule = append(schedule, buffer[0])
+	}
+	if got := schedule[len(schedule)-2:]; !reflect.DeepEqual(got, []byte{4, 1}) {
+		t.Fatalf("dynamic egress schedule = %v", got)
 	}
 }
 

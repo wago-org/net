@@ -65,7 +65,6 @@ type egressParticipant struct {
 	sequence uint64
 	has      func() bool
 	try      func([]byte) (int, bool, error)
-	prefer   bool
 }
 
 type closeParticipant struct {
@@ -101,6 +100,7 @@ type Namespace struct {
 	ingress                []ingressParticipant
 	egress                 []egressParticipant
 	egressActive           []bool
+	nextEgress             int
 	closers                []closeParticipant
 	udpPorts               map[uint16]*UDPPortLease
 	closed                 bool
@@ -191,7 +191,7 @@ func (n *Namespace) Install(participant Participant) error {
 	if participant.HasEgress != nil {
 		n.egress = append(n.egress, egressParticipant{
 			order: participant.EgressOrder, sequence: sequence,
-			has: participant.HasEgress, try: participant.Egress, prefer: true,
+			has: participant.HasEgress, try: participant.Egress,
 		})
 		sort.SliceStable(n.egress, func(i, j int) bool {
 			if n.egress[i].order != n.egress[j].order {
@@ -406,49 +406,37 @@ func (n *Namespace) tryEgress(remainingBytes uint32) (bool, bool, int, error) {
 		for i := range n.egress {
 			active[i] = n.egress[i].has()
 		}
-		for i := range n.egress {
-			participant := &n.egress[i]
-			if !active[i] || !participant.prefer {
+
+		// Treat the shared stack as one source in the same round-robin as
+		// protocol participants. This bounds every continuously active source's
+		// wait to one pass without consuming inactive participants.
+		sources := len(n.egress) + 1
+		if n.nextEgress >= sources {
+			n.nextEgress = 0
+		}
+		for offset := 0; offset < sources; offset++ {
+			source := n.nextEgress + offset
+			if source >= sources {
+				source -= sources
+			}
+			if source == len(n.egress) {
+				maintenanceEpoch := n.maintenanceEpoch
+				written, stackErr := n.stack.EgressEthernet(frame)
+				worked := n.maintenanceEpoch != maintenanceEpoch
+				workedWithoutFrame = workedWithoutFrame || worked
+				if written != 0 || worked || stackErr != nil {
+					n.nextEgress = 0
+					return written, stackErr
+				}
 				continue
 			}
-			participant.prefer = false
-			written, worked, participantErr := participant.try(frame)
-			workedWithoutFrame = workedWithoutFrame || worked
-			if written != 0 || worked || participantErr != nil {
-				for prior := 0; prior < i; prior++ {
-					if active[prior] {
-						n.egress[prior].prefer = true
-					}
-				}
-				return written, participantErr
-			}
-		}
-
-		maintenanceEpoch := n.maintenanceEpoch
-		written, stackErr := n.stack.EgressEthernet(frame)
-		workedWithoutFrame = workedWithoutFrame || n.maintenanceEpoch != maintenanceEpoch
-		if written != 0 || stackErr != nil {
-			for i := range n.egress {
-				if active[i] {
-					n.egress[i].prefer = true
-				}
-			}
-			return written, stackErr
-		}
-
-		for i := len(n.egress) - 1; i >= 0; i-- {
-			if !active[i] {
+			if !active[source] {
 				continue
 			}
-			n.egress[i].prefer = true
-			written, worked, participantErr := n.egress[i].try(frame)
+			written, worked, participantErr := n.egress[source].try(frame)
 			workedWithoutFrame = workedWithoutFrame || worked
 			if written != 0 || worked || participantErr != nil {
-				for prior := 0; prior < i; prior++ {
-					if active[prior] {
-						n.egress[prior].prefer = true
-					}
-				}
+				n.nextEgress = source + 1
 				return written, participantErr
 			}
 		}
