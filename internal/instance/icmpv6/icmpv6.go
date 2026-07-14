@@ -137,13 +137,19 @@ func NeighborResult(state *core.State, handle resource.Handle) (result icmpns.Ne
 			return lookupErr
 		}
 		result, next, err = resolution.TryResult()
-		if err == nil && next == icmpns.NextReady && !result.Valid() {
+		if err != nil {
+			result, next = icmpns.Neighbor{}, 0
+			return err
+		}
+		if next == icmpns.NextReady && !result.Valid() {
+			result, next = icmpns.Neighbor{}, 0
 			return nscore.Fail(nscore.FailureIO, core.ErrInvalidBackendResult)
 		}
-		if err == nil && next != icmpns.NextReady && next != icmpns.NextWouldBlock {
+		if next != icmpns.NextReady && next != icmpns.NextWouldBlock {
+			result, next = icmpns.Neighbor{}, 0
 			return nscore.Fail(nscore.FailureIO, core.ErrInvalidBackendResult)
 		}
-		return err
+		return nil
 	})
 	return
 }
@@ -165,10 +171,18 @@ func Lookup(state *core.State, namespace resource.Handle, request icmpns.Neighbo
 			return lookupErr
 		}
 		neighbor, found, err = backend.LookupNeighbor(request)
-		if err == nil && found && !neighbor.Valid() {
+		if err != nil {
+			neighbor, found = icmpns.Neighbor{}, false
+			return err
+		}
+		if found && !neighbor.Valid() {
+			neighbor, found = icmpns.Neighbor{}, false
 			return nscore.Fail(nscore.FailureIO, core.ErrInvalidBackendResult)
 		}
-		return err
+		if !found {
+			neighbor = icmpns.Neighbor{}
+		}
+		return nil
 	})
 	return
 }

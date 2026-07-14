@@ -32,6 +32,7 @@ type fakeNamespace struct {
 	resolveProgress nscore.Progress
 	lookup          icmpns.Neighbor
 	found           bool
+	lookupFailure   error
 	seeded          icmpns.Neighbor
 	removed         icmpns.NeighborRequest
 }
@@ -44,7 +45,7 @@ func (n *fakeNamespace) TryResolve(icmpns.NeighborRequest) (nscore.Resource, nsc
 	return n.resolution, n.resolveProgress, nil
 }
 func (n *fakeNamespace) LookupNeighbor(icmpns.NeighborRequest) (icmpns.Neighbor, bool, error) {
-	return n.lookup, n.found, nil
+	return n.lookup, n.found, n.lookupFailure
 }
 func (n *fakeNamespace) SeedNeighbor(neighbor icmpns.Neighbor) error {
 	n.seeded = neighbor
@@ -200,6 +201,45 @@ func TestEchoResultRejectsInvalidBackendOutputWithoutMutation(t *testing.T) {
 	echo.next = icmpns.NextWouldBlock
 	if result, next, err := EchoResult(state, handle, dst); err != nil || result != (icmpns.EchoResult{}) || next != icmpns.NextWouldBlock || !bytes.Equal(dst, before) {
 		t.Fatalf("would-block = %+v, %v, %v, payload=%x", result, next, err, dst)
+	}
+}
+
+func TestNeighborResultsClearInvalidBackendOutputs(t *testing.T) {
+	destination := netip.MustParseAddr("2001:db8::5")
+	neighbor := icmpns.Neighbor{Address: destination, MAC: [6]byte{0x02, 0, 0, 0, 0, 5}}
+	resolution := &fakeResolution{neighbor: neighbor, next: icmpns.NextReady, failure: errors.New("resolution failed")}
+	backend := &fakeNamespace{
+		operations: icmpns.SupportedOperations,
+		resolution: resolution, resolveProgress: nscore.ProgressDone,
+		lookup: neighbor, found: true, lookupFailure: errors.New("lookup failed"),
+	}
+	state, manager, instance := attachState(t, backend, 4)
+	defer manager.Detach(instance)
+	handle, _, err := Resolve(state, state.NamespaceHandle(), icmpns.NeighborRequest{Address: destination})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, next, err := NeighborResult(state, handle); err == nil || got != (icmpns.Neighbor{}) || next != 0 {
+		t.Fatalf("failed resolution output = %+v, %v, %v", got, next, err)
+	}
+	if got, found, err := Lookup(state, state.NamespaceHandle(), icmpns.NeighborRequest{Address: destination}); err == nil || got != (icmpns.Neighbor{}) || found {
+		t.Fatalf("failed lookup output = %+v, %v, %v", got, found, err)
+	}
+
+	resolution.failure = nil
+	resolution.neighbor = icmpns.Neighbor{}
+	if got, next, err := NeighborResult(state, handle); failureOf(err) != nscore.FailureIO || got != (icmpns.Neighbor{}) || next != 0 {
+		t.Fatalf("invalid resolution output = %+v, %v, %v", got, next, err)
+	}
+	backend.lookupFailure = nil
+	backend.lookup = icmpns.Neighbor{}
+	if got, found, err := Lookup(state, state.NamespaceHandle(), icmpns.NeighborRequest{Address: destination}); failureOf(err) != nscore.FailureIO || got != (icmpns.Neighbor{}) || found {
+		t.Fatalf("invalid lookup output = %+v, %v, %v", got, found, err)
+	}
+	backend.lookup = neighbor
+	backend.found = false
+	if got, found, err := Lookup(state, state.NamespaceHandle(), icmpns.NeighborRequest{Address: destination}); err != nil || got != (icmpns.Neighbor{}) || found {
+		t.Fatalf("not-found lookup output = %+v, %v, %v", got, found, err)
 	}
 }
 
