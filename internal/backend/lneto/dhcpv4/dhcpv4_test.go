@@ -416,6 +416,33 @@ func TestServerClientBoundAndPoolAreFinite(t *testing.T) {
 	}
 }
 
+func TestServerRejectsLimitedBroadcastAdvertisementsBeforeOwnership(t *testing.T) {
+	for _, field := range []string{"gateway", "DNS"} {
+		t.Run(field, func(t *testing.T) {
+			config := defaultConfig()
+			config.Server = ServerConfig{
+				ServerAddr: netip.MustParseAddr("192.0.2.1"), Gateway: netip.MustParseAddr("192.0.2.1"), DNS: netip.MustParseAddr("192.0.2.53"),
+				Subnet: netip.MustParsePrefix("192.0.2.0/24"), LeaseSeconds: 3600, MaxClients: 1,
+			}
+			if field == "gateway" {
+				config.Server.Gateway = limitedBroadcast
+			} else {
+				config.Server.DNS = limitedBroadcast
+			}
+			core, _, _ := newDHCPv4Core(t, config.Server.ServerAddr, [6]byte{2, 0, 0, 0, 0, 1}, serverPolicy())
+			if adapter, err := New(core, config); adapter != nil || failureOf(err) != nscore.FailureInvalidArgument {
+				t.Fatalf("New = %p, %v", adapter, err)
+			}
+			core.Lock()
+			ports := core.UDPPortLeaseCountLocked()
+			core.Unlock()
+			if ports != 0 {
+				t.Fatalf("rejected server retained %d UDP port leases", ports)
+			}
+		})
+	}
+}
+
 func TestClientIngressRejectsInvalidEthernetSources(t *testing.T) {
 	invalid := map[string][6]byte{
 		"zero":      {},
@@ -547,6 +574,16 @@ func defaultConfig() Config {
 
 func newAdapter(t testing.TB, address netip.Addr, mac [6]byte, config Config, policyConfig policy.Config) (*lnetocore.Namespace, *Adapter) {
 	t.Helper()
+	core, _, _ := newDHCPv4Core(t, address, mac, policyConfig)
+	adapter, err := New(core, config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return core, adapter
+}
+
+func newDHCPv4Core(t testing.TB, address netip.Addr, mac [6]byte, policyConfig policy.Config) (*lnetocore.Namespace, *policy.Policy, *quota.Account) {
+	t.Helper()
 	compiled, err := policy.Compile(policyConfig)
 	if err != nil {
 		t.Fatal(err)
@@ -557,11 +594,7 @@ func newAdapter(t testing.TB, address netip.Addr, mac [6]byte, config Config, po
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = core.Close() })
-	adapter, err := New(core, config)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return core, adapter
+	return core, compiled, account
 }
 
 func clientPolicy() policy.Config {

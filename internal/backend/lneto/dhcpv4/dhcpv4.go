@@ -185,13 +185,16 @@ func ValidConfig(config Config, mtu int, compiled *policy.Policy, account *quota
 func serverConfigured(config ServerConfig) bool { return config != (ServerConfig{}) }
 
 func validServer(config ServerConfig) bool {
-	return validIPv4(config.ServerAddr) && config.Subnet.IsValid() && config.Subnet.Addr().Is4() && config.Subnet.Contains(config.ServerAddr) && config.LeaseSeconds > 0 && config.MaxClients > 0 && validOptionalIPv4(config.Gateway) && validOptionalIPv4(config.DNS)
+	return validIPv4(config.ServerAddr) && config.Subnet.IsValid() && config.Subnet.Addr().Is4() && config.Subnet.Contains(config.ServerAddr) && config.LeaseSeconds > 0 && config.MaxClients > 0 && validOptionalAdvertisedIPv4(config.Gateway) && validOptionalAdvertisedIPv4(config.DNS)
 }
 
 func validIPv4(address netip.Addr) bool {
 	return address.Is4() && !address.Is4In6() && address.Zone() == "" && !address.IsUnspecified() && !address.IsMulticast()
 }
-func validOptionalIPv4(address netip.Addr) bool { return !address.IsValid() || validIPv4(address) }
+
+func validOptionalAdvertisedIPv4(address netip.Addr) bool {
+	return !address.IsValid() || validIPv4(address) && address != limitedBroadcast
+}
 
 func (a *Adapter) TryAcquire(request dhcpns.Request) (nscore.Resource, nscore.Progress, error) {
 	if a == nil {
