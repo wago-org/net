@@ -109,9 +109,7 @@ func (s *fakeStream) TryFinishConnect() (nscore.Progress, error) {
 }
 func (s *fakeStream) TryRead(dst []byte) (nscore.IOResult, error) {
 	s.readCalls++
-	if s.readFailure == nil && s.readResult.State == nscore.IOReady {
-		copy(dst, s.readData)
-	}
+	copy(dst, s.readData)
 	return s.readResult, s.readFailure
 }
 func (s *fakeStream) TryWrite(src []byte) (nscore.IOResult, error) {
@@ -199,13 +197,14 @@ func TestBindingsConnectStreamIOAtomicStatusesAndLifecycle(t *testing.T) {
 	if status := callBinding(t, bindingByName(t, bindings, "read"), host, uint64(streamHandle), payloadPtr, payloadLen, resultPtr); status != guest.StatusEOF || !bytes.Equal(host.memory[resultPtr:resultPtr+uint64(tcpabi.IOResultV1Size)], readResultBefore) {
 		t.Fatalf("EOF read = %v", status)
 	}
+	stream.readData = []byte("poison")
 	stream.readFailure = nscore.Fail(nscore.FailureConnectionReset, errors.New("reset"))
-	if status := callBinding(t, bindingByName(t, bindings, "read"), host, uint64(streamHandle), payloadPtr, payloadLen, resultPtr); status != guest.StatusConnectionReset || !bytes.Equal(host.memory[resultPtr:resultPtr+uint64(tcpabi.IOResultV1Size)], readResultBefore) {
+	if status := callBinding(t, bindingByName(t, bindings, "read"), host, uint64(streamHandle), payloadPtr, payloadLen, resultPtr); status != guest.StatusConnectionReset || !bytes.Equal(host.memory[payloadPtr:payloadPtr+payloadLen], readPayloadBefore) || !bytes.Equal(host.memory[resultPtr:resultPtr+uint64(tcpabi.IOResultV1Size)], readResultBefore) {
 		t.Fatalf("failed read = %v", status)
 	}
 	stream.readFailure = nil
 	stream.readResult = nscore.IOResult{Bytes: int(payloadLen) + 1, State: nscore.IOReady}
-	if status := callBinding(t, bindingByName(t, bindings, "read"), host, uint64(streamHandle), payloadPtr, payloadLen, resultPtr); status != guest.StatusIO || !bytes.Equal(host.memory[resultPtr:resultPtr+uint64(tcpabi.IOResultV1Size)], readResultBefore) {
+	if status := callBinding(t, bindingByName(t, bindings, "read"), host, uint64(streamHandle), payloadPtr, payloadLen, resultPtr); status != guest.StatusIO || !bytes.Equal(host.memory[payloadPtr:payloadPtr+payloadLen], readPayloadBefore) || !bytes.Equal(host.memory[resultPtr:resultPtr+uint64(tcpabi.IOResultV1Size)], readResultBefore) {
 		t.Fatalf("malformed read = %v", status)
 	}
 	stream.readData = []byte("reply")

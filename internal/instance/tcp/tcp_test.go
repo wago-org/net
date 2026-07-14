@@ -53,11 +53,16 @@ func (l *fakeListener) TryAccept() (nscore.Resource, nscore.Progress, error) {
 }
 
 type fakeStream struct {
-	closed  atomic.Int32
-	local   nscore.Endpoint
-	remote  nscore.Endpoint
-	input   []byte
-	written []byte
+	closed      atomic.Int32
+	local       nscore.Endpoint
+	remote      nscore.Endpoint
+	input       []byte
+	written     []byte
+	scriptRead  bool
+	readPayload []byte
+	readResult  nscore.IOResult
+	readFailure error
+	readDstLen  int
 }
 
 func (s *fakeStream) Close() error { s.closed.Add(1); return nil }
@@ -68,6 +73,11 @@ func (s *fakeStream) LocalEndpoint() nscore.Endpoint           { return s.local 
 func (s *fakeStream) RemoteEndpoint() nscore.Endpoint          { return s.remote }
 func (*fakeStream) TryFinishConnect() (nscore.Progress, error) { return nscore.ProgressDone, nil }
 func (s *fakeStream) TryRead(dst []byte) (nscore.IOResult, error) {
+	if s.scriptRead {
+		s.readDstLen = len(dst)
+		copy(dst, s.readPayload)
+		return s.readResult, s.readFailure
+	}
 	if len(s.input) == 0 {
 		return nscore.IOResult{State: nscore.IOWouldBlock}, nil
 	}
@@ -127,6 +137,96 @@ func TestOperationsPreserveReadinessPartialIOAndKindSafety(t *testing.T) {
 	}
 }
 
+func TestReadCommitsOnlyValidatedReadyBytes(t *testing.T) {
+	local := nscore.Endpoint{Address: netip.MustParseAddr("192.0.2.1"), Port: 4300}
+	remote := nscore.Endpoint{Address: netip.MustParseAddr("192.0.2.2"), Port: 4301}
+	stream := &fakeStream{local: local, remote: remote, scriptRead: true, readPayload: []byte("backend-write")}
+	state, manager, instance := attachState(t, &fakeNamespace{stream: stream}, 2)
+	defer manager.Detach(instance)
+	handle, _, err := Connect(state, state.NamespaceHandle(), remote)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	backendFailure := nscore.Fail(nscore.FailureConnectionReset, errors.New("reset"))
+	for _, test := range []struct {
+		name   string
+		result nscore.IOResult
+		err    error
+	}{
+		{name: "error", result: nscore.IOResult{Bytes: 7, State: nscore.IOReady}, err: backendFailure},
+		{name: "would block", result: nscore.IOResult{State: nscore.IOWouldBlock}},
+		{name: "EOF", result: nscore.IOResult{State: nscore.IOEOF}},
+		{name: "malformed", result: nscore.IOResult{Bytes: 33, State: nscore.IOReady}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			dst := make([]byte, 32)
+			for i := range dst {
+				dst[i] = 0xa5
+			}
+			before := append([]byte(nil), dst...)
+			stream.readResult, stream.readFailure = test.result, test.err
+			result, err := Read(state, handle, dst)
+			if test.err != nil {
+				if result != (nscore.IOResult{}) || failureOf(t, err) != nscore.FailureConnectionReset || string(dst) != string(before) {
+					t.Fatalf("Read = %+v, %v, dst=%x", result, err, dst)
+				}
+				return
+			}
+			if test.name == "malformed" {
+				if result != (nscore.IOResult{}) || failureOf(t, err) != nscore.FailureIO || string(dst) != string(before) {
+					t.Fatalf("Read = %+v, %v, dst=%x", result, err, dst)
+				}
+				return
+			}
+			if err != nil || result != test.result || string(dst) != string(before) {
+				t.Fatalf("Read = %+v, %v, dst=%x", result, err, dst)
+			}
+		})
+	}
+
+	dst := make([]byte, 32)
+	for i := range dst {
+		dst[i] = 0xa5
+	}
+	stream.readPayload = []byte("validated-extra")
+	stream.readResult, stream.readFailure = nscore.IOResult{Bytes: 9, State: nscore.IOReady}, nil
+	result, err := Read(state, handle, dst)
+	if err != nil || result != stream.readResult || string(dst[:9]) != "validated" {
+		t.Fatalf("ready Read = %+v, %v, dst=%q", result, err, dst)
+	}
+	for i, value := range dst[9:] {
+		if value != 0xa5 {
+			t.Fatalf("ready tail[%d] = %x", i, value)
+		}
+	}
+
+	const maxReadBytes = tcpns.MaxReadBytes
+	large := make([]byte, maxReadBytes+17)
+	for i := range large {
+		large[i] = 0xa5
+	}
+	stream.readPayload = make([]byte, maxReadBytes+17)
+	for i := range stream.readPayload {
+		stream.readPayload[i] = 0x5a
+	}
+	stream.readResult = nscore.IOResult{Bytes: maxReadBytes, State: nscore.IOReady}
+	result, err = Read(state, handle, large)
+	if err != nil || result != stream.readResult || stream.readDstLen != maxReadBytes {
+		t.Fatalf("bounded Read = %+v, %v, backend dst=%d", result, err, stream.readDstLen)
+	}
+	for i, value := range large[:maxReadBytes] {
+		if value != 0x5a {
+			t.Fatalf("bounded payload[%d] = %x", i, value)
+		}
+	}
+	for i, value := range large[maxReadBytes:] {
+		if value != 0xa5 {
+			t.Fatalf("bounded tail[%d] = %x", i, value)
+		}
+	}
+}
+
 func TestTypedNilBackendResourcesFailClosed(t *testing.T) {
 	local := nscore.Endpoint{Address: netip.MustParseAddr("192.0.2.1"), Port: 4302}
 	var nilListener *fakeListener
@@ -178,6 +278,15 @@ func TestRegistrationRollbackAndCloseRace(t *testing.T) {
 		t.Fatal(err)
 	}
 	wait.Wait()
+}
+
+func failureOf(t testing.TB, err error) nscore.Failure {
+	t.Helper()
+	failure, ok := nscore.FailureOf(err)
+	if !ok {
+		t.Fatalf("uncategorized error: %v", err)
+	}
+	return failure
 }
 
 func attachState(t testing.TB, backend nscore.Namespace, maxRegistrations int) (*core.State, *core.Manager, *wago.Instance) {

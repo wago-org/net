@@ -169,20 +169,33 @@ func FinishConnect(state *core.State, handle resource.Handle) (progress nscore.P
 	return
 }
 
-// Read performs one bounded stream read into caller-owned memory.
+// Read performs one bounded stream read and commits only validated ready bytes
+// to caller-owned memory.
 func Read(state *core.State, handle resource.Handle, dst []byte) (result nscore.IOResult, err error) {
 	err = state.WithLock(func(locked core.LockedState) error {
 		stream, lookupErr := lookupStream(locked, handle)
 		if lookupErr != nil {
 			return lookupErr
 		}
-		result, err = stream.TryRead(dst)
-		if err == nil && !result.Valid(len(dst)) {
+		scratchSize := min(len(dst), tcpns.MaxReadBytes)
+		scratch := locked.OutputScratch(scratchSize)
+		result, err = stream.TryRead(scratch)
+		if err != nil {
+			result = nscore.IOResult{}
+			return err
+		}
+		if !result.Valid(scratchSize) {
 			result = nscore.IOResult{}
 			return nscore.Fail(nscore.FailureIO, core.ErrInvalidBackendResult)
 		}
-		return err
+		if result.State == nscore.IOReady {
+			copy(dst, scratch[:result.Bytes])
+		}
+		return nil
 	})
+	if err != nil {
+		result = nscore.IOResult{}
+	}
 	return
 }
 

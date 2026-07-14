@@ -8,6 +8,11 @@ import nscore "github.com/wago-org/net/internal/namespace/core"
 // shared composed namespace.
 const ServiceKey nscore.ServiceKey = "tcp"
 
+// MaxReadBytes bounds one nonblocking stream read and the instance-owned
+// scratch used to commit validated bytes atomically to caller memory. Larger
+// caller buffers are served by ordinary partial reads.
+const MaxReadBytes = 64 << 10
+
 // Namespace creates TCP resources on the shared namespace object. Resources are
 // returned through the shared lifetime contract and must satisfy Listener or
 // Stream as appropriate before callers publish them.
