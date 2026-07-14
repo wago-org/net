@@ -76,6 +76,10 @@ func TestConfigurationEncodingRejectsMalformedValuesAtomically(t *testing.T) {
 		{name: "name inactive", mutate: func(c *dhcpns.Configuration) { c.NTPNameCount = 1 }},
 		{name: "prefix count", mutate: func(c *dhcpns.Configuration) { c.PrefixCount = dhcpns.MaxDelegatedPrefixes + 1 }},
 		{name: "prefix multicast", mutate: func(c *dhcpns.Configuration) { c.DelegatedPrefixes[0].Prefix = netip.MustParsePrefix("ff05::/64") }},
+		{name: "prefix timers without prefixes", mutate: func(c *dhcpns.Configuration) {
+			c.PrefixCount = 0
+			c.DelegatedPrefixes = [dhcpns.MaxDelegatedPrefixes]dhcpns.DelegatedPrefix{}
+		}},
 		{name: "prefix inactive", mutate: func(c *dhcpns.Configuration) { c.PrefixCount = 1 }},
 	}
 	for _, test := range mutations {

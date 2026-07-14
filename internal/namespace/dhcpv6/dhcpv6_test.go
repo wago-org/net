@@ -37,6 +37,17 @@ func TestConfigurationOwnsBoundedInlineResults(t *testing.T) {
 	if !configuration.Valid() {
 		t.Fatalf("valid configuration rejected: %+v", configuration)
 	}
+	withoutPrefixes := configuration
+	withoutPrefixes.PrefixCount = 0
+	withoutPrefixes.DelegatedPrefixes = [MaxDelegatedPrefixes]DelegatedPrefix{}
+	if withoutPrefixes.Valid() {
+		t.Fatal("prefix timers without delegated prefixes accepted")
+	}
+	withoutPrefixes.PrefixRenewalSeconds = 0
+	withoutPrefixes.PrefixRebindingSeconds = 0
+	if !withoutPrefixes.Valid() {
+		t.Fatal("canonical configuration without delegated prefixes rejected")
+	}
 	configuration.ServerDUID[20] = 1
 	if configuration.Valid() {
 		t.Fatal("nonzero DUID padding accepted")

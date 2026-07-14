@@ -177,7 +177,8 @@ func (configuration *Configuration) Valid() bool {
 		!validTimers(configuration.RenewalSeconds, configuration.RebindingSeconds, configuration.ValidLifetimeSeconds) ||
 		configuration.DNSCount > MaxDNSServers || configuration.DomainCount > MaxDomainSearch ||
 		configuration.NTPCount > MaxNTPServers || configuration.NTPMulticastCount > MaxNTPMulticastServers ||
-		configuration.NTPNameCount > MaxNTPServerNames || configuration.PrefixCount > MaxDelegatedPrefixes {
+		configuration.NTPNameCount > MaxNTPServerNames || configuration.PrefixCount > MaxDelegatedPrefixes ||
+		(configuration.PrefixCount == 0 && (configuration.PrefixRenewalSeconds != 0 || configuration.PrefixRebindingSeconds != 0)) {
 		return false
 	}
 	for _, b := range configuration.ServerDUID[configuration.ServerDUIDLength:] {

@@ -233,6 +233,11 @@ func TestBackendFailuresAndInvalidResultsClearOutputs(t *testing.T) {
 		t.Fatalf("invalid configuration = %+v, %v, %v", configuration, result, err)
 	}
 	lease.configuration = validConfiguration(t)
+	lease.configuration.PrefixRenewalSeconds = 1
+	if configuration, result, err := Result(state, handle); failureOf(err) != nscore.FailureIO || configuration != (dhcpns.Configuration{}) || result != 0 {
+		t.Fatalf("orphan prefix timers = %+v, %v, %v", configuration, result, err)
+	}
+	lease.configuration = validConfiguration(t)
 	lease.result = 99
 	if configuration, result, err := Result(state, handle); failureOf(err) != nscore.FailureIO || configuration != (dhcpns.Configuration{}) || result != 0 {
 		t.Fatalf("invalid result state = %+v, %v, %v", configuration, result, err)
