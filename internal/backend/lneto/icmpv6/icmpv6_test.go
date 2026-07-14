@@ -302,6 +302,129 @@ func TestQueuedEchoResponsesPreserveQuotaAcrossSaturationRetryDrainAndClose(t *t
 	}
 }
 
+func TestQueuedNeighborAdvertisementsPreservePassiveStateQuotaRetryRemoveAndClose(t *testing.T) {
+	coreA, a := newTestAdapter(t, 27, "2001:db8::27")
+	coreB, b := newTestAdapter(t, 28, "2001:db8::28")
+	defer coreA.Close()
+	request := icmpns.NeighborRequest{Address: b.address}
+	resource, _, err := a.TryResolve(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resource.Close()
+	var storage [1514]byte
+	n, worked, err := a.egressLocked(storage[:])
+	if err != nil || !worked || n != 14+40+ndpSize {
+		t.Fatalf("neighbor solicitation = %d, %v, %v", n, worked, err)
+	}
+	solicitation := append([]byte(nil), storage[:n]...)
+	for i := 0; i < int(b.config.MaxQueuedResponses)+1; i++ {
+		if handled, err := b.ingressLocked(solicitation); err != nil || !handled {
+			t.Fatalf("neighbor solicitation %d ingress = %v, %v", i, handled, err)
+		}
+	}
+	queued := int(b.config.MaxQueuedResponses)
+	passive, ok := b.neighbors[a.address]
+	if !ok || !passive.complete || passive.mac != a.hardwareAddress || len(b.responses) != queued {
+		t.Fatalf("saturated advertisement state: passive=%+v queued=%d", passive, len(b.responses))
+	}
+	wantUsage := quota.Usage{Resources: uint64(queued + 1), ICMPv6Resources: uint64(queued + 1)}
+	if usage, _ := b.quotas.Snapshot(); usage != wantUsage {
+		t.Fatalf("saturated advertisement quota = %+v, want %+v", usage, wantUsage)
+	}
+
+	first := b.responses[0]
+	short := bytes.Repeat([]byte{0xa5}, 14+40+ndpSize-1)
+	if n, worked, err := b.egressLocked(short); !errors.Is(err, lneto.ErrShortBuffer) || worked || n != 0 {
+		t.Fatalf("short advertisement egress = %d, %v, %v", n, worked, err)
+	}
+	if !bytes.Equal(short, bytes.Repeat([]byte{0xa5}, len(short))) || len(b.responses) != queued || b.responses[0] != first {
+		t.Fatalf("short advertisement egress mutated output or queue: queued=%d first=%p", len(b.responses), b.responses[0])
+	}
+	if usage, _ := b.quotas.Snapshot(); usage != wantUsage {
+		t.Fatalf("short advertisement egress changed quota = %+v, want %+v", usage, wantUsage)
+	}
+
+	n, worked, err = b.egressLocked(storage[:])
+	if err != nil || !worked || n != 14+40+ndpSize {
+		t.Fatalf("advertisement retry = %d, %v, %v", n, worked, err)
+	}
+	wantUsage.Resources--
+	wantUsage.ICMPv6Resources--
+	if len(b.responses) != queued-1 || first.retained.ResetReleased() {
+		t.Fatalf("drained advertisement retained state: queued=%d response=%+v", len(b.responses), first)
+	}
+	if usage, _ := b.quotas.Snapshot(); usage != wantUsage {
+		t.Fatalf("drained advertisement quota = %+v, want %+v", usage, wantUsage)
+	}
+
+	if err := b.RemoveNeighbor(icmpns.NeighborRequest{Address: a.address}); err != nil {
+		t.Fatal(err)
+	}
+	wantUsage.Resources--
+	wantUsage.ICMPv6Resources--
+	if b.neighbors[a.address] != nil || len(b.responses) != queued-1 {
+		t.Fatalf("passive remove disturbed queued responses: neighbor=%+v queued=%d", b.neighbors[a.address], len(b.responses))
+	}
+	if usage, _ := b.quotas.Snapshot(); usage != wantUsage {
+		t.Fatalf("passive remove quota = %+v, want %+v", usage, wantUsage)
+	}
+
+	if err := coreB.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if len(b.responses) != 0 || b.responses != nil || len(b.neighbors) != 0 || b.neighbors != nil {
+		t.Fatalf("closed NDP state: responses=%#v neighbors=%#v", b.responses, b.neighbors)
+	}
+	if usage, _ := b.quotas.Snapshot(); usage != (quota.Usage{}) {
+		t.Fatalf("closed NDP quota = %+v", usage)
+	}
+}
+
+func TestNeighborSolicitationRetainsPassiveLearningWhenResponseQuotaIsFull(t *testing.T) {
+	coreA, a := newTestAdapter(t, 29, "2001:db8::29")
+	coreB, b := newTestAdapter(t, 30, "2001:db8::30")
+	defer coreA.Close()
+	defer coreB.Close()
+	resource, _, err := a.TryResolve(icmpns.NeighborRequest{Address: b.address})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resource.Close()
+	var storage [1514]byte
+	n, worked, err := a.egressLocked(storage[:])
+	if err != nil || !worked || n == 0 {
+		t.Fatalf("neighbor solicitation = %d, %v, %v", n, worked, err)
+	}
+	var blocker quota.Charge
+	if err := b.quotas.AcquireResource(&blocker, quota.ResourceICMPv6, 127); err != nil {
+		t.Fatal(err)
+	}
+	if handled, err := b.ingressLocked(storage[:n]); err != nil || !handled {
+		t.Fatalf("quota-saturated solicitation ingress = %v, %v", handled, err)
+	}
+	passive := b.neighbors[a.address]
+	if passive == nil || !passive.complete || passive.mac != a.hardwareAddress || len(b.responses) != 0 {
+		t.Fatalf("quota-saturated solicitation state: passive=%+v responses=%d", passive, len(b.responses))
+	}
+	if usage, _ := b.quotas.Snapshot(); usage != (quota.Usage{Resources: 128, ICMPv6Resources: 128}) {
+		t.Fatalf("quota-saturated passive learning = %+v", usage)
+	}
+	if !blocker.Release() {
+		t.Fatal("blocker release failed")
+	}
+	blocker.ResetReleased()
+	if handled, err := b.ingressLocked(storage[:n]); err != nil || !handled {
+		t.Fatalf("solicitation retry ingress = %v, %v", handled, err)
+	}
+	if b.neighbors[a.address] != passive || len(b.responses) != 1 {
+		t.Fatalf("solicitation retry duplicated passive state: passive=%p current=%p responses=%d", passive, b.neighbors[a.address], len(b.responses))
+	}
+	if usage, _ := b.quotas.Snapshot(); usage != (quota.Usage{Resources: 2, ICMPv6Resources: 2}) {
+		t.Fatalf("solicitation retry quota = %+v", usage)
+	}
+}
+
 func TestStrictNDPValidationAndTimeoutCancellation(t *testing.T) {
 	coreA, a := newTestAdapter(t, 3, "fe80::3")
 	coreB, b := newTestAdapter(t, 4, "fe80::4")
