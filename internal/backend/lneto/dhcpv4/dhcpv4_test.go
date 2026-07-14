@@ -122,6 +122,53 @@ func TestClientTimeoutCancellationQuotaAndPortOwnership(t *testing.T) {
 	core.Unlock()
 }
 
+func TestClientDropsLimitedBroadcastLeaseOptionsBeforePinnedMutation(t *testing.T) {
+	for _, test := range []struct {
+		name   string
+		mutate func(testing.TB, []byte) []byte
+	}{
+		{name: "server", mutate: func(t testing.TB, frame []byte) []byte {
+			frame = rewriteDHCPOptionData(t, frame, lnetodhcp.OptServerIdentification, limitedBroadcast.AsSlice())
+			return rewriteIPv4Source(t, frame, limitedBroadcast)
+		}},
+		{name: "router", mutate: func(t testing.TB, frame []byte) []byte {
+			return rewriteDHCPOptionData(t, frame, lnetodhcp.OptRouter, limitedBroadcast.AsSlice())
+		}},
+		{name: "broadcast", mutate: func(t testing.TB, frame []byte) []byte {
+			return appendDHCPOption(t, frame, lnetodhcp.OptBroadcastAddress, limitedBroadcast.AsSlice())
+		}},
+		{name: "DNS", mutate: func(t testing.TB, frame []byte) []byte {
+			return rewriteDHCPOptionData(t, frame, lnetodhcp.OptDNSServers, limitedBroadcast.AsSlice())
+		}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			clientCore, client := newClient(t, false)
+			serverCore, _ := newServer(t, 1)
+			resource, progress, err := client.TryAcquire(dhcpns.Request{})
+			if err != nil || progress != nscore.ProgressInProgress {
+				t.Fatalf("acquire = %T, %v, %v", resource, progress, err)
+			}
+			lease := resource.(*leaseResource)
+			transferOne(t, clientCore, serverCore)
+			offer := serviceEgress(t, serverCore)
+
+			serviceIngress(t, clientCore, test.mutate(t, offer))
+			if lease.state != leaseWaitOffer || lease.wait != client.config.ResponseServiceAttempts {
+				t.Fatalf("limited-broadcast offer mutated lease: state=%v wait=%d", lease.state, lease.wait)
+			}
+			serviceIngress(t, clientCore, offer)
+			if lease.state != leaseRequest || lease.wait != 0 {
+				t.Fatalf("valid offer after malformed option = state:%v wait:%d", lease.state, lease.wait)
+			}
+			transferOne(t, clientCore, serverCore)
+			serviceIngress(t, clientCore, serviceEgress(t, serverCore))
+			if result, state, err := lease.TryResult(); err != nil || state != dhcpns.ResultReady || !result.Valid() {
+				t.Fatalf("valid lease after malformed option = %+v, %v, %v", result, state, err)
+			}
+		})
+	}
+}
+
 func TestClientRejectsAmbiguousDuplicateMessageType(t *testing.T) {
 	clientCore, client := newClient(t, false)
 	serverCore, _ := newServer(t, 1)
@@ -765,6 +812,73 @@ func appendDHCPOption(t testing.TB, frame []byte, option lnetodhcp.OptNum, data 
 	options[end+2+len(data)] = byte(lnetodhcp.OptEnd)
 	ip.SetCRC(0)
 	ip.SetCRC(ip.CalculateHeaderCRC())
+	udp.SetCRC(0)
+	var checksum lneto.CRC791
+	ip.CRCWriteUDPPseudo(&checksum, udp.Length())
+	udp.SetCRC(lneto.NeverZeroSum(checksum.PayloadSum16(udp.RawData()[:udp.Length()])))
+	return frame
+}
+
+func rewriteDHCPOptionData(t testing.TB, frame []byte, target lnetodhcp.OptNum, value []byte) []byte {
+	t.Helper()
+	frame = append([]byte(nil), frame...)
+	eth, err := ethernet.NewFrame(frame)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ip, err := ipv4.NewFrame(eth.Payload())
+	if err != nil {
+		t.Fatal(err)
+	}
+	udp, err := lnetoudp.NewFrame(ip.Payload())
+	if err != nil {
+		t.Fatal(err)
+	}
+	dhcp, err := lnetodhcp.NewFrame(udp.Payload())
+	if err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	if err := dhcp.ForEachOption(func(_ int, option lnetodhcp.OptNum, data []byte) error {
+		if option == target {
+			if len(data) != len(value) {
+				t.Fatalf("DHCP option %v length = %d, want %d", target, len(data), len(value))
+			}
+			copy(data, value)
+			found = true
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if !found {
+		t.Fatalf("DHCP option %v not found", target)
+	}
+	udp.SetCRC(0)
+	var checksum lneto.CRC791
+	ip.CRCWriteUDPPseudo(&checksum, udp.Length())
+	udp.SetCRC(lneto.NeverZeroSum(checksum.PayloadSum16(udp.RawData()[:udp.Length()])))
+	return frame
+}
+
+func rewriteIPv4Source(t testing.TB, frame []byte, source netip.Addr) []byte {
+	t.Helper()
+	frame = append([]byte(nil), frame...)
+	eth, err := ethernet.NewFrame(frame)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ip, err := ipv4.NewFrame(eth.Payload())
+	if err != nil {
+		t.Fatal(err)
+	}
+	*ip.SourceAddr() = source.As4()
+	ip.SetCRC(0)
+	ip.SetCRC(ip.CalculateHeaderCRC())
+	udp, err := lnetoudp.NewFrame(ip.Payload())
+	if err != nil {
+		t.Fatal(err)
+	}
 	udp.SetCRC(0)
 	var checksum lneto.CRC791
 	ip.CRCWriteUDPPseudo(&checksum, udp.Length())

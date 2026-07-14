@@ -189,11 +189,11 @@ func validServer(config ServerConfig) bool {
 }
 
 func validIPv4(address netip.Addr) bool {
-	return address.Is4() && !address.Is4In6() && address.Zone() == "" && !address.IsUnspecified() && !address.IsMulticast()
+	return address.Is4() && !address.Is4In6() && address.Zone() == "" && !address.IsUnspecified() && !address.IsMulticast() && address != limitedBroadcast
 }
 
 func validOptionalAdvertisedIPv4(address netip.Addr) bool {
-	return !address.IsValid() || validIPv4(address) && address != limitedBroadcast
+	return !address.IsValid() || validIPv4(address)
 }
 
 func (a *Adapter) TryAcquire(request dhcpns.Request) (nscore.Resource, nscore.Progress, error) {
@@ -669,15 +669,35 @@ func inspectPacket(frame lnetodhcp.Frame) (lnetodhcp.MessageType, netip.Addr, in
 			}
 			serverSeen = true
 			server = netip.AddrFrom4([4]byte(data))
+			if server == limitedBroadcast {
+				return lneto.ErrInvalidField
+			}
+		case lnetodhcp.OptRouter, lnetodhcp.OptBroadcastAddress:
+			if containsLimitedBroadcast(data) {
+				return lneto.ErrInvalidField
+			}
 		case lnetodhcp.OptDNSServers:
 			if len(data)%4 != 0 {
 				return lneto.ErrInvalidLengthField
+			}
+			if containsLimitedBroadcast(data) {
+				return lneto.ErrInvalidField
 			}
 			dnsCount += len(data) / 4
 		}
 		return nil
 	})
 	return message, server, dnsCount, err == nil && messageSeen && message != 0
+}
+
+func containsLimitedBroadcast(data []byte) bool {
+	for len(data) >= 4 {
+		if [4]byte(data[:4]) == limitedBroadcast.As4() {
+			return true
+		}
+		data = data[4:]
+	}
+	return false
 }
 
 func (a *Adapter) acceptServerLocked(payload []byte) {

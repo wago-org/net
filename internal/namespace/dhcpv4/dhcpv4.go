@@ -19,6 +19,8 @@ const (
 	ServerPort       uint16 = 67
 )
 
+var limitedBroadcast = netip.AddrFrom4([4]byte{255, 255, 255, 255})
+
 // Namespace starts at most the configured finite number of immediate DORA
 // transactions. Server operation, when configured, is serviced automatically.
 type Namespace interface {
@@ -119,7 +121,7 @@ type Resource interface {
 }
 
 func validRequiredIPv4(address netip.Addr) bool {
-	return address.Is4() && !address.Is4In6() && address.Zone() == "" && !address.IsUnspecified() && !address.IsMulticast()
+	return address.Is4() && !address.Is4In6() && address.Zone() == "" && !address.IsUnspecified() && !address.IsMulticast() && address != limitedBroadcast
 }
 
 func validOptionalIPv4(address netip.Addr) bool {
