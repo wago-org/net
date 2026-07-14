@@ -267,6 +267,73 @@ func TestShortEgressByteBudgetFailsClosedWithoutProbingOutput(t *testing.T) {
 	}
 }
 
+func TestEgressErrorsPreserveSourceCursorForRetry(t *testing.T) {
+	for _, test := range []struct {
+		name  string
+		first func(dst []byte, call int) (int, bool, error)
+	}{
+		{name: "backend error", first: func([]byte, int) (int, bool, error) {
+			return 0, false, errors.New("egress failed")
+		}},
+		{name: "invalid length", first: func(dst []byte, call int) (int, bool, error) {
+			if call == 1 {
+				dst[0] = 0xff
+				return len(dst) + 1, false, nil
+			}
+			dst[0] = 1
+			return 1, true, nil
+		}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			ns := newTestNamespace(t, byte(40+len(test.name)))
+			firstCalls, secondCalls := 0, 0
+			if err := ns.Install(Participant{
+				EgressOrder: 10, HasEgress: func() bool { return true },
+				Egress: func(dst []byte) (int, bool, error) {
+					firstCalls++
+					if test.name == "backend error" && firstCalls > 1 {
+						dst[0] = 1
+						return 1, true, nil
+					}
+					return test.first(dst, firstCalls)
+				},
+			}); err != nil {
+				t.Fatal(err)
+			}
+			if err := ns.Install(Participant{
+				EgressOrder: 20, HasEgress: func() bool { return true },
+				Egress: func(dst []byte) (int, bool, error) {
+					secondCalls++
+					dst[0] = 2
+					return 1, true, nil
+				},
+			}); err != nil {
+				t.Fatal(err)
+			}
+			ns.Lock()
+			ns.SetNextIngressLocked(false)
+			ns.Unlock()
+			budget := nscore.ServiceBudget{Packets: 1, Bytes: uint32(ns.Link().MaxFrameBytes()), Operations: 1}
+			if report, progress, err := ns.TryService(budget); failureOf(err) != nscore.FailureIO || report != (nscore.ServiceReport{}) || progress != nscore.ProgressWouldBlock {
+				t.Fatalf("failed egress = %+v, %v, %v", report, progress, err)
+			}
+			ns.Lock()
+			ns.SetNextIngressLocked(false)
+			ns.Unlock()
+			if report, progress, err := ns.TryService(budget); err != nil || report != (nscore.ServiceReport{Packets: 1, Bytes: 1, Operations: 1}) || progress != nscore.ProgressDone {
+				t.Fatalf("retry egress = %+v, %v, %v", report, progress, err)
+			}
+			var frame [1]byte
+			if result, err := ns.Link().TryDequeue(packetlink.Egress, frame[:]); err != nil || !result.Ready || frame[0] != 1 {
+				t.Fatalf("retry frame = %+v, %v, data=%v", result, err, frame)
+			}
+			if firstCalls != 2 || secondCalls != 0 {
+				t.Fatalf("source calls after retry = %d/%d", firstCalls, secondCalls)
+			}
+		})
+	}
+}
+
 func TestMalformedEgressResultFailsClosedAsIO(t *testing.T) {
 	for name, written := range map[string]int{
 		"negative": -1,
@@ -637,6 +704,11 @@ func TestSharedOwnerValidationAndClose(t *testing.T) {
 	if snapshot := link.Snapshot(); !snapshot.Closed || snapshot.IngressFrames != 0 || snapshot.EgressFrames != 0 {
 		t.Fatalf("closed link snapshot = %+v", snapshot)
 	}
+}
+
+func failureOf(err error) nscore.Failure {
+	failure, _ := nscore.FailureOf(err)
+	return failure
 }
 
 func newTestNamespace(t testing.TB, id byte) *Namespace {

@@ -400,6 +400,7 @@ func (n *Namespace) tryEgress(remainingBytes uint32) (bool, bool, int, error) {
 		return false, false, 0, nil
 	}
 	workedWithoutFrame := false
+	originalNextEgress := n.nextEgress
 	result, err := n.link.TryFill(packetlink.Egress, func(dst []byte) (int, error) {
 		frame := dst[:n.requiredFrameBytes]
 		active := n.egressActive
@@ -443,6 +444,7 @@ func (n *Namespace) tryEgress(remainingBytes uint32) (bool, bool, int, error) {
 		return 0, nil
 	})
 	if err != nil {
+		n.nextEgress = originalNextEgress
 		if errors.Is(err, packetlink.ErrQueueFull) {
 			return false, false, 0, nil
 		}
