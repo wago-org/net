@@ -115,12 +115,19 @@ func (s *State) Close() error {
 		return nil
 	}
 	s.closed = true
-	var errs []error
+	var errs [2]error
+	errCount := 0
 	if s.readiness != nil {
-		errs = append(errs, s.readiness.Close())
+		if err := s.readiness.Close(); err != nil {
+			errs[errCount] = err
+			errCount++
+		}
 	}
 	if s.resources != nil {
-		errs = append(errs, s.resources.Close())
+		if err := s.resources.Close(); err != nil {
+			errs[errCount] = err
+			errCount++
+		}
 	}
 	if s.quotas != nil {
 		s.quotas.Close()
@@ -128,7 +135,14 @@ func (s *State) Close() error {
 	clear(s.pollEvents)
 	s.pollEvents = nil
 	s.namespace = 0
-	return errors.Join(errs...)
+	switch errCount {
+	case 0:
+		return nil
+	case 1:
+		return errs[0]
+	default:
+		return errors.Join(errs[:]...)
+	}
 }
 
 // Manager is an extension-local attachment map. It must be owned by an

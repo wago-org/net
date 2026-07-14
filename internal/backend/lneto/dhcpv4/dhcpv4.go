@@ -31,6 +31,8 @@ var (
 	broadcastMAC     = [6]byte{0xff, 0xff, 0xff, 0xff, 0xff, 0xff}
 	errPolicyDenied  = errors.New("net: DHCPv4 policy denied operation")
 	errPortInUse     = errors.New("net: DHCPv4 UDP port already owned")
+	errCanceled      = errors.New("DHCPv4 acquisition canceled")
+	errResponseLimit = errors.New("DHCPv4 response service-attempt limit reached")
 )
 
 // ServerConfig enables one finite automatic DHCPv4 server. It is disabled by
@@ -278,7 +280,7 @@ func (r *leaseResource) Cancel() error {
 	r.owner.core.Lock()
 	defer r.owner.core.Unlock()
 	if r.state == leaseDiscover || r.state == leaseWaitOffer || r.state == leaseRequest || r.state == leaseWaitACK {
-		r.failLocked(nscore.FailureCanceled, errors.New("DHCPv4 acquisition canceled"))
+		r.failLocked(nscore.FailureCanceled, errCanceled)
 		return nil
 	}
 	if r.state == leaseClosed {
@@ -375,7 +377,7 @@ func (a *Adapter) egressLocked(dst []byte) (int, bool, error) {
 			r.wait--
 			return 0, true, nil
 		}
-		r.failLocked(nscore.FailureTimedOut, errors.New("DHCPv4 response service-attempt limit reached"))
+		r.failLocked(nscore.FailureTimedOut, errResponseLimit)
 		return 0, true, nil
 	}
 	if r.state != leaseDiscover && r.state != leaseRequest {

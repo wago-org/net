@@ -35,10 +35,13 @@ const (
 )
 
 var (
-	multicastAddress = netip.AddrFrom4([4]byte{224, 0, 0, 251})
-	multicastMAC     = [6]byte{0x01, 0x00, 0x5e, 0x00, 0x00, 0xfb}
-	errPolicyDenied  = errors.New("net: mDNS policy denied operation")
-	errPortInUse     = errors.New("net: mDNS UDP port 5353 is already owned")
+	multicastAddress      = netip.AddrFrom4([4]byte{224, 0, 0, 251})
+	multicastMAC          = [6]byte{0x01, 0x00, 0x5e, 0x00, 0x00, 0xfb}
+	errPolicyDenied       = errors.New("net: mDNS policy denied operation")
+	errPortInUse          = errors.New("net: mDNS UDP port 5353 is already owned")
+	errQueryCanceled      = errors.New("mDNS query canceled")
+	errAnnouncementCancel = errors.New("mDNS announcement canceled")
+	errResponseLimit      = errors.New("mDNS response service-attempt limit reached")
 )
 
 // Config fixes every retained service, operation, packet, retry, parse, and
@@ -336,7 +339,7 @@ func (q *query) Cancel() error {
 	if q.state == stateDone || q.state == stateFailed {
 		return nscore.Fail(nscore.FailureInvalidState, lneto.ErrBadState)
 	}
-	q.failLocked(nscore.FailureCanceled, errors.New("mDNS query canceled"))
+	q.failLocked(nscore.FailureCanceled, errQueryCanceled)
 	return nil
 }
 
@@ -443,7 +446,7 @@ func (a *announcement) Cancel() error {
 	if a.state == stateDone || a.state == stateFailed {
 		return nscore.Fail(nscore.FailureInvalidState, lneto.ErrBadState)
 	}
-	a.failLocked(nscore.FailureCanceled, errors.New("mDNS announcement canceled"))
+	a.failLocked(nscore.FailureCanceled, errAnnouncementCancel)
 	return nil
 }
 
@@ -570,7 +573,7 @@ func (a *Adapter) egressLocked(dst []byte) (int, bool, error) {
 					return 0, true, nil
 				}
 				if q.attempts >= a.config.MaxAttempts {
-					q.failLocked(nscore.FailureTimedOut, errors.New("mDNS response service-attempt limit reached"))
+					q.failLocked(nscore.FailureTimedOut, errResponseLimit)
 					return 0, true, nil
 				}
 				q.state = statePending

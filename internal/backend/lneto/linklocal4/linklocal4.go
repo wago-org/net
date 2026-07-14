@@ -27,7 +27,11 @@ const (
 	arpFrameSize = 14 + 28
 )
 
-var errPolicyDenied = errors.New("net: IPv4 link-local policy denied operation")
+var (
+	errPolicyDenied = errors.New("net: IPv4 link-local policy denied operation")
+	errCanceled     = errors.New("IPv4 link-local claim canceled")
+	errServiceLimit = errors.New("IPv4 link-local service-attempt limit reached")
+)
 
 // Config bounds every live claim, conflict sequence, and service attempt. The
 // zero value truthfully disables the adapter. One exact claim is currently the
@@ -218,7 +222,7 @@ func (r *claimResource) Cancel() error {
 	if r.state != stateActive || r.handler.State().IsBound() {
 		return nscore.Fail(nscore.FailureInvalidState, lneto.ErrBadState)
 	}
-	r.failLocked(nscore.FailureCanceled, errors.New("IPv4 link-local claim canceled"))
+	r.failLocked(nscore.FailureCanceled, errCanceled)
 	return nil
 }
 
@@ -307,7 +311,7 @@ func (a *Adapter) egressLocked(dst []byte) (int, bool, error) {
 		return 0, false, nil
 	}
 	if r.serviceAttempts >= a.config.MaxServiceAttempts {
-		r.failLocked(nscore.FailureTimedOut, errors.New("IPv4 link-local service-attempt limit reached"))
+		r.failLocked(nscore.FailureTimedOut, errServiceLimit)
 		return 0, true, nil
 	}
 	r.serviceAttempts++

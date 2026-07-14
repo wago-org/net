@@ -26,7 +26,11 @@ const (
 	closeOrder   = 5
 )
 
-var errPolicyDenied = errors.New("net: ICMPv4 policy denied operation")
+var (
+	errPolicyDenied = errors.New("net: ICMPv4 policy denied operation")
+	errCanceled     = errors.New("ICMPv4 echo canceled")
+	errReplyLimit   = errors.New("ICMPv4 reply service-attempt limit reached")
+)
 
 // Config fixes concurrent echo resources, copied payload bytes, transmission
 // attempts, and service-attempt retry bounds. Zero MaxEchoes disables ICMPv4
@@ -227,7 +231,7 @@ func (e *echo) Cancel() error {
 	if e.state == echoDone || e.state == echoFailed {
 		return nscore.Fail(nscore.FailureInvalidState, lneto.ErrBadState)
 	}
-	e.failLocked(nscore.FailureCanceled, errors.New("ICMPv4 echo canceled"))
+	e.failLocked(nscore.FailureCanceled, errCanceled)
 	return nil
 }
 
@@ -346,7 +350,7 @@ func (a *Adapter) egressLocked(dst []byte) (written int, worked bool, err error)
 				return 0, true, nil
 			}
 			if exchange.attempts >= a.config.MaxAttempts {
-				exchange.failLocked(nscore.FailureTimedOut, errors.New("ICMPv4 reply service-attempt limit reached"))
+				exchange.failLocked(nscore.FailureTimedOut, errReplyLimit)
 				return 0, true, nil
 			}
 			exchange.state = echoPending

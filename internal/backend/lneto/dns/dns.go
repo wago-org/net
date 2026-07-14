@@ -26,7 +26,11 @@ const (
 	inlineDNSRecordCapacity        = 8
 )
 
-var errPolicyDenied = errors.New("net: endpoint policy denied operation")
+var (
+	errPolicyDenied  = errors.New("net: endpoint policy denied operation")
+	errCanceled      = errors.New("DNS query canceled")
+	errResponseLimit = errors.New("DNS response service-attempt limit reached")
+)
 
 const (
 	serviceOrder = 10
@@ -278,7 +282,7 @@ func (q *dnsQuery) Cancel() error {
 	if q.state == dnsQueryDone || q.state == dnsQueryFailed {
 		return nscore.Fail(nscore.FailureInvalidState, lneto.ErrBadState)
 	}
-	q.failLocked(nscore.FailureCanceled, errors.New("DNS query canceled"))
+	q.failLocked(nscore.FailureCanceled, errCanceled)
 	return nil
 }
 
@@ -421,7 +425,7 @@ func (n *Adapter) egressLocked(dst []byte) (written int, worked bool, err error)
 				return 0, true, nil
 			}
 			if query.attempts >= n.config.MaxAttempts {
-				query.failLocked(nscore.FailureTimedOut, errors.New("DNS response service-attempt limit reached"))
+				query.failLocked(nscore.FailureTimedOut, errResponseLimit)
 				return 0, true, nil
 			}
 			query.state = dnsQueryPending

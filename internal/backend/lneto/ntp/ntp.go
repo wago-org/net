@@ -31,7 +31,12 @@ const (
 	closeOrder                   = 7
 )
 
-var errPolicyDenied = errors.New("net: NTP policy denied operation")
+var (
+	errPolicyDenied  = errors.New("net: NTP policy denied operation")
+	errCanceled      = errors.New("NTP synchronization canceled")
+	errResponseLimit = errors.New("NTP response service-attempt limit reached")
+	errClockBackward = errors.New("NTP host clock moved backward during exchange")
+)
 
 // Config fixes one server, explicit clock, concurrent resources, transmission
 // attempts, and service-attempt retry bounds. Zero MaxSyncs disables NTP
@@ -229,7 +234,7 @@ func (s *syncResource) Cancel() error {
 	if s.state == syncDone || s.state == syncFailed {
 		return nscore.Fail(nscore.FailureInvalidState, lneto.ErrBadState)
 	}
-	s.failLocked(nscore.FailureCanceled, errors.New("NTP synchronization canceled"))
+	s.failLocked(nscore.FailureCanceled, errCanceled)
 	return nil
 }
 
@@ -349,7 +354,7 @@ func (a *Adapter) egressLocked(dst []byte) (written int, worked bool, err error)
 				return 0, true, nil
 			}
 			if sync.attempts >= a.config.MaxAttempts {
-				sync.failLocked(nscore.FailureTimedOut, errors.New("NTP response service-attempt limit reached"))
+				sync.failLocked(nscore.FailureTimedOut, errResponseLimit)
 				return 0, true, nil
 			}
 			sync.state = syncSend
@@ -481,7 +486,7 @@ func (a *Adapter) ingressLocked(frame []byte) (bool, error) {
 	}
 	requestFrame, _ := lnetontp.NewFrame(sync.request[:])
 	if sync.clockSample.Before(requestFrame.TransmitTime().Time()) {
-		sync.failLocked(nscore.FailureInvalidState, errors.New("NTP host clock moved backward during exchange"))
+		sync.failLocked(nscore.FailureInvalidState, errClockBackward)
 		return true, nil
 	}
 	if err := sync.client.Demux(payload, 0); err != nil {

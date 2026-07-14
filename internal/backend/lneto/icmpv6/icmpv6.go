@@ -28,7 +28,13 @@ const (
 	ndpSize      = 32
 )
 
-var errPolicyDenied = errors.New("net: ICMPv6 policy denied operation")
+var (
+	errPolicyDenied     = errors.New("net: ICMPv6 policy denied operation")
+	errEchoCanceled     = errors.New("ICMPv6 echo canceled")
+	errNeighborCanceled = errors.New("ICMPv6 neighbor resolution canceled")
+	errNeighborLimit    = errors.New("ICMPv6 neighbor service-attempt limit reached")
+	errEchoLimit        = errors.New("ICMPv6 echo service-attempt limit reached")
+)
 
 // Config fixes every retained cache, response, payload, retry, and active-work
 // dimension. The complete zero value disables ICMPv6 truthfully.
@@ -441,7 +447,7 @@ func (e *echo) Cancel() error {
 	if e.state == stateDone || e.state == stateFailed {
 		return nscore.Fail(nscore.FailureInvalidState, lneto.ErrBadState)
 	}
-	e.failLocked(nscore.FailureCanceled, errors.New("ICMPv6 echo canceled"))
+	e.failLocked(nscore.FailureCanceled, errEchoCanceled)
 	return nil
 }
 
@@ -549,7 +555,7 @@ func (r *resolution) Cancel() error {
 	if r.state == stateDone || r.state == stateFailed {
 		return nscore.Fail(nscore.FailureInvalidState, lneto.ErrBadState)
 	}
-	r.failLocked(nscore.FailureCanceled, errors.New("ICMPv6 neighbor resolution canceled"), true)
+	r.failLocked(nscore.FailureCanceled, errNeighborCanceled, true)
 	return nil
 }
 
@@ -656,7 +662,7 @@ func (a *Adapter) egressLocked(dst []byte) (int, bool, error) {
 				return 0, true, nil
 			}
 			if r.attempts >= a.config.MaxAttempts {
-				r.failLocked(nscore.FailureTimedOut, errors.New("ICMPv6 neighbor service-attempt limit reached"), true)
+				r.failLocked(nscore.FailureTimedOut, errNeighborLimit, true)
 				return 0, true, nil
 			}
 			r.state = statePending
@@ -687,7 +693,7 @@ func (a *Adapter) egressLocked(dst []byte) (int, bool, error) {
 				return 0, true, nil
 			}
 			if e.attempts >= a.config.MaxAttempts {
-				e.failLocked(nscore.FailureTimedOut, errors.New("ICMPv6 echo service-attempt limit reached"))
+				e.failLocked(nscore.FailureTimedOut, errEchoLimit)
 				return 0, true, nil
 			}
 			e.state = statePending
