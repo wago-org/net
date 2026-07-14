@@ -36,13 +36,14 @@ const (
 )
 
 var (
-	multicastAddress      = netip.AddrFrom4([4]byte{224, 0, 0, 251})
-	multicastMAC          = [6]byte{0x01, 0x00, 0x5e, 0x00, 0x00, 0xfb}
-	errPolicyDenied       = errors.New("net: mDNS policy denied operation")
-	errPortInUse          = errors.New("net: mDNS UDP port 5353 is already owned")
-	errQueryCanceled      = errors.New("mDNS query canceled")
-	errAnnouncementCancel = errors.New("mDNS announcement canceled")
-	errResponseLimit      = errors.New("mDNS response service-attempt limit reached")
+	multicastAddress        = netip.AddrFrom4([4]byte{224, 0, 0, 251})
+	limitedBroadcastAddress = netip.AddrFrom4([4]byte{255, 255, 255, 255})
+	multicastMAC            = [6]byte{0x01, 0x00, 0x5e, 0x00, 0x00, 0xfb}
+	errPolicyDenied         = errors.New("net: mDNS policy denied operation")
+	errPortInUse            = errors.New("net: mDNS UDP port 5353 is already owned")
+	errQueryCanceled        = errors.New("mDNS query canceled")
+	errAnnouncementCancel   = errors.New("mDNS announcement canceled")
+	errResponseLimit        = errors.New("mDNS response service-attempt limit reached")
 )
 
 // Config fixes every retained service, operation, packet, retry, parse, and
@@ -770,7 +771,7 @@ func (a *Adapter) validateFrame(frame []byte) ([]byte, netip.Addr, bool, error) 
 		}
 	}
 	source := netip.AddrFrom4(*ip.SourceAddr())
-	if source.IsUnspecified() || source.IsMulticast() {
+	if source.IsUnspecified() || source.IsLoopback() || source.IsMulticast() || source == limitedBroadcastAddress {
 		return nil, netip.Addr{}, true, lneto.ErrInvalidAddr
 	}
 	return udp.RawData()[8:length], source, true, nil

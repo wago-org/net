@@ -525,6 +525,50 @@ func TestMDNSIngressRelevanceConsumesLocalMalformedAndLeavesForeignUnhandled(t *
 	}
 }
 
+func TestMDNSRejectsInvalidIPv4SourcesWithoutMutatingOperations(t *testing.T) {
+	for _, sourceIP := range []netip.Addr{
+		netip.MustParseAddr("127.0.0.1"),
+		netip.MustParseAddr("255.255.255.255"),
+	} {
+		t.Run(sourceIP.String(), func(t *testing.T) {
+			service := testService("device", "192.0.2.11")
+			core, adapter, _ := newTestAdapter(t, Config{
+				Services: []mdnsns.Service{service}, MaxServices: 1, MaxQueries: 1, MaxAnnouncements: 1,
+				MaxRecords: 8, MaxPacketBytes: 1200, MaxQueuedResponses: 1, MaxQuestionsPerPacket: 4,
+				MaxRecordsPerPacket: 16, MaxAttempts: 1, RetryServiceAttempts: 1,
+			}, testPolicy())
+			resource, _, err := adapter.TryQuery(mdnsns.Request{Name: "peer.local", Types: mdnsns.RecordsA})
+			if err != nil {
+				t.Fatal(err)
+			}
+			query := resource.(*query)
+			_ = serviceEgress(t, core)
+
+			question, err := buildQueryPacket(mdnsns.Request{Name: "_demo._udp.local", Types: mdnsns.RecordsPTR}, 1200)
+			if err != nil {
+				t.Fatal(err)
+			}
+			response, err := buildServicePacket(testService("peer", "192.0.2.22"), lnetodns.TypeA, 1200)
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, payload := range [][]byte{question, response} {
+				frame := wrapMDNSFrame(t, payload, [6]byte{2, 0, 0, 0, 0, 22}, sourceIP)
+				core.Lock()
+				handled, ingressErr := adapter.ingressLocked(frame)
+				queued := adapter.responseCount
+				core.Unlock()
+				if ingressErr != nil || !handled {
+					t.Fatalf("ingress = handled %v, err %v", handled, ingressErr)
+				}
+				if queued != 0 || query.Readiness() != 0 {
+					t.Fatalf("invalid source mutated operations: queued=%d readiness=%v", queued, query.Readiness())
+				}
+			}
+		})
+	}
+}
+
 func TestMDNSRejectsInvalidEthernetSourcesWithoutMutatingOperations(t *testing.T) {
 	for _, sourceMAC := range [][6]byte{
 		{},
