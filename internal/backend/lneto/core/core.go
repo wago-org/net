@@ -454,10 +454,13 @@ func (n *Namespace) tryEgress(remainingBytes uint32) (bool, bool, int, error) {
 		}
 		return 0, nil
 	})
-	if errors.Is(err, packetlink.ErrQueueFull) {
-		return false, false, 0, nil
-	}
 	if err != nil {
+		if errors.Is(err, packetlink.ErrQueueFull) {
+			return false, false, 0, nil
+		}
+		if errors.Is(err, packetlink.ErrInvalidFill) || errors.Is(err, packetlink.ErrFrameTooLarge) {
+			return workedWithoutFrame, false, 0, nscore.Fail(nscore.FailureIO, err)
+		}
 		return workedWithoutFrame, false, 0, MapError(err)
 	}
 	if !result.Ready {

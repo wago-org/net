@@ -1,6 +1,7 @@
 package core
 
 import (
+	"errors"
 	"net/netip"
 	"reflect"
 	"testing"
@@ -191,6 +192,107 @@ func TestShortEgressByteBudgetFailsClosedWithoutProbingOutput(t *testing.T) {
 	}
 	if called != 1 {
 		t.Fatalf("exact budget probe count = %d, want 1", called)
+	}
+}
+
+func TestMalformedEgressResultFailsClosedAsIO(t *testing.T) {
+	for name, written := range map[string]int{
+		"negative": -1,
+		"oversize": int(ethernet.MaxMTU) + 15,
+	} {
+		t.Run(name, func(t *testing.T) {
+			ns := newTestNamespace(t, byte(20+len(name)))
+			calls := 0
+			if err := ns.Install(Participant{
+				EgressOrder: 10,
+				HasEgress:   func() bool { return true },
+				Egress: func(dst []byte) (int, bool, error) {
+					calls++
+					dst[0] = 0xff
+					return written, false, nil
+				},
+			}); err != nil {
+				t.Fatal(err)
+			}
+			ns.Lock()
+			ns.SetNextIngressLocked(false)
+			ns.Unlock()
+			budget := nscore.ServiceBudget{Packets: 1, Bytes: uint32(ns.Link().MaxFrameBytes()), Operations: 1}
+			report, progress, err := ns.TryService(budget)
+			failure, ok := nscore.FailureOf(err)
+			if !ok || failure != nscore.FailureIO || report != (nscore.ServiceReport{}) || progress != nscore.ProgressWouldBlock || calls != 1 {
+				t.Fatalf("malformed egress = %+v, %v, %v, calls=%d", report, progress, err, calls)
+			}
+			if snapshot := ns.Link().Snapshot(); snapshot.EgressFrames != 0 || snapshot.EgressBytes != 0 {
+				t.Fatalf("malformed egress committed output: %+v", snapshot)
+			}
+			if ready := ns.Readiness(); ready != nscore.ReadyWritable {
+				t.Fatalf("readiness after rollback = %v", ready)
+			}
+		})
+	}
+}
+
+func TestPacketServiceReadinessTracksCommittedQueues(t *testing.T) {
+	ns := newTestNamespace(t, 30)
+	if ready := ns.Readiness(); ready != nscore.ReadyWritable {
+		t.Fatalf("initial readiness = %v", ready)
+	}
+	for i := 0; i < 4; i++ {
+		if err := ns.Link().TryEnqueue(packetlink.Ingress, []byte{byte(i)}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if ready := ns.Readiness(); ready != 0 {
+		t.Fatalf("full ingress readiness = %v", ready)
+	}
+	if err := ns.Install(Participant{
+		IngressOrder: 10,
+		Ingress: func([]byte) (bool, error) {
+			return true, nil
+		},
+		EgressOrder: 10,
+		HasEgress:   func() bool { return true },
+		Egress: func(dst []byte) (int, bool, error) {
+			clear(dst[:60])
+			return 60, false, nil
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	ns.Lock()
+	ns.SetNextIngressLocked(false)
+	ns.Unlock()
+	budget := nscore.ServiceBudget{Packets: 1, Bytes: uint32(ns.Link().MaxFrameBytes()), Operations: 1}
+	if report, progress, err := ns.TryService(budget); err != nil || progress != nscore.ProgressDone || report != (nscore.ServiceReport{Packets: 1, Bytes: 60, Operations: 1}) {
+		t.Fatalf("egress service = %+v, %v, %v", report, progress, err)
+	}
+	if ready := ns.Readiness(); ready != nscore.ReadyReadable {
+		t.Fatalf("queued egress readiness = %v", ready)
+	}
+	if _, err := ns.Link().TryDequeue(packetlink.Egress, make([]byte, 60)); err != nil {
+		t.Fatal(err)
+	}
+	if ready := ns.Readiness(); ready != 0 {
+		t.Fatalf("drained egress readiness = %v", ready)
+	}
+	ns.Lock()
+	ns.SetNextIngressLocked(true)
+	ns.Unlock()
+	if report, progress, err := ns.TryService(budget); err != nil || progress != nscore.ProgressDone || report.Packets != 1 || report.Operations != 1 {
+		t.Fatalf("ingress service = %+v, %v, %v", report, progress, err)
+	}
+	if ready := ns.Readiness(); ready != nscore.ReadyWritable {
+		t.Fatalf("released ingress readiness = %v", ready)
+	}
+	if err := ns.Link().Close(); err != nil {
+		t.Fatal(err)
+	}
+	if ready := ns.Readiness(); ready != nscore.ReadyClosed {
+		t.Fatalf("closed link readiness = %v", ready)
+	}
+	if report, progress, err := ns.TryService(budget); report != (nscore.ServiceReport{}) || progress != nscore.ProgressWouldBlock || !errors.Is(err, packetlink.ErrClosed) {
+		t.Fatalf("closed link service = %+v, %v, %v", report, progress, err)
 	}
 }
 
