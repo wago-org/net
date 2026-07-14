@@ -610,6 +610,9 @@ func (l *tcpListener) Readiness() nscore.Readiness {
 	if l.listener.NumberOfReadyToAccept() > 0 {
 		return nscore.ReadyAccept
 	}
+	if conn, _ := l.fallbackAcceptLocked(); conn != nil {
+		return nscore.ReadyAccept
+	}
 	return 0
 }
 
@@ -622,9 +625,16 @@ func (l *tcpListener) TryAccept() (nscore.Resource, nscore.Progress, error) {
 	if l.closed || l.owner.core.ClosedLocked() {
 		return nil, 0, nscore.Fail(nscore.FailureClosed, net.ErrClosed)
 	}
-	conn, userData, err := l.listener.TryAccept()
-	if errors.Is(err, lneto.ErrExhausted) {
-		return nil, nscore.ProgressWouldBlock, nil
+	conn, slot := l.fallbackAcceptLocked()
+	var userData any
+	var err error
+	if conn != nil {
+		userData = slot
+	} else {
+		conn, userData, err = l.listener.TryAccept()
+		if errors.Is(err, lneto.ErrExhausted) {
+			return nil, nscore.ProgressWouldBlock, nil
+		}
 	}
 	if err != nil {
 		return nil, 0, lnetocore.MapError(err)
@@ -665,6 +675,20 @@ func (l *tcpListener) TryAccept() (nscore.Resource, nscore.Progress, error) {
 	slot.stream = stream
 	l.owner.streams = append(l.owner.streams, stream)
 	return stream, nscore.ProgressDone, nil
+}
+
+func (l *tcpListener) fallbackAcceptLocked() (*lnetotcp.Conn, *tcpPoolSlot) {
+	if l == nil {
+		return nil, nil
+	}
+	for i := range l.pool.slots {
+		slot := &l.pool.slots[i]
+		if !slot.inUse || slot.stream != nil || !slot.quotaOwned || slot.conn.InternalHandler().State() != lnetotcp.StateCloseWait {
+			continue
+		}
+		return &slot.conn, slot
+	}
+	return nil, nil
 }
 
 func (l *tcpListener) Close() error {

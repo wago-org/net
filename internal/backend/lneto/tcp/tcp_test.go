@@ -439,6 +439,83 @@ func TestSimultaneousShutdownReachesStableEOFAndAcceptedSlotReuse(t *testing.T) 
 	}
 }
 
+func TestQueuedPeerHalfCloseAcceptsAsConnectedEOFAndRetiresSlot(t *testing.T) {
+	clientCore, client := newTestAdapter(t, 71, 0, 1)
+	serverCore, server := newTestAdapter(t, 72, 1, 0)
+	clientMAC := [6]byte{0x02, 0, 0, 0, 0, 71}
+	serverMAC := [6]byte{0x02, 0, 0, 0, 0, 72}
+	setGateways(clientCore, serverMAC)
+	setGateways(serverCore, clientMAC)
+
+	endpoint := nscore.Endpoint{Address: netip.MustParseAddr("192.0.2.72"), Port: 4272}
+	listenerValue, progress, err := server.TryListen(endpoint)
+	if err != nil || progress != nscore.ProgressDone {
+		t.Fatalf("listen = %T, %v, %v", listenerValue, progress, err)
+	}
+	listener := listenerValue.(*tcpListener)
+	clientValue, progress, err := client.TryConnect(endpoint)
+	if err != nil || progress != nscore.ProgressInProgress {
+		t.Fatalf("connect = %T, %v, %v", clientValue, progress, err)
+	}
+	clientStream := clientValue.(*tcpStream)
+	transferTCP(t, clientCore, serverCore)
+	transferTCP(t, serverCore, clientCore)
+	transferTCP(t, clientCore, serverCore)
+	if progress, err := clientStream.TryFinishConnect(); err != nil || progress != nscore.ProgressDone {
+		t.Fatalf("finish connect = %v, %v", progress, err)
+	}
+	if ready := listener.Readiness(); ready != nscore.ReadyAccept {
+		t.Fatalf("queued connection readiness = %v", ready)
+	}
+
+	if progress, err := clientStream.TryShutdownWrite(); err != nil || progress != nscore.ProgressDone {
+		t.Fatalf("queued peer shutdown = %v, %v", progress, err)
+	}
+	transferTCP(t, clientCore, serverCore)
+	transferTCP(t, serverCore, clientCore)
+	if ready := listener.Readiness(); ready != nscore.ReadyAccept {
+		t.Fatalf("half-closed queued readiness = %v", ready)
+	}
+	acceptedValue, progress, err := listener.TryAccept()
+	if err != nil || progress != nscore.ProgressDone {
+		t.Fatalf("accept half-closed = %T, %v, %v", acceptedValue, progress, err)
+	}
+	accepted := acceptedValue.(*tcpStream)
+	if ready := accepted.Readiness(); ready&nscore.ReadyConnected == 0 || ready&nscore.ReadyClosed == 0 || ready&nscore.ReadyWritable == 0 || ready&(nscore.ReadyReadable|nscore.ReadyError) != 0 {
+		t.Fatalf("accepted half-close readiness = %v", ready)
+	}
+	if result, err := accepted.TryRead(make([]byte, 1)); err != nil || result.State != nscore.IOEOF {
+		t.Fatalf("accepted half-close read = %+v, %v", result, err)
+	}
+	if progress, err := accepted.TryFinishConnect(); err != nil || progress != nscore.ProgressDone {
+		t.Fatalf("accepted half-close finish = %v, %v", progress, err)
+	}
+	if err := accepted.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if usage, _ := server.quotas.Snapshot(); usage != (quota.Usage{Resources: 1, TCPResources: 1, QueuedBytes: 512}) {
+		t.Fatalf("accepted close quota = %+v", usage)
+	}
+
+	serverCore.Lock()
+	serverCore.SetNextIngressLocked(false)
+	required := serverCore.RequiredFrameBytesLocked()
+	serverCore.Unlock()
+	report, progress, err := serverCore.TryService(nscore.ServiceBudget{Packets: 1, Bytes: uint32(required), Operations: 1})
+	if err != nil || progress != nscore.ProgressDone || report != (nscore.ServiceReport{Operations: 1}) {
+		t.Fatalf("accepted retirement = %+v, %v, %v", report, progress, err)
+	}
+	if slot := &listener.pool.slots[0]; slot.inUse || slot.stream != nil || slot.quotaOwned {
+		t.Fatalf("retired slot = in_use=%v stream=%p quota_owned=%v", slot.inUse, slot.stream, slot.quotaOwned)
+	}
+	if ready := accepted.Readiness(); ready != nscore.ReadyClosed {
+		t.Fatalf("closed accepted readiness = %v", ready)
+	}
+	if err := accepted.Close(); err != nil {
+		t.Fatalf("second accepted close = %v", err)
+	}
+}
+
 func TestEstablishedResetIsAConnectionEventNotServiceFailure(t *testing.T) {
 	clientCore, _, client, serverCore, server := newEstablishedPair(t)
 	if result, err := client.TryWrite([]byte{0x5a}); err != nil || result != (nscore.IOResult{Bytes: 1, State: nscore.IOReady}) {
