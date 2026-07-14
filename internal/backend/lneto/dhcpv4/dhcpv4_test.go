@@ -196,6 +196,132 @@ func TestClientDropsLimitedBroadcastLeaseOptionsBeforePinnedMutation(t *testing.
 	}
 }
 
+func TestClientDropsLoopbackLeaseOptionsBeforePinnedMutation(t *testing.T) {
+	loopback := netip.MustParseAddr("127.0.0.1")
+	for _, test := range []struct {
+		name   string
+		mutate func(testing.TB, []byte) []byte
+	}{
+		{name: "server", mutate: func(t testing.TB, frame []byte) []byte {
+			frame = rewriteDHCPOptionData(t, frame, lnetodhcp.OptServerIdentification, loopback.AsSlice())
+			return rewriteIPv4Source(t, frame, loopback)
+		}},
+		{name: "router", mutate: func(t testing.TB, frame []byte) []byte {
+			return appendDHCPOption(t, frame, lnetodhcp.OptRouter, loopback.AsSlice())
+		}},
+		{name: "broadcast", mutate: func(t testing.TB, frame []byte) []byte {
+			return appendDHCPOption(t, frame, lnetodhcp.OptBroadcastAddress, loopback.AsSlice())
+		}},
+		{name: "DNS", mutate: func(t testing.TB, frame []byte) []byte {
+			return appendDHCPOption(t, frame, lnetodhcp.OptDNSServers, loopback.AsSlice())
+		}},
+	} {
+		for _, stage := range []string{"OFFER", "ACK"} {
+			t.Run(stage+"/"+test.name, func(t *testing.T) {
+				clientCore, client := newClient(t, false)
+				serverCore, _ := newServer(t, 1)
+				resource, progress, err := client.TryAcquire(dhcpns.Request{})
+				if err != nil || progress != nscore.ProgressInProgress {
+					t.Fatalf("acquire = %T, %v, %v", resource, progress, err)
+				}
+				lease := resource.(*leaseResource)
+				transferOne(t, clientCore, serverCore)
+				offer := serviceEgress(t, serverCore)
+				if stage == "OFFER" {
+					serviceIngress(t, clientCore, test.mutate(t, offer))
+					if lease.state != leaseWaitOffer || lease.wait != client.config.ResponseServiceAttempts {
+						t.Fatalf("loopback offer mutated lease: state=%v wait=%d", lease.state, lease.wait)
+					}
+					serviceIngress(t, clientCore, offer)
+				} else {
+					serviceIngress(t, clientCore, offer)
+				}
+				if lease.state != leaseRequest || lease.wait != 0 {
+					t.Fatalf("valid offer after malformed option = state:%v wait:%d", lease.state, lease.wait)
+				}
+				transferOne(t, clientCore, serverCore)
+				ack := serviceEgress(t, serverCore)
+				if stage == "ACK" {
+					serviceIngress(t, clientCore, test.mutate(t, ack))
+					if lease.state != leaseWaitACK || lease.wait != client.config.ResponseServiceAttempts {
+						t.Fatalf("loopback ACK mutated lease: state=%v wait=%d", lease.state, lease.wait)
+					}
+				}
+				serviceIngress(t, clientCore, ack)
+				if result, state, err := lease.TryResult(); err != nil || state != dhcpns.ResultReady || !result.Valid() {
+					t.Fatalf("valid lease after loopback option = %+v, %v, %v", result, state, err)
+				}
+			})
+		}
+	}
+}
+
+func TestClientDropsMalformedLeaseOptionShapesBeforePinnedMutation(t *testing.T) {
+	for _, test := range []struct {
+		name   string
+		option lnetodhcp.OptNum
+		data   []byte
+	}{
+		{name: "router not IPv4 aligned", option: lnetodhcp.OptRouter, data: []byte{192, 0, 2}},
+		{name: "broadcast short", option: lnetodhcp.OptBroadcastAddress, data: []byte{192, 0, 2}},
+		{name: "broadcast multiple", option: lnetodhcp.OptBroadcastAddress, data: []byte{192, 0, 2, 255, 192, 0, 2, 254}},
+		{name: "DNS not IPv4 aligned", option: lnetodhcp.OptDNSServers, data: []byte{192, 0, 2}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			clientCore, client := newClient(t, false)
+			serverCore, _ := newServer(t, 1)
+			resource, _, err := client.TryAcquire(dhcpns.Request{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			lease := resource.(*leaseResource)
+			transferOne(t, clientCore, serverCore)
+			offer := serviceEgress(t, serverCore)
+			serviceIngress(t, clientCore, appendDHCPOption(t, offer, test.option, test.data))
+			if lease.state != leaseWaitOffer || lease.wait != client.config.ResponseServiceAttempts {
+				t.Fatalf("malformed offer mutated lease: state=%v wait=%d", lease.state, lease.wait)
+			}
+			serviceIngress(t, clientCore, offer)
+			if lease.state != leaseRequest || lease.wait != 0 {
+				t.Fatalf("valid offer after malformed option = state:%v wait:%d", lease.state, lease.wait)
+			}
+		})
+	}
+}
+
+func TestPacketInspectionPreservesValidMultiAddressOptionsAndDirectedBroadcast(t *testing.T) {
+	clientCore, client := newClient(t, false)
+	serverCore, _ := newServer(t, 1)
+	if _, _, err := client.TryAcquire(dhcpns.Request{}); err != nil {
+		t.Fatal(err)
+	}
+	transferOne(t, clientCore, serverCore)
+	offer := serviceEgress(t, serverCore)
+	offer = appendDHCPOption(t, offer, lnetodhcp.OptRouter, []byte{192, 0, 2, 1, 192, 0, 2, 2})
+	offer = appendDHCPOption(t, offer, lnetodhcp.OptDNSServers, []byte{192, 0, 2, 53, 192, 0, 2, 54})
+	offer = appendDHCPOption(t, offer, lnetodhcp.OptBroadcastAddress, []byte{192, 0, 2, 255})
+	eth, err := ethernet.NewFrame(offer)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ip, err := ipv4.NewFrame(eth.Payload())
+	if err != nil {
+		t.Fatal(err)
+	}
+	udp, err := lnetoudp.NewFrame(ip.Payload())
+	if err != nil {
+		t.Fatal(err)
+	}
+	frame, err := lnetodhcp.NewFrame(udp.Payload())
+	if err != nil {
+		t.Fatal(err)
+	}
+	message, server, dnsCount, ok := inspectPacket(frame)
+	if !ok || message != lnetodhcp.MsgOffer || server != netip.MustParseAddr("192.0.2.1") || dnsCount != 3 {
+		t.Fatalf("inspect = message:%v server:%v DNS:%d ok:%v", message, server, dnsCount, ok)
+	}
+}
+
 func TestClientRejectsAmbiguousDuplicateMessageType(t *testing.T) {
 	clientCore, client := newClient(t, false)
 	serverCore, _ := newServer(t, 1)

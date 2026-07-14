@@ -669,18 +669,28 @@ func inspectPacket(frame lnetodhcp.Frame) (lnetodhcp.MessageType, netip.Addr, in
 			}
 			serverSeen = true
 			server = netip.AddrFrom4([4]byte(data))
-			if server == limitedBroadcast {
+			if !validIPv4(server) {
 				return lneto.ErrInvalidField
 			}
-		case lnetodhcp.OptRouter, lnetodhcp.OptBroadcastAddress:
-			if containsLimitedBroadcast(data) {
+		case lnetodhcp.OptRouter:
+			if len(data) == 0 || len(data)%4 != 0 {
+				return lneto.ErrInvalidLengthField
+			}
+			if containsInvalidAdvertisedIPv4(data) {
+				return lneto.ErrInvalidField
+			}
+		case lnetodhcp.OptBroadcastAddress:
+			if len(data) != 4 {
+				return lneto.ErrInvalidLengthField
+			}
+			if containsInvalidAdvertisedIPv4(data) {
 				return lneto.ErrInvalidField
 			}
 		case lnetodhcp.OptDNSServers:
-			if len(data)%4 != 0 {
+			if len(data) == 0 || len(data)%4 != 0 {
 				return lneto.ErrInvalidLengthField
 			}
-			if containsLimitedBroadcast(data) {
+			if containsInvalidAdvertisedIPv4(data) {
 				return lneto.ErrInvalidField
 			}
 			dnsCount += len(data) / 4
@@ -690,9 +700,9 @@ func inspectPacket(frame lnetodhcp.Frame) (lnetodhcp.MessageType, netip.Addr, in
 	return message, server, dnsCount, err == nil && messageSeen && message != 0
 }
 
-func containsLimitedBroadcast(data []byte) bool {
+func containsInvalidAdvertisedIPv4(data []byte) bool {
 	for len(data) >= 4 {
-		if [4]byte(data[:4]) == limitedBroadcast.As4() {
+		if !validIPv4(netip.AddrFrom4([4]byte(data[:4]))) {
 			return true
 		}
 		data = data[4:]
