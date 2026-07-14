@@ -37,11 +37,16 @@ func (*fakeBase) TryService(nscore.ServiceBudget) (nscore.ServiceReport, nscore.
 }
 
 type fakeNamespace struct {
-	query         nscore.Resource
-	queryProgress nscore.Progress
-	queryFailure  error
-	request       mdnsns.Request
-	queryCalls    int
+	query                nscore.Resource
+	queryProgress        nscore.Progress
+	queryFailure         error
+	request              mdnsns.Request
+	queryCalls           int
+	announcement         nscore.Resource
+	announcementProgress nscore.Progress
+	announcementFailure  error
+	service              uint16
+	announcementCalls    int
 }
 
 func (n *fakeNamespace) TryQuery(request mdnsns.Request) (nscore.Resource, nscore.Progress, error) {
@@ -49,8 +54,10 @@ func (n *fakeNamespace) TryQuery(request mdnsns.Request) (nscore.Resource, nscor
 	n.request = request
 	return n.query, n.queryProgress, n.queryFailure
 }
-func (*fakeNamespace) TryAnnounce(uint16) (nscore.Resource, nscore.Progress, error) {
-	return nil, 0, nscore.Fail(nscore.FailureNotSupported, nil)
+func (n *fakeNamespace) TryAnnounce(service uint16) (nscore.Resource, nscore.Progress, error) {
+	n.announcementCalls++
+	n.service = service
+	return n.announcement, n.announcementProgress, n.announcementFailure
 }
 
 type fakeQuery struct {
@@ -60,6 +67,28 @@ type fakeQuery struct {
 	nextCalls   int
 	cancelCalls int
 	closeCalls  int
+}
+
+type fakeAnnouncement struct {
+	next        mdnsns.Next
+	failure     error
+	finishCalls int
+	cancelCalls int
+	closeCalls  int
+}
+
+func (a *fakeAnnouncement) Close() error {
+	a.closeCalls++
+	return nil
+}
+func (a *fakeAnnouncement) Cancel() error {
+	a.cancelCalls++
+	return nil
+}
+func (*fakeAnnouncement) Readiness() nscore.Readiness { return nscore.ReadyMDNSAnnouncement }
+func (a *fakeAnnouncement) TryFinish() (mdnsns.Next, error) {
+	a.finishCalls++
+	return a.next, a.failure
 }
 
 func (q *fakeQuery) Close() error {
@@ -184,6 +213,98 @@ func TestBindingsQueryNextAtomicStatusesAndLifecycle(t *testing.T) {
 	}
 }
 
+func TestBindingsAnnouncementAtomicStatusesAndLifecycle(t *testing.T) {
+	backend := &fakeNamespace{}
+	manager, instance := attachManager(t, backend)
+	defer manager.Detach(instance)
+	host := testHost{instance: instance, memory: bytes.Repeat([]byte{0x6b}, 256)}
+	bindings := Bindings(plugin.NewHost(manager))
+
+	if status := callBinding(t, bindingByName(t, bindings, "namespace_default"), host, 224); status != guest.StatusOK {
+		t.Fatalf("namespace_default = %v", status)
+	}
+	namespaceHandle := resource.Handle(binary.LittleEndian.Uint64(host.memory[224:232]))
+	if !mdnsabi.EncodeAnnouncementV1(host.memory, 0, 7) {
+		t.Fatal("encode announcement")
+	}
+
+	before := append([]byte(nil), host.memory...)
+	if status := callBinding(t, bindingByName(t, bindings, "announce"), host, uint64(namespaceHandle), 0, 4); status != guest.StatusInvalidArgument || backend.announcementCalls != 0 || !bytes.Equal(host.memory, before) {
+		t.Fatalf("overlap announcement = %v, calls=%d", status, backend.announcementCalls)
+	}
+	binary.LittleEndian.PutUint32(host.memory[4:8], 1)
+	before = append(before[:0], host.memory...)
+	if status := callBinding(t, bindingByName(t, bindings, "announce"), host, uint64(namespaceHandle), 0, 32); status != guest.StatusInvalidArgument || backend.announcementCalls != 0 || !bytes.Equal(host.memory, before) {
+		t.Fatalf("reserved announcement = %v, calls=%d", status, backend.announcementCalls)
+	}
+	binary.LittleEndian.PutUint32(host.memory[4:8], 0)
+	binary.LittleEndian.PutUint32(host.memory[0:4], 1<<16)
+	before = append(before[:0], host.memory...)
+	if status := callBinding(t, bindingByName(t, bindings, "announce"), host, uint64(namespaceHandle), 0, 32); status != guest.StatusInvalidArgument || backend.announcementCalls != 0 || !bytes.Equal(host.memory, before) {
+		t.Fatalf("wide service announcement = %v, calls=%d", status, backend.announcementCalls)
+	}
+	binary.LittleEndian.PutUint32(host.memory[0:4], 7)
+	handleBefore := append([]byte(nil), host.memory[32:40]...)
+
+	backend.announcementFailure = nscore.Fail(nscore.FailureAccessDenied, errors.New("denied"))
+	if status := callBinding(t, bindingByName(t, bindings, "announce"), host, uint64(namespaceHandle), 0, 32); status != guest.StatusAccessDenied || backend.announcementCalls != 1 || !bytes.Equal(host.memory[32:40], handleBefore) {
+		t.Fatalf("failed announcement = %v, calls=%d", status, backend.announcementCalls)
+	}
+
+	invalid := &fakeAnnouncement{}
+	backend.announcement, backend.announcementProgress, backend.announcementFailure = invalid, nscore.ProgressWouldBlock, nil
+	if status := callBinding(t, bindingByName(t, bindings, "announce"), host, uint64(namespaceHandle), 0, 32); status != guest.StatusIO || invalid.closeCalls != 1 || !bytes.Equal(host.memory[32:40], handleBefore) {
+		t.Fatalf("malformed announcement = %v, closes=%d", status, invalid.closeCalls)
+	}
+
+	ready := &fakeAnnouncement{next: mdnsns.NextWouldBlock}
+	backend.announcement, backend.announcementProgress = ready, nscore.ProgressDone
+	if status := callBinding(t, bindingByName(t, bindings, "announce"), host, uint64(namespaceHandle), 0, 32); status != guest.StatusOK || backend.service != 7 {
+		t.Fatalf("ready announcement = %v, service=%d", status, backend.service)
+	}
+	readyHandle := resource.Handle(binary.LittleEndian.Uint64(host.memory[32:40]))
+
+	pending := &fakeAnnouncement{next: mdnsns.NextWouldBlock}
+	backend.announcement, backend.announcementProgress = pending, nscore.ProgressInProgress
+	if status := callBinding(t, bindingByName(t, bindings, "announce"), host, uint64(namespaceHandle), 0, 40); status != guest.StatusInProgress {
+		t.Fatalf("pending announcement = %v", status)
+	}
+	pendingHandle := resource.Handle(binary.LittleEndian.Uint64(host.memory[40:48]))
+
+	if status := callBinding(t, bindingByName(t, bindings, "finish_announcement"), host, uint64(readyHandle)); status != guest.StatusAgain || ready.finishCalls != 1 {
+		t.Fatalf("would-block finish = %v, calls=%d", status, ready.finishCalls)
+	}
+	ready.failure = nscore.Fail(nscore.FailureCanceled, errors.New("canceled"))
+	if status := callBinding(t, bindingByName(t, bindings, "finish_announcement"), host, uint64(readyHandle)); status != guest.StatusCanceled {
+		t.Fatalf("failed finish = %v", status)
+	}
+	ready.failure = nil
+	ready.next = mdnsns.NextEOF
+	if status := callBinding(t, bindingByName(t, bindings, "finish_announcement"), host, uint64(readyHandle)); status != guest.StatusIO {
+		t.Fatalf("malformed finish = %v", status)
+	}
+	ready.next = mdnsns.NextReady
+	if status := callBinding(t, bindingByName(t, bindings, "finish_announcement"), host, uint64(readyHandle)); status != guest.StatusOK {
+		t.Fatalf("ready finish = %v", status)
+	}
+
+	if status := callBinding(t, bindingByName(t, bindings, "finish_announcement"), host, uint64(namespaceHandle)); status != guest.StatusBadHandle {
+		t.Fatalf("wrong-kind finish = %v", status)
+	}
+	if status := callBinding(t, bindingByName(t, bindings, "cancel_announcement"), host, uint64(readyHandle)); status != guest.StatusOK || ready.cancelCalls != 1 {
+		t.Fatalf("cancel announcement = %v, calls=%d", status, ready.cancelCalls)
+	}
+	if status := callBinding(t, bindingByName(t, bindings, "close_announcement"), host, uint64(readyHandle)); status != guest.StatusOK || ready.closeCalls != 1 {
+		t.Fatalf("close announcement = %v, calls=%d", status, ready.closeCalls)
+	}
+	if status := callBinding(t, bindingByName(t, bindings, "finish_announcement"), host, uint64(readyHandle)); status != guest.StatusBadHandle {
+		t.Fatalf("stale finish = %v", status)
+	}
+	if status := callBinding(t, bindingByName(t, bindings, "close_announcement"), host, uint64(pendingHandle)); status != guest.StatusOK || pending.closeCalls != 1 {
+		t.Fatalf("close pending = %v, calls=%d", status, pending.closeCalls)
+	}
+}
+
 func TestBindingsPrevalidateQueryOutputsBeforeInstanceAndHandleLookup(t *testing.T) {
 	manager := instancecore.NewManager()
 	instance := new(wago.Instance)
@@ -195,6 +316,9 @@ func TestBindingsPrevalidateQueryOutputsBeforeInstanceAndHandleLookup(t *testing
 	}
 	if status := callBinding(t, bindingByName(t, bindings, "query"), host, 1, 0, 32); status != guest.StatusInvalidArgument || !bytes.Equal(host.memory, before) {
 		t.Fatalf("query range = %v", status)
+	}
+	if status := callBinding(t, bindingByName(t, bindings, "announce"), host, 1, 0, 60); status != guest.StatusInvalidArgument || !bytes.Equal(host.memory, before) {
+		t.Fatalf("announcement range = %v", status)
 	}
 	if status := callBinding(t, bindingByName(t, bindings, "next"), host, 1, 1); status != guest.StatusInvalidArgument || !bytes.Equal(host.memory, before) {
 		t.Fatalf("next range = %v", status)
@@ -241,6 +365,30 @@ func callBinding(t testing.TB, function wago.HostFunc, host testHost, params ...
 	var results [1]uint64
 	function(host, params, results[:])
 	return guest.Status(int32(results[0]))
+}
+
+func BenchmarkFinishAnnouncementBindingReady(b *testing.B) {
+	announcement := &fakeAnnouncement{next: mdnsns.NextReady}
+	manager, instance := attachManager(b, &fakeNamespace{})
+	defer manager.Detach(instance)
+	state, _ := manager.ForInstance(instance)
+	handle, err := state.Resources().Add(resource.KindMDNSAnnouncement, announcement)
+	if err != nil {
+		b.Fatal(err)
+	}
+	host := testHost{instance: instance, memory: make([]byte, 1)}
+	function := bindingByName(b, Bindings(plugin.NewHost(manager)), "finish_announcement")
+	params := []uint64{uint64(handle)}
+	var results [1]uint64
+	function(host, params, results[:])
+	if status := guest.Status(int32(results[0])); status != guest.StatusOK {
+		b.Fatalf("warmup status = %v", status)
+	}
+	b.ReportAllocs()
+	b.ResetTimer()
+	for b.Loop() {
+		function(host, params, results[:])
+	}
 }
 
 func BenchmarkNextBindingReady(b *testing.B) {
