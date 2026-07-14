@@ -1,6 +1,8 @@
 package mdns
 
 import (
+	"bytes"
+	"errors"
 	"net"
 	"net/netip"
 	"testing"
@@ -89,6 +91,92 @@ func TestMDNSQueryResponseAnnouncementAndAutomaticService(t *testing.T) {
 	}
 	if usage, _ := account.Snapshot(); usage.Resources != 0 || usage.MDNSResources != 0 || usage.MDNSWork != 0 || usage.QueuedBytes == 0 {
 		t.Fatalf("resource close quota = %+v", usage)
+	}
+}
+
+func TestEgressShortBufferPreservesMixedRoundRobinStateAndPendingWork(t *testing.T) {
+	service := testService("device", "192.0.2.11")
+	config := Config{
+		Services: []mdnsns.Service{service}, MaxServices: 1, MaxQueries: 1, MaxAnnouncements: 1,
+		MaxRecords: 8, MaxPacketBytes: 1200, MaxQueuedResponses: 1, MaxQuestionsPerPacket: 4,
+		MaxRecordsPerPacket: 16, MaxAttempts: 2, RetryServiceAttempts: 2,
+	}
+	core, adapter, account := newTestAdapter(t, config, testPolicy())
+	queryResource, _, err := adapter.TryQuery(mdnsns.Request{Name: "peer.local", Types: mdnsns.RecordsA})
+	if err != nil {
+		t.Fatal(err)
+	}
+	announcementResource, _, err := adapter.TryAnnounce(0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	query := queryResource.(*query)
+	announcement := announcementResource.(*announcement)
+	queryPacket := append([]byte(nil), query.packet...)
+	announcementPacket := append([]byte(nil), announcement.packet...)
+	queryReady, announcementReady := query.Readiness(), announcement.Readiness()
+	usageBefore, _ := account.Snapshot()
+	short := bytes.Repeat([]byte{0xa5}, 14+20+8+len(query.packet)-1)
+
+	core.Lock()
+	written, worked, err := adapter.egressLocked(short)
+	cursor := adapter.cursor
+	core.Unlock()
+	if written != 0 || worked || !errors.Is(err, lneto.ErrShortBuffer) {
+		t.Fatalf("short egress = %d, %v, %v", written, worked, err)
+	}
+	if !bytes.Equal(short, bytes.Repeat([]byte{0xa5}, len(short))) {
+		t.Fatalf("short egress mutated destination = %x", short)
+	}
+	if cursor != 0 || query.state != statePending || announcement.state != statePending || query.attempts != 0 || announcement.attempts != 0 || query.retry != 0 || announcement.retry != 0 || !bytes.Equal(query.packet, queryPacket) || !bytes.Equal(announcement.packet, announcementPacket) {
+		t.Fatalf("short egress mutated scheduler or work: cursor=%d query=%v/%d/%d announcement=%v/%d/%d", cursor, query.state, query.attempts, query.retry, announcement.state, announcement.attempts, announcement.retry)
+	}
+	if query.Readiness() != queryReady || announcement.Readiness() != announcementReady {
+		t.Fatalf("short egress changed readiness: query=%v/%v announcement=%v/%v", query.Readiness(), queryReady, announcement.Readiness(), announcementReady)
+	}
+	if usage, _ := account.Snapshot(); usage != usageBefore {
+		t.Fatalf("short egress changed quota = %+v, want %+v", usage, usageBefore)
+	}
+
+	frame := make([]byte, core.Link().MaxFrameBytes())
+	core.Lock()
+	queryBytes, queryWorked, err := adapter.egressLocked(frame)
+	cursorAfterQuery := adapter.cursor
+	core.Unlock()
+	if err != nil || !queryWorked || queryBytes == 0 || cursorAfterQuery != 1 {
+		t.Fatalf("query retry = %d, %v, %v, cursor=%d", queryBytes, queryWorked, err, cursorAfterQuery)
+	}
+	queryIP, err := ipv4.NewFrame(frame[14:queryBytes])
+	if err != nil {
+		t.Fatal(err)
+	}
+	queryUDP, err := lnetoudp.NewFrame(queryIP.Payload())
+	if err != nil {
+		t.Fatal(err)
+	}
+	queryDNS, err := lnetodns.NewFrame(queryUDP.Payload())
+	if err != nil || queryIP.ID() != 21 || queryDNS.Flags().IsResponse() {
+		t.Fatalf("query retry frame = id=%d response=%v err=%v", queryIP.ID(), queryDNS.Flags().IsResponse(), err)
+	}
+
+	core.Lock()
+	announcementBytes, announcementWorked, err := adapter.egressLocked(frame)
+	cursorAfterAnnouncement := adapter.cursor
+	core.Unlock()
+	if err != nil || !announcementWorked || announcementBytes == 0 || cursorAfterAnnouncement != 0 {
+		t.Fatalf("announcement egress = %d, %v, %v, cursor=%d", announcementBytes, announcementWorked, err, cursorAfterAnnouncement)
+	}
+	announcementIP, err := ipv4.NewFrame(frame[14:announcementBytes])
+	if err != nil {
+		t.Fatal(err)
+	}
+	announcementUDP, err := lnetoudp.NewFrame(announcementIP.Payload())
+	if err != nil {
+		t.Fatal(err)
+	}
+	announcementDNS, err := lnetodns.NewFrame(announcementUDP.Payload())
+	if err != nil || announcementIP.ID() != 22 || !announcementDNS.Flags().IsResponse() {
+		t.Fatalf("announcement frame = id=%d response=%v err=%v", announcementIP.ID(), announcementDNS.Flags().IsResponse(), err)
 	}
 }
 

@@ -593,8 +593,8 @@ func (a *Adapter) egressLocked(dst []byte) (int, bool, error) {
 			if q.state != statePending && q.state != stateWaiting {
 				continue
 			}
-			a.cursor = (index + 1) % total
 			if q.state == stateWaiting {
+				a.cursor = (index + 1) % total
 				if q.retry > 1 {
 					q.retry--
 					return 0, true, nil
@@ -610,6 +610,7 @@ func (a *Adapter) egressLocked(dst []byte) (int, bool, error) {
 			if err != nil {
 				return 0, false, err
 			}
+			a.cursor = (index + 1) % total
 			q.attempts++
 			q.retry = a.config.RetryServiceAttempts
 			q.state = stateWaiting
@@ -619,8 +620,8 @@ func (a *Adapter) egressLocked(dst []byte) (int, bool, error) {
 		if ann.state != statePending && ann.state != stateWaiting {
 			continue
 		}
-		a.cursor = (index + 1) % total
 		if ann.state == stateWaiting {
+			a.cursor = (index + 1) % total
 			if ann.retry > 1 {
 				ann.retry--
 				return 0, true, nil
@@ -632,6 +633,7 @@ func (a *Adapter) egressLocked(dst []byte) (int, bool, error) {
 		if err != nil {
 			return 0, false, err
 		}
+		a.cursor = (index + 1) % total
 		ann.attempts++
 		if ann.attempts >= a.config.MaxAttempts {
 			ann.completeLocked()
