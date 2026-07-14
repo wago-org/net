@@ -120,8 +120,13 @@ func TestBindingsBindSendReceiveAtomicStatusesAndLifecycle(t *testing.T) {
 	if status := callBinding(t, bindingByName(t, bindings, "bind"), host, uint64(namespaceHandle), 0, 48); status != guest.StatusAgain || backend.calls != 2 || !bytes.Equal(host.memory[48:56], handleBefore) {
 		t.Fatalf("would-block bind = %v, calls=%d", status, backend.calls)
 	}
-	backend.socket, backend.progress = socket, nscore.ProgressDone
-	if status := callBinding(t, bindingByName(t, bindings, "bind"), host, uint64(namespaceHandle), 0, 48); status != guest.StatusOK || backend.calls != 3 || backend.local != local {
+	var typedNil *fakeSocket
+	backend.socket, backend.progress = typedNil, nscore.ProgressDone
+	if status := callBinding(t, bindingByName(t, bindings, "bind"), host, uint64(namespaceHandle), 0, 48); status != guest.StatusIO || backend.calls != 3 || !bytes.Equal(host.memory[48:56], handleBefore) {
+		t.Fatalf("typed-nil bind = %v, calls=%d", status, backend.calls)
+	}
+	backend.socket = socket
+	if status := callBinding(t, bindingByName(t, bindings, "bind"), host, uint64(namespaceHandle), 0, 48); status != guest.StatusOK || backend.calls != 4 || backend.local != local {
 		t.Fatalf("bind = %v, calls=%d local=%+v", status, backend.calls, backend.local)
 	}
 	socketHandle := resource.Handle(binary.LittleEndian.Uint64(host.memory[48:56]))
@@ -205,6 +210,31 @@ func TestBindingsBindSendReceiveAtomicStatusesAndLifecycle(t *testing.T) {
 	}
 	if status := callBinding(t, bindingByName(t, bindings, "receive"), host, uint64(socketHandle), payloadPtr, payloadLen, resultPtr); status != guest.StatusBadHandle {
 		t.Fatalf("stale receive = %v", status)
+	}
+
+	fresh := &fakeSocket{local: local, sendProgress: nscore.ProgressDone}
+	backend.socket = fresh
+	if status := callBinding(t, bindingByName(t, bindings, "bind"), host, uint64(namespaceHandle), 0, 56); status != guest.StatusOK {
+		t.Fatalf("fresh bind = %v", status)
+	}
+	freshHandle := resource.Handle(binary.LittleEndian.Uint64(host.memory[56:64]))
+	if freshHandle == socketHandle || uint16(freshHandle) != uint16(socketHandle) {
+		t.Fatalf("generation-safe slot reuse = old %v, fresh %v", socketHandle, freshHandle)
+	}
+	if status := callBinding(t, bindingByName(t, bindings, "send"), host, uint64(socketHandle), 64, 6, 96); status != guest.StatusBadHandle || fresh.sendCalls != 0 {
+		t.Fatalf("stale send after reuse = %v, fresh calls=%d", status, fresh.sendCalls)
+	}
+	if status := callBinding(t, bindingByName(t, bindings, "receive"), host, uint64(socketHandle), payloadPtr, payloadLen, resultPtr); status != guest.StatusBadHandle || fresh.receiveCalls != 0 {
+		t.Fatalf("stale receive after reuse = %v, fresh calls=%d", status, fresh.receiveCalls)
+	}
+	if status := callBinding(t, bindingByName(t, bindings, "close"), host, uint64(socketHandle)); status != guest.StatusBadHandle || fresh.closeCalls != 0 {
+		t.Fatalf("stale close after reuse = %v, fresh calls=%d", status, fresh.closeCalls)
+	}
+	if status := callBinding(t, bindingByName(t, bindings, "send"), host, uint64(freshHandle), 64, 6, 96); status != guest.StatusOK || fresh.sendCalls != 1 {
+		t.Fatalf("fresh send = %v, calls=%d", status, fresh.sendCalls)
+	}
+	if status := callBinding(t, bindingByName(t, bindings, "close"), host, uint64(freshHandle)); status != guest.StatusOK || fresh.closeCalls != 1 {
+		t.Fatalf("fresh close = %v, calls=%d", status, fresh.closeCalls)
 	}
 }
 
