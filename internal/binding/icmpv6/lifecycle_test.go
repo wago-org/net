@@ -30,6 +30,7 @@ func (*lifecycleBase) TryService(nscore.ServiceBudget) (nscore.ServiceReport, ns
 
 type lifecycleNamespace struct {
 	operations      icmpns.Operations
+	operationsCalls int
 	echo            nscore.Resource
 	echoProgress    nscore.Progress
 	echoFailure     error
@@ -54,7 +55,10 @@ type lifecycleNamespace struct {
 	removeCalls     int
 }
 
-func (n *lifecycleNamespace) Operations() icmpns.Operations { return n.operations }
+func (n *lifecycleNamespace) Operations() icmpns.Operations {
+	n.operationsCalls++
+	return n.operations
+}
 func (n *lifecycleNamespace) TryEcho(request icmpns.EchoRequest) (nscore.Resource, nscore.Progress, error) {
 	n.echoCalls++
 	n.echoRequest = request
@@ -371,6 +375,91 @@ func TestBindingsNeighborAtomicStatusesCacheAndLifecycle(t *testing.T) {
 	}
 	if status := callLifecycleBinding(t, bindingByName(t, bindings, "neighbor_result"), host, uint64(freshHandle), resultPtr); status != guest.StatusAgain || fresh.resultCalls != 1 {
 		t.Fatalf("fresh neighbor result = %v calls=%d", status, fresh.resultCalls)
+	}
+}
+
+func TestBindingsRejectHighBitI32AliasesBeforeStateAndBackendWork(t *testing.T) {
+	address := netip.MustParseAddr("fe80::20")
+	request := icmpns.NeighborRequest{Address: address, ScopeID: 4}
+	neighbor := icmpns.Neighbor{Address: address, ScopeID: 4, MAC: [6]byte{0x02, 0, 0, 0, 0, 0x20}}
+	echo := &lifecycleEcho{next: icmpns.NextWouldBlock}
+	resolution := &lifecycleResolution{next: icmpns.NextWouldBlock}
+	backend := &lifecycleNamespace{
+		operations:      icmpns.SupportedOperations,
+		echo:            echo,
+		echoProgress:    nscore.ProgressInProgress,
+		resolution:      resolution,
+		resolveProgress: nscore.ProgressInProgress,
+	}
+	manager, instance := attachLifecycleManager(t, backend)
+	defer manager.Detach(instance)
+	host := testHost{instance: instance, memory: bytes.Repeat([]byte{0x6d}, 1024)}
+	bindings := Bindings(plugin.NewHost(manager))
+	state, ok := manager.ForInstance(instance)
+	if !ok {
+		t.Fatal("attached state missing")
+	}
+	namespaceHandle := state.NamespaceHandle()
+
+	copy(host.memory[64:68], "ping")
+	if !icmpabi.EncodeEchoRequestV1(host.memory, 0, nscore.Endpoint{Address: netip.MustParseAddr("2001:db8::2")}, 64, 4) {
+		t.Fatal("encode echo request")
+	}
+	if !icmpabi.EncodeNeighborKeyV1(host.memory, 256, request) {
+		t.Fatal("encode neighbor key")
+	}
+	if !icmpabi.EncodeNeighborV1(host.memory, 448, neighbor) {
+		t.Fatal("encode neighbor")
+	}
+	echoHandle, err := state.Resources().Add(resource.KindICMPv6Echo, echo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resolutionHandle, err := state.Resources().Add(resource.KindICMPv6Neighbor, resolution)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	high := uint64(1) << 32
+	tests := []struct {
+		name    string
+		binding string
+		params  []uint64
+	}{
+		{name: "namespace output", binding: "namespace_default", params: []uint64{high | 960}},
+		{name: "operations output", binding: "operations", params: []uint64{uint64(namespaceHandle), high | 900}},
+		{name: "echo request", binding: "echo", params: []uint64{uint64(namespaceHandle), high, 128}},
+		{name: "echo output", binding: "echo", params: []uint64{uint64(namespaceHandle), 0, high | 128}},
+		{name: "echo result payload", binding: "echo_result", params: []uint64{uint64(echoHandle), high | 128, 16, 192}},
+		{name: "echo result length", binding: "echo_result", params: []uint64{uint64(echoHandle), 128, high | 16, 192}},
+		{name: "echo result output", binding: "echo_result", params: []uint64{uint64(echoHandle), 128, 16, high | 192}},
+		{name: "resolve key", binding: "resolve", params: []uint64{uint64(namespaceHandle), high | 256, 320}},
+		{name: "resolve output", binding: "resolve", params: []uint64{uint64(namespaceHandle), 256, high | 320}},
+		{name: "neighbor result output", binding: "neighbor_result", params: []uint64{uint64(resolutionHandle), high | 384}},
+		{name: "lookup key", binding: "lookup_neighbor", params: []uint64{uint64(namespaceHandle), high | 256, 384}},
+		{name: "lookup output", binding: "lookup_neighbor", params: []uint64{uint64(namespaceHandle), 256, high | 384}},
+		{name: "seed input", binding: "seed_neighbor", params: []uint64{uint64(namespaceHandle), high | 448}},
+		{name: "remove input", binding: "remove_neighbor", params: []uint64{uint64(namespaceHandle), high | 256}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			before := append([]byte(nil), host.memory...)
+			operationsCalls, echoCalls, resolveCalls := backend.operationsCalls, backend.echoCalls, backend.resolveCalls
+			lookupCalls, seedCalls, removeCalls := backend.lookupCalls, backend.seedCalls, backend.removeCalls
+			echoResultCalls, neighborResultCalls := echo.resultCalls, resolution.resultCalls
+			if status := callLifecycleBinding(t, bindingByName(t, bindings, test.binding), host, test.params...); status != guest.StatusInvalidArgument {
+				t.Fatalf("status = %v", status)
+			}
+			if backend.operationsCalls != operationsCalls || backend.echoCalls != echoCalls || backend.resolveCalls != resolveCalls ||
+				backend.lookupCalls != lookupCalls || backend.seedCalls != seedCalls || backend.removeCalls != removeCalls ||
+				echo.resultCalls != echoResultCalls || resolution.resultCalls != neighborResultCalls {
+				t.Fatalf("backend work changed: operations=%d echo=%d echo_result=%d resolve=%d neighbor_result=%d lookup=%d seed=%d remove=%d",
+					backend.operationsCalls, backend.echoCalls, echo.resultCalls, backend.resolveCalls, resolution.resultCalls, backend.lookupCalls, backend.seedCalls, backend.removeCalls)
+			}
+			if !bytes.Equal(host.memory, before) {
+				t.Fatal("invalid alias mutated guest memory")
+			}
+		})
 	}
 }
 

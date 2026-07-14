@@ -49,8 +49,9 @@ func NamespaceDefault(host plugin.Host, module wago.HostModule, params, results 
 		guest.SetStatus(results, guest.StatusInvalidArgument)
 		return
 	}
-	memory, out := guest.Memory(module), uint32(params[0])
-	if !abicore.CheckRanges(memory, false, abicore.Range{Ptr: out, Length: abicore.HandleV1Size}) {
+	memory := guest.Memory(module)
+	out, ok := abicore.NarrowUint32(params[0])
+	if !ok || !abicore.CheckRanges(memory, false, abicore.Range{Ptr: out, Length: abicore.HandleV1Size}) {
 		guest.SetStatus(results, guest.StatusInvalidArgument)
 		return
 	}
@@ -72,8 +73,9 @@ func Operations(host plugin.Host, module wago.HostModule, params, results []uint
 		guest.SetStatus(results, guest.StatusInvalidArgument)
 		return
 	}
-	memory, out := guest.Memory(module), uint32(params[1])
-	if !abicore.CheckRanges(memory, false, abicore.Range{Ptr: out, Length: icmpabi.OperationsV1Size}) {
+	memory := guest.Memory(module)
+	out, ok := abicore.NarrowUint32(params[1])
+	if !ok || !abicore.CheckRanges(memory, false, abicore.Range{Ptr: out, Length: icmpabi.OperationsV1Size}) {
 		guest.SetStatus(results, guest.StatusInvalidArgument)
 		return
 	}
@@ -99,8 +101,10 @@ func Echo(host plugin.Host, module wago.HostModule, params, results []uint64) {
 		guest.SetStatus(results, guest.StatusInvalidArgument)
 		return
 	}
-	memory, requestPtr, out := guest.Memory(module), uint32(params[1]), uint32(params[2])
-	if !icmpabi.CheckEchoV1(memory, requestPtr, out) {
+	memory := guest.Memory(module)
+	requestPtr, requestOK := abicore.NarrowUint32(params[1])
+	out, outOK := abicore.NarrowUint32(params[2])
+	if !requestOK || !outOK || !icmpabi.CheckEchoV1(memory, requestPtr, out) {
 		guest.SetStatus(results, guest.StatusInvalidArgument)
 		return
 	}
@@ -134,8 +138,10 @@ func EchoResult(host plugin.Host, module wago.HostModule, params, results []uint
 		return
 	}
 	memory := guest.Memory(module)
-	payloadPtr, payloadLen, out := uint32(params[1]), uint32(params[2]), uint32(params[3])
-	if !icmpabi.CheckEchoResultV1(memory, payloadPtr, payloadLen, out) {
+	payloadPtr, payloadOK := abicore.NarrowUint32(params[1])
+	payloadLen, lengthOK := abicore.NarrowUint32(params[2])
+	out, outOK := abicore.NarrowUint32(params[3])
+	if !payloadOK || !lengthOK || !outOK || !icmpabi.CheckEchoResultV1(memory, payloadPtr, payloadLen, out) {
 		guest.SetStatus(results, guest.StatusInvalidArgument)
 		return
 	}
@@ -166,8 +172,10 @@ func Resolve(host plugin.Host, module wago.HostModule, params, results []uint64)
 		guest.SetStatus(results, guest.StatusInvalidArgument)
 		return
 	}
-	memory, keyPtr, out := guest.Memory(module), uint32(params[1]), uint32(params[2])
-	if !abicore.CheckRanges(memory, true, abicore.Range{Ptr: keyPtr, Length: icmpabi.NeighborKeyV1Size}, abicore.Range{Ptr: out, Length: abicore.HandleV1Size}) {
+	memory := guest.Memory(module)
+	keyPtr, keyOK := abicore.NarrowUint32(params[1])
+	out, outOK := abicore.NarrowUint32(params[2])
+	if !keyOK || !outOK || !abicore.CheckRanges(memory, true, abicore.Range{Ptr: keyPtr, Length: icmpabi.NeighborKeyV1Size}, abicore.Range{Ptr: out, Length: abicore.HandleV1Size}) {
 		guest.SetStatus(results, guest.StatusInvalidArgument)
 		return
 	}
@@ -200,8 +208,9 @@ func NeighborResult(host plugin.Host, module wago.HostModule, params, results []
 		guest.SetStatus(results, guest.StatusInvalidArgument)
 		return
 	}
-	memory, out := guest.Memory(module), uint32(params[1])
-	if !abicore.CheckRanges(memory, false, abicore.Range{Ptr: out, Length: icmpabi.NeighborV1Size}) {
+	memory := guest.Memory(module)
+	out, ok := abicore.NarrowUint32(params[1])
+	if !ok || !abicore.CheckRanges(memory, false, abicore.Range{Ptr: out, Length: icmpabi.NeighborV1Size}) {
 		guest.SetStatus(results, guest.StatusInvalidArgument)
 		return
 	}
@@ -231,8 +240,10 @@ func LookupNeighbor(host plugin.Host, module wago.HostModule, params, results []
 		guest.SetStatus(results, guest.StatusInvalidArgument)
 		return
 	}
-	memory, keyPtr, out := guest.Memory(module), uint32(params[1]), uint32(params[2])
-	if !abicore.CheckRanges(memory, true, abicore.Range{Ptr: keyPtr, Length: icmpabi.NeighborKeyV1Size}, abicore.Range{Ptr: out, Length: icmpabi.NeighborV1Size}) {
+	memory := guest.Memory(module)
+	keyPtr, keyOK := abicore.NarrowUint32(params[1])
+	out, outOK := abicore.NarrowUint32(params[2])
+	if !keyOK || !outOK || !abicore.CheckRanges(memory, true, abicore.Range{Ptr: keyPtr, Length: icmpabi.NeighborKeyV1Size}, abicore.Range{Ptr: out, Length: icmpabi.NeighborV1Size}) {
 		guest.SetStatus(results, guest.StatusInvalidArgument)
 		return
 	}
@@ -267,7 +278,13 @@ func SeedNeighbor(host plugin.Host, module wago.HostModule, params, results []ui
 		guest.SetStatus(results, guest.StatusInvalidArgument)
 		return
 	}
-	neighbor, ok := icmpabi.DecodeNeighborV1(guest.Memory(module), uint32(params[1]))
+	memory := guest.Memory(module)
+	neighborPtr, ptrOK := abicore.NarrowUint32(params[1])
+	if !ptrOK {
+		guest.SetStatus(results, guest.StatusInvalidArgument)
+		return
+	}
+	neighbor, ok := icmpabi.DecodeNeighborV1(memory, neighborPtr)
 	if !ok {
 		guest.SetStatus(results, guest.StatusInvalidArgument)
 		return
@@ -285,7 +302,13 @@ func RemoveNeighbor(host plugin.Host, module wago.HostModule, params, results []
 		guest.SetStatus(results, guest.StatusInvalidArgument)
 		return
 	}
-	request, ok := icmpabi.DecodeNeighborKeyV1(guest.Memory(module), uint32(params[1]))
+	memory := guest.Memory(module)
+	keyPtr, ptrOK := abicore.NarrowUint32(params[1])
+	if !ptrOK {
+		guest.SetStatus(results, guest.StatusInvalidArgument)
+		return
+	}
+	request, ok := icmpabi.DecodeNeighborKeyV1(memory, keyPtr)
 	if !ok {
 		guest.SetStatus(results, guest.StatusInvalidArgument)
 		return
