@@ -104,6 +104,56 @@ func TestLinkFillCommitsAtomicallyAndRollsBackFailures(t *testing.T) {
 	}
 }
 
+func TestZeroLengthFillRollbackRemainsDistinctFromCommittedEmptyFrame(t *testing.T) {
+	link := newTestLink(t, Config{MaxFrameBytes: 4, IngressFrames: 1, EgressFrames: 1})
+	result, err := link.TryFill(Egress, func(dst []byte) (int, error) {
+		copy(dst, []byte{1, 2, 3, 4})
+		return 0, nil
+	})
+	if err != nil || result != (FrameResult{}) {
+		t.Fatalf("zero fill = %+v, %v", result, err)
+	}
+	if snapshot := link.Snapshot(); snapshot.EgressFrames != 0 || snapshot.EgressBytes != 0 {
+		t.Fatalf("zero fill committed queue state: %+v", snapshot)
+	}
+	if !allZero(link.egress.storage) {
+		t.Fatal("zero fill retained callback bytes")
+	}
+
+	if err := link.TryEnqueue(Egress, nil); err != nil {
+		t.Fatal(err)
+	}
+	if snapshot := link.Snapshot(); snapshot.EgressFrames != 1 || snapshot.EgressBytes != 0 {
+		t.Fatalf("empty frame snapshot = %+v", snapshot)
+	}
+	called := false
+	if _, err := link.TryFill(Egress, func([]byte) (int, error) {
+		called = true
+		return 1, nil
+	}); !errors.Is(err, ErrQueueFull) || called {
+		t.Fatalf("full queue fill = called %v, error %v", called, err)
+	}
+	result, err = link.TryDequeue(Egress, nil)
+	if err != nil || result != (FrameResult{Ready: true}) || !result.Valid(0) {
+		t.Fatalf("empty frame dequeue = %+v, %v", result, err)
+	}
+	if snapshot := link.Snapshot(); snapshot.EgressFrames != 0 || snapshot.EgressBytes != 0 {
+		t.Fatalf("empty frame drain = %+v", snapshot)
+	}
+
+	result, err = link.TryFill(Egress, func(dst []byte) (int, error) {
+		dst[0] = 9
+		return 1, nil
+	})
+	if err != nil || result != (FrameResult{Copied: 1, FrameBytes: 1, Ready: true}) {
+		t.Fatalf("fill after empty frame = %+v, %v", result, err)
+	}
+	var dst [1]byte
+	if result, err = link.TryDequeue(Egress, dst[:]); err != nil || result.FrameBytes != 1 || dst[0] != 9 {
+		t.Fatalf("filled frame dequeue = %+v, %v, data=%v", result, err, dst)
+	}
+}
+
 func TestLinkRejectsInvalidConfigQueueAndFill(t *testing.T) {
 	invalid := []Config{
 		{},
