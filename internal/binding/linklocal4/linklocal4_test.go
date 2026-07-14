@@ -47,12 +47,13 @@ func (n *fakeNamespace) TryClaim(linklocalns.Request) (nscore.Resource, nscore.P
 }
 
 type fakeClaim struct {
-	value    linklocalns.Result
-	result   linklocalns.ResultState
-	failure  error
-	closed   bool
-	canceled bool
-	released bool
+	value       linklocalns.Result
+	result      linklocalns.ResultState
+	failure     error
+	resultCalls int
+	closed      bool
+	canceled    bool
+	released    bool
 }
 
 func (c *fakeClaim) Close() error { c.closed = true; return nil }
@@ -65,6 +66,7 @@ func (*fakeClaim) Readiness() nscore.Readiness {
 	return nscore.ReadyLinkLocal4Result
 }
 func (c *fakeClaim) TryResult() (linklocalns.Result, linklocalns.ResultState, error) {
+	c.resultCalls++
 	return c.value, c.result, c.failure
 }
 
@@ -162,6 +164,54 @@ func TestBindingsPrevalidateClaimAndPreserveResultOutputs(t *testing.T) {
 	}
 	if status := callBinding(t, bindingByName(t, bindings, "close"), host, freshHandle); status != guest.StatusOK || !fresh.closed {
 		t.Fatalf("close fresh = %v, closed=%v", status, fresh.closed)
+	}
+}
+
+func TestBindingsRejectHighBitI32AliasesBeforeStateAndBackendWork(t *testing.T) {
+	claim := &fakeClaim{result: linklocalns.ResultWouldBlock}
+	backend := &fakeNamespace{claim: claim, progress: nscore.ProgressInProgress}
+	manager, instance := attachManager(t, backend)
+	defer manager.Detach(instance)
+	host := testHost{instance: instance, memory: bytes.Repeat([]byte{0x4c}, 512)}
+	bindings := Bindings(plugin.NewHost(manager))
+	state, ok := manager.ForInstance(instance)
+	if !ok {
+		t.Fatal("attached state missing")
+	}
+	namespaceHandle := state.NamespaceHandle()
+	claimHandle, err := state.Resources().Add(resource.KindLinkLocal4Claim, claim)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !linklocalabi.EncodeRequestV1(host.memory, 0, linklocalns.Request{FirstCandidate: netip.MustParseAddr("169.254.42.7")}) {
+		t.Fatal("encode request")
+	}
+
+	high := uint64(1) << 32
+	tests := []struct {
+		name    string
+		binding string
+		params  []uint64
+	}{
+		{name: "namespace output", binding: "namespace_default", params: []uint64{high | 480}},
+		{name: "claim request", binding: "claim", params: []uint64{uint64(namespaceHandle), high, 64}},
+		{name: "claim output", binding: "claim", params: []uint64{uint64(namespaceHandle), 0, high | 64}},
+		{name: "result output", binding: "result", params: []uint64{uint64(claimHandle), high | 128}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			before := append([]byte(nil), host.memory...)
+			claimCalls, resultCalls := backend.calls, claim.resultCalls
+			if status := callBinding(t, bindingByName(t, bindings, test.binding), host, test.params...); status != guest.StatusInvalidArgument {
+				t.Fatalf("status = %v", status)
+			}
+			if backend.calls != claimCalls || claim.resultCalls != resultCalls {
+				t.Fatalf("backend work changed: claim=%d result=%d", backend.calls, claim.resultCalls)
+			}
+			if !bytes.Equal(host.memory, before) {
+				t.Fatal("invalid alias mutated guest memory")
+			}
+		})
 	}
 }
 
