@@ -604,6 +604,70 @@ func TestIngressRelevanceConsumesMalformedLocalARPAndLeavesForeignUnhandled(t *t
 	}
 }
 
+func TestUnsupportedARPOperationPreservesClaimAndValidRetry(t *testing.T) {
+	core, adapter, account, _ := newTestAdapter(t, Config{MaxClaims: 1, MaxConflicts: 4, MaxServiceAttempts: 16, Seed: 30})
+	resource, _, err := adapter.TryClaim(linklocalns.Request{FirstCandidate: netip.MustParseAddr("169.254.42.7")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	claim := resource.(*claimResource)
+	candidate := netip.AddrFrom4(claim.handler.Candidate())
+	malformed := makeConflict(t, candidate, [6]byte{2, 0, 0, 0, 0, 2})
+	eth, err := ethernet.NewFrame(malformed)
+	if err != nil {
+		t.Fatal(err)
+	}
+	aframe, err := arp.NewFrame(eth.Payload())
+	if err != nil {
+		t.Fatal(err)
+	}
+	aframe.SetOperation(3)
+	usageBefore, _ := account.Snapshot()
+	core.Lock()
+	beforeState, beforeCandidate, beforeConflicts := claim.handler.State(), claim.handler.Candidate(), claim.handler.Conflicts()
+	handled, ingressErr := adapter.ingressLocked(malformed)
+	afterState, afterCandidate, afterConflicts := claim.handler.State(), claim.handler.Candidate(), claim.handler.Conflicts()
+	core.Unlock()
+	if ingressErr != nil || !handled {
+		t.Fatalf("unsupported operation ingress = handled %v, err %v", handled, ingressErr)
+	}
+	if afterState != beforeState || afterCandidate != beforeCandidate || afterConflicts != beforeConflicts || claim.state != stateActive || claim.failure != nil {
+		t.Fatalf("unsupported operation mutated claim: state %v -> %v candidate %v -> %v conflicts %d -> %d resource=%v failure=%v", beforeState, afterState, beforeCandidate, afterCandidate, beforeConflicts, afterConflicts, claim.state, claim.failure)
+	}
+	if usage, _ := account.Snapshot(); usage != usageBefore {
+		t.Fatalf("unsupported operation changed quota = %+v, want %+v", usage, usageBefore)
+	}
+
+	foreign := makeConflict(t, netip.MustParseAddr("169.254.99.9"), [6]byte{2, 0, 0, 0, 0, 3})
+	foreignEthernet, err := ethernet.NewFrame(foreign)
+	if err != nil {
+		t.Fatal(err)
+	}
+	foreignARP, err := arp.NewFrame(foreignEthernet.Payload())
+	if err != nil {
+		t.Fatal(err)
+	}
+	foreignARP.SetOperation(3)
+	core.Lock()
+	foreignHandled, foreignErr := adapter.ingressLocked(foreign)
+	foreignState, foreignCandidate, foreignConflicts := claim.handler.State(), claim.handler.Candidate(), claim.handler.Conflicts()
+	core.Unlock()
+	if foreignErr != nil || foreignHandled {
+		t.Fatalf("foreign unsupported operation ingress = handled %v, err %v", foreignHandled, foreignErr)
+	}
+	if foreignState != beforeState || foreignCandidate != beforeCandidate || foreignConflicts != beforeConflicts || claim.state != stateActive || claim.failure != nil {
+		t.Fatalf("foreign unsupported operation mutated claim: state=%v candidate=%v conflicts=%d resource=%v failure=%v", foreignState, foreignCandidate, foreignConflicts, claim.state, claim.failure)
+	}
+
+	serviceIngress(t, core, makeConflict(t, candidate, [6]byte{2, 0, 0, 0, 0, 2}))
+	core.Lock()
+	retryCandidate, retryConflicts := claim.handler.Candidate(), claim.handler.Conflicts()
+	core.Unlock()
+	if retryConflicts != beforeConflicts+1 || retryCandidate == beforeCandidate || claim.state != stateActive || claim.failure != nil {
+		t.Fatalf("valid conflict after malformed operation = candidate %v -> %v conflicts %d -> %d state=%v failure=%v", beforeCandidate, retryCandidate, beforeConflicts, retryConflicts, claim.state, claim.failure)
+	}
+}
+
 func TestConflictMutationFallsThroughToOrdinaryARPProcessing(t *testing.T) {
 	core, adapter, _, _ := newTestAdapter(t, Config{MaxClaims: 1, MaxConflicts: 4, MaxServiceAttempts: 16, Seed: 31})
 	resource, _, err := adapter.TryClaim(linklocalns.Request{FirstCandidate: netip.MustParseAddr("169.254.42.7")})

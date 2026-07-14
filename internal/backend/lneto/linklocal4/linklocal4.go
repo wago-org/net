@@ -393,6 +393,15 @@ func (a *Adapter) ingressLocked(frame []byte) (bool, error) {
 	if *senderHW != source {
 		return true, nil
 	}
+	operation := aframe.Operation()
+	if operation != arp.OpRequest && operation != arp.OpReply {
+		_, targetProto := aframe.Target4()
+		candidate := r.handler.Candidate()
+		if *senderProto == candidate || *targetProto == candidate {
+			return true, nil
+		}
+		return false, nil
+	}
 	beforeState := r.handler.State()
 	beforeCandidate := r.handler.Candidate()
 	defenseConflict := false
