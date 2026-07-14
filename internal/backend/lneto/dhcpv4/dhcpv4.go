@@ -189,7 +189,7 @@ func validServer(config ServerConfig) bool {
 }
 
 func validIPv4(address netip.Addr) bool {
-	return address.Is4() && !address.Is4In6() && address.Zone() == "" && !address.IsUnspecified() && !address.IsMulticast() && address != limitedBroadcast
+	return address.Is4() && !address.Is4In6() && address.Zone() == "" && !address.IsUnspecified() && !address.IsLoopback() && !address.IsMulticast() && address != limitedBroadcast
 }
 
 func validOptionalAdvertisedIPv4(address netip.Addr) bool {

@@ -41,7 +41,7 @@ func (r Request) Valid() bool {
 	if r.HostnameLength > MaxHostnameBytes || r.ClientIDLength > MaxClientIDBytes {
 		return false
 	}
-	if r.RequestedAddr.IsValid() && (!r.RequestedAddr.Is4() || r.RequestedAddr.Is4In6() || r.RequestedAddr.Zone() != "" || r.RequestedAddr.IsMulticast() || r.RequestedAddr == limitedBroadcast) {
+	if r.RequestedAddr.IsValid() && (!r.RequestedAddr.Is4() || r.RequestedAddr.Is4In6() || r.RequestedAddr.Zone() != "" || r.RequestedAddr.IsLoopback() || r.RequestedAddr.IsMulticast() || r.RequestedAddr == limitedBroadcast) {
 		return false
 	}
 	for _, value := range r.Hostname[r.HostnameLength:] {
@@ -121,7 +121,7 @@ type Resource interface {
 }
 
 func validRequiredIPv4(address netip.Addr) bool {
-	return address.Is4() && !address.Is4In6() && address.Zone() == "" && !address.IsUnspecified() && !address.IsMulticast() && address != limitedBroadcast
+	return address.Is4() && !address.Is4In6() && address.Zone() == "" && !address.IsUnspecified() && !address.IsLoopback() && !address.IsMulticast() && address != limitedBroadcast
 }
 
 func validOptionalIPv4(address netip.Addr) bool {

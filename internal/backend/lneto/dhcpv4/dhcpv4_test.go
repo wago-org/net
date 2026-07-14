@@ -93,23 +93,30 @@ func TestBoundLeaseCloseRollsBackIdentityAndAllowsFreshAcquisition(t *testing.T)
 	}
 }
 
-func TestClientRejectsLimitedBroadcastRequestBeforeQuotaOwnership(t *testing.T) {
-	core, adapter := newClient(t, false)
-	resource, progress, err := adapter.TryAcquire(dhcpns.Request{RequestedAddr: limitedBroadcast})
-	if resource != nil || progress != 0 || failureOf(err) != nscore.FailureInvalidArgument {
-		t.Fatalf("acquire = %T, %v, %v", resource, progress, err)
-	}
-	if adapter.lease != nil {
-		t.Fatalf("rejected request installed lease %p", adapter.lease)
-	}
-	if usage, _ := adapter.quotas.Snapshot(); usage != (quota.Usage{}) {
-		t.Fatalf("rejected request quota = %+v", usage)
-	}
-	core.Lock()
-	ports := core.UDPPortLeaseCountLocked()
-	core.Unlock()
-	if ports != 1 {
-		t.Fatalf("rejected request changed namespace client port ownership: %d", ports)
+func TestClientRejectsInvalidUnicastRequestBeforeQuotaOwnership(t *testing.T) {
+	for name, address := range map[string]netip.Addr{
+		"loopback":          netip.MustParseAddr("127.0.0.1"),
+		"limited broadcast": limitedBroadcast,
+	} {
+		t.Run(name, func(t *testing.T) {
+			core, adapter := newClient(t, false)
+			resource, progress, err := adapter.TryAcquire(dhcpns.Request{RequestedAddr: address})
+			if resource != nil || progress != 0 || failureOf(err) != nscore.FailureInvalidArgument {
+				t.Fatalf("acquire = %T, %v, %v", resource, progress, err)
+			}
+			if adapter.lease != nil {
+				t.Fatalf("rejected request installed lease %p", adapter.lease)
+			}
+			if usage, _ := adapter.quotas.Snapshot(); usage != (quota.Usage{}) {
+				t.Fatalf("rejected request quota = %+v", usage)
+			}
+			core.Lock()
+			ports := core.UDPPortLeaseCountLocked()
+			core.Unlock()
+			if ports != 1 {
+				t.Fatalf("rejected request changed namespace client port ownership: %d", ports)
+			}
+		})
 	}
 }
 
@@ -381,9 +388,15 @@ func TestDirectServerResponsesKeepRelayAddressClear(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
+		if destination := *eth.DestinationHardwareAddr(); destination != ([6]byte{2, 0, 0, 0, 0, 2}) {
+			t.Fatalf("direct %s Ethernet destination = %v", name, destination)
+		}
 		ip, err := ipv4.NewFrame(eth.Payload())
 		if err != nil {
 			t.Fatal(err)
+		}
+		if destination := netip.AddrFrom4(*ip.DestinationAddr()); destination != netip.MustParseAddr("192.0.2.2") {
+			t.Fatalf("direct %s IPv4 destination = %v", name, destination)
 		}
 		udp, err := lnetoudp.NewFrame(ip.Payload())
 		if err != nil {
@@ -582,30 +595,35 @@ func TestServerClientBoundAndPoolAreFinite(t *testing.T) {
 	}
 }
 
-func TestServerRejectsLimitedBroadcastAdvertisementsBeforeOwnership(t *testing.T) {
-	for _, field := range []string{"gateway", "DNS"} {
-		t.Run(field, func(t *testing.T) {
-			config := defaultConfig()
-			config.Server = ServerConfig{
-				ServerAddr: netip.MustParseAddr("192.0.2.1"), Gateway: netip.MustParseAddr("192.0.2.1"), DNS: netip.MustParseAddr("192.0.2.53"),
-				Subnet: netip.MustParsePrefix("192.0.2.0/24"), LeaseSeconds: 3600, MaxClients: 1,
-			}
-			if field == "gateway" {
-				config.Server.Gateway = limitedBroadcast
-			} else {
-				config.Server.DNS = limitedBroadcast
-			}
-			core, _, _ := newDHCPv4Core(t, config.Server.ServerAddr, [6]byte{2, 0, 0, 0, 0, 1}, serverPolicy())
-			if adapter, err := New(core, config); adapter != nil || failureOf(err) != nscore.FailureInvalidArgument {
-				t.Fatalf("New = %p, %v", adapter, err)
-			}
-			core.Lock()
-			ports := core.UDPPortLeaseCountLocked()
-			core.Unlock()
-			if ports != 0 {
-				t.Fatalf("rejected server retained %d UDP port leases", ports)
-			}
-		})
+func TestServerRejectsInvalidAdvertisementsBeforeOwnership(t *testing.T) {
+	for addressName, address := range map[string]netip.Addr{
+		"loopback":          netip.MustParseAddr("127.0.0.1"),
+		"limited broadcast": limitedBroadcast,
+	} {
+		for _, field := range []string{"gateway", "DNS"} {
+			t.Run(addressName+"/"+field, func(t *testing.T) {
+				config := defaultConfig()
+				config.Server = ServerConfig{
+					ServerAddr: netip.MustParseAddr("192.0.2.1"), Gateway: netip.MustParseAddr("192.0.2.1"), DNS: netip.MustParseAddr("192.0.2.53"),
+					Subnet: netip.MustParsePrefix("192.0.2.0/24"), LeaseSeconds: 3600, MaxClients: 1,
+				}
+				if field == "gateway" {
+					config.Server.Gateway = address
+				} else {
+					config.Server.DNS = address
+				}
+				core, _, _ := newDHCPv4Core(t, config.Server.ServerAddr, [6]byte{2, 0, 0, 0, 0, 1}, serverPolicy())
+				if adapter, err := New(core, config); adapter != nil || failureOf(err) != nscore.FailureInvalidArgument {
+					t.Fatalf("New = %p, %v", adapter, err)
+				}
+				core.Lock()
+				ports := core.UDPPortLeaseCountLocked()
+				core.Unlock()
+				if ports != 0 {
+					t.Fatalf("rejected server retained %d UDP port leases", ports)
+				}
+			})
+		}
 	}
 }
 

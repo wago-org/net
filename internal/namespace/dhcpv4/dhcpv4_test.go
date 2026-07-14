@@ -18,9 +18,16 @@ func TestRequestOwnsFiniteInlineValues(t *testing.T) {
 	}
 }
 
-func TestRequestRejectsLimitedBroadcastAddress(t *testing.T) {
-	if request := (Request{RequestedAddr: limitedBroadcast}); request.Valid() {
-		t.Fatalf("limited-broadcast request accepted: %+v", request)
+func TestRequestRejectsInvalidUnicastAddresses(t *testing.T) {
+	for name, address := range map[string]netip.Addr{
+		"loopback":          netip.MustParseAddr("127.0.0.1"),
+		"limited broadcast": limitedBroadcast,
+	} {
+		t.Run(name, func(t *testing.T) {
+			if request := (Request{RequestedAddr: address}); request.Valid() {
+				t.Fatalf("invalid request address accepted: %+v", request)
+			}
+		})
 	}
 }
 
@@ -45,29 +52,34 @@ func TestLeaseValidationBoundsOptions(t *testing.T) {
 	}
 }
 
-func TestLeaseRejectsLimitedBroadcastAddresses(t *testing.T) {
+func TestLeaseRejectsInvalidUnicastAddresses(t *testing.T) {
 	valid := Lease{
 		AssignedAddr: netip.MustParseAddr("192.0.2.10"), ServerAddr: netip.MustParseAddr("192.0.2.1"),
 		RouterAddr: netip.MustParseAddr("192.0.2.1"), BroadcastAddr: netip.MustParseAddr("192.0.2.255"),
 		Subnet: netip.MustParsePrefix("192.0.2.0/24"), LeaseSeconds: 3600,
 		DNSCount: 1, DNSServers: [MaxDNSServers]netip.Addr{netip.MustParseAddr("192.0.2.53")},
 	}
-	for _, mutate := range []struct {
-		name string
-		do   func(*Lease)
-	}{
-		{name: "assigned", do: func(lease *Lease) { lease.AssignedAddr = limitedBroadcast }},
-		{name: "server", do: func(lease *Lease) { lease.ServerAddr = limitedBroadcast }},
-		{name: "router", do: func(lease *Lease) { lease.RouterAddr = limitedBroadcast }},
-		{name: "broadcast", do: func(lease *Lease) { lease.BroadcastAddr = limitedBroadcast }},
-		{name: "DNS", do: func(lease *Lease) { lease.DNSServers[0] = limitedBroadcast }},
+	for addressName, address := range map[string]netip.Addr{
+		"loopback":          netip.MustParseAddr("127.0.0.1"),
+		"limited broadcast": limitedBroadcast,
 	} {
-		t.Run(mutate.name, func(t *testing.T) {
-			lease := valid
-			mutate.do(&lease)
-			if lease.Valid() {
-				t.Fatalf("limited-broadcast %s accepted: %+v", mutate.name, lease)
-			}
-		})
+		for _, mutate := range []struct {
+			name string
+			do   func(*Lease)
+		}{
+			{name: "assigned", do: func(lease *Lease) { lease.AssignedAddr = address }},
+			{name: "server", do: func(lease *Lease) { lease.ServerAddr = address }},
+			{name: "router", do: func(lease *Lease) { lease.RouterAddr = address }},
+			{name: "broadcast", do: func(lease *Lease) { lease.BroadcastAddr = address }},
+			{name: "DNS", do: func(lease *Lease) { lease.DNSServers[0] = address }},
+		} {
+			t.Run(addressName+"/"+mutate.name, func(t *testing.T) {
+				lease := valid
+				mutate.do(&lease)
+				if lease.Valid() {
+					t.Fatalf("invalid %s accepted: %+v", mutate.name, lease)
+				}
+			})
+		}
 	}
 }
