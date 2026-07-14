@@ -22,6 +22,9 @@ func Resolve(state *core.State, namespaceHandle resource.Handle, request dnsns.R
 		query, backendProgress, backendErr := backend.TryResolve(request)
 		progress = backendProgress
 		if backendErr != nil {
+			if !resource.IsNil(query) {
+				_ = query.Close()
+			}
 			return backendErr
 		}
 		typedQuery, ok := query.(dnsns.Query)

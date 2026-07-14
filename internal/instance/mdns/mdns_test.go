@@ -40,14 +40,15 @@ func (n *fakeNamespace) TryAnnounce(uint16) (nscore.Resource, nscore.Progress, e
 }
 
 type fakeQuery struct {
-	record   mdnsns.Record
-	next     mdnsns.Next
-	failure  error
-	canceled bool
-	closed   bool
+	record     mdnsns.Record
+	next       mdnsns.Next
+	failure    error
+	canceled   bool
+	closed     bool
+	closeCalls int
 }
 
-func (q *fakeQuery) Close() error { q.closed = true; return nil }
+func (q *fakeQuery) Close() error { q.closed = true; q.closeCalls++; return nil }
 func (q *fakeQuery) Cancel() error {
 	q.canceled = true
 	return nil
@@ -58,13 +59,14 @@ func (q *fakeQuery) TryNext() (mdnsns.Record, mdnsns.Next, error) {
 }
 
 type fakeAnnouncement struct {
-	next     mdnsns.Next
-	failure  error
-	canceled bool
-	closed   bool
+	next       mdnsns.Next
+	failure    error
+	canceled   bool
+	closed     bool
+	closeCalls int
 }
 
-func (a *fakeAnnouncement) Close() error { a.closed = true; return nil }
+func (a *fakeAnnouncement) Close() error { a.closed = true; a.closeCalls++; return nil }
 func (a *fakeAnnouncement) Cancel() error {
 	a.canceled = true
 	return nil
@@ -160,18 +162,37 @@ func TestInstanceMDNSRejectsInvalidBackendResults(t *testing.T) {
 func TestInstanceMDNSCanonicalizesFailedAndUnusedOutputs(t *testing.T) {
 	dirtyRecord := mdnsns.Record{Name: "dirty.local", Type: mdnsns.RecordA, TTLSeconds: 120, Address: netip.MustParseAddr("192.0.2.99")}
 	backendFailure := nscore.Fail(nscore.FailureTimedOut, errors.New("timeout"))
+	failedQuery := new(fakeQuery)
+	failedAnnouncement := new(fakeAnnouncement)
 	backend := &fakeNamespace{
-		query: new(fakeQuery), queryProgress: nscore.ProgressDone, queryFailure: backendFailure,
-		announcement: new(fakeAnnouncement), announceProgress: nscore.ProgressDone, announceFailure: backendFailure,
+		query: failedQuery, queryProgress: nscore.ProgressDone, queryFailure: backendFailure,
+		announcement: failedAnnouncement, announceProgress: nscore.ProgressDone, announceFailure: backendFailure,
 	}
 	state, manager, instance := attachState(t, backend, 4)
 	defer manager.Detach(instance)
+	resourcesBefore := state.Resources().Len()
+	readinessBefore := state.Readiness().Snapshot()
 
 	if handle, progress, err := Query(state, state.NamespaceHandle(), mdnsns.Request{Name: "host.local", Types: mdnsns.RecordsA}); handle != 0 || progress != 0 || failureOf(err) != nscore.FailureTimedOut {
 		t.Fatalf("failed Query = %v, %v, %v", handle, progress, err)
 	}
 	if handle, progress, err := Announce(state, state.NamespaceHandle(), 0); handle != 0 || progress != 0 || failureOf(err) != nscore.FailureTimedOut {
 		t.Fatalf("failed Announce = %v, %v, %v", handle, progress, err)
+	}
+	if failedQuery.closeCalls != 1 || failedAnnouncement.closeCalls != 1 || state.Resources().Len() != resourcesBefore || state.Readiness().Snapshot() != readinessBefore {
+		t.Fatalf("failed creations retained state: query closes=%d announcement closes=%d resources=%d readiness=%+v", failedQuery.closeCalls, failedAnnouncement.closeCalls, state.Resources().Len(), state.Readiness().Snapshot())
+	}
+	var typedNilQuery *fakeQuery
+	var typedNilAnnouncement *fakeAnnouncement
+	backend.query, backend.announcement = typedNilQuery, typedNilAnnouncement
+	if handle, progress, err := Query(state, state.NamespaceHandle(), mdnsns.Request{Name: "host.local", Types: mdnsns.RecordsA}); handle != 0 || progress != 0 || failureOf(err) != nscore.FailureTimedOut {
+		t.Fatalf("typed-nil failed Query = %v, %v, %v", handle, progress, err)
+	}
+	if handle, progress, err := Announce(state, state.NamespaceHandle(), 0); handle != 0 || progress != 0 || failureOf(err) != nscore.FailureTimedOut {
+		t.Fatalf("typed-nil failed Announce = %v, %v, %v", handle, progress, err)
+	}
+	if state.Resources().Len() != resourcesBefore || state.Readiness().Snapshot() != readinessBefore {
+		t.Fatalf("typed-nil failed creations retained state: resources=%d readiness=%+v", state.Resources().Len(), state.Readiness().Snapshot())
 	}
 
 	query := &fakeQuery{record: dirtyRecord, next: mdnsns.NextWouldBlock}

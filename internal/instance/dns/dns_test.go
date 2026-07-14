@@ -118,12 +118,26 @@ func TestOperationsPreserveReadinessCancellationAndGenerationSafety(t *testing.T
 func TestFailedAndUnusedOutputsAreCanonical(t *testing.T) {
 	dirtyRecord := namespace.DNSRecord{Name: "dirty.example.com", Type: namespace.DNSRecordA, TTLSeconds: 60, Address: netip.MustParseAddr("192.0.2.99")}
 	backendFailure := namespace.Fail(namespace.FailureTimedOut, errors.New("timeout"))
-	backend := &fakeNamespace{query: new(fakeQuery), progress: namespace.ProgressDone, failure: backendFailure}
+	failedQuery := new(fakeQuery)
+	backend := &fakeNamespace{query: failedQuery, progress: namespace.ProgressDone, failure: backendFailure}
 	state, manager, instance := attachState(t, backend, 2)
 	defer manager.Detach(instance)
+	resourcesBefore := state.Resources().Len()
+	readinessBefore := state.Readiness().Snapshot()
 
 	if handle, progress, err := Resolve(state, state.NamespaceHandle(), namespace.DNSRequest{Name: "example.com", Types: namespace.DNSRecordsA}); handle != 0 || progress != 0 || failureOf(t, err) != namespace.FailureTimedOut {
 		t.Fatalf("failed Resolve = %v, %v, %v", handle, progress, err)
+	}
+	if failedQuery.closed.Load() != 1 || state.Resources().Len() != resourcesBefore || state.Readiness().Snapshot() != readinessBefore {
+		t.Fatalf("failed Resolve retained state: closes=%d resources=%d readiness=%+v", failedQuery.closed.Load(), state.Resources().Len(), state.Readiness().Snapshot())
+	}
+	var typedNil *fakeQuery
+	backend.query = typedNil
+	if handle, progress, err := Resolve(state, state.NamespaceHandle(), namespace.DNSRequest{Name: "example.com", Types: namespace.DNSRecordsA}); handle != 0 || progress != 0 || failureOf(t, err) != namespace.FailureTimedOut {
+		t.Fatalf("typed-nil failed Resolve = %v, %v, %v", handle, progress, err)
+	}
+	if state.Resources().Len() != resourcesBefore || state.Readiness().Snapshot() != readinessBefore {
+		t.Fatalf("typed-nil failed Resolve retained state: resources=%d readiness=%+v", state.Resources().Len(), state.Readiness().Snapshot())
 	}
 
 	query := &fakeQuery{scripted: true}

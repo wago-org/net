@@ -22,6 +22,9 @@ func Sync(state *core.State, namespaceHandle resource.Handle) (handle resource.H
 		synchronization, backendProgress, backendErr := backend.TrySync()
 		progress = backendProgress
 		if backendErr != nil {
+			if !resource.IsNil(synchronization) {
+				_ = synchronization.Close()
+			}
 			return backendErr
 		}
 		typed, ok := synchronization.(ntpns.Sync)

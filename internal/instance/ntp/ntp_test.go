@@ -43,14 +43,15 @@ func (n *fakeNamespace) TrySync() (nscore.Resource, nscore.Progress, error) {
 }
 
 type fakeSync struct {
-	sample   ntpns.Sample
-	next     ntpns.Next
-	failure  error
-	canceled bool
-	closed   bool
+	sample     ntpns.Sample
+	next       ntpns.Next
+	failure    error
+	canceled   bool
+	closed     bool
+	closeCalls int
 }
 
-func (s *fakeSync) Close() error { s.closed = true; return nil }
+func (s *fakeSync) Close() error { s.closed = true; s.closeCalls++; return nil }
 func (s *fakeSync) Cancel() error {
 	s.canceled = true
 	return nil
@@ -75,7 +76,8 @@ func TestInstanceNTPCanonicalizesFailedAndUnusedOutputs(t *testing.T) {
 		RoundTripDelay: time.Millisecond, Stratum: 2, Version: 4,
 	}
 	backendFailure := nscore.Fail(nscore.FailureTimedOut, errors.New("timeout"))
-	adapter := &fakeNamespace{next: new(fakeSync), progress: nscore.ProgressDone, failure: backendFailure}
+	failedSync := new(fakeSync)
+	adapter := &fakeNamespace{next: failedSync, progress: nscore.ProgressDone, failure: backendFailure}
 	manager, err := instancecore.NewManagerConfigured(instancecore.Config{
 		Limits: quota.DefaultLimits(), Readiness: instancecore.DefaultConfig().Readiness,
 		NamespaceFactory: func(*policy.Policy, *quota.Account) (nscore.Namespace, error) {
@@ -91,9 +93,22 @@ func TestInstanceNTPCanonicalizesFailedAndUnusedOutputs(t *testing.T) {
 	}
 	defer manager.Detach(instance)
 	state, _ := manager.ForInstance(instance)
+	resourcesBefore := state.Resources().Len()
+	readinessBefore := state.Readiness().Snapshot()
 
 	if handle, progress, err := Sync(state, state.NamespaceHandle()); handle != 0 || progress != 0 || failureOf(err) != nscore.FailureTimedOut {
 		t.Fatalf("failed Sync = %v, %v, %v", handle, progress, err)
+	}
+	if failedSync.closeCalls != 1 || state.Resources().Len() != resourcesBefore || state.Readiness().Snapshot() != readinessBefore {
+		t.Fatalf("failed Sync retained state: closes=%d resources=%d readiness=%+v", failedSync.closeCalls, state.Resources().Len(), state.Readiness().Snapshot())
+	}
+	var typedNil *fakeSync
+	adapter.next = typedNil
+	if handle, progress, err := Sync(state, state.NamespaceHandle()); handle != 0 || progress != 0 || failureOf(err) != nscore.FailureTimedOut {
+		t.Fatalf("typed-nil failed Sync = %v, %v, %v", handle, progress, err)
+	}
+	if state.Resources().Len() != resourcesBefore || state.Readiness().Snapshot() != readinessBefore {
+		t.Fatalf("typed-nil failed Sync retained state: resources=%d readiness=%+v", state.Resources().Len(), state.Readiness().Snapshot())
 	}
 
 	synchronization := &fakeSync{sample: dirtySample, next: ntpns.NextWouldBlock}

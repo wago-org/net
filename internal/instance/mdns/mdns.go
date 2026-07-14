@@ -17,6 +17,9 @@ func Query(state *core.State, namespaceHandle resource.Handle, request mdnsns.Re
 		value, backendProgress, backendErr := backend.TryQuery(request)
 		progress = backendProgress
 		if backendErr != nil {
+			if !resource.IsNil(value) {
+				_ = value.Close()
+			}
 			return backendErr
 		}
 		typed, ok := value.(mdnsns.Query)
@@ -95,6 +98,9 @@ func Announce(state *core.State, namespaceHandle resource.Handle, service uint16
 		value, backendProgress, backendErr := backend.TryAnnounce(service)
 		progress = backendProgress
 		if backendErr != nil {
+			if !resource.IsNil(value) {
+				_ = value.Close()
+			}
 			return backendErr
 		}
 		typed, ok := value.(mdnsns.Announcement)
