@@ -37,13 +37,15 @@ func TestAdapterRequiresUnicastGatewayHardwareAddressWhenEnabled(t *testing.T) {
 	}
 }
 
-func TestTryEchoRejectsLoopbackBeforePolicyOwnershipAndAdapterMutation(t *testing.T) {
+func TestTryEchoRejectsNonWireDestinationsBeforePolicyOwnershipAndAdapterMutation(t *testing.T) {
 	compiled, err := policy.Compile(policy.Config{
 		Rules: []policy.Rule{{
 			Action: policy.ActionAllow, Transports: []policy.Transport{policy.TransportICMPv4},
 			Directions: []policy.Direction{policy.DirectionOutbound},
 		}},
-		LoopbackTransports: []policy.Transport{policy.TransportICMPv4},
+		LoopbackTransports:  []policy.Transport{policy.TransportICMPv4},
+		MulticastTransports: []policy.Transport{policy.TransportICMPv4},
+		BroadcastTransports: []policy.Transport{policy.TransportICMPv4},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -65,14 +67,22 @@ func TestTryEchoRejectsLoopbackBeforePolicyOwnershipAndAdapterMutation(t *testin
 	}
 	payload := []byte("owned-only-on-success")
 	identifier, sequence, cursor := adapter.nextIdentifier, adapter.nextSequence, adapter.cursor
-	if resource, progress, err := adapter.TryEcho(icmpns.Request{Destination: netip.MustParseAddr("127.0.0.1"), Payload: payload}); resource != nil || progress != 0 || failureOf(t, err) != nscore.FailureInvalidArgument {
-		t.Fatalf("loopback echo = %T, %v, %v", resource, progress, err)
-	}
-	if string(payload) != "owned-only-on-success" || len(adapter.echoes) != 0 || len(adapter.byIdentity) != 0 || adapter.cursor != cursor || adapter.nextIdentifier != identifier || adapter.nextSequence != sequence || adapter.hasWorkLocked() {
-		t.Fatalf("loopback echo mutated adapter: echoes=%d identities=%d cursor=%d next=%d/%d work=%v payload=%q", len(adapter.echoes), len(adapter.byIdentity), adapter.cursor, adapter.nextIdentifier, adapter.nextSequence, adapter.hasWorkLocked(), payload)
-	}
-	if usage, closed := account.Snapshot(); closed || usage != (quota.Usage{}) {
-		t.Fatalf("loopback echo quota = %+v, closed=%v", usage, closed)
+	for name, destination := range map[string]netip.Addr{
+		"loopback":          netip.MustParseAddr("127.0.0.1"),
+		"multicast":         netip.MustParseAddr("224.0.0.1"),
+		"limited broadcast": limitedBroadcastAddress,
+	} {
+		t.Run(name, func(t *testing.T) {
+			if resource, progress, err := adapter.TryEcho(icmpns.Request{Destination: destination, Payload: payload}); resource != nil || progress != 0 || failureOf(t, err) != nscore.FailureInvalidArgument {
+				t.Fatalf("non-wire echo = %T, %v, %v", resource, progress, err)
+			}
+			if string(payload) != "owned-only-on-success" || len(adapter.echoes) != 0 || len(adapter.byIdentity) != 0 || adapter.cursor != cursor || adapter.nextIdentifier != identifier || adapter.nextSequence != sequence || adapter.hasWorkLocked() {
+				t.Fatalf("non-wire echo mutated adapter: echoes=%d identities=%d cursor=%d next=%d/%d work=%v payload=%q", len(adapter.echoes), len(adapter.byIdentity), adapter.cursor, adapter.nextIdentifier, adapter.nextSequence, adapter.hasWorkLocked(), payload)
+			}
+			if usage, closed := account.Snapshot(); closed || usage != (quota.Usage{}) {
+				t.Fatalf("non-wire echo quota = %+v, closed=%v", usage, closed)
+			}
+		})
 	}
 
 	resource, progress, err := adapter.TryEcho(icmpns.Request{Destination: netip.MustParseAddr("192.0.2.99"), Payload: payload})

@@ -91,19 +91,24 @@ func AllowLoopback() Option {
 	return WithPolicy(wagonet.PolicyConfig{LoopbackTransports: []wagonet.PolicyTransport{wagonet.PolicyTransportICMPv4}})
 }
 
-// AllowMulticast permits otherwise granted multicast echo destinations.
+// AllowMulticast grants multicast policy authority. The physical link-backed
+// adapter still rejects multicast because it cannot emit or correlate a
+// one-result echo exchange with multicast wire semantics.
 func AllowMulticast() Option {
 	return WithPolicy(wagonet.PolicyConfig{MulticastTransports: []wagonet.PolicyTransport{wagonet.PolicyTransportICMPv4}})
 }
 
-// AllowBroadcast permits otherwise granted limited-broadcast echo destinations.
+// AllowBroadcast grants limited-broadcast policy authority. The physical
+// link-backed adapter still rejects limited broadcast because it cannot emit or
+// correlate a one-result echo exchange with broadcast wire semantics.
 func AllowBroadcast() Option {
 	return WithPolicy(wagonet.PolicyConfig{BroadcastTransports: []wagonet.PolicyTransport{wagonet.PolicyTransportICMPv4}})
 }
 
 // AllowAll conspicuously grants policy authority for every structurally valid
 // IPv4 destination class. The physical link-backed adapter still rejects
-// loopback; payloads, resources, retries, service, and quotas remain finite.
+// loopback, multicast, and limited broadcast; payloads, resources, retries,
+// service, and quotas remain finite.
 func AllowAll() Option {
 	return WithPolicy(wagonet.PolicyConfig{
 		Rules: []wagonet.PolicyRule{{

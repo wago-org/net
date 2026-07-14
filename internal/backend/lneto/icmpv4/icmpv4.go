@@ -27,9 +27,10 @@ const (
 )
 
 var (
-	errPolicyDenied = errors.New("net: ICMPv4 policy denied operation")
-	errCanceled     = errors.New("ICMPv4 echo canceled")
-	errReplyLimit   = errors.New("ICMPv4 reply service-attempt limit reached")
+	limitedBroadcastAddress = netip.AddrFrom4([4]byte{255, 255, 255, 255})
+	errPolicyDenied         = errors.New("net: ICMPv4 policy denied operation")
+	errCanceled             = errors.New("ICMPv4 echo canceled")
+	errReplyLimit           = errors.New("ICMPv4 reply service-attempt limit reached")
 )
 
 // Config fixes concurrent echo resources, copied payload bytes, transmission
@@ -146,7 +147,7 @@ func (a *Adapter) TryEcho(request icmpns.Request) (nscore.Resource, nscore.Progr
 	if a.core.ClosedLocked() {
 		return nil, 0, nscore.Fail(nscore.FailureClosed, net.ErrClosed)
 	}
-	if !request.Valid() || request.Destination.IsLoopback() {
+	if !request.Valid() || request.Destination.IsLoopback() || request.Destination.IsMulticast() || request.Destination == limitedBroadcastAddress {
 		return nil, 0, nscore.Fail(nscore.FailureInvalidArgument, lneto.ErrInvalidAddr)
 	}
 	if len(request.Payload) > a.config.MaxPayloadBytes {
