@@ -4,8 +4,11 @@ import (
 	"net/netip"
 	"testing"
 
+	lneto "github.com/soypat/lneto"
 	lnetodhcp "github.com/soypat/lneto/dhcp/dhcpv4"
 	"github.com/soypat/lneto/ethernet"
+	"github.com/soypat/lneto/ipv4"
+	lnetoudp "github.com/soypat/lneto/udp"
 	lnetocore "github.com/wago-org/net/internal/backend/lneto/core"
 	nscore "github.com/wago-org/net/internal/namespace/core"
 	dhcpns "github.com/wago-org/net/internal/namespace/dhcpv4"
@@ -47,6 +50,47 @@ func TestImmediateClientServerDORAAppliesAndRollsBackIdentity(t *testing.T) {
 	}
 }
 
+func TestBoundLeaseCloseRollsBackIdentityAndAllowsFreshAcquisition(t *testing.T) {
+	clientCore, client := newClient(t, true)
+	serverCore, _ := newServer(t, 1)
+	resource, _, err := client.TryAcquire(dhcpns.Request{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	bound := resource.(*leaseResource)
+	for range 2 {
+		transferOne(t, clientCore, serverCore)
+		transferOne(t, serverCore, clientCore)
+	}
+	result, state, err := bound.TryResult()
+	if err != nil || state != dhcpns.ResultReady || !result.Applied || !bound.identity.Active() {
+		t.Fatalf("bound result = %+v, %v, %v identity=%v", result, state, err, bound.identity.Active())
+	}
+	if err := bound.Close(); err != nil {
+		t.Fatal(err)
+	}
+	clientCore.Lock()
+	address := clientCore.IPv4AddressLocked()
+	ports := clientCore.UDPPortLeaseCountLocked()
+	clientCore.Unlock()
+	if address != netip.IPv4Unspecified() || ports != 1 || client.lease != nil || bound.identity.Active() || bound.result != (dhcpns.Lease{}) || bound.request != (dhcpns.Request{}) {
+		t.Fatalf("bound close state: address=%v ports=%d mapped=%p identity=%v result=%+v request=%+v", address, ports, client.lease, bound.identity.Active(), bound.result, bound.request)
+	}
+	if usage, _ := client.quotas.Snapshot(); usage != (quota.Usage{}) {
+		t.Fatalf("bound close quota = %+v", usage)
+	}
+	fresh, progress, err := client.TryAcquire(dhcpns.Request{})
+	if err != nil || progress != nscore.ProgressInProgress || fresh == bound {
+		t.Fatalf("fresh acquisition = %T, %v, %v stale=%p", fresh, progress, err, bound)
+	}
+	if err := bound.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if client.lease != fresh {
+		t.Fatalf("stale bound close affected fresh lease: mapped=%p fresh=%p", client.lease, fresh)
+	}
+}
+
 func TestClientTimeoutCancellationQuotaAndPortOwnership(t *testing.T) {
 	core, adapter := newClient(t, false)
 	resource, _, err := adapter.TryAcquire(dhcpns.Request{})
@@ -74,6 +118,89 @@ func TestClientTimeoutCancellationQuotaAndPortOwnership(t *testing.T) {
 		t.Fatal("namespace client port lease was not retained")
 	}
 	core.Unlock()
+}
+
+func TestClientNACKRetiresWorkClearsOnCloseAndIsolatesFreshLease(t *testing.T) {
+	clientCore, client := newClient(t, false)
+	serverCore, _ := newServer(t, 1)
+	resource, progress, err := client.TryAcquire(dhcpns.Request{})
+	if err != nil || progress != nscore.ProgressInProgress {
+		t.Fatalf("acquire = %T, %v, %v", resource, progress, err)
+	}
+	failed := resource.(*leaseResource)
+	if usage, closed := client.quotas.Snapshot(); closed || usage != (quota.Usage{Resources: 1, DHCPv4Resources: 1, QueuedBytes: 576, DHCPv4Work: 1}) {
+		t.Fatalf("active quota = %+v, closed=%v", usage, closed)
+	}
+
+	transferOne(t, clientCore, serverCore)
+	transferOne(t, serverCore, clientCore)
+	transferOne(t, clientCore, serverCore)
+	ack := serviceEgress(t, serverCore)
+	nack := rewriteDHCPMessageType(t, ack, lnetodhcp.MsgNack)
+	serviceIngress(t, clientCore, nack)
+
+	if failed.Readiness() != nscore.ReadyError {
+		t.Fatalf("NACK readiness = %v", failed.Readiness())
+	}
+	if _, _, err := failed.TryResult(); failureOf(err) != nscore.FailureTemporary {
+		t.Fatalf("NACK result = %v", err)
+	}
+	clientCore.Lock()
+	leases := clientCore.UDPPortLeaseCountLocked()
+	clientCore.Unlock()
+	if failed.state != leaseFailed || failed.wait != 0 || client.lease != failed || leases != 1 {
+		t.Fatalf("terminal state = state:%v wait:%d mapped:%p leases:%d", failed.state, failed.wait, client.lease, leases)
+	}
+	if usage, _ := client.quotas.Snapshot(); usage != (quota.Usage{Resources: 1, DHCPv4Resources: 1, QueuedBytes: 576}) {
+		t.Fatalf("terminal quota = %+v", usage)
+	}
+
+	serviceIngress(t, clientCore, ack)
+	if failed.Readiness() != nscore.ReadyError || failed.state != leaseFailed {
+		t.Fatalf("late ACK changed terminal lease: readiness=%v state=%v", failed.Readiness(), failed.state)
+	}
+	if _, _, err := client.TryAcquire(dhcpns.Request{}); failureOf(err) != nscore.FailureResourceLimit {
+		t.Fatalf("terminal resource concurrency = %v", err)
+	}
+	if err := failed.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if failed.Readiness() != nscore.ReadyClosed || failed.request != (dhcpns.Request{}) || failed.result != (dhcpns.Lease{}) || failed.failure != nil || failed.wait != 0 || failed.identity.Active() || client.lease != nil || failed.retained.ResetReleased() || failed.work.ResetReleased() {
+		t.Fatalf("closed terminal resource retained state: %+v", failed)
+	}
+	if usage, _ := client.quotas.Snapshot(); usage != (quota.Usage{}) {
+		t.Fatalf("closed terminal quota = %+v", usage)
+	}
+
+	resource, progress, err = client.TryAcquire(dhcpns.Request{})
+	if err != nil || progress != nscore.ProgressInProgress {
+		t.Fatalf("fresh acquire = %T, %v, %v", resource, progress, err)
+	}
+	fresh := resource.(*leaseResource)
+	if fresh == failed || client.lease != fresh {
+		t.Fatalf("fresh lease reused stale wrapper: stale=%p fresh=%p mapped=%p", failed, fresh, client.lease)
+	}
+	if err := failed.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if usage, _ := client.quotas.Snapshot(); usage != (quota.Usage{Resources: 1, DHCPv4Resources: 1, QueuedBytes: 576, DHCPv4Work: 1}) || client.lease != fresh {
+		t.Fatalf("stale close affected fresh lease: usage=%+v mapped=%p", usage, client.lease)
+	}
+	if err := clientCore.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if fresh.Readiness() != nscore.ReadyClosed || fresh.request != (dhcpns.Request{}) || fresh.result != (dhcpns.Lease{}) || fresh.failure != nil || fresh.identity.Active() {
+		t.Fatalf("namespace close retained fresh lease: %+v", fresh)
+	}
+	if usage, _ := client.quotas.Snapshot(); usage != (quota.Usage{}) {
+		t.Fatalf("namespace close quota = %+v", usage)
+	}
+	clientCore.Lock()
+	leases = clientCore.UDPPortLeaseCountLocked()
+	clientCore.Unlock()
+	if leases != 0 {
+		t.Fatalf("namespace close retained client port lease: %d", leases)
+	}
 }
 
 func TestServerClientBoundAndPoolAreFinite(t *testing.T) {
@@ -241,6 +368,45 @@ func serviceIngress(t testing.TB, core *lnetocore.Namespace, frame []byte) {
 	if err != nil || progress != nscore.ProgressDone || report.Packets != 1 {
 		t.Fatalf("ingress = %+v, %v, %v", report, progress, err)
 	}
+}
+
+func rewriteDHCPMessageType(t testing.TB, frame []byte, message lnetodhcp.MessageType) []byte {
+	t.Helper()
+	frame = append([]byte(nil), frame...)
+	eth, err := ethernet.NewFrame(frame)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ip, err := ipv4.NewFrame(eth.Payload())
+	if err != nil {
+		t.Fatal(err)
+	}
+	udp, err := lnetoudp.NewFrame(ip.Payload())
+	if err != nil {
+		t.Fatal(err)
+	}
+	dhcp, err := lnetodhcp.NewFrame(udp.Payload())
+	if err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	if err := dhcp.ForEachOption(func(_ int, option lnetodhcp.OptNum, data []byte) error {
+		if option == lnetodhcp.OptMessageType && len(data) == 1 {
+			data[0] = byte(message)
+			found = true
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if !found {
+		t.Fatal("DHCP message type option not found")
+	}
+	udp.SetCRC(0)
+	var checksum lneto.CRC791
+	ip.CRCWriteUDPPseudo(&checksum, udp.Length())
+	udp.SetCRC(lneto.NeverZeroSum(checksum.PayloadSum16(udp.RawData()[:udp.Length()])))
+	return frame
 }
 
 func rewriteEthernetSource(t testing.TB, frame []byte, source [6]byte) []byte {
