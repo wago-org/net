@@ -48,8 +48,8 @@ func NamespaceDefault(host plugin.Host, module wago.HostModule, params, results 
 		return
 	}
 	memory := guest.Memory(module)
-	out := uint32(params[0])
-	if !abicore.CheckRanges(memory, false, abicore.Range{Ptr: out, Length: abicore.HandleV1Size}) {
+	out, ok := abicore.NarrowUint32(params[0])
+	if !ok || !abicore.CheckRanges(memory, false, abicore.Range{Ptr: out, Length: abicore.HandleV1Size}) {
 		guest.SetStatus(results, guest.StatusInvalidArgument)
 		return
 	}
@@ -76,8 +76,9 @@ func Echo(host plugin.Host, module wago.HostModule, params, results []uint64) {
 		return
 	}
 	memory := guest.Memory(module)
-	requestPtr, out := uint32(params[1]), uint32(params[2])
-	if !icmpabi.CheckEchoV1(memory, requestPtr, out) {
+	requestPtr, requestOK := abicore.NarrowUint32(params[1])
+	out, outOK := abicore.NarrowUint32(params[2])
+	if !requestOK || !outOK || !icmpabi.CheckEchoV1(memory, requestPtr, out) {
 		guest.SetStatus(results, guest.StatusInvalidArgument)
 		return
 	}
@@ -118,8 +119,10 @@ func Result(host plugin.Host, module wago.HostModule, params, results []uint64) 
 		return
 	}
 	memory := guest.Memory(module)
-	payloadPtr, payloadLen, resultPtr := uint32(params[1]), uint32(params[2]), uint32(params[3])
-	if !icmpabi.CheckResultV1(memory, payloadPtr, payloadLen, resultPtr) {
+	payloadPtr, payloadOK := abicore.NarrowUint32(params[1])
+	payloadLen, lengthOK := abicore.NarrowUint32(params[2])
+	resultPtr, resultOK := abicore.NarrowUint32(params[3])
+	if !payloadOK || !lengthOK || !resultOK || !icmpabi.CheckResultV1(memory, payloadPtr, payloadLen, resultPtr) {
 		guest.SetStatus(results, guest.StatusInvalidArgument)
 		return
 	}

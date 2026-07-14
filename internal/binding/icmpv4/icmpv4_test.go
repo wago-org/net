@@ -199,6 +199,59 @@ func TestBindingsPrevalidateEchoAndPreserveResultOutputs(t *testing.T) {
 	}
 }
 
+func TestBindingsRejectHighBitI32AliasesBeforeStateAndBackendWork(t *testing.T) {
+	backend := &fakeNamespace{}
+	manager, instance := attachManager(t, backend)
+	defer manager.Detach(instance)
+	host := testHost{instance: instance, memory: bytes.Repeat([]byte{0x6d}, 1024)}
+	bindings := Bindings(plugin.NewHost(manager))
+	state, ok := manager.ForInstance(instance)
+	if !ok {
+		t.Fatal("attached state missing")
+	}
+	namespaceHandle := state.NamespaceHandle()
+
+	copy(host.memory[128:132], "ping")
+	if !icmpabi.EncodeEchoRequestV1(host.memory, 0, nscore.Endpoint{Address: netip.MustParseAddr("192.0.2.9")}, 128, 4) {
+		t.Fatal("encode request")
+	}
+	echo := &fakeEcho{next: icmpns.NextWouldBlock}
+	backend.next, backend.progress = echo, nscore.ProgressDone
+	echoHandle, err := state.Resources().Add(resource.KindICMPv4Echo, echo)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	high := uint64(1) << 32
+	tests := []struct {
+		name    string
+		binding string
+		params  []uint64
+	}{
+		{name: "namespace output", binding: "namespace_default", params: []uint64{high | 900}},
+		{name: "echo request", binding: "echo", params: []uint64{uint64(namespaceHandle), high, 80}},
+		{name: "echo output", binding: "echo", params: []uint64{uint64(namespaceHandle), 0, high | 80}},
+		{name: "result payload", binding: "result", params: []uint64{uint64(echoHandle), high | 256, 16, 320}},
+		{name: "result length", binding: "result", params: []uint64{uint64(echoHandle), 256, high | 16, 320}},
+		{name: "result output", binding: "result", params: []uint64{uint64(echoHandle), 256, 16, high | 320}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			before := append([]byte(nil), host.memory...)
+			echoCalls, resultCalls := backend.calls, echo.resultCalls
+			if status := callBinding(t, bindingByName(t, bindings, test.binding), host, test.params...); status != guest.StatusInvalidArgument {
+				t.Fatalf("status = %v", status)
+			}
+			if backend.calls != echoCalls || echo.resultCalls != resultCalls {
+				t.Fatalf("backend work changed: echo=%d result=%d", backend.calls, echo.resultCalls)
+			}
+			if !bytes.Equal(host.memory, before) {
+				t.Fatal("invalid alias mutated guest memory")
+			}
+		})
+	}
+}
+
 func TestResultRejectsRangesBeforeHandleLookup(t *testing.T) {
 	manager := instancecore.NewManager()
 	instance := new(wago.Instance)
