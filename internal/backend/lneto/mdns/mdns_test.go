@@ -587,6 +587,137 @@ func TestMDNSCanonicalDuplicateQuestionsAndKnownAnswerSuppression(t *testing.T) 
 	_ = serviceEgress(t, core)
 }
 
+func TestMDNSKnownAnswerComparisonCoversEveryServiceRecord(t *testing.T) {
+	service := testService("device", "192.0.2.11")
+	records, err := serviceResources(service, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	byType := make(map[lnetodns.Type]lnetodns.Resource, len(records))
+	for _, record := range records {
+		byType[record.Header().Type] = record
+	}
+	for _, typ := range []lnetodns.Type{lnetodns.TypeA, lnetodns.TypePTR, lnetodns.TypeSRV, lnetodns.TypeTXT} {
+		t.Run(typ.String(), func(t *testing.T) {
+			candidate := byType[typ]
+			if !sameKnownAnswer(candidate, candidate) {
+				t.Fatal("exact known answer did not suppress")
+			}
+			threshold := service
+			threshold.TTLSeconds = service.TTLSeconds / 2
+			if !sameKnownAnswer(resourceOfType(t, threshold, typ), candidate) {
+				t.Fatal("half-TTL known answer did not suppress")
+			}
+			low := service
+			low.TTLSeconds = service.TTLSeconds/2 - 1
+			if sameKnownAnswer(resourceOfType(t, low, typ), candidate) {
+				t.Fatal("below-half-TTL known answer suppressed")
+			}
+			mismatch := service
+			switch typ {
+			case lnetodns.TypeA:
+				mismatch.Address = netip.MustParseAddr("192.0.2.99")
+			case lnetodns.TypePTR:
+				mismatch.Name = "other._demo._udp.local"
+			case lnetodns.TypeSRV:
+				mismatch.Port++
+			case lnetodns.TypeTXT:
+				mismatch.TXT[3] = 'x'
+			}
+			if sameKnownAnswer(resourceOfType(t, mismatch, typ), candidate) {
+				t.Fatal("mismatched RDATA suppressed")
+			}
+			if sameKnownAnswer(resourceWithHeader(t, candidate, candidate.Header().Name, lnetodns.Type(99), lnetodns.ClassINET, service.TTLSeconds), candidate) {
+				t.Fatal("mismatched type suppressed")
+			}
+			otherName, err := lnetodns.NewName("other.local")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if sameKnownAnswer(resourceWithHeader(t, candidate, otherName, typ, lnetodns.ClassINET, service.TTLSeconds), candidate) {
+				t.Fatal("mismatched owner suppressed")
+			}
+			if sameKnownAnswer(resourceWithHeader(t, candidate, candidate.Header().Name, typ, lnetodns.Class(3), service.TTLSeconds), candidate) {
+				t.Fatal("non-IN answer suppressed")
+			}
+		})
+	}
+
+	ptr := byType[lnetodns.TypePTR]
+	malformedPTR := lnetodns.NewResource(ptr.Header().Name, lnetodns.TypePTR, lnetodns.ClassINET, service.TTLSeconds, []byte{0xc0, 0})
+	if sameKnownAnswer(malformedPTR, ptr) {
+		t.Fatal("malformed PTR target suppressed")
+	}
+	srv := byType[lnetodns.TypeSRV]
+	malformedSRV := lnetodns.NewResource(srv.Header().Name, lnetodns.TypeSRV, lnetodns.ClassINET, service.TTLSeconds, []byte{0, 0, 0, 0, 0, 80, 0xc0})
+	if sameKnownAnswer(malformedSRV, srv) {
+		t.Fatal("malformed SRV target suppressed")
+	}
+}
+
+func TestMDNSAutomaticResponsesPreserveDistinctServiceRDATAAndRecordLimit(t *testing.T) {
+	first := testService("device", "192.0.2.11")
+	second := testService("printer", "192.0.2.12")
+	third := testService("camera", "192.0.2.13")
+	third.Host = first.Host
+	for _, test := range []struct {
+		name       string
+		queryName  string
+		queryType  mdnsns.RecordTypes
+		limit      uint16
+		wantAnswer uint16
+	}{
+		{name: "distinct PTR targets", queryName: "_demo._udp.local", queryType: mdnsns.RecordsPTR, limit: 8, wantAnswer: 3},
+		{name: "distinct host addresses", queryName: first.Host, queryType: mdnsns.RecordsA, limit: 8, wantAnswer: 2},
+		{name: "bounded distinct PTR targets", queryName: "_demo._udp.local", queryType: mdnsns.RecordsPTR, limit: 2, wantAnswer: 2},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			config := Config{
+				Services: []mdnsns.Service{first, second, third}, MaxServices: 3, MaxQueries: 1, MaxAnnouncements: 1,
+				MaxRecords: 8, MaxPacketBytes: 1200, MaxQueuedResponses: 1, MaxQuestionsPerPacket: 1,
+				MaxRecordsPerPacket: test.limit, MaxAttempts: 1, RetryServiceAttempts: 1,
+			}
+			core, _, _ := newTestAdapter(t, config, testPolicy())
+			payload, err := buildQueryPacket(mdnsns.Request{Name: test.queryName, Types: test.queryType}, config.MaxPacketBytes)
+			if err != nil {
+				t.Fatal(err)
+			}
+			serviceIngress(t, core, wrapMDNSFrame(t, payload, [6]byte{2, 0, 0, 0, 0, 33}, netip.MustParseAddr("192.0.2.33")))
+			response := serviceEgress(t, core)
+			eth, _ := ethernet.NewFrame(response)
+			ip, _ := ipv4.NewFrame(eth.Payload())
+			udp, _ := lnetoudp.NewFrame(ip.Payload())
+			dnsFrame, err := lnetodns.NewFrame(udp.Payload())
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := dnsFrame.ANCount(); got != test.wantAnswer {
+				t.Fatalf("answers = %d, want %d", got, test.wantAnswer)
+			}
+		})
+	}
+}
+
+func resourceOfType(t testing.TB, service mdnsns.Service, typ lnetodns.Type) lnetodns.Resource {
+	t.Helper()
+	resources, err := serviceResources(service, typ)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, resource := range resources {
+		if resource.Header().Type == typ {
+			return resource
+		}
+	}
+	t.Fatalf("service resource %v missing", typ)
+	return lnetodns.Resource{}
+}
+
+func resourceWithHeader(t testing.TB, source lnetodns.Resource, name lnetodns.Name, typ lnetodns.Type, class lnetodns.Class, ttl uint32) lnetodns.Resource {
+	t.Helper()
+	return lnetodns.NewResource(name, typ, class, ttl, append([]byte(nil), source.RawData()...))
+}
+
 func BenchmarkIngressAutomaticResponse(b *testing.B) {
 	service := testService("device", "192.0.2.11")
 	core, adapter, _ := newTestAdapter(b, Config{

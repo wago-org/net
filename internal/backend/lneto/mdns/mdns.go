@@ -1026,10 +1026,16 @@ func duplicateRecord(records []mdnsns.Record, record mdnsns.Record) bool {
 }
 
 func duplicateWireResource(resources []lnetodns.Resource, candidate lnetodns.Resource) bool {
+	if len(resources) == 0 {
+		return false
+	}
 	candidateHeader := candidate.Header()
+	candidateName := canonicalName(candidateHeader.Name)
 	for _, resource := range resources {
 		header := resource.Header()
-		if canonicalName(header.Name) == canonicalName(candidateHeader.Name) && header.Type == candidateHeader.Type {
+		if canonicalName(header.Name) == candidateName && header.Type == candidateHeader.Type &&
+			lnetodns.Class(uint16(header.Class)&^cacheFlush) == lnetodns.Class(uint16(candidateHeader.Class)&^cacheFlush) &&
+			sameResourceData(resource, candidate) {
 			return true
 		}
 	}
@@ -1053,21 +1059,25 @@ func sameKnownAnswer(known, candidate lnetodns.Resource) bool {
 		uint64(knownHeader.TTL)*2 < uint64(candidateHeader.TTL) {
 		return false
 	}
-	knownData, candidateData := known.RawData(), candidate.RawData()
-	switch candidateHeader.Type {
+	return sameResourceData(known, candidate)
+}
+
+func sameResourceData(left, right lnetodns.Resource) bool {
+	leftData, rightData := left.RawData(), right.RawData()
+	switch right.Header().Type {
 	case lnetodns.TypeA, lnetodns.TypeTXT:
-		return bytes.Equal(knownData, candidateData)
+		return bytes.Equal(leftData, rightData)
 	case lnetodns.TypePTR:
-		knownTarget, knownOK := decodeResourceName(knownData, 0)
-		candidateTarget, candidateOK := decodeResourceName(candidateData, 0)
-		return knownOK && candidateOK && knownTarget == candidateTarget
+		leftTarget, leftOK := decodeResourceName(leftData, 0)
+		rightTarget, rightOK := decodeResourceName(rightData, 0)
+		return leftOK && rightOK && leftTarget == rightTarget
 	case lnetodns.TypeSRV:
-		if len(knownData) < 7 || len(candidateData) < 7 || !bytes.Equal(knownData[:6], candidateData[:6]) {
+		if len(leftData) < 7 || len(rightData) < 7 || !bytes.Equal(leftData[:6], rightData[:6]) {
 			return false
 		}
-		knownTarget, knownOK := decodeResourceName(knownData, 6)
-		candidateTarget, candidateOK := decodeResourceName(candidateData, 6)
-		return knownOK && candidateOK && knownTarget == candidateTarget
+		leftTarget, leftOK := decodeResourceName(leftData, 6)
+		rightTarget, rightOK := decodeResourceName(rightData, 6)
+		return leftOK && rightOK && leftTarget == rightTarget
 	default:
 		return false
 	}
