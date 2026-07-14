@@ -300,6 +300,76 @@ func TestBindingsConnectStreamIOAtomicStatusesAndLifecycle(t *testing.T) {
 	}
 }
 
+func TestBindingsRejectHighBitI32AliasesBeforeBackendCalls(t *testing.T) {
+	local := nscore.Endpoint{Address: netip.MustParseAddr("0.0.0.0"), Port: 8080}
+	remote := nscore.Endpoint{Address: netip.MustParseAddr("192.0.2.44"), Port: 443}
+	stream := &fakeStream{local: local, remote: remote, readResult: nscore.IOResult{State: nscore.IOWouldBlock}, writeResult: nscore.IOResult{State: nscore.IOWouldBlock}}
+	listener := &fakeListener{local: local, progress: nscore.ProgressWouldBlock}
+	backend := &fakeNamespace{listener: listener, listenProgress: nscore.ProgressDone, stream: stream, connectProgress: nscore.ProgressDone}
+	manager, instance := attachManager(t, backend)
+	defer manager.Detach(instance)
+	host := testHost{instance: instance, memory: bytes.Repeat([]byte{0xa5}, 512)}
+	bindings := Bindings(plugin.NewHost(manager))
+	state, _ := manager.ForInstance(instance)
+	if !abicore.EncodeEndpointV1(host.memory, 0, local) {
+		t.Fatal("encode endpoint")
+	}
+	listenerHandle, err := state.Resources().Add(resource.KindTCPListener, listener)
+	if err != nil {
+		t.Fatal(err)
+	}
+	streamHandle, err := state.Resources().Add(resource.KindTCPStream, stream)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	const high = uint64(1) << 32
+	before := append([]byte(nil), host.memory...)
+	if status := callBinding(t, bindingByName(t, bindings, "namespace_default"), host, high+480); status != guest.StatusInvalidArgument || !bytes.Equal(host.memory, before) {
+		t.Fatalf("high namespace output = %v", status)
+	}
+	for name, params := range map[string][]uint64{
+		"listen endpoint": {uint64(state.NamespaceHandle()), high, 64},
+		"listen output":   {uint64(state.NamespaceHandle()), 0, high + 64},
+	} {
+		if status := callBinding(t, bindingByName(t, bindings, "listen"), host, params...); status != guest.StatusInvalidArgument || backend.listenCalls != 0 || !bytes.Equal(host.memory, before) {
+			t.Fatalf("high %s = %v calls=%d", name, status, backend.listenCalls)
+		}
+	}
+	for name, params := range map[string][]uint64{
+		"connect endpoint": {uint64(state.NamespaceHandle()), high, 64},
+		"connect output":   {uint64(state.NamespaceHandle()), 0, high + 64},
+	} {
+		if status := callBinding(t, bindingByName(t, bindings, "connect"), host, params...); status != guest.StatusInvalidArgument || backend.connectCalls != 0 || !bytes.Equal(host.memory, before) {
+			t.Fatalf("high %s = %v calls=%d", name, status, backend.connectCalls)
+		}
+	}
+	if status := callBinding(t, bindingByName(t, bindings, "accept"), host, uint64(listenerHandle), high+64); status != guest.StatusInvalidArgument || listener.accepts != 0 || !bytes.Equal(host.memory, before) {
+		t.Fatalf("high accept output = %v calls=%d", status, listener.accepts)
+	}
+	for operation, cases := range map[string]map[string][]uint64{
+		"read": {
+			"payload pointer": {uint64(streamHandle), high + 160, 16, 192},
+			"payload length":  {uint64(streamHandle), 160, high + 16, 192},
+			"result pointer":  {uint64(streamHandle), 160, 16, high + 192},
+		},
+		"write": {
+			"payload pointer": {uint64(streamHandle), high + 160, 16, 192},
+			"payload length":  {uint64(streamHandle), 160, high + 16, 192},
+			"result pointer":  {uint64(streamHandle), 160, 16, high + 192},
+		},
+	} {
+		for name, params := range cases {
+			if status := callBinding(t, bindingByName(t, bindings, operation), host, params...); status != guest.StatusInvalidArgument || !bytes.Equal(host.memory, before) {
+				t.Fatalf("high %s %s = %v", operation, name, status)
+			}
+		}
+	}
+	if stream.readCalls != 0 || stream.writeCalls != 0 {
+		t.Fatalf("high I/O invoked backend: reads=%d writes=%d", stream.readCalls, stream.writeCalls)
+	}
+}
+
 func TestBindingsListenAcceptAtomicStatusesAndLifecycle(t *testing.T) {
 	local := nscore.Endpoint{Address: netip.MustParseAddr("0.0.0.0"), Port: 8080}
 	remote := nscore.Endpoint{Address: netip.MustParseAddr("192.0.2.44"), Port: 52000}

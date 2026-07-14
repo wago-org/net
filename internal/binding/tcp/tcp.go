@@ -57,8 +57,8 @@ func namespaceDefault(host plugin.Host, module wago.HostModule, params, results 
 		return
 	}
 	memory := guest.Memory(module)
-	out := uint32(params[0])
-	if !abicore.CheckRanges(memory, false, abicore.Range{Ptr: out, Length: abicore.HandleV1Size}) {
+	out, ok := abicore.NarrowUint32(params[0])
+	if !ok || !abicore.CheckRanges(memory, false, abicore.Range{Ptr: out, Length: abicore.HandleV1Size}) {
 		guest.SetStatus(results, guest.StatusInvalidArgument)
 		return
 	}
@@ -85,8 +85,9 @@ func listen(host plugin.Host, module wago.HostModule, params, results []uint64) 
 		return
 	}
 	memory := guest.Memory(module)
-	endpointPtr, out := uint32(params[1]), uint32(params[2])
-	if !tcpabi.CheckListenV1(memory, endpointPtr, out) {
+	endpointPtr, endpointOK := abicore.NarrowUint32(params[1])
+	out, outOK := abicore.NarrowUint32(params[2])
+	if !endpointOK || !outOK || !tcpabi.CheckListenV1(memory, endpointPtr, out) {
 		guest.SetStatus(results, guest.StatusInvalidArgument)
 		return
 	}
@@ -124,8 +125,9 @@ func connect(host plugin.Host, module wago.HostModule, params, results []uint64)
 		return
 	}
 	memory := guest.Memory(module)
-	endpointPtr, out := uint32(params[1]), uint32(params[2])
-	if !tcpabi.CheckCreateV1(memory, endpointPtr, out) {
+	endpointPtr, endpointOK := abicore.NarrowUint32(params[1])
+	out, outOK := abicore.NarrowUint32(params[2])
+	if !endpointOK || !outOK || !tcpabi.CheckCreateV1(memory, endpointPtr, out) {
 		guest.SetStatus(results, guest.StatusInvalidArgument)
 		return
 	}
@@ -187,8 +189,8 @@ func accept(host plugin.Host, module wago.HostModule, params, results []uint64) 
 		return
 	}
 	memory := guest.Memory(module)
-	out := uint32(params[1])
-	if !abicore.CheckRanges(memory, false, abicore.Range{Ptr: out, Length: tcpabi.StreamV1Size}) {
+	out, ok := abicore.NarrowUint32(params[1])
+	if !ok || !abicore.CheckRanges(memory, false, abicore.Range{Ptr: out, Length: tcpabi.StreamV1Size}) {
 		guest.SetStatus(results, guest.StatusInvalidArgument)
 		return
 	}
@@ -233,8 +235,10 @@ func read(host plugin.Host, module wago.HostModule, params, results []uint64) {
 		return
 	}
 	memory := guest.Memory(module)
-	payloadPtr, payloadLength, resultPtr := uint32(params[1]), uint32(params[2]), uint32(params[3])
-	if !tcpabi.CheckIOV1(memory, payloadPtr, payloadLength, resultPtr) {
+	payloadPtr, payloadOK := abicore.NarrowUint32(params[1])
+	payloadLength, lengthOK := abicore.NarrowUint32(params[2])
+	resultPtr, resultOK := abicore.NarrowUint32(params[3])
+	if !payloadOK || !lengthOK || !resultOK || !tcpabi.CheckIOV1(memory, payloadPtr, payloadLength, resultPtr) {
 		guest.SetStatus(results, guest.StatusInvalidArgument)
 		return
 	}
@@ -267,8 +271,10 @@ func write(host plugin.Host, module wago.HostModule, params, results []uint64) {
 		return
 	}
 	memory := guest.Memory(module)
-	payloadPtr, payloadLength, resultPtr := uint32(params[1]), uint32(params[2]), uint32(params[3])
-	if !tcpabi.CheckIOV1(memory, payloadPtr, payloadLength, resultPtr) {
+	payloadPtr, payloadOK := abicore.NarrowUint32(params[1])
+	payloadLength, lengthOK := abicore.NarrowUint32(params[2])
+	resultPtr, resultOK := abicore.NarrowUint32(params[3])
+	if !payloadOK || !lengthOK || !resultOK || !tcpabi.CheckIOV1(memory, payloadPtr, payloadLength, resultPtr) {
 		guest.SetStatus(results, guest.StatusInvalidArgument)
 		return
 	}
