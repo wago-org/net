@@ -408,6 +408,53 @@ func TestPacketServiceBudgetEdgesPreserveQueuedWorkAndAlternate(t *testing.T) {
 	})
 }
 
+func TestZeroLengthIngressFrameCountsAsPacketAndReleasesReadiness(t *testing.T) {
+	ns := newTestNamespace(t, 35)
+	calls := 0
+	if err := ns.Install(Participant{Ingress: func(frame []byte) (bool, error) {
+		calls++
+		if len(frame) != 0 {
+			t.Fatalf("ingress frame length = %d, want 0", len(frame))
+		}
+		return true, nil
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := ns.Link().TryEnqueue(packetlink.Ingress, nil); err != nil {
+		t.Fatal(err)
+	}
+	for i := 1; i < testConfig(35).Link.IngressFrames; i++ {
+		if err := ns.Link().TryEnqueue(packetlink.Ingress, []byte{byte(i)}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if ready := ns.Readiness(); ready != 0 {
+		t.Fatalf("full ingress readiness = %v", ready)
+	}
+	ns.Lock()
+	ns.SetNextIngressLocked(true)
+	ns.Unlock()
+	budget := nscore.ServiceBudget{Packets: 1, Bytes: 1, Operations: 1}
+	report, progress, err := ns.TryService(budget)
+	if err != nil || progress != nscore.ProgressDone || report != (nscore.ServiceReport{Packets: 1, Operations: 1}) || !report.ValidResult(budget, progress) {
+		t.Fatalf("zero-frame service = %+v, %v, %v", report, progress, err)
+	}
+	if calls != 1 {
+		t.Fatalf("ingress calls = %d, want 1", calls)
+	}
+	if ready := ns.Readiness(); ready != nscore.ReadyWritable {
+		t.Fatalf("released ingress readiness = %v", ready)
+	}
+	if snapshot := ns.Link().Snapshot(); snapshot.IngressFrames != 3 || snapshot.IngressBytes != 3 {
+		t.Fatalf("remaining ingress = %+v", snapshot)
+	}
+	var next [1]byte
+	result, err := ns.Link().TryDequeue(packetlink.Ingress, next[:])
+	if err != nil || !result.Ready || result.FrameBytes != 1 || next[0] != 1 {
+		t.Fatalf("next ingress = %+v, %v, data=%v", result, err, next)
+	}
+}
+
 func TestPacketServiceReadinessTracksCommittedQueues(t *testing.T) {
 	ns := newTestNamespace(t, 30)
 	if ready := ns.Readiness(); ready != nscore.ReadyWritable {
