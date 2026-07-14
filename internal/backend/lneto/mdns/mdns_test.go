@@ -362,3 +362,185 @@ func failureOf(t testing.TB, err error) nscore.Failure {
 	}
 	return failure
 }
+
+func TestMDNSIngressRelevanceConsumesLocalMalformedAndLeavesForeignUnhandled(t *testing.T) {
+	service := testService("device", "192.0.2.11")
+	core, adapter, _ := newTestAdapter(t, Config{
+		Services: []mdnsns.Service{service}, MaxServices: 1, MaxQueries: 1, MaxAnnouncements: 1,
+		MaxRecords: 8, MaxPacketBytes: 1200, MaxQueuedResponses: 2, MaxQuestionsPerPacket: 4,
+		MaxRecordsPerPacket: 16, MaxAttempts: 1, RetryServiceAttempts: 1,
+	}, testPolicy())
+	payload, err := buildQueryPacket(mdnsns.Request{Name: "_demo._udp.local", Types: mdnsns.RecordsPTR}, 1200)
+	if err != nil {
+		t.Fatal(err)
+	}
+	base := wrapMDNSFrame(t, payload, [6]byte{2, 0, 0, 0, 0, 33}, netip.MustParseAddr("192.0.2.33"))
+	for _, test := range []struct {
+		name        string
+		wantHandled bool
+		mutate      func([]byte)
+	}{
+		{name: "foreign Ethernet destination", mutate: func(frame []byte) {
+			eth, _ := ethernet.NewFrame(frame)
+			*eth.DestinationHardwareAddr() = [6]byte{2, 0, 0, 0, 0, 99}
+		}},
+		{name: "foreign IPv4 destination", mutate: func(frame []byte) {
+			eth, _ := ethernet.NewFrame(frame)
+			ip, _ := ipv4.NewFrame(eth.Payload())
+			*ip.DestinationAddr() = [4]byte{192, 0, 2, 99}
+			ip.SetCRC(0)
+			ip.SetCRC(ip.CalculateHeaderCRC())
+		}},
+		{name: "foreign UDP port", mutate: func(frame []byte) {
+			eth, _ := ethernet.NewFrame(frame)
+			ip, _ := ipv4.NewFrame(eth.Payload())
+			udp, _ := lnetoudp.NewFrame(ip.Payload())
+			udp.SetDestinationPort(9999)
+			udp.SetCRC(0)
+		}},
+		{name: "local invalid TTL", wantHandled: true, mutate: func(frame []byte) {
+			eth, _ := ethernet.NewFrame(frame)
+			ip, _ := ipv4.NewFrame(eth.Payload())
+			ip.SetTTL(64)
+			ip.SetCRC(0)
+			ip.SetCRC(ip.CalculateHeaderCRC())
+		}},
+		{name: "local fragmented IPv4", wantHandled: true, mutate: func(frame []byte) {
+			eth, _ := ethernet.NewFrame(frame)
+			ip, _ := ipv4.NewFrame(eth.Payload())
+			ip.SetFlags(1)
+			ip.SetCRC(0)
+			ip.SetCRC(ip.CalculateHeaderCRC())
+		}},
+		{name: "local invalid UDP checksum", wantHandled: true, mutate: func(frame []byte) {
+			eth, _ := ethernet.NewFrame(frame)
+			ip, _ := ipv4.NewFrame(eth.Payload())
+			udp, _ := lnetoudp.NewFrame(ip.Payload())
+			udp.SetCRC(1)
+		}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			frame := append([]byte(nil), base...)
+			test.mutate(frame)
+			core.Lock()
+			handled, ingressErr := adapter.ingressLocked(frame)
+			queued := adapter.responseCount
+			core.Unlock()
+			if ingressErr != nil || handled != test.wantHandled {
+				t.Fatalf("ingress = handled %v, err %v; want handled %v", handled, ingressErr, test.wantHandled)
+			}
+			if queued != 0 {
+				t.Fatalf("malformed or foreign frame queued %d responses", queued)
+			}
+		})
+	}
+}
+
+func TestMDNSQueuedResponseNamespaceCloseAndStaleResourcesAreIsolated(t *testing.T) {
+	service := testService("device", "192.0.2.11")
+	config := Config{
+		Services: []mdnsns.Service{service}, MaxServices: 1, MaxQueries: 1, MaxAnnouncements: 1,
+		MaxRecords: 8, MaxPacketBytes: 1200, MaxQueuedResponses: 2, MaxQuestionsPerPacket: 4,
+		MaxRecordsPerPacket: 16, MaxAttempts: 2, RetryServiceAttempts: 2,
+	}
+	core, adapter, account := newTestAdapter(t, config, testPolicy())
+	oldQueryResource, _, err := adapter.TryQuery(mdnsns.Request{Name: "peer.local", Types: mdnsns.RecordsA})
+	if err != nil {
+		t.Fatal(err)
+	}
+	oldAnnouncementResource, _, err := adapter.TryAnnounce(0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	oldQuery := oldQueryResource.(*query)
+	oldAnnouncement := oldAnnouncementResource.(*announcement)
+	if err := oldQuery.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := oldAnnouncement.Close(); err != nil {
+		t.Fatal(err)
+	}
+	queryResource, _, err := adapter.TryQuery(mdnsns.Request{Name: "peer.local", Types: mdnsns.RecordsA})
+	if err != nil {
+		t.Fatal(err)
+	}
+	announcementResource, _, err := adapter.TryAnnounce(0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	query := queryResource.(*query)
+	announcement := announcementResource.(*announcement)
+	if err := oldQuery.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := oldAnnouncement.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if query.Readiness() != 0 || announcement.Readiness() != 0 {
+		t.Fatalf("stale close mutated fresh resources: query=%v announcement=%v", query.Readiness(), announcement.Readiness())
+	}
+
+	payload, err := buildQueryPacket(mdnsns.Request{Name: "_demo._udp.local", Types: mdnsns.RecordsPTR}, config.MaxPacketBytes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	serviceIngress(t, core, wrapMDNSFrame(t, payload, [6]byte{2, 0, 0, 0, 0, 33}, netip.MustParseAddr("192.0.2.33")))
+	core.Lock()
+	queued, leases := adapter.responseCount, core.UDPPortLeaseCountLocked()
+	core.Unlock()
+	if queued != 1 || leases != 1 {
+		t.Fatalf("queued responses=%d UDP leases=%d", queued, leases)
+	}
+	wantQueuedBytes := uint64(config.MaxQueuedResponses)*uint64(config.MaxPacketBytes) + queryRetainedBytes(config) + uint64(config.MaxPacketBytes)
+	if usage, closed := account.Snapshot(); closed || usage != (quota.Usage{
+		Resources: 2, MDNSResources: 2, QueuedBytes: wantQueuedBytes, MDNSWork: 2,
+	}) {
+		t.Fatalf("live quota = %+v, closed=%v; want queued bytes %d", usage, closed, wantQueuedBytes)
+	}
+	if err := core.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if query.Readiness() != nscore.ReadyClosed || announcement.Readiness() != nscore.ReadyClosed {
+		t.Fatalf("namespace close readiness: query=%v announcement=%v", query.Readiness(), announcement.Readiness())
+	}
+	if _, _, err := query.TryNext(); failureOf(t, err) != nscore.FailureClosed {
+		t.Fatalf("closed query result = %v", err)
+	}
+	if _, err := announcement.TryFinish(); failureOf(t, err) != nscore.FailureClosed {
+		t.Fatalf("closed announcement result = %v", err)
+	}
+	if usage, _ := account.Snapshot(); usage != (quota.Usage{}) {
+		t.Fatalf("namespace close quota = %+v", usage)
+	}
+	if adapter.responseCount != 0 || adapter.responseSlots != nil || adapter.responseResources != nil || adapter.serviceResources != nil || adapter.services != nil {
+		t.Fatalf("namespace close retained adapter state: responses=%d slots=%v scratch=%v service records=%v services=%v",
+			adapter.responseCount, adapter.responseSlots, adapter.responseResources, adapter.serviceResources, adapter.services)
+	}
+}
+
+func BenchmarkIngressAutomaticResponse(b *testing.B) {
+	service := testService("device", "192.0.2.11")
+	core, adapter, _ := newTestAdapter(b, Config{
+		Services: []mdnsns.Service{service}, MaxServices: 1, MaxQueries: 1, MaxAnnouncements: 1,
+		MaxRecords: 8, MaxPacketBytes: 1200, MaxQueuedResponses: 1, MaxQuestionsPerPacket: 4,
+		MaxRecordsPerPacket: 16, MaxAttempts: 1, RetryServiceAttempts: 1,
+	}, testPolicy())
+	payload, err := buildQueryPacket(mdnsns.Request{Name: "_demo._udp.local", Types: mdnsns.RecordsPTR}, 1200)
+	if err != nil {
+		b.Fatal(err)
+	}
+	frame := wrapMDNSFrame(b, payload, [6]byte{2, 0, 0, 0, 0, 33}, netip.MustParseAddr("192.0.2.33"))
+	core.Lock()
+	defer core.Unlock()
+	b.ReportAllocs()
+	b.ResetTimer()
+	for b.Loop() {
+		adapter.responseCount = 0
+		adapter.responseHead = 0
+		adapter.responseSlots[0] = adapter.responseSlots[0][:0]
+		handled, err := adapter.ingressLocked(frame)
+		if err != nil || !handled || adapter.responseCount != 1 {
+			b.Fatalf("ingress = handled %v, err %v, responses %d", handled, err, adapter.responseCount)
+		}
+	}
+}

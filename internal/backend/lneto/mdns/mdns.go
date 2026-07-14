@@ -69,12 +69,14 @@ type Adapter struct {
 	portLease       lnetocore.UDPPortLease
 	queueCharge     quota.Charge
 
-	services      []mdnsns.Service
-	queries       []*query
-	announcements []*announcement
-	cursor        int
+	services         []mdnsns.Service
+	serviceResources [][]lnetodns.Resource
+	queries          []*query
+	announcements    []*announcement
+	cursor           int
 
-	decode lnetodns.Message
+	decode            lnetodns.Message
+	responseResources []lnetodns.Resource
 
 	responseSlots [][]byte
 	responseHead  int
@@ -137,6 +139,18 @@ func New(common *lnetocore.Namespace, config Config) (*Adapter, error) {
 	a.queries = make([]*query, 0, config.MaxQueries)
 	a.announcements = make([]*announcement, 0, config.MaxAnnouncements)
 	a.services = a.config.Services
+	if len(a.services) != 0 {
+		a.serviceResources = make([][]lnetodns.Resource, len(a.services))
+		for i := range a.services {
+			resources, err := serviceResources(a.services[i], 0)
+			if err != nil {
+				common.Unlock()
+				return nil, lnetocore.MapError(err)
+			}
+			a.serviceResources[i] = resources
+		}
+		a.responseResources = make([]lnetodns.Resource, 0, config.MaxRecordsPerPacket)
+	}
 	if config.MaxQueries != 0 || len(config.Services) != 0 {
 		if !common.TryLeaseUDPPortIntoLocked(&a.portLease, Port) {
 			common.Unlock()
@@ -523,6 +537,13 @@ func (a *Adapter) CloseLocked() {
 	a.responseCount = 0
 	a.responseHead = 0
 	a.decode.Reset()
+	for i := range a.serviceResources {
+		clear(a.serviceResources[i])
+		a.serviceResources[i] = nil
+	}
+	a.serviceResources = nil
+	clear(a.responseResources)
+	a.responseResources = nil
 	clear(a.services)
 	a.services = nil
 	a.portLease.ReleaseLocked()
@@ -709,12 +730,18 @@ func (a *Adapter) validateFrame(frame []byte) ([]byte, netip.Addr, bool, error) 
 	}
 	version, ihl := ip.VersionAndIHL()
 	destination := netip.AddrFrom4(*ip.DestinationAddr())
-	if version != 4 || ihl < 5 || ip.Protocol() != lneto.IPProtoUDP || ip.TTL() != 255 || (destination != multicastAddress && destination != a.core.IPv4AddressLocked()) {
+	if ip.Protocol() != lneto.IPProtoUDP || (destination != multicastAddress && destination != a.core.IPv4AddressLocked()) {
 		return nil, netip.Addr{}, false, nil
 	}
 	udp, err := lnetoudp.NewFrame(ip.Payload())
-	if err != nil || udp.SourcePort() != Port || udp.DestinationPort() != Port {
+	if err != nil {
+		return nil, netip.Addr{}, true, err
+	}
+	if udp.SourcePort() != Port || udp.DestinationPort() != Port {
 		return nil, netip.Addr{}, false, nil
+	}
+	if version != 4 || ihl < 5 || ip.TTL() != 255 {
+		return nil, netip.Addr{}, true, lneto.ErrBadState
 	}
 	var validator lneto.Validator
 	ip.ValidateExceptCRC(&validator)
@@ -771,18 +798,22 @@ func (a *Adapter) queueResponseLocked() {
 	if len(a.services) == 0 || a.responseCount == len(a.responseSlots) || !a.policy.CheckEndpoint(policy.OperationMDNSSend, multicastAddress, Port) {
 		return
 	}
-	resources := make([]lnetodns.Resource, 0, a.config.MaxRecordsPerPacket)
+	resources := a.responseResources[:0]
+	defer func() {
+		clear(resources)
+		a.responseResources = resources[:0]
+	}()
 	for _, question := range a.decode.Questions {
 		questionName := canonicalName(question.Name)
 		questionClass := lnetodns.Class(uint16(question.Class) &^ cacheFlush)
 		if (questionClass != lnetodns.ClassINET && questionClass != lnetodns.ClassANY) || questionName == "" || !a.policy.CheckDNS(policy.OperationMDNSRespond, questionName) {
 			continue
 		}
-		for _, service := range a.services {
+		for i, service := range a.services {
 			if !a.policy.CheckDNS(policy.OperationMDNSRespond, service.Name) || !a.policy.CheckDNS(policy.OperationMDNSRespond, service.Host) {
 				continue
 			}
-			resources = appendServiceAnswers(resources, question, service, int(a.config.MaxRecordsPerPacket))
+			resources = appendServiceAnswers(resources, questionName, question.Type, service, a.serviceResources[i], int(a.config.MaxRecordsPerPacket))
 		}
 	}
 	if len(resources) == 0 {
@@ -880,12 +911,10 @@ func serviceResources(service mdnsns.Service, only lnetodns.Type) ([]lnetodns.Re
 	return resources, nil
 }
 
-func appendServiceAnswers(resources []lnetodns.Resource, question lnetodns.Question, service mdnsns.Service, limit int) []lnetodns.Resource {
-	name := canonicalName(question.Name)
+func appendServiceAnswers(resources []lnetodns.Resource, name string, questionType lnetodns.Type, service mdnsns.Service, serviceRecords []lnetodns.Resource, limit int) []lnetodns.Resource {
 	if name == "" {
 		return resources
 	}
-	questionType := question.Type
 	matches := questionType == lnetodns.TypeALL ||
 		questionType == lnetodns.TypePTR && name == serviceType(service.Name) ||
 		(questionType == lnetodns.TypeSRV || questionType == lnetodns.TypeTXT) && name == service.Name ||
@@ -893,18 +922,16 @@ func appendServiceAnswers(resources []lnetodns.Resource, question lnetodns.Quest
 	if !matches {
 		return resources
 	}
-	var selected []lnetodns.Resource
-	if questionType == lnetodns.TypeALL {
-		selected, _ = serviceResources(service, 0)
-	} else {
-		selected, _ = serviceResources(service, questionType)
-	}
-	for _, resource := range selected {
+	for i, resource := range serviceRecords {
+		typ := resource.Header().Type
+		if questionType != lnetodns.TypeALL && typ != questionType && !(questionType == lnetodns.TypeSRV && typ == lnetodns.TypeA) {
+			continue
+		}
 		if len(resources) == limit {
 			break
 		}
 		if !duplicateWireResource(resources, resource) {
-			resources = append(resources, resource)
+			resources = append(resources, serviceRecords[i])
 		}
 	}
 	return resources
