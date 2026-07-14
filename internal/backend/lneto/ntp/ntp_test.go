@@ -30,6 +30,26 @@ func (c *manualClock) Now() time.Time {
 	return c.now
 }
 
+func TestAdapterRequiresUnicastGatewayHardwareAddressWhenEnabled(t *testing.T) {
+	clock := &manualClock{now: time.Date(2026, 7, 14, 12, 0, 0, 0, time.UTC)}
+	config := Config{Server: netip.MustParseAddr("192.0.2.123"), Clock: clock, MaxSyncs: 1, MaxAttempts: 1, RetryServiceAttempts: 1, Precision: -20}
+	for name, gateway := range map[string][6]byte{
+		"zero":      {},
+		"multicast": {0x01, 0, 0, 0, 0, 1},
+		"broadcast": {0xff, 0xff, 0xff, 0xff, 0xff, 0xff},
+	} {
+		t.Run(name, func(t *testing.T) {
+			common := newGatewayConfigTestCore(t, gateway)
+			if _, err := New(common, config); err == nil {
+				t.Fatalf("enabled NTP accepted gateway hardware address %v", gateway)
+			}
+			if _, err := New(common, Config{}); err != nil {
+				t.Fatalf("disabled NTP rejected irrelevant gateway hardware address %v: %v", gateway, err)
+			}
+		})
+	}
+}
+
 func TestNTPExchangeUsesExplicitClockValidatesRepliesAndReleasesQuota(t *testing.T) {
 	clock := &manualClock{now: time.Date(2026, 7, 13, 22, 0, 0, 0, time.UTC)}
 	core, adapter, account := newTestAdapter(t, clock, Config{
@@ -525,6 +545,29 @@ func TestNTPConfigIsFiniteExplicitClockAndZeroDisables(t *testing.T) {
 	if ValidConfig(Config{Server: netip.MustParseAddr("192.0.2.1"), Clock: nilClock, MaxSyncs: 1, MaxAttempts: 1, RetryServiceAttempts: 1, Precision: -20}, nil, nil, false) {
 		t.Fatal("typed nil clock accepted")
 	}
+}
+
+func newGatewayConfigTestCore(t testing.TB, gateway [6]byte) *lnetocore.Namespace {
+	t.Helper()
+	compiled, err := policy.Compile(policy.Config{Rules: []policy.Rule{{
+		Action: policy.ActionAllow, Transports: []policy.Transport{policy.TransportNTP},
+		Directions: []policy.Direction{policy.DirectionOutbound}, Prefixes: []netip.Prefix{netip.MustParsePrefix("192.0.2.0/24")},
+		Ports: []policy.PortRange{{First: 123, Last: 123}},
+	}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	core, err := lnetocore.New(lnetocore.Config{
+		Hostname: "ntp-config", RandSeed: 12,
+		HardwareAddress: [6]byte{2, 0, 0, 0, 0, 12}, GatewayHardwareAddress: gateway,
+		IPv4Address: netip.MustParseAddr("192.0.2.12"), MTU: 1500,
+		Link: packetlink.Config{MaxFrameBytes: 1514, IngressFrames: 1, EgressFrames: 1}, Policy: compiled, Quotas: quota.NewAccount(quota.DefaultLimits()),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = core.Close() })
+	return core
 }
 
 func newTestAdapter(t testing.TB, clock *manualClock, config Config) (*lnetocore.Namespace, *Adapter, *quota.Account) {

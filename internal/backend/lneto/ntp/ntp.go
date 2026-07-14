@@ -97,7 +97,8 @@ func New(common *lnetocore.Namespace, config Config) (*Adapter, error) {
 		return nil, nscore.Fail(nscore.FailureInvalidArgument, lneto.ErrInvalidConfig)
 	}
 	common.Lock()
-	if common.ClosedLocked() || !ValidConfig(config, common.PolicyLocked(), common.QuotasLocked(), true) {
+	if common.ClosedLocked() || !ValidConfig(config, common.PolicyLocked(), common.QuotasLocked(), true) ||
+		(config.MaxSyncs != 0 && !common.GatewayHardwareAddressUsableLocked()) {
 		common.Unlock()
 		return nil, nscore.Fail(nscore.FailureInvalidArgument, lneto.ErrInvalidConfig)
 	}
