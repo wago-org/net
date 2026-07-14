@@ -64,6 +64,10 @@ func Send(state *core.State, handle resource.Handle, payload []byte, remote nsco
 			return lookupErr
 		}
 		progress, err = socket.TrySend(payload, remote)
+		if err == nil && !progress.Valid() {
+			progress = 0
+			return nscore.Fail(nscore.FailureIO, core.ErrInvalidBackendResult)
+		}
 		return err
 	})
 	return

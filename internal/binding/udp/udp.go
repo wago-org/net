@@ -76,9 +76,13 @@ func bind(host plugin.Host, module wago.HostModule, params, results []uint64) {
 		return
 	}
 	memory := guest.Memory(module)
-	local, ok := abicore.DecodeEndpointV1(memory, uint32(params[1]))
-	out := uint32(params[2])
-	if !ok || !abicore.CheckRanges(memory, false, abicore.Range{Ptr: out, Length: abicore.HandleV1Size}) {
+	endpointPtr, out := uint32(params[1]), uint32(params[2])
+	if !udpabi.CheckBindV1(memory, endpointPtr, out) {
+		guest.SetStatus(results, guest.StatusInvalidArgument)
+		return
+	}
+	local, ok := abicore.DecodeEndpointV1(memory, endpointPtr)
+	if !ok {
 		guest.SetStatus(results, guest.StatusInvalidArgument)
 		return
 	}

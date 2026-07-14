@@ -14,6 +14,10 @@ func TestReceiveResultV1AtomicEncoding(t *testing.T) {
 	if ReceiveResultV1Size != 48 || ReceiveFlagTruncated != 1 || !ValidReceiveFlagsV1(0) || !ValidReceiveFlagsV1(ReceiveFlagTruncated) || ValidReceiveFlagsV1(2) {
 		t.Fatal("UDP ABI values changed")
 	}
+	checked := make([]byte, 64)
+	if !CheckBindV1(checked, 0, 32) || CheckBindV1(checked, 0, 16) || CheckBindV1(checked, 40, 0) {
+		t.Fatal("UDP bind checked ranges changed")
+	}
 	result := udpns.DatagramResult{
 		Copied: 3, DatagramBytes: 5,
 		Source:    nscore.Endpoint{Address: netip.MustParseAddr("192.0.2.2"), Port: 5300},

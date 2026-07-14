@@ -16,6 +16,16 @@ const (
 	receiveFlagMaskV1           = ReceiveFlagTruncated
 )
 
+// CheckBindV1 validates a complete endpoint input and socket-handle output
+// before a bind implementation changes backend state. Nonempty input and
+// output ranges must be disjoint.
+func CheckBindV1(memory []byte, endpointPtr, socketPtr uint32) bool {
+	return abicore.CheckRanges(memory, true,
+		abicore.Range{Ptr: endpointPtr, Length: abicore.AddressV1Size},
+		abicore.Range{Ptr: socketPtr, Length: abicore.HandleV1Size},
+	)
+}
+
 // EncodeReceiveResultV1 writes source, exact copied/original lengths, and
 // truncation metadata after validating the result and complete output range.
 func EncodeReceiveResultV1(memory []byte, ptr uint32, result udpns.DatagramResult, bufferSize int) bool {
