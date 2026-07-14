@@ -238,6 +238,60 @@ func TestBindingsBindSendReceiveAtomicStatusesAndLifecycle(t *testing.T) {
 	}
 }
 
+func TestBindingsRejectHighBitI32AliasesBeforeBackendCalls(t *testing.T) {
+	local := nscore.Endpoint{Address: netip.MustParseAddr("0.0.0.0"), Port: 53000}
+	remote := nscore.Endpoint{Address: netip.MustParseAddr("192.0.2.53"), Port: 53}
+	socket := &fakeSocket{local: local, sendProgress: nscore.ProgressDone}
+	backend := &fakeNamespace{socket: socket, progress: nscore.ProgressDone}
+	manager, instance := attachManager(t, backend)
+	defer manager.Detach(instance)
+	host := testHost{instance: instance, memory: bytes.Repeat([]byte{0xa5}, 512)}
+	bindings := Bindings(plugin.NewHost(manager))
+	state, _ := manager.ForInstance(instance)
+	namespaceHandle := state.NamespaceHandle()
+	if !abicore.EncodeEndpointV1(host.memory, 0, local) || !abicore.EncodeEndpointV1(host.memory, 96, remote) {
+		t.Fatal("encode endpoints")
+	}
+
+	const high = uint64(1) << 32
+	before := append([]byte(nil), host.memory...)
+	if status := callBinding(t, bindingByName(t, bindings, "namespace_default"), host, high+480); status != guest.StatusInvalidArgument || !bytes.Equal(host.memory, before) {
+		t.Fatalf("high namespace output = %v", status)
+	}
+	if status := callBinding(t, bindingByName(t, bindings, "bind"), host, uint64(namespaceHandle), high, 48); status != guest.StatusInvalidArgument || backend.calls != 0 || !bytes.Equal(host.memory, before) {
+		t.Fatalf("high bind endpoint = %v calls=%d", status, backend.calls)
+	}
+	if status := callBinding(t, bindingByName(t, bindings, "bind"), host, uint64(namespaceHandle), 0, high+48); status != guest.StatusInvalidArgument || backend.calls != 0 || !bytes.Equal(host.memory, before) {
+		t.Fatalf("high bind output = %v calls=%d", status, backend.calls)
+	}
+	if status := callBinding(t, bindingByName(t, bindings, "bind"), host, uint64(namespaceHandle), 0, 48); status != guest.StatusOK {
+		t.Fatalf("valid bind = %v", status)
+	}
+	socketHandle := binary.LittleEndian.Uint64(host.memory[48:56])
+	copy(host.memory[64:70], "packet")
+
+	for name, params := range map[string][]uint64{
+		"payload pointer": {socketHandle, high + 64, 6, 96},
+		"payload length":  {socketHandle, 64, high + 6, 96},
+		"remote pointer":  {socketHandle, 64, 6, high + 96},
+	} {
+		if status := callBinding(t, bindingByName(t, bindings, "send"), host, params...); status != guest.StatusInvalidArgument || socket.sendCalls != 0 {
+			t.Fatalf("high send %s = %v calls=%d", name, status, socket.sendCalls)
+		}
+	}
+
+	before = append(before[:0], host.memory...)
+	for name, params := range map[string][]uint64{
+		"payload pointer": {socketHandle, high + 160, 8, 192},
+		"payload length":  {socketHandle, 160, high + 8, 192},
+		"result pointer":  {socketHandle, 160, 8, high + 192},
+	} {
+		if status := callBinding(t, bindingByName(t, bindings, "receive"), host, params...); status != guest.StatusInvalidArgument || socket.receiveCalls != 0 || !bytes.Equal(host.memory, before) {
+			t.Fatalf("high receive %s = %v calls=%d", name, status, socket.receiveCalls)
+		}
+	}
+}
+
 func TestBindingsPrevalidateOutputsBeforeInstanceAndHandleLookup(t *testing.T) {
 	manager := instancecore.NewManager()
 	instance := new(wago.Instance)

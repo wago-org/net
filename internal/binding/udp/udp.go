@@ -48,8 +48,8 @@ func namespaceDefault(host plugin.Host, module wago.HostModule, params, results 
 		return
 	}
 	memory := guest.Memory(module)
-	out := uint32(params[0])
-	if !abicore.CheckRanges(memory, false, abicore.Range{Ptr: out, Length: abicore.HandleV1Size}) {
+	out, ok := abicore.NarrowUint32(params[0])
+	if !ok || !abicore.CheckRanges(memory, false, abicore.Range{Ptr: out, Length: abicore.HandleV1Size}) {
 		guest.SetStatus(results, guest.StatusInvalidArgument)
 		return
 	}
@@ -76,8 +76,9 @@ func bind(host plugin.Host, module wago.HostModule, params, results []uint64) {
 		return
 	}
 	memory := guest.Memory(module)
-	endpointPtr, out := uint32(params[1]), uint32(params[2])
-	if !udpabi.CheckBindV1(memory, endpointPtr, out) {
+	endpointPtr, endpointOK := abicore.NarrowUint32(params[1])
+	out, outOK := abicore.NarrowUint32(params[2])
+	if !endpointOK || !outOK || !udpabi.CheckBindV1(memory, endpointPtr, out) {
 		guest.SetStatus(results, guest.StatusInvalidArgument)
 		return
 	}
@@ -115,12 +116,19 @@ func send(host plugin.Host, module wago.HostModule, params, results []uint64) {
 		return
 	}
 	memory := guest.Memory(module)
-	payload, ok := abicore.Slice(memory, uint32(params[1]), uint32(params[2]))
+	payloadPtr, ptrOK := abicore.NarrowUint32(params[1])
+	payloadLength, lengthOK := abicore.NarrowUint32(params[2])
+	remotePtr, remoteOK := abicore.NarrowUint32(params[3])
+	if !ptrOK || !lengthOK || !remoteOK {
+		guest.SetStatus(results, guest.StatusInvalidArgument)
+		return
+	}
+	payload, ok := abicore.Slice(memory, payloadPtr, payloadLength)
 	if !ok {
 		guest.SetStatus(results, guest.StatusInvalidArgument)
 		return
 	}
-	remote, ok := abicore.DecodeEndpointV1(memory, uint32(params[3]))
+	remote, ok := abicore.DecodeEndpointV1(memory, remotePtr)
 	if !ok {
 		guest.SetStatus(results, guest.StatusInvalidArgument)
 		return
@@ -144,9 +152,10 @@ func receive(host plugin.Host, module wago.HostModule, params, results []uint64)
 		return
 	}
 	memory := guest.Memory(module)
-	payloadPtr, payloadLength := uint32(params[1]), uint32(params[2])
-	resultPtr := uint32(params[3])
-	if !abicore.CheckRanges(memory, true,
+	payloadPtr, ptrOK := abicore.NarrowUint32(params[1])
+	payloadLength, lengthOK := abicore.NarrowUint32(params[2])
+	resultPtr, resultOK := abicore.NarrowUint32(params[3])
+	if !ptrOK || !lengthOK || !resultOK || !abicore.CheckRanges(memory, true,
 		abicore.Range{Ptr: payloadPtr, Length: payloadLength},
 		abicore.Range{Ptr: resultPtr, Length: udpabi.ReceiveResultV1Size},
 	) {

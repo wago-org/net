@@ -5,6 +5,18 @@ import (
 	"testing"
 )
 
+func TestNarrowUint32RejectsHighBits(t *testing.T) {
+	for _, value := range []uint64{0, 1, uint64(^uint32(0))} {
+		got, ok := NarrowUint32(value)
+		if !ok || uint64(got) != value {
+			t.Fatalf("NarrowUint32(%#x) = %#x, %v", value, got, ok)
+		}
+	}
+	if got, ok := NarrowUint32(uint64(1) << 32); ok || got != 0 {
+		t.Fatalf("high-bit NarrowUint32 = %#x, %v", got, ok)
+	}
+}
+
 func TestSliceBoundaries(t *testing.T) {
 	memory := make([]byte, 8)
 	tests := []struct {

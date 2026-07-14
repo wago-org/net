@@ -5,6 +5,13 @@ package core
 
 import "encoding/binary"
 
+// NarrowUint32 converts one raw host parameter only when it is exactly
+// representable by the guest ABI's i32 value domain.
+func NarrowUint32(value uint64) (uint32, bool) {
+	narrowed := uint32(value)
+	return narrowed, value == uint64(narrowed)
+}
+
 // Slice validates [ptr, ptr+length) using uint64 arithmetic before slicing guest
 // memory. A zero-length range at exactly len(memory) is valid.
 func Slice(memory []byte, ptr, length uint32) ([]byte, bool) {
