@@ -826,7 +826,7 @@ func (s *tcpStream) TryWrite(src []byte) (nscore.IOResult, error) {
 	}
 	h := s.conn.InternalHandler()
 	if !h.State().TxDataOpen() {
-		if h.State().IsPreestablished() || h.AwaitingSynSend() {
+		if !s.connected && (h.State().IsPreestablished() || h.AwaitingSynSend()) {
 			return nscore.IOResult{State: nscore.IOWouldBlock}, nil
 		}
 		return nscore.IOResult{}, nscore.Fail(nscore.FailureConnectionBroken, net.ErrClosed)

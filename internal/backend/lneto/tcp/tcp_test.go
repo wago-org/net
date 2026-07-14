@@ -4,7 +4,10 @@ import (
 	"net/netip"
 	"testing"
 
+	lneto "github.com/soypat/lneto"
 	"github.com/soypat/lneto/ethernet"
+	"github.com/soypat/lneto/ipv4"
+	lnetotcp "github.com/soypat/lneto/tcp"
 	lnetocore "github.com/wago-org/net/internal/backend/lneto/core"
 	ipv6backend "github.com/wago-org/net/internal/backend/lneto/ipv6"
 	nscore "github.com/wago-org/net/internal/namespace/core"
@@ -354,6 +357,61 @@ func TestConnectedStatePersistsThroughHalfClose(t *testing.T) {
 	}
 }
 
+func TestEstablishedResetIsAConnectionEventNotServiceFailure(t *testing.T) {
+	clientCore, _, client, serverCore, server := newEstablishedPair(t)
+	if result, err := client.TryWrite([]byte{0x5a}); err != nil || result != (nscore.IOResult{Bytes: 1, State: nscore.IOReady}) {
+		t.Fatalf("write = %+v, %v", result, err)
+	}
+	transferTCP(t, clientCore, serverCore)
+	ack := nextTCPFrame(t, serverCore)
+	ethernetFrame, err := ethernet.NewFrame(ack)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ipFrame, err := ipv4.NewFrame(ethernetFrame.Payload())
+	if err != nil {
+		t.Fatal(err)
+	}
+	tcpFrame, err := lnetotcp.NewFrame(ipFrame.Payload())
+	if err != nil {
+		t.Fatal(err)
+	}
+	offset, _ := tcpFrame.OffsetAndFlags()
+	tcpFrame.SetOffsetAndFlags(offset, lnetotcp.FlagRST|lnetotcp.FlagACK)
+	tcpFrame.SetCRC(0)
+	var checksum lneto.CRC791
+	ipFrame.CRCWriteTCPPseudo(&checksum)
+	tcpFrame.SetCRC(checksum.PayloadSum16(tcpFrame.RawData()))
+
+	if err := clientCore.Link().TryEnqueue(packetlink.Ingress, ack); err != nil {
+		t.Fatal(err)
+	}
+	clientCore.Lock()
+	clientCore.SetNextIngressLocked(true)
+	required := clientCore.RequiredFrameBytesLocked()
+	clientCore.Unlock()
+	budget := nscore.ServiceBudget{Packets: 1, Bytes: uint32(required), Operations: 1}
+	report, progress, err := clientCore.TryService(budget)
+	if err != nil || progress != nscore.ProgressDone || report != (nscore.ServiceReport{Packets: 1, Bytes: uint32(len(ack)), Operations: 1}) {
+		t.Fatalf("reset service = %+v, %v, %v", report, progress, err)
+	}
+	if ready := client.Readiness(); ready&nscore.ReadyConnected == 0 || ready&nscore.ReadyClosed == 0 || ready&nscore.ReadyWritable != 0 {
+		t.Fatalf("reset readiness = %v", ready)
+	}
+	if progress, err := client.TryFinishConnect(); err != nil || progress != nscore.ProgressDone {
+		t.Fatalf("finish after reset = %v, %v", progress, err)
+	}
+	if result, err := client.TryRead(make([]byte, 1)); err != nil || result.State != nscore.IOEOF {
+		t.Fatalf("read after reset = %+v, %v", result, err)
+	}
+	if result, err := client.TryWrite([]byte{1}); err == nil || failureOf(t, err) != nscore.FailureConnectionBroken {
+		t.Fatalf("write after reset = %+v, %v", result, err)
+	}
+	if result, err := server.TryRead(make([]byte, 1)); err != nil || result != (nscore.IOResult{Bytes: 1, State: nscore.IOReady}) {
+		t.Fatalf("server retained input = %+v, %v", result, err)
+	}
+}
+
 func TestListenerCloseDetachesAcceptedStreamBeforePoolReuse(t *testing.T) {
 	clientCore, listener, client, serverCore, server := newEstablishedPair(t)
 	serverAdapter := listener.owner
@@ -562,6 +620,25 @@ func transferTCP(t testing.TB, from, to *lnetocore.Namespace) {
 	if err != nil || progress != nscore.ProgressDone || report.Packets != 1 {
 		t.Fatalf("ingress = %+v, %v, %v", report, progress, err)
 	}
+}
+
+func nextTCPFrame(t testing.TB, from *lnetocore.Namespace) []byte {
+	t.Helper()
+	from.Lock()
+	from.SetNextIngressLocked(false)
+	required := from.RequiredFrameBytesLocked()
+	from.Unlock()
+	budget := nscore.ServiceBudget{Packets: 1, Bytes: uint32(required), Operations: 1}
+	report, progress, err := from.TryService(budget)
+	if err != nil || progress != nscore.ProgressDone || report.Packets != 1 {
+		t.Fatalf("egress = %+v, %v, %v", report, progress, err)
+	}
+	frame := make([]byte, from.Link().MaxFrameBytes())
+	result, err := from.Link().TryDequeue(packetlink.Egress, frame)
+	if err != nil || !result.Ready || result.Truncated || result.FrameBytes == 0 {
+		t.Fatalf("dequeue = %+v, %v", result, err)
+	}
+	return frame[:result.FrameBytes]
 }
 
 func failureOf(t testing.TB, err error) nscore.Failure {
