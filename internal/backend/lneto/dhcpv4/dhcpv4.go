@@ -647,7 +647,7 @@ func inspectPacket(frame lnetodhcp.Frame) (lnetodhcp.MessageType, netip.Addr, in
 
 func (a *Adapter) acceptServerLocked(payload []byte) {
 	frame, err := lnetodhcp.NewFrame(payload)
-	if err != nil || frame.MagicCookie() != lnetodhcp.MagicCookie {
+	if err != nil || frame.MagicCookie() != lnetodhcp.MagicCookie || !validUnicastMAC(*frame.CHAddrAs6()) {
 		return
 	}
 	message, _, _, ok := inspectPacket(frame)

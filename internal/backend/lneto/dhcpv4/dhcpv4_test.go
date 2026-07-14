@@ -242,6 +242,29 @@ func TestClientIngressRejectsInvalidEthernetSources(t *testing.T) {
 	}
 }
 
+func TestServerInvalidClientHardwareAddressesDoNotReserveCapacity(t *testing.T) {
+	clientCore, client := newClient(t, false)
+	serverCore, server := newServer(t, 1)
+	if _, _, err := client.TryAcquire(dhcpns.Request{}); err != nil {
+		t.Fatal(err)
+	}
+	valid := serviceEgress(t, clientCore)
+	for name, address := range map[string][6]byte{
+		"zero": {}, "broadcast": broadcastMAC, "multicast": {1, 0, 94, 0, 0, 1},
+	} {
+		t.Run(name, func(t *testing.T) {
+			serviceIngress(t, serverCore, rewriteDHCPClientHardwareAddress(t, valid, address))
+			if len(server.serverClients) != 0 || server.serverPending != 0 {
+				t.Fatalf("invalid client hardware address reserved server capacity: clients=%d pending=%d", len(server.serverClients), server.serverPending)
+			}
+		})
+	}
+	serviceIngress(t, serverCore, valid)
+	if len(server.serverClients) != 1 || server.serverPending != 1 {
+		t.Fatalf("valid discover after malformed frames = clients=%d pending=%d", len(server.serverClients), server.serverPending)
+	}
+}
+
 func TestServerIngressRejectsInvalidEthernetSources(t *testing.T) {
 	invalid := map[string][6]byte{
 		"zero":      {},
@@ -402,6 +425,33 @@ func rewriteDHCPMessageType(t testing.TB, frame []byte, message lnetodhcp.Messag
 	if !found {
 		t.Fatal("DHCP message type option not found")
 	}
+	udp.SetCRC(0)
+	var checksum lneto.CRC791
+	ip.CRCWriteUDPPseudo(&checksum, udp.Length())
+	udp.SetCRC(lneto.NeverZeroSum(checksum.PayloadSum16(udp.RawData()[:udp.Length()])))
+	return frame
+}
+
+func rewriteDHCPClientHardwareAddress(t testing.TB, frame []byte, address [6]byte) []byte {
+	t.Helper()
+	frame = append([]byte(nil), frame...)
+	eth, err := ethernet.NewFrame(frame)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ip, err := ipv4.NewFrame(eth.Payload())
+	if err != nil {
+		t.Fatal(err)
+	}
+	udp, err := lnetoudp.NewFrame(ip.Payload())
+	if err != nil {
+		t.Fatal(err)
+	}
+	dhcp, err := lnetodhcp.NewFrame(udp.Payload())
+	if err != nil {
+		t.Fatal(err)
+	}
+	*dhcp.CHAddrAs6() = address
 	udp.SetCRC(0)
 	var checksum lneto.CRC791
 	ip.CRCWriteUDPPseudo(&checksum, udp.Length())
