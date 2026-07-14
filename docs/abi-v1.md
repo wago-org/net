@@ -13,7 +13,7 @@ Except for `abi_version`, networking imports return one `i32` status and write
 additional values through checked guest-memory output pointers. `InfoImports()`
 and the historical zero-config `Imports(Config{})` helper intentionally expose
 only `wago_net.abi_version`; every resource-owning UDP/TCP/DNS/ICMPv4/NTP/mDNS/
-DHCPv4/link-local/ICMPv6 imports and the configured IPv6 namespace import require exact
+DHCPv4/link-local/ICMPv6/DHCPv6 imports and the configured IPv6 namespace import require exact
 Runtime lifecycle identity and are therefore available only through
 extension registration. The completed `internal/backend/lneto/core` plus `/tcp`,
 `/udp`, and `/dns` adapter extraction and selective opaque contribution assembly
@@ -71,7 +71,8 @@ poll codecs in `internal/abi/core`. TCP stream/I/O, UDP receive-result, DNS name
 request/lease and link-local request/result layouts are separate compilation
 units in `internal/abi/tcp`, `internal/abi/udp`, `internal/abi/dns`,
 `internal/abi/icmpv4`, `internal/abi/ntp`, `internal/abi/mdns`,
-`internal/abi/dhcpv4`, `internal/abi/linklocal4`, `internal/abi/ipv6`, and `internal/abi/icmpv6`. This package
+`internal/abi/dhcpv4`, `internal/abi/linklocal4`, `internal/abi/ipv6`,
+`internal/abi/icmpv6`, and `internal/abi/dhcpv6`. This package
 split changes no guest-visible size, offset, validation rule, or numeric value.
 
 ## UDP module and signatures
@@ -600,6 +601,51 @@ SLAAC, prefix/router lifetimes, route tables, multicast echo, and raw packet
 access are unsupported. IPv6 TCP continues to use the explicitly configured
 gateway MAC; the guest cache is not a transport route table.
 
+## DHCPv6 module, signatures, and layout
+
+The checked DHCPv6 ABI is independently gated in `wago_net_dhcpv6` by
+`net.dhcpv6`:
+
+```text
+namespace_default(out_handle_ptr: i32) -> i32
+operations(namespace: i64, out_operations_ptr: i32) -> i32
+start(namespace: i64, operation: i32, out_handle_ptr: i32) -> i32
+result(lease: i64, out_configuration_ptr: i32) -> i32
+cancel(lease: i64) -> i32
+close(lease: i64) -> i32
+poll(events_ptr: i32, event_capacity: i32, budget_ptr: i32, out_result_ptr: i32) -> i32
+```
+
+The four-byte operation bitset advertises only bit 1, initial acquisition.
+Operation code 1 starts one bounded Solicit → Advertise → Request → Reply
+exchange. Codes naming renew, rebind, release, decline, confirm,
+information-request, Reconfigure, rapid commit, relay agent, server,
+identity-apply, and raw packet operation return `NOT_SUPPORTED` without writing
+the handle output. Unknown operation codes return `INVALID_ARGUMENT`.
+
+`wago_net_dhcpv6_configuration_v1` is 3368 bytes. It stores transaction ID and
+IAID at offsets 0 and 4; assigned and selected-server IPv6 addresses at 8 and
+40; server-DUID length and six repeated-option counts at 72..96; zero reserved
+at 100; IA_NA and IA_PD timers/lifetimes at 104..124; 128 inline server-DUID
+bytes at 128; four DNS addresses at 256; six 260-byte canonical domain names at
+384; four NTP addresses at 1944; two multicast NTP addresses at 2072; four
+260-byte NTP names at 2136; and four 48-byte delegated-prefix records at 3176.
+Each prefix record contains a 32-byte IPv6 address, prefix bits, preferred and
+valid lifetimes, and a zero reserved word. Counts select the initialized prefix
+of each fixed array; unused entries and name/DUID padding are zero. The complete
+structure is validated and copied atomically only on `OK`.
+
+The result is observation-only. No assigned address or delegated prefix is
+applied to the namespace, and the ABI implies no SLAAC, DAD, route table, router
+advertisement, or lifetime scheduler. The adapter owns internal UDP ports
+546/547 without exposing general UDP6. It requires a configured scoped
+link-local identity and validates Ethernet/IPv6/UDP integrity, mandatory nonzero
+UDP checksum, exact `ff02::1:2`/`33:33:00:01:00:02` transmission, transaction
+ID, client/server DUID, IAID, selected server source/MAC, success status, IA
+nesting, and every repeated-option bound before state mutation. Outbound
+messages remove the pinned Reconfigure Accept option because Reconfigure is not
+part of the supported operation bitset.
+
 ## Bounded poll layouts
 
 `wago_net_poll_budget_v1` is 24 bytes, containing six consecutive `uint32_t`
@@ -614,7 +660,8 @@ bit `1` readable, bit `2` writable, bit `4` accept, bit `8` connected, bit `16`
 DNS result, bit `32` error, bit `64` closed, bit `128` ICMPv4 reply, bit `256`
 NTP result, bit `512` mDNS query result, bit `1024` mDNS announcement completion,
 bit `2048` DHCPv4 lease result, bit `4096` IPv4 link-local result, bit `8192`
-ICMPv6 echo reply, and bit `16384` ICMPv6 neighbor result. Unknown bits are
+ICMPv6 echo reply, bit `16384` ICMPv6 neighbor result, and bit `32768` DHCPv6
+configuration result. Unknown bits are
 invalid.
 
 `wago_net_poll_result_v1` is 24 bytes, containing six consecutive `uint32_t`
@@ -674,7 +721,8 @@ listen, connect, datagram destination, DNS request, ICMPv4 echo destination,
 NTP server synchronization, mDNS query/announcement/response authority, and
 DHCPv4 client/server endpoint authority, IPv4 link-local candidate and defense
 authority, the configured IPv6 namespace identity, and every ICMPv6 echo,
-response, neighbor resolution, lookup, seed, and remove address.
+response, neighbor resolution, lookup, seed, and remove address, plus DHCPv6
+client bind, multicast send, and selected-server receive endpoint.
 Unmatched or malformed requests are denied. Wildcard binds, loopback, multicast,
 limited IPv4 broadcast, and local bind/listen ports below 1024 require separate
 explicit grants so a broad prefix rule cannot grant them accidentally.
@@ -684,7 +732,8 @@ families.
 Resource creation, retained packet bytes, DNS work, active ICMPv4 work, active
 NTP work, active mDNS query/announcement work, active DHCPv4 DORA work, active
 IPv4 link-local claim/defense work, configured IPv6 namespace ownership,
-ICMPv6 resources/cache/queued bytes and active echo/resolution work, and manual
+ICMPv6 resources/cache/queued bytes and active echo/resolution work, DHCPv6
+resources/retained configuration bytes/active acquisition work, and manual
 service work are also subject to finite per-instance quotas. A failed operation must roll back its
 tentative reservation, and instance teardown clears both committed allocations
 and abandoned reservations. Exact default limits remain implementation policy,

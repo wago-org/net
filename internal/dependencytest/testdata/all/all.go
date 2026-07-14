@@ -3,6 +3,7 @@ package all
 import (
 	wagonet "github.com/wago-org/net"
 	"github.com/wago-org/net/dhcpv4"
+	"github.com/wago-org/net/dhcpv6"
 	"github.com/wago-org/net/dns"
 	"github.com/wago-org/net/icmpv4"
 	"github.com/wago-org/net/icmpv6"
@@ -44,6 +45,9 @@ func Network() (*wagonet.Network, error) {
 		return network, err
 	}
 	if err := icmpv6.Register(network); err != nil {
+		return network, err
+	}
+	if err := dhcpv6.Register(network); err != nil {
 		return network, err
 	}
 	return network, nil

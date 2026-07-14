@@ -2,7 +2,7 @@
 
 Status: active implementation plan. ICMPv4, NTP, mDNS, DHCPv4, IPv4
 link-local/APIPA, IPv6 namespace/transport enablement, and ICMPv6/NDP are
-complete; the implemented DHCPv6 subset remains planned.
+complete; the implemented DHCPv6 subset is now complete.
 
 ## Goal
 
@@ -30,11 +30,12 @@ DNS modules:
 | `linklocal4` | `ipv4/linklocal4` | complete: bounded RFC 3927 claim-and-defend address selection |
 | `ipv6` | `ipv6` and `x/xnet` IPv6 stack | configured IPv6 namespace and transport enablement |
 | `icmpv6` | `ipv6/icmpv6` | complete: bounded echo and Neighbor Discovery operations |
-| `dhcpv6` | `dhcp/dhcpv6` | the finite client/configuration subset implemented by the pinned library |
+| `dhcpv6` | `dhcp/dhcpv6` | complete: bounded initial Solicit/Advertise/Request/Reply acquisition and copied configuration observations |
 
-DHCPv6 must truthfully document and return `NOT_SUPPORTED` for functionality the
-pinned library does not implement, including relay-agent and dynamic-server-pool
-operation.
+DHCPv6 truthfully reports only initial acquisition. Renew, rebind, release,
+decline, confirm, information-request, Reconfigure processing, rapid commit,
+relay-agent and dynamic-server-pool operation, namespace identity application,
+and raw packet access return `NOT_SUPPORTED` without mutation.
 
 ## Existing stack infrastructure
 
@@ -293,3 +294,35 @@ runtime composition covers all 1024 combinations of the ten completed modules,
 and granular plus aggregate registration are tested. IPv6 TCP continues to use
 the configured gateway MAC rather than claiming the guest cache as transport
 routing state.
+
+DHCPv6 is exposed as independently selectable `dhcpv6.Register`, capability
+`net.dhcpv6`, and seven-function import module `wago_net_dhcpv6`. Its truthful
+operation bitset advertises only one bounded initial Solicit → Advertise →
+Request → Reply acquisition; checked `start` returns `NOT_SUPPORTED` without
+output mutation for renew, rebind, release, decline, confirm,
+information-request, Reconfigure, rapid commit, relay, server, identity-apply,
+and raw-packet operations. One exact generation/kind-safe lease handle owns
+copied transaction, IAID, server DUID/source, IA_NA address and timers, bounded
+DNS/domain/NTP observations, and bounded IA_PD prefixes. Results are
+observation-only: no address/prefix is applied, and no SLAAC, DAD, route table,
+router advertisement, or lifetime scheduler is invented.
+
+The immediate adapter uses the pinned DHCPv6 client state machine and exported
+Ethernet II, IPv6, UDP, and DHCPv6 codecs directly. It owns exact internal UDP
+546/547 semantics without exposing general UDP6, requires a configured scoped
+link-local client identity, sends only to `ff02::1:2` and
+`33:33:00:01:00:02`, uses IPv6 hop limit 1 and a mandatory nonzero UDP
+pseudo-header checksum, and correlates exact transaction ID, client/server DUID,
+IAID, selected server source/MAC, message type, success status, IA nesting, and
+repeated-option bounds before mutation. The pinned client's Reconfigure Accept
+option is removed from outbound messages so the wire contract matches the
+unsupported Reconfigure operation. Every transaction, packet buffer, DUID,
+address, name, prefix, resource, active exchange, attempt, response countdown,
+UDP-port lease, and service operation is finite and quota-accounted.
+Cancellation, timeout, close, and namespace teardown synchronously clear
+retained state and release exact charges. Caller denies win over protocol
+defaults, and IPv6 or general UDP authority cannot widen DHCPv6. The module uses
+no lneto blocking, deadline, sleep, retry/backoff, goroutine, or retained
+guest-slice API. Selective dependency fixtures reject every omitted DHCPv6
+layer, runtime composition covers all 2048 combinations of the eleven completed
+modules, and granular plus aggregate registration are tested.

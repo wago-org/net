@@ -2,7 +2,7 @@
 // suite. The guest ABI is backend-neutral; lneto is the first backend and is
 // not part of the public contract. Complete UDP, TCP, bounded DNS, ICMPv4 echo,
 // explicit-clock NTP, bounded mDNS, DHCPv4, IPv4 link-local, configured IPv6,
-// and bounded ICMPv6/NDP modules are independently capability-gated. Runtime registration requires physical
+// bounded ICMPv6/NDP, and bounded initial DHCPv6 acquisition modules are independently capability-gated. Runtime registration requires physical
 // reinstantiation between class leases so instance-owned network state cannot
 // survive an in-place Wasm memory reset.
 package net
@@ -47,6 +47,8 @@ const (
 	IPv6Module = "wago_net_ipv6"
 	// ICMPv6Module owns bounded ICMPv6 echo and Neighbor Discovery.
 	ICMPv6Module = "wago_net_icmpv6"
+	// DHCPv6Module owns the bounded initial DHCPv6 acquisition subset.
+	DHCPv6Module = "wago_net_dhcpv6"
 
 	// ABIVersion1 encodes ABI version 1.0 as major in the upper 16 bits and minor
 	// in the lower 16 bits.
@@ -74,6 +76,8 @@ const (
 	CapIPv6 wago.Capability = "net.ipv6"
 	// CapICMPv6 permits checked bounded ICMPv6 echo and Neighbor Discovery.
 	CapICMPv6 wago.Capability = "net.icmpv6"
+	// CapDHCPv6 permits the checked bounded initial DHCPv6 acquisition subset.
+	CapDHCPv6 wago.Capability = "net.dhcpv6"
 )
 
 // PolicyConfig and related aliases expose the backend-neutral authority model
@@ -99,6 +103,7 @@ const (
 	PolicyTransportLinkLocal4 = policy.TransportLinkLocal4
 	PolicyTransportIPv6       = policy.TransportIPv6
 	PolicyTransportICMPv6     = policy.TransportICMPv6
+	PolicyTransportDHCPv6     = policy.TransportDHCPv6
 
 	PolicyInbound  = policy.DirectionInbound
 	PolicyOutbound = policy.DirectionOutbound
@@ -189,7 +194,7 @@ var (
 
 // Option configures shared network composition. Protocol-specific options live
 // in the tcp, udp, dns, icmpv4, ntp, mdns, dhcpv4, linklocal4, ipv6, and
-// icmpv6 packages rather than in the root package.
+// icmpv6 and dhcpv6 packages rather than in the root package.
 type Option interface {
 	applyNetwork(*Config) error
 }

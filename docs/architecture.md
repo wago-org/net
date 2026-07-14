@@ -33,7 +33,7 @@ The suite therefore uses **protocol import modules**:
 - `wago_net_linklocal4` for bounded RFC 3927 claim-and-defend operations;
 - `wago_net_ipv6` for configured IPv6 namespace introspection and service;
 - `wago_net_icmpv6` for bounded echo and Neighbor Discovery;
-- additional modules only when their implementations exist.
+- `wago_net_dhcpv6` for bounded initial DHCPv6 acquisition and copied configuration observations.
 
 This permits narrow per-protocol capabilities and independent ABI evolution
 without multiple owners competing for `wago_net`. The current root extension is
@@ -42,7 +42,7 @@ protocol modules; no process-global state or placeholder protocol module is used
 
 ## Current implementation
 
-The root extension owns eleven distinct import modules: `wago_net` declares
+The root extension owns twelve distinct import modules: `wago_net` declares
 `net.info` and exposes `abi_version`; `wago_net_udp` declares narrow `net.udp`
 authority; `wago_net_tcp` declares narrow `net.tcp` authority;
 `wago_net_dns` declares narrow `net.dns` authority; `wago_net_icmpv4`
@@ -51,8 +51,9 @@ declares narrow `net.icmpv4` authority; `wago_net_ntp` declares narrow
 `wago_net_dhcpv4` declares narrow `net.dhcpv4` authority;
 `wago_net_linklocal4` declares narrow `net.linklocal4` authority;
 `wago_net_ipv6` declares narrow `net.ipv6` authority; and `wago_net_icmpv6`
-declares narrow `net.icmpv6` authority. UDP, TCP, DNS, ICMPv4, NTP, mDNS,
-DHCPv4, IPv4 link-local, IPv6, and ICMPv6 each expose complete configured-namespace discovery plus their truthful
+declares narrow `net.icmpv6` authority; and `wago_net_dhcpv6` declares narrow
+`net.dhcpv6` authority. UDP, TCP, DNS, ICMPv4, NTP, mDNS, DHCPv4, IPv4
+link-local, IPv6, ICMPv6, and DHCPv6 each expose complete configured-namespace discovery plus their truthful
 operation or introspection surface and independently capability-gated bounded
 poll. Resource-owning modules retain kind-safe close; IPv6 configuration owns no
 separate guest resource. The explicit low-level
@@ -63,10 +64,10 @@ metadata, TinyGo-compatible slot shapes, and actual host functions do not drift.
 `internal/abi/core` provides allocation-free checked ranges, shared endpoint and
 poll layouts, disjoint multi-output validation, and common handle/memory codecs
 without exposing lneto types. `internal/abi/tcp`, `/udp`, `/dns`, `/icmpv4`,
-`/ntp`, `/mdns`, `/dhcpv4`, `/linklocal4`, `/ipv6`, and `/icmpv6` hold only TCP stream/I/O,
+`/ntp`, `/mdns`, `/dhcpv4`, `/linklocal4`, `/ipv6`, `/icmpv6`, and `/dhcpv6` hold only TCP stream/I/O,
 UDP receive-result, inline DNS query/name/record, ICMPv4 echo, NTP sample, mDNS
 query/record/announcement, DHCPv4 request/lease, link-local request/result,
-IPv6 configuration, and ICMPv6 echo/neighbor layouts, so omitted protocol ABI units stay out of selective
+IPv6 configuration, ICMPv6 echo/neighbor, and DHCPv6 configuration layouts, so omitted protocol ABI units stay out of selective
 dependency graphs.
 `internal/resource` provides O(1) opaque-handle lookup with exact kind checks,
 never-reused table identities, per-slot generations, rollover retirement, and
@@ -98,8 +99,8 @@ options creates a second policy or quota domain.
 
 `internal/quota` provides finite per-instance total/protocol resource,
 queued-byte, DNS-work, active-ICMPv4-work, active-NTP-work, active-mDNS-work,
-active-DHCPv4-work, active-link-local-work, one configured IPv6 namespace resource, ICMPv6 resources,
-active ICMPv6 echo/resolution work, and service-work counters. Tentative reservations must be committed or
+active-DHCPv4-work, active-link-local-work, one configured IPv6 namespace resource, ICMPv6 resources, active ICMPv6 echo/resolution work, DHCPv6 resources and
+active acquisition work, and service-work counters. Tentative reservations must be committed or
 rolled back; committed allocations release exactly once. Guest poll uses a
 scoped service charge that preserves the same finite concurrent limit and panic
 cleanup without allocating retained reservation/allocation tokens. Closing an
@@ -109,7 +110,7 @@ abandoned reservations and makes late token cleanup harmless.
 `internal/namespace/core` defines the backend-neutral endpoint, progress,
 stream-I/O, readiness, semantic-error, resource, namespace ownership, and bounded
 manual-service contracts. `internal/namespace/tcp`, `/udp`, `/dns`, `/icmpv4`, `/ntp`, `/mdns`,
-`/dhcpv4`, `/linklocal4`, `/ipv6`, and `/icmpv6` define
+`/dhcpv4`, `/linklocal4`, `/ipv6`, `/icmpv6`, and `/dhcpv6` define
 only their narrow creation/resource or configuration facets and protocol-local values. NTP additionally
 defines the explicit host clock contract; no ambient wall clock is available to
 the adapter. Operations
@@ -222,6 +223,20 @@ resolution, cache, queued response, retained-byte, active-work, retry, and
 service dimensions are finite and synchronously released. Router discovery,
 redirects, DAD, SLAAC, route tables, multicast echo, raw packets, blocking,
 deadline, sleep, backoff, and goroutine APIs remain absent.
+`internal/backend/lneto/dhcpv6` owns exact internal UDP 546/547 semantics and
+one bounded initial Solicit/Advertise/Request/Reply acquisition over direct
+Ethernet II, IPv6, UDP, and pinned DHCPv6 immediate codecs. It requires the
+configured scoped link-local IPv6 identity, mandatory UDP pseudo-header
+checksums, exact multicast mapping, transaction/client/server DUID/IAID/server
+source correlation, success status, strict IA nesting, and finite repeated
+option bounds before mutation. It removes the pinned Reconfigure Accept option
+because Reconfigure is not exposed. Accepted address, prefix, DNS, domain, NTP, and
+server data are copied observations only. Renew, rebind, release, decline,
+confirm, information-request, Reconfigure, rapid commit, relay, server,
+identity-apply, and raw-packet operations remain unsupported. Resource, byte,
+active-work, retry, response countdown, port, parser, and service dimensions are
+finite and synchronously released; no general UDP6, blocking, deadline, sleep,
+backoff, goroutine, or retained guest-slice API is introduced.
 `internal/backend/lneto/linklocal4` owns one exact bounded RFC 3927 claim and
 its namespace-lifetime defense resource. It uses only the pinned exported
 immediate link-local handler plus Ethernet II and ARP codecs, an explicit host
@@ -257,12 +272,12 @@ construction imports only the shared lneto core. Root, single-protocol, pair,
 and all-protocol dependency fixtures require exactly the selected
 adapters/facets and reject every omitted one plus the aggregate assembler,
 completing the Stage 4 compile-isolation boundary; runtime composition separately
-covers all 1024 selections.
+covers all 2048 selections.
 Granular `tcp/register`, `udp/register`, `dns/register`, `icmpv4/register`,
 `ntp/register`, `mdns/register`, `dhcpv4/register`, `linklocal4/register`,
-`ipv6/register`, and `icmpv6/register` packages own only their selected public
+`ipv6/register`, `icmpv6/register`, and `dhcpv6/register` packages own only their selected public
 facade and exact implementation graph. The root `register` package explicitly
-composes all ten implemented protocols in one extension rather than
+composes all eleven implemented protocols in one extension rather than
 using the aggregate compatibility constructor.
 
 `internal/readiness` attaches a finite coordinator to each instance resource
@@ -278,14 +293,15 @@ now measure the complete UDP and TCP guest poll calls at zero allocations rather
 than including a value-to-interface boxing artifact.
 
 Each `Extension` owns one private instance-state manager shared by its core,
-UDP, TCP, DNS, ICMPv4, NTP, mDNS, DHCPv4, link-local, IPv6, and ICMPv6 module bindings. Runtime instantiation attaches one resource table,
+UDP, TCP, DNS, ICMPv4, NTP, mDNS, DHCPv4, link-local, IPv6, ICMPv6, and DHCPv6 module bindings. Runtime instantiation attaches one resource table,
 readiness coordinator, immutable policy, and finite quota ledger to the exact
 `*wago.Instance`. Optional static
 IPv4 configuration transactionally reserves namespace quota, constructs the
 backend, inserts a generation-safe handle, and registers bounded readiness before
 the state is published. UDP, TCP, DNS, ICMPv4, NTP, mDNS, DHCPv4, link-local,
-and ICMPv6 creation repeat that transaction for exact socket, listener, stream,
-query, echo, synchronization, announcement, lease, claim, or neighbor handles
+ICMPv6, and DHCPv6 creation repeat that transaction for exact socket, listener,
+stream, query, echo, synchronization, announcement, lease, claim, neighbor, or
+DHCPv6 acquisition handles
 and poll registration; every
 failed stage closes the backend resource and releases accounting. DNS handles
 support copied record iteration, explicit cancellation, backend service-attempt
