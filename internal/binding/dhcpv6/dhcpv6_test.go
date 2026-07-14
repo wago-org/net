@@ -14,6 +14,7 @@ import (
 	"github.com/wago-org/net/internal/plugin"
 	"github.com/wago-org/net/internal/policy"
 	"github.com/wago-org/net/internal/quota"
+	"github.com/wago-org/net/internal/resource"
 	wago "github.com/wago-org/wago"
 )
 
@@ -33,20 +34,32 @@ func (*fakeBase) TryService(nscore.ServiceBudget) (nscore.ServiceReport, nscore.
 	return nscore.ServiceReport{}, nscore.ProgressWouldBlock, nil
 }
 
-type fakeNamespace struct{ lease *fakeLease }
+type fakeNamespace struct {
+	lease *fakeLease
+	calls int
+}
 
 func (*fakeNamespace) Operations() dhcpns.Operations { return dhcpns.SupportedOperations }
 func (n *fakeNamespace) TryAcquire() (nscore.Resource, nscore.Progress, error) {
+	n.calls++
 	return n.lease, nscore.ProgressInProgress, nil
 }
 
-type fakeLease struct{ configuration dhcpns.Configuration }
+type fakeLease struct {
+	configuration dhcpns.Configuration
+	result        dhcpns.ResultState
+	failure       error
+	resultCalls   int
+	cancelCalls   int
+	closeCalls    int
+}
 
-func (*fakeLease) Close() error                { return nil }
-func (*fakeLease) Cancel() error               { return nil }
+func (l *fakeLease) Close() error              { l.closeCalls++; return nil }
+func (l *fakeLease) Cancel() error             { l.cancelCalls++; return nil }
 func (*fakeLease) Readiness() nscore.Readiness { return nscore.ReadyDHCPv6Result }
 func (l *fakeLease) TryResult() (dhcpns.Configuration, dhcpns.ResultState, error) {
-	return l.configuration, dhcpns.ResultReady, nil
+	l.resultCalls++
+	return l.configuration, l.result, l.failure
 }
 
 func TestResultBindingChecksMemoryAndEncodesReadyConfiguration(t *testing.T) {
@@ -61,7 +74,7 @@ func TestResultBindingChecksMemoryAndEncodesReadyConfiguration(t *testing.T) {
 		ValidLifetimeSeconds:     3600,
 	}
 	copy(configuration.ServerDUID[:], []byte{0, 3, 0, 1, 2, 0, 0, 0, 0, 2})
-	lease := &fakeLease{configuration: configuration}
+	lease := &fakeLease{configuration: configuration, result: dhcpns.ResultReady}
 	manager, err := instancecore.NewManagerConfigured(instancecore.Config{
 		Limits: quota.DefaultLimits(), Readiness: instancecore.DefaultConfig().Readiness,
 		NamespaceFactory: func(*policy.Policy, *quota.Account) (nscore.Namespace, error) {
@@ -103,6 +116,92 @@ func TestResultBindingChecksMemoryAndEncodesReadyConfiguration(t *testing.T) {
 	if ready.status != guest.StatusOK || binary.LittleEndian.Uint32(host.memory[:4]) != configuration.TransactionID ||
 		host.memory[dhcpabi.ConfigurationV1Size-1] != 0 {
 		t.Fatalf("ready result = %v xid=%x", ready.status, binary.LittleEndian.Uint32(host.memory[:4]))
+	}
+}
+
+func TestBindingsRejectTypedNilAndIsolateReusedLeaseGeneration(t *testing.T) {
+	backend := &fakeNamespace{}
+	manager, err := instancecore.NewManagerConfigured(instancecore.Config{
+		Limits: quota.DefaultLimits(), Readiness: instancecore.DefaultConfig().Readiness,
+		NamespaceFactory: func(*policy.Policy, *quota.Account) (nscore.Namespace, error) {
+			return nscore.ComposeNamespace(&fakeBase{}, nscore.Service{Key: dhcpns.ServiceKey, Value: backend})
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	instance := new(wago.Instance)
+	if err := manager.Attach(instance); err != nil {
+		t.Fatal(err)
+	}
+	defer manager.Detach(instance)
+	host := testHost{instance: instance, memory: bytes.Repeat([]byte{0xa5}, 4096)}
+	bindings := Bindings(plugin.NewHost(manager))
+	state, ok := manager.ForInstance(instance)
+	if !ok {
+		t.Fatal("instance state missing")
+	}
+	namespaceHandle := state.NamespaceHandle()
+
+	outPtr := uint64(320)
+	outBefore := append([]byte(nil), host.memory[outPtr:outPtr+uint64(8)]...)
+	if status := callBinding(t, bindingByName(t, bindings, "start"), host, uint64(namespaceHandle), uint64(dhcpns.OperationAcquire), uint64(len(host.memory)-1)); status.status != guest.StatusInvalidArgument || backend.calls != 0 {
+		t.Fatalf("out-of-bounds start = %v calls=%d", status.status, backend.calls)
+	}
+	var typedNil *fakeLease
+	backend.lease = typedNil
+	if status := callBinding(t, bindingByName(t, bindings, "start"), host, uint64(namespaceHandle), uint64(dhcpns.OperationAcquire), outPtr); status.status != guest.StatusIO || backend.calls != 1 || !bytes.Equal(host.memory[outPtr:outPtr+uint64(8)], outBefore) {
+		t.Fatalf("typed-nil start = %v calls=%d", status.status, backend.calls)
+	}
+
+	first := &fakeLease{result: dhcpns.ResultWouldBlock}
+	backend.lease = first
+	if status := callBinding(t, bindingByName(t, bindings, "start"), host, uint64(namespaceHandle), uint64(dhcpns.OperationAcquire), outPtr); status.status != guest.StatusInProgress || backend.calls != 2 {
+		t.Fatalf("first start = %v calls=%d", status.status, backend.calls)
+	}
+	firstHandle := resource.Handle(binary.LittleEndian.Uint64(host.memory[outPtr : outPtr+uint64(8)]))
+	resultPtr := uint64(512)
+	resultBefore := append([]byte(nil), host.memory[resultPtr:resultPtr+uint64(dhcpabi.ConfigurationV1Size)]...)
+	if status := callBinding(t, bindingByName(t, bindings, "result"), host, uint64(firstHandle), resultPtr); status.status != guest.StatusAgain || first.resultCalls != 1 || !bytes.Equal(host.memory[resultPtr:resultPtr+uint64(dhcpabi.ConfigurationV1Size)], resultBefore) {
+		t.Fatalf("would-block result = %v calls=%d", status.status, first.resultCalls)
+	}
+	if status := callBinding(t, bindingByName(t, bindings, "result"), host, uint64(namespaceHandle), resultPtr); status.status != guest.StatusBadHandle {
+		t.Fatalf("wrong-kind result = %v", status.status)
+	}
+	if status := callBinding(t, bindingByName(t, bindings, "cancel"), host, uint64(firstHandle)); status.status != guest.StatusOK || first.cancelCalls != 1 {
+		t.Fatalf("first cancel = %v calls=%d", status.status, first.cancelCalls)
+	}
+	if status := callBinding(t, bindingByName(t, bindings, "close"), host, uint64(firstHandle)); status.status != guest.StatusOK || first.closeCalls != 1 {
+		t.Fatalf("first close = %v calls=%d", status.status, first.closeCalls)
+	}
+	if status := callBinding(t, bindingByName(t, bindings, "result"), host, uint64(firstHandle), resultPtr); status.status != guest.StatusBadHandle {
+		t.Fatalf("stale result = %v", status.status)
+	}
+
+	fresh := &fakeLease{result: dhcpns.ResultWouldBlock}
+	backend.lease = fresh
+	freshPtr := uint64(336)
+	if status := callBinding(t, bindingByName(t, bindings, "start"), host, uint64(namespaceHandle), uint64(dhcpns.OperationAcquire), freshPtr); status.status != guest.StatusInProgress {
+		t.Fatalf("fresh start = %v", status.status)
+	}
+	freshHandle := resource.Handle(binary.LittleEndian.Uint64(host.memory[freshPtr : freshPtr+uint64(8)]))
+	if freshHandle == firstHandle || uint16(freshHandle) != uint16(firstHandle) {
+		t.Fatalf("generation-safe slot reuse = old %v fresh %v", firstHandle, freshHandle)
+	}
+	if status := callBinding(t, bindingByName(t, bindings, "cancel"), host, uint64(firstHandle)); status.status != guest.StatusBadHandle || fresh.cancelCalls != 0 {
+		t.Fatalf("stale cancel after reuse = %v fresh calls=%d", status.status, fresh.cancelCalls)
+	}
+	if status := callBinding(t, bindingByName(t, bindings, "close"), host, uint64(firstHandle)); status.status != guest.StatusBadHandle || fresh.closeCalls != 0 {
+		t.Fatalf("stale close after reuse = %v fresh calls=%d", status.status, fresh.closeCalls)
+	}
+	if status := callBinding(t, bindingByName(t, bindings, "result"), host, uint64(firstHandle), resultPtr); status.status != guest.StatusBadHandle || fresh.resultCalls != 0 {
+		t.Fatalf("stale result after reuse = %v fresh calls=%d", status.status, fresh.resultCalls)
+	}
+	if status := callBinding(t, bindingByName(t, bindings, "result"), host, uint64(freshHandle), resultPtr); status.status != guest.StatusAgain || fresh.resultCalls != 1 {
+		t.Fatalf("fresh result = %v calls=%d", status.status, fresh.resultCalls)
+	}
+	if status := callBinding(t, bindingByName(t, bindings, "close"), host, uint64(freshHandle)); status.status != guest.StatusOK || fresh.closeCalls != 1 {
+		t.Fatalf("fresh close = %v calls=%d", status.status, fresh.closeCalls)
 	}
 }
 
