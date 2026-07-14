@@ -1,6 +1,7 @@
 package dns
 
 import (
+	"bytes"
 	"encoding/binary"
 	"errors"
 	"net/netip"
@@ -114,6 +115,81 @@ func TestDNSNameInterningReusesRequestAndBoundedScratch(t *testing.T) {
 	}
 	if _, err := internDNSName([]byte("other.example.com"), request, storage, &count); err == nil {
 		t.Fatal("bounded name scratch accepted a second unique name")
+	}
+}
+
+func TestEgressShortBufferPreservesRoundRobinStateAndPendingQueries(t *testing.T) {
+	config := dnsTestConfig(t, 74)
+	ns := newTestNamespace(t, config)
+	firstRequest := namespace.DNSRequest{Name: "first.example.com", Types: namespace.DNSRecordsA}
+	secondRequest := namespace.DNSRequest{Name: "second.example.com", Types: namespace.DNSRecordsAAAA}
+	firstResource, _, err := ns.TryResolve(firstRequest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	secondResource, _, err := ns.TryResolve(secondRequest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	first := firstResource.(*dnsQuery)
+	second := secondResource.(*dnsQuery)
+	firstPacket := append([]byte(nil), first.packet...)
+	secondPacket := append([]byte(nil), second.packet...)
+	usageBefore, _ := config.Quotas.Snapshot()
+	firstReady, secondReady := first.Readiness(), second.Readiness()
+	short := bytes.Repeat([]byte{0xa5}, 14+20+8+len(first.packet)-1)
+
+	ns.core.Lock()
+	written, worked, err := ns.adapter.egressLocked(short)
+	cursor := ns.adapter.cursor
+	ns.core.Unlock()
+	if written != 0 || worked || !errors.Is(err, lneto.ErrShortBuffer) {
+		t.Fatalf("short egress = %d, %v, %v", written, worked, err)
+	}
+	if !bytes.Equal(short, bytes.Repeat([]byte{0xa5}, len(short))) {
+		t.Fatalf("short egress mutated destination = %x", short)
+	}
+	if cursor != 0 || first.state != dnsQueryPending || second.state != dnsQueryPending || first.attempts != 0 || second.attempts != 0 || first.retry != 0 || second.retry != 0 || !bytes.Equal(first.packet, firstPacket) || !bytes.Equal(second.packet, secondPacket) {
+		t.Fatalf("short egress mutated scheduler or queries: cursor=%d first=%v/%d/%d second=%v/%d/%d", cursor, first.state, first.attempts, first.retry, second.state, second.attempts, second.retry)
+	}
+	if first.Readiness() != firstReady || second.Readiness() != secondReady {
+		t.Fatalf("short egress changed readiness: first=%v/%v second=%v/%v", first.Readiness(), firstReady, second.Readiness(), secondReady)
+	}
+	if usage, _ := config.Quotas.Snapshot(); usage != usageBefore {
+		t.Fatalf("short egress changed quota = %+v, want %+v", usage, usageBefore)
+	}
+
+	frame := make([]byte, ns.Link().MaxFrameBytes())
+	ns.core.Lock()
+	firstBytes, firstWorked, err := ns.adapter.egressLocked(frame)
+	cursorAfterFirst := ns.adapter.cursor
+	ns.core.Unlock()
+	if err != nil || !firstWorked || firstBytes == 0 || cursorAfterFirst != 1 {
+		t.Fatalf("first retry = %d, %v, %v, cursor=%d", firstBytes, firstWorked, err, cursorAfterFirst)
+	}
+	firstIP, err := ipv4.NewFrame(frame[14:firstBytes])
+	if err != nil {
+		t.Fatal(err)
+	}
+	firstTxID, firstPort := dnsPacketIdentity(t, frame[:firstBytes])
+	if firstIP.ID() != 75 || firstTxID != first.txid || firstPort != first.localPort {
+		t.Fatalf("first retry frame = id=%d txid=%d port=%d", firstIP.ID(), firstTxID, firstPort)
+	}
+
+	ns.core.Lock()
+	secondBytes, secondWorked, err := ns.adapter.egressLocked(frame)
+	cursorAfterSecond := ns.adapter.cursor
+	ns.core.Unlock()
+	if err != nil || !secondWorked || secondBytes == 0 || cursorAfterSecond != 0 {
+		t.Fatalf("second egress = %d, %v, %v, cursor=%d", secondBytes, secondWorked, err, cursorAfterSecond)
+	}
+	secondIP, err := ipv4.NewFrame(frame[14:secondBytes])
+	if err != nil {
+		t.Fatal(err)
+	}
+	secondTxID, secondPort := dnsPacketIdentity(t, frame[:secondBytes])
+	if secondIP.ID() != 76 || secondTxID != second.txid || secondPort != second.localPort {
+		t.Fatalf("second frame = id=%d txid=%d port=%d", secondIP.ID(), secondTxID, secondPort)
 	}
 }
 

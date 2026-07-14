@@ -420,11 +420,11 @@ func (n *Adapter) egressLocked(dst []byte) (written int, worked bool, err error)
 		if query == nil || (query.state != dnsQueryPending && query.state != dnsQueryWaiting) {
 			continue
 		}
-		n.cursor = index + 1
-		if n.cursor == len(n.queries) {
-			n.cursor = 0
-		}
 		if query.state == dnsQueryWaiting {
+			n.cursor = index + 1
+			if n.cursor == len(n.queries) {
+				n.cursor = 0
+			}
 			if query.retry > 1 {
 				query.retry--
 				return 0, true, nil
@@ -469,6 +469,10 @@ func (n *Adapter) egressLocked(dst []byte) (written int, worked bool, err error)
 		query.attempts++
 		query.retry = n.config.RetryServiceAttempts
 		query.state = dnsQueryWaiting
+		n.cursor = index + 1
+		if n.cursor == len(n.queries) {
+			n.cursor = 0
+		}
 		return frameBytes, true, nil
 	}
 	return 0, false, nil
