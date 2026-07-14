@@ -42,3 +42,64 @@ func TestResultEncodingIsAtomicAndFixed(t *testing.T) {
 		t.Fatalf("encoded result = %x", memory[:48])
 	}
 }
+
+func TestRequestRejectsMalformedAddressFields(t *testing.T) {
+	memory := make([]byte, RequestV1Size)
+	if !EncodeRequestV1(memory, 0, linklocalns.Request{}) {
+		t.Fatal("encode empty request")
+	}
+	for name, mutate := range map[string]func([]byte){
+		"unknown family": func(encoded []byte) { encoded[0] = 0xff },
+		"address flags":  func(encoded []byte) { encoded[1] = 1 },
+		"port":           func(encoded []byte) { binary.LittleEndian.PutUint16(encoded[2:4], 1) },
+		"scope":          func(encoded []byte) { binary.LittleEndian.PutUint32(encoded[4:8], 1) },
+		"reserved":       func(encoded []byte) { encoded[28] = 1 },
+	} {
+		t.Run(name, func(t *testing.T) {
+			malformed := append([]byte(nil), memory...)
+			mutate(malformed)
+			if _, ok := DecodeRequestV1(malformed, 0); ok {
+				t.Fatal("malformed request accepted")
+			}
+		})
+	}
+	if CheckRequestV1(memory, ^uint32(0)-RequestV1Size+2, 0) || CheckRequestV1(memory, 0, ^uint32(0)) {
+		t.Fatal("overflowing fixed range accepted")
+	}
+}
+
+func FuzzLinkLocal4V1Layouts(f *testing.F) {
+	valid := make([]byte, 128)
+	request := linklocalns.Request{FirstCandidate: netip.MustParseAddr("169.254.42.7")}
+	if !EncodeRequestV1(valid, 8, request) {
+		f.Fatal("seed request")
+	}
+	f.Add(valid, uint32(8), uint32(64))
+	f.Add([]byte{0xff, 1, 2, 3}, ^uint32(0), ^uint32(0))
+	f.Fuzz(func(t *testing.T, memory []byte, requestPtr, outputPtr uint32) {
+		if len(memory) > 4096 {
+			t.Skip()
+		}
+		before := append([]byte(nil), memory...)
+		decoded, ok := DecodeRequestV1(memory, requestPtr)
+		_ = CheckRequestV1(memory, requestPtr, outputPtr)
+		if !bytes.Equal(memory, before) {
+			t.Fatal("request validation mutated memory")
+		}
+		if ok && !decoded.Valid() {
+			t.Fatal("decoded invalid request")
+		}
+
+		encoded := append([]byte(nil), memory...)
+		encodedBefore := append([]byte(nil), encoded...)
+		if !EncodeRequestV1(encoded, outputPtr, request) && !bytes.Equal(encoded, encodedBefore) {
+			t.Fatal("failed request encode mutated memory")
+		}
+		result := linklocalns.Result{Address: request.FirstCandidate, Subnet: linklocalns.Prefix, Applied: true}
+		encoded = append(encoded[:0], memory...)
+		encodedBefore = append(encodedBefore[:0], encoded...)
+		if !EncodeResultV1(encoded, outputPtr, result) && !bytes.Equal(encoded, encodedBefore) {
+			t.Fatal("failed result encode mutated memory")
+		}
+	})
+}
