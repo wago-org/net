@@ -74,6 +74,74 @@ func TestNTPExchangeUsesExplicitClockValidatesRepliesAndReleasesQuota(t *testing
 	}
 }
 
+func TestNTPIngressRequiresLocalEthernetDestinationAndValidSource(t *testing.T) {
+	for _, test := range []struct {
+		name        string
+		mutate      func(*ethernet.Frame)
+		wantHandled bool
+	}{
+		{
+			name: "foreign destination",
+			mutate: func(frame *ethernet.Frame) {
+				*frame.DestinationHardwareAddr() = [6]byte{2, 0, 0, 0, 0, 99}
+			},
+		},
+		{
+			name: "zero source",
+			mutate: func(frame *ethernet.Frame) {
+				*frame.SourceHardwareAddr() = [6]byte{}
+			},
+			wantHandled: true,
+		},
+		{
+			name: "broadcast source",
+			mutate: func(frame *ethernet.Frame) {
+				*frame.SourceHardwareAddr() = ethernet.BroadcastAddr()
+			},
+			wantHandled: true,
+		},
+		{
+			name: "multicast source",
+			mutate: func(frame *ethernet.Frame) {
+				*frame.SourceHardwareAddr() = [6]byte{1, 0, 0, 0, 0, 1}
+			},
+			wantHandled: true,
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			clock := &manualClock{now: time.Date(2026, 7, 13, 22, 0, 0, 0, time.UTC)}
+			core, adapter, _ := newTestAdapter(t, clock, Config{
+				Server: netip.MustParseAddr("192.0.2.123"), Clock: clock, MaxSyncs: 1,
+				MaxAttempts: 1, RetryServiceAttempts: 2, Precision: -20,
+			})
+			resource, _, err := adapter.TrySync()
+			if err != nil {
+				t.Fatal(err)
+			}
+			sync := resource.(*syncResource)
+			request := serviceEgress(t, core)
+			response, arrival := makeNTPResponse(t, request, 100*time.Millisecond, 20*time.Millisecond)
+			clock.now = arrival
+			ethernetFrame, err := ethernet.NewFrame(response)
+			if err != nil {
+				t.Fatal(err)
+			}
+			test.mutate(&ethernetFrame)
+			beforeClockSample, beforeRequest := sync.clockSample, sync.request
+
+			core.Lock()
+			handled, err := adapter.ingressLocked(response)
+			core.Unlock()
+			if err != nil || handled != test.wantHandled {
+				t.Fatalf("ingress = handled %v, err %v; want handled %v", handled, err, test.wantHandled)
+			}
+			if sync.state != syncWaiting || sync.Readiness() != 0 || sync.sample != (ntpns.Sample{}) || sync.clockSample != beforeClockSample || sync.request != beforeRequest {
+				t.Fatalf("foreign L2 frame mutated sync: state=%v readiness=%v sample=%+v clock_changed=%v request_changed=%v", sync.state, sync.Readiness(), sync.sample, sync.clockSample != beforeClockSample, sync.request != beforeRequest)
+			}
+		})
+	}
+}
+
 func TestNTPRejectsMalformedServerResponseAndIgnoresOriginMismatch(t *testing.T) {
 	clock := &manualClock{now: time.Date(2026, 7, 13, 22, 0, 0, 0, time.UTC)}
 	core, adapter, _ := newTestAdapter(t, clock, Config{
@@ -354,6 +422,40 @@ func rechecksumUDP(t testing.TB, frame []byte) {
 	var checksum lneto.CRC791
 	ipFrame.CRCWriteUDPPseudo(&checksum, udpFrame.Length())
 	udpFrame.SetCRC(lneto.NeverZeroSum(checksum.PayloadSum16(udpFrame.RawData()[:udpFrame.Length()])))
+}
+
+var (
+	benchmarkNTPHandled bool
+	benchmarkNTPErr     error
+)
+
+func BenchmarkIngressNTPOriginMismatch(b *testing.B) {
+	clock := &manualClock{now: time.Date(2026, 7, 13, 22, 0, 0, 0, time.UTC)}
+	core, adapter, _ := newTestAdapter(b, clock, Config{
+		Server: netip.MustParseAddr("192.0.2.123"), Clock: clock, MaxSyncs: 1,
+		MaxAttempts: 1, RetryServiceAttempts: 2, Precision: -20,
+	})
+	resource, _, err := adapter.TrySync()
+	if err != nil {
+		b.Fatal(err)
+	}
+	request := serviceEgress(b, core)
+	response, arrival := makeNTPResponse(b, request, 100*time.Millisecond, 20*time.Millisecond)
+	ntpFrame := ntpPayload(b, response)
+	ntpFrame.SetOriginTime(lnetontp.TimestampFromUint64(1))
+	rechecksumUDP(b, response)
+	clock.now = arrival
+	b.SetBytes(int64(len(response)))
+	b.ReportAllocs()
+	b.ResetTimer()
+	for b.Loop() {
+		core.Lock()
+		benchmarkNTPHandled, benchmarkNTPErr = adapter.ingressLocked(response)
+		core.Unlock()
+		if benchmarkNTPErr != nil || !benchmarkNTPHandled || resource.(*syncResource).state != syncWaiting {
+			b.Fatalf("ingress = %v, %v, state %v", benchmarkNTPHandled, benchmarkNTPErr, resource.(*syncResource).state)
+		}
+	}
 }
 
 func failureOf(t testing.TB, err error) nscore.Failure {

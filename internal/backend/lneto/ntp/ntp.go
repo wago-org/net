@@ -423,6 +423,9 @@ func (a *Adapter) ingressLocked(frame []byte) (bool, error) {
 	if err != nil || ethernetFrame.EtherTypeOrSize() != ethernet.TypeIPv4 {
 		return false, err
 	}
+	if *ethernetFrame.DestinationHardwareAddr() != a.hardwareAddress {
+		return false, nil
+	}
 	ipFrame, err := ipv4.NewFrame(ethernetFrame.Payload())
 	if err != nil {
 		return false, err
@@ -438,6 +441,9 @@ func (a *Adapter) ingressLocked(frame []byte) (bool, error) {
 	sync := a.byPort[udpFrame.DestinationPort()]
 	if sync == nil || sync.state != syncWaiting || netip.AddrFrom4(*ipFrame.SourceAddr()) != a.config.Server || udpFrame.SourcePort() != lnetontp.ServerPort {
 		return false, nil
+	}
+	if !validUnicastMAC(*ethernetFrame.SourceHardwareAddr()) {
+		return true, nil
 	}
 	var validator lneto.Validator
 	ipFrame.ValidateExceptCRC(&validator)
@@ -515,6 +521,10 @@ func (a *Adapter) ingressLocked(frame []byte) (bool, error) {
 	}
 	sync.completeLocked(sample)
 	return true, nil
+}
+
+func validUnicastMAC(mac [6]byte) bool {
+	return mac != ([6]byte{}) && mac != ethernet.BroadcastAddr() && mac[0]&1 == 0
 }
 
 func usableClock(clock ntpns.Clock) bool {
