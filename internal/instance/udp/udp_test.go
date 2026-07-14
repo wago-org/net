@@ -17,11 +17,18 @@ import (
 	wago "github.com/wago-org/wago"
 )
 
-type fakeNamespace struct{ socket namespace.UDPSocket }
+type fakeNamespace struct {
+	socket   nscore.Resource
+	progress namespace.Progress
+	failure  error
+}
 
 func (*fakeNamespace) Close() error                   { return nil }
 func (*fakeNamespace) Readiness() namespace.Readiness { return namespace.ReadyWritable }
 func (n *fakeNamespace) TryBindUDP(namespace.Endpoint) (nscore.Resource, namespace.Progress, error) {
+	if n.progress != 0 || n.failure != nil {
+		return n.socket, n.progress, n.failure
+	}
 	return n.socket, namespace.ProgressDone, nil
 }
 func (*fakeNamespace) TryListenTCP(namespace.Endpoint) (namespace.TCPListener, namespace.Progress, error) {
@@ -38,12 +45,14 @@ func (*fakeNamespace) TryService(namespace.ServiceBudget) (namespace.ServiceRepo
 }
 
 type fakeSocket struct {
-	closed      atomic.Int32
-	local       namespace.Endpoint
-	result      namespace.DatagramResult
-	payload     []byte
-	failure     error
-	receiveSize int
+	closed       atomic.Int32
+	local        namespace.Endpoint
+	result       namespace.DatagramResult
+	payload      []byte
+	failure      error
+	receiveSize  int
+	sendProgress namespace.Progress
+	sendFailure  error
 }
 
 func (s *fakeSocket) Close() error { s.closed.Add(1); return nil }
@@ -56,7 +65,10 @@ func (s *fakeSocket) TryReceive(dst []byte) (namespace.DatagramResult, error) {
 	copy(dst, s.payload)
 	return s.result, s.failure
 }
-func (*fakeSocket) TrySend([]byte, namespace.Endpoint) (namespace.Progress, error) {
+func (s *fakeSocket) TrySend([]byte, namespace.Endpoint) (namespace.Progress, error) {
+	if s.sendProgress != 0 || s.sendFailure != nil {
+		return s.sendProgress, s.sendFailure
+	}
 	return namespace.ProgressDone, nil
 }
 
@@ -92,6 +104,53 @@ func TestOperationsAndRegistrationRollback(t *testing.T) {
 	}
 	if rollbackSocket.closed.Load() != 1 || rollbackState.Resources().Len() != 1 || rollbackState.Readiness().Snapshot().Registrations != 1 {
 		t.Fatalf("rollback retained state: closes=%d resources=%d readiness=%+v", rollbackSocket.closed.Load(), rollbackState.Resources().Len(), rollbackState.Readiness().Snapshot())
+	}
+}
+
+func TestBindAndSendErrorsCloseResourcesAndCanonicalizeProgress(t *testing.T) {
+	local := namespace.Endpoint{Address: netip.MustParseAddr("192.0.2.1"), Port: 4200}
+	remote := namespace.Endpoint{Address: netip.MustParseAddr("192.0.2.2"), Port: 53}
+	backend := &fakeNamespace{}
+	state, manager, instance := attachState(t, backend, 4)
+	defer manager.Detach(instance)
+	resourcesBefore := state.Resources().Len()
+	readinessBefore := state.Readiness().Snapshot()
+	failure := namespace.Fail(namespace.FailureTemporary, errors.New("backend failed"))
+
+	socket := &fakeSocket{}
+	backend.socket, backend.progress, backend.failure = socket, namespace.ProgressDone, failure
+	if handle, progress, err := Bind(state, state.NamespaceHandle(), local); handle != 0 || progress != 0 || failureOf(t, err) != namespace.FailureTemporary {
+		t.Fatalf("failed bind = %v, %v, %v", handle, progress, err)
+	}
+	if socket.closed.Load() != 1 || state.Resources().Len() != resourcesBefore || state.Readiness().Snapshot() != readinessBefore {
+		t.Fatalf("failed bind published state: closes=%d resources=%d readiness=%+v", socket.closed.Load(), state.Resources().Len(), state.Readiness().Snapshot())
+	}
+
+	var typedNil *fakeSocket
+	backend.socket = typedNil
+	if handle, progress, err := Bind(state, state.NamespaceHandle(), local); handle != 0 || progress != 0 || failureOf(t, err) != namespace.FailureTemporary {
+		t.Fatalf("typed-nil failed bind = %v, %v, %v", handle, progress, err)
+	}
+	if state.Resources().Len() != resourcesBefore || state.Readiness().Snapshot() != readinessBefore {
+		t.Fatalf("typed-nil failed bind published state: resources=%d readiness=%+v", state.Resources().Len(), state.Readiness().Snapshot())
+	}
+
+	backend.socket, backend.progress, backend.failure = nil, namespace.ProgressWouldBlock, nil
+	if handle, progress, err := Bind(state, state.NamespaceHandle(), local); err != nil || handle != 0 || progress != namespace.ProgressWouldBlock {
+		t.Fatalf("would-block bind = %v, %v, %v", handle, progress, err)
+	}
+
+	socket = &fakeSocket{sendProgress: namespace.ProgressDone, sendFailure: failure}
+	handle, err := state.Resources().Add(resource.KindUDPSocket, socket)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if progress, err := Send(state, handle, nil, remote); progress != 0 || failureOf(t, err) != namespace.FailureTemporary {
+		t.Fatalf("failed send = %v, %v", progress, err)
+	}
+	socket.sendProgress, socket.sendFailure = namespace.ProgressWouldBlock, nil
+	if progress, err := Send(state, handle, nil, remote); err != nil || progress != namespace.ProgressWouldBlock {
+		t.Fatalf("would-block send = %v, %v", progress, err)
 	}
 }
 

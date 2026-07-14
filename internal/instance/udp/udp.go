@@ -22,6 +22,9 @@ func Bind(state *core.State, namespaceHandle resource.Handle, local nscore.Endpo
 		socket, backendProgress, backendErr := backend.TryBindUDP(local)
 		progress = backendProgress
 		if backendErr != nil {
+			if !resource.IsNil(socket) {
+				_ = socket.Close()
+			}
 			return backendErr
 		}
 		if progress == nscore.ProgressWouldBlock {
@@ -53,6 +56,9 @@ func Bind(state *core.State, namespaceHandle resource.Handle, local nscore.Endpo
 		}
 		return nil
 	})
+	if err != nil {
+		handle, progress = 0, 0
+	}
 	return
 }
 
@@ -70,6 +76,9 @@ func Send(state *core.State, handle resource.Handle, payload []byte, remote nsco
 		}
 		return err
 	})
+	if err != nil {
+		progress = 0
+	}
 	return
 }
 

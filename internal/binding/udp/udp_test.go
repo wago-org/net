@@ -112,9 +112,11 @@ func TestBindingsBindSendReceiveAtomicStatusesAndLifecycle(t *testing.T) {
 	}
 	host.memory[28] = 0
 
+	failedSocket := &fakeSocket{local: local}
+	backend.socket = failedSocket
 	backend.failure = nscore.Fail(nscore.FailureAddressInUse, errors.New("in use"))
-	if status := callBinding(t, bindingByName(t, bindings, "bind"), host, uint64(namespaceHandle), 0, 48); status != guest.StatusAddressInUse || backend.calls != 1 || !bytes.Equal(host.memory[48:56], handleBefore) {
-		t.Fatalf("failed bind = %v, calls=%d", status, backend.calls)
+	if status := callBinding(t, bindingByName(t, bindings, "bind"), host, uint64(namespaceHandle), 0, 48); status != guest.StatusAddressInUse || backend.calls != 1 || failedSocket.closeCalls != 1 || !bytes.Equal(host.memory[48:56], handleBefore) {
+		t.Fatalf("failed bind = %v, calls=%d closes=%d", status, backend.calls, failedSocket.closeCalls)
 	}
 	backend.socket, backend.progress, backend.failure = nil, nscore.ProgressWouldBlock, nil
 	if status := callBinding(t, bindingByName(t, bindings, "bind"), host, uint64(namespaceHandle), 0, 48); status != guest.StatusAgain || backend.calls != 2 || !bytes.Equal(host.memory[48:56], handleBefore) {
