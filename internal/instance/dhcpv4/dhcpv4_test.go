@@ -143,10 +143,25 @@ func TestAcquireRejectsInvalidBackendResourcesAndRollsBackRegistration(t *testin
 }
 
 func TestBackendFailuresAndMalformedResultsClearOutputs(t *testing.T) {
-	backend := &fakeNamespace{progress: nscore.ProgressDone, failure: nscore.Fail(nscore.FailureTemporary, errors.New("acquire"))}
+	failure := nscore.Fail(nscore.FailureTemporary, errors.New("acquire"))
+	failedLease := &fakeLease{lease: validLease(t), result: dhcpns.ResultReady}
+	backend := &fakeNamespace{next: failedLease, progress: nscore.ProgressDone, failure: failure}
 	state, manager, instance, _ := attachState(t, backend, 4)
+	resourcesBefore := state.Resources().Len()
+	readinessBefore := state.Readiness().Snapshot()
 	if handle, progress, err := Acquire(state, state.NamespaceHandle(), dhcpns.Request{}); handle != 0 || progress != 0 || failureOf(err) != nscore.FailureTemporary {
 		t.Fatalf("failed acquire = %v, %v, %v", handle, progress, err)
+	}
+	if failedLease.closeCalls != 1 || state.Resources().Len() != resourcesBefore || state.Readiness().Snapshot() != readinessBefore {
+		t.Fatalf("failed acquire published state: closes=%d resources=%d readiness=%+v", failedLease.closeCalls, state.Resources().Len(), state.Readiness().Snapshot())
+	}
+	var typedNil *fakeLease
+	backend.next = typedNil
+	if handle, progress, err := Acquire(state, state.NamespaceHandle(), dhcpns.Request{}); handle != 0 || progress != 0 || failureOf(err) != nscore.FailureTemporary {
+		t.Fatalf("typed-nil failed acquire = %v, %v, %v", handle, progress, err)
+	}
+	if state.Resources().Len() != resourcesBefore || state.Readiness().Snapshot() != readinessBefore {
+		t.Fatalf("typed-nil failed acquire published state: resources=%d readiness=%+v", state.Resources().Len(), state.Readiness().Snapshot())
 	}
 	_ = manager.Detach(instance)
 
