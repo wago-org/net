@@ -981,9 +981,13 @@ func decodeDNSNameInto(decoded, message []byte, offset int) (int, int, error) {
 			if next < 0 {
 				next = position + 2
 			}
-			position = (length^0xc0)<<8 | int(message[position+1])
+			pointer := (length^0xc0)<<8 | int(message[position+1])
+			if pointer >= position || pointer >= len(message) {
+				return 0, offset, lneto.ErrInvalidField
+			}
+			position = pointer
 			pointers++
-			if pointers > 10 || position >= len(message) {
+			if pointers > 10 {
 				return 0, offset, lneto.ErrInvalidField
 			}
 		default:

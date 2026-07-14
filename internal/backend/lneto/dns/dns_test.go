@@ -720,6 +720,35 @@ func TestDNSResponseSelectsUniqueReachableChainAndRequestedTypes(t *testing.T) {
 	}
 }
 
+func TestDNSResponseRejectsForwardCompressionPointer(t *testing.T) {
+	request := namespace.DNSRequest{Name: "example.com", Types: namespace.DNSRecordsA}
+	name := lnetodns.MustNewName(request.Name)
+	payload := make([]byte, lnetodns.SizeHeader+6)
+	binary.BigEndian.PutUint16(payload[0:2], 17)
+	binary.BigEndian.PutUint16(payload[2:4], 1<<15)
+	binary.BigEndian.PutUint16(payload[4:6], 1)
+	binary.BigEndian.PutUint16(payload[6:8], 1)
+	payload[12], payload[13] = 0xc0, byte(lnetodns.SizeHeader+6)
+	binary.BigEndian.PutUint16(payload[14:16], uint16(lnetodns.TypeA))
+	binary.BigEndian.PutUint16(payload[16:18], uint16(lnetodns.ClassINET))
+	var err error
+	payload, err = name.AppendTo(payload)
+	if err != nil {
+		t.Fatal(err)
+	}
+	answer := len(payload)
+	payload = append(payload, make([]byte, 14)...)
+	binary.BigEndian.PutUint16(payload[answer:answer+2], uint16(lnetodns.TypeA))
+	binary.BigEndian.PutUint16(payload[answer+2:answer+4], uint16(lnetodns.ClassINET))
+	binary.BigEndian.PutUint32(payload[answer+4:answer+8], 1)
+	binary.BigEndian.PutUint16(payload[answer+8:answer+10], 4)
+	copy(payload[answer+10:], []byte{192, 0, 2, 17})
+
+	if records, response, failure, err := parseDNSResponse(payload, 17, request, 4); !response || failure != namespace.FailureIO || err == nil || len(records) != 0 {
+		t.Fatalf("forward pointer = records %+v, response %v, failure %v, err %v", records, response, failure, err)
+	}
+}
+
 func TestDNSResponseRejectsCNAMEConflictLoopAndMalformedWire(t *testing.T) {
 	request := namespace.DNSRequest{Name: "example.com", Types: namespace.DNSRecordsA}
 	name := lnetodns.MustNewName(request.Name)
