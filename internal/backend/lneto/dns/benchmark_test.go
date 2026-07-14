@@ -19,6 +19,7 @@ var (
 	benchmarkRecord   dnsns.Record
 	benchmarkNext     dnsns.Next
 	benchmarkReady    nscore.Readiness
+	benchmarkHandled  bool
 )
 
 func BenchmarkBuildDNSQueryPacket(b *testing.B) {
@@ -171,6 +172,30 @@ func BenchmarkSelectDNSAnswers(b *testing.B) {
 		benchmarkRecords, benchmarkFailure, benchmarkErr = selectDNSAnswersInto(records, candidates, request, 8)
 		if benchmarkErr != nil || len(benchmarkRecords) != 3 {
 			b.Fatalf("select = %d, %v, %v", len(benchmarkRecords), benchmarkFailure, benchmarkErr)
+		}
+	}
+}
+
+func BenchmarkIngressDNSResponseMismatch(b *testing.B) {
+	config := dnsTestConfig(b, 84)
+	ns := newTestNamespace(b, config)
+	request := dnsns.Request{Name: "example.com", Types: dnsns.RecordsA | dnsns.RecordsAAAA}
+	value, progress, err := ns.adapter.TryResolve(request)
+	if err != nil || progress != nscore.ProgressInProgress {
+		b.Fatalf("resolve = %T, %v, %v", value, progress, err)
+	}
+	outgoing := serviceDNSPacket(b, ns)
+	txid, localPort := dnsPacketIdentity(b, outgoing)
+	response := buildDNSResponseFrame(b, config, txid+1, localPort, request.Name)
+	b.SetBytes(int64(len(response)))
+	b.ReportAllocs()
+	b.ResetTimer()
+	for b.Loop() {
+		ns.core.Lock()
+		benchmarkHandled, benchmarkErr = ns.adapter.ingressLocked(response)
+		ns.core.Unlock()
+		if benchmarkErr != nil || !benchmarkHandled {
+			b.Fatalf("ingress = %v, %v", benchmarkHandled, benchmarkErr)
 		}
 	}
 }

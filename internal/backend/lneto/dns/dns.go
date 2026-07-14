@@ -474,6 +474,9 @@ func (n *Adapter) ingressLocked(frame []byte) (bool, error) {
 	if err != nil || ethernetFrame.EtherTypeOrSize() != ethernet.TypeIPv4 {
 		return false, err
 	}
+	if *ethernetFrame.DestinationHardwareAddr() != n.hardwareAddress {
+		return false, nil
+	}
 	ipFrame, err := ipv4.NewFrame(ethernetFrame.Payload())
 	if err != nil {
 		return false, err
@@ -489,6 +492,9 @@ func (n *Adapter) ingressLocked(frame []byte) (bool, error) {
 	query := n.byPort[udpFrame.DestinationPort()]
 	if query == nil || (query.state != dnsQueryPending && query.state != dnsQueryWaiting) || netip.AddrFrom4(*ipFrame.SourceAddr()) != n.config.Server || udpFrame.SourcePort() != lnetodns.ServerPort {
 		return false, nil
+	}
+	if !validUnicastMAC(*ethernetFrame.SourceHardwareAddr()) {
+		return true, nil
 	}
 	var validator lneto.Validator
 	ipFrame.ValidateExceptCRC(&validator)
@@ -1000,6 +1006,10 @@ func ValidConfig(config Config, mtu int, compiled *policy.Policy, account *quota
 	return config.Server.Is4() && !config.Server.Is4In6() && !config.Server.IsUnspecified() && config.Server.Zone() == "" &&
 		config.MaxRecords > 0 && config.MaxResponseBytes >= lnetodns.MaxSizeUDP && config.MaxResponseBytes <= mtu-28 &&
 		config.MaxResponseBytes <= int(^uint16(0)) && config.MaxAttempts > 0 && config.RetryServiceAttempts > 0
+}
+
+func validUnicastMAC(mac [6]byte) bool {
+	return mac != ([6]byte{}) && mac != ethernet.BroadcastAddr() && mac[0]&1 == 0
 }
 
 func (n *Adapter) allocatePortLocked(lease *lnetocore.UDPPortLease) bool {

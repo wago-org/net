@@ -280,6 +280,71 @@ func TestDNSRetryTimeoutPolicyLimitsAndReuse(t *testing.T) {
 	}
 }
 
+func TestDNSIngressRequiresLocalEthernetDestinationAndValidSource(t *testing.T) {
+	for _, test := range []struct {
+		name        string
+		mutate      func(*ethernet.Frame)
+		wantHandled bool
+	}{
+		{
+			name: "foreign destination",
+			mutate: func(frame *ethernet.Frame) {
+				*frame.DestinationHardwareAddr() = [6]byte{0x02, 0, 0, 0, 0, 99}
+			},
+		},
+		{
+			name: "zero source",
+			mutate: func(frame *ethernet.Frame) {
+				*frame.SourceHardwareAddr() = [6]byte{}
+			},
+			wantHandled: true,
+		},
+		{
+			name: "broadcast source",
+			mutate: func(frame *ethernet.Frame) {
+				*frame.SourceHardwareAddr() = ethernet.BroadcastAddr()
+			},
+			wantHandled: true,
+		},
+		{
+			name: "multicast source",
+			mutate: func(frame *ethernet.Frame) {
+				*frame.SourceHardwareAddr() = [6]byte{0x01, 0, 0, 0, 0, 1}
+			},
+			wantHandled: true,
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			config := dnsTestConfig(t, 46)
+			ns := newTestNamespace(t, config)
+			request := namespace.DNSRequest{Name: "example.com", Types: namespace.DNSRecordsA | namespace.DNSRecordsAAAA}
+			resource, progress, err := ns.TryResolve(request)
+			if err != nil || progress != namespace.ProgressInProgress {
+				t.Fatalf("resolve = %T, %v, %v", resource, progress, err)
+			}
+			query := resource.(*dnsQuery)
+			outgoing := serviceDNSPacket(t, ns)
+			txid, localPort := dnsPacketIdentity(t, outgoing)
+			response := buildDNSResponseFrame(t, config, txid, localPort, request.Name)
+			ethernetFrame, err := ethernet.NewFrame(response)
+			if err != nil {
+				t.Fatal(err)
+			}
+			test.mutate(&ethernetFrame)
+
+			ns.core.Lock()
+			handled, err := ns.adapter.ingressLocked(response)
+			ns.core.Unlock()
+			if err != nil || handled != test.wantHandled {
+				t.Fatalf("ingress = handled %v, err %v; want handled %v", handled, err, test.wantHandled)
+			}
+			if query.state != dnsQueryWaiting || query.Readiness() != 0 || len(query.records) != 0 || ns.adapter.byPort[localPort] != query {
+				t.Fatalf("foreign L2 frame mutated query: state=%v readiness=%v records=%d mapped=%v", query.state, query.Readiness(), len(query.records), ns.adapter.byPort[localPort] == query)
+			}
+		})
+	}
+}
+
 func TestDNSTerminalCompletionRetiresTransportAndIgnoresLateResponses(t *testing.T) {
 	config := dnsTestConfig(t, 44)
 	ns := newTestNamespace(t, config)
