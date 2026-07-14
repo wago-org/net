@@ -45,8 +45,9 @@ func NamespaceDefault(host plugin.Host, module wago.HostModule, params, results 
 		guest.SetStatus(results, guest.StatusInvalidArgument)
 		return
 	}
-	memory, out := guest.Memory(module), uint32(params[0])
-	if !abicore.CheckRanges(memory, false, abicore.Range{Ptr: out, Length: abicore.HandleV1Size}) {
+	memory := guest.Memory(module)
+	out, ok := abicore.NarrowUint32(params[0])
+	if !ok || !abicore.CheckRanges(memory, false, abicore.Range{Ptr: out, Length: abicore.HandleV1Size}) {
 		guest.SetStatus(results, guest.StatusInvalidArgument)
 		return
 	}
@@ -73,8 +74,9 @@ func Query(host plugin.Host, module wago.HostModule, params, results []uint64) {
 		return
 	}
 	memory := guest.Memory(module)
-	requestPtr, out := uint32(params[1]), uint32(params[2])
-	if !mdnsabi.CheckQueryV1(memory, requestPtr, out) {
+	requestPtr, requestOK := abicore.NarrowUint32(params[1])
+	out, outOK := abicore.NarrowUint32(params[2])
+	if !requestOK || !outOK || !mdnsabi.CheckQueryV1(memory, requestPtr, out) {
 		guest.SetStatus(results, guest.StatusInvalidArgument)
 		return
 	}
@@ -112,8 +114,9 @@ func Next(host plugin.Host, module wago.HostModule, params, results []uint64) {
 		guest.SetStatus(results, guest.StatusInvalidArgument)
 		return
 	}
-	memory, out := guest.Memory(module), uint32(params[1])
-	if !abicore.CheckRanges(memory, false, abicore.Range{Ptr: out, Length: mdnsabi.RecordV1Size}) {
+	memory := guest.Memory(module)
+	out, ok := abicore.NarrowUint32(params[1])
+	if !ok || !abicore.CheckRanges(memory, false, abicore.Range{Ptr: out, Length: mdnsabi.RecordV1Size}) {
 		guest.SetStatus(results, guest.StatusInvalidArgument)
 		return
 	}
@@ -145,8 +148,9 @@ func Announce(host plugin.Host, module wago.HostModule, params, results []uint64
 		return
 	}
 	memory := guest.Memory(module)
-	requestPtr, out := uint32(params[1]), uint32(params[2])
-	if !mdnsabi.CheckAnnouncementV1(memory, requestPtr, out) {
+	requestPtr, requestOK := abicore.NarrowUint32(params[1])
+	out, outOK := abicore.NarrowUint32(params[2])
+	if !requestOK || !outOK || !mdnsabi.CheckAnnouncementV1(memory, requestPtr, out) {
 		guest.SetStatus(results, guest.StatusInvalidArgument)
 		return
 	}

@@ -330,6 +330,59 @@ func TestBindingsAnnouncementAtomicStatusesAndLifecycle(t *testing.T) {
 	}
 }
 
+func TestBindingsRejectHighBitI32AliasesBeforeStateAndBackendWork(t *testing.T) {
+	backend := &fakeNamespace{}
+	manager, instance := attachManager(t, backend)
+	defer manager.Detach(instance)
+	host := testHost{instance: instance, memory: bytes.Repeat([]byte{0x4d}, 1000)}
+	bindings := Bindings(plugin.NewHost(manager))
+	state, ok := manager.ForInstance(instance)
+	if !ok {
+		t.Fatal("attached state missing")
+	}
+	namespaceHandle := state.NamespaceHandle()
+	query := &fakeQuery{next: mdnsns.NextReady, record: mdnsns.Record{Name: "host.local", Type: mdnsns.RecordA, TTLSeconds: 1, Address: netip.MustParseAddr("192.0.2.1")}}
+	queryHandle, err := state.Resources().Add(resource.KindMDNSQuery, query)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !mdnsabi.EncodeQueryV1(host.memory, 0, mdnsns.Request{Name: "_demo._udp.local", Types: mdnsns.RecordsPTR}) {
+		t.Fatal("encode query")
+	}
+	if !mdnsabi.EncodeAnnouncementV1(host.memory, 400, 7) {
+		t.Fatal("encode announcement")
+	}
+
+	high := uint64(1) << 32
+	tests := []struct {
+		name    string
+		binding string
+		params  []uint64
+	}{
+		{name: "namespace output", binding: "namespace_default", params: []uint64{high | 900}},
+		{name: "query request", binding: "query", params: []uint64{uint64(namespaceHandle), high, 900}},
+		{name: "query output", binding: "query", params: []uint64{uint64(namespaceHandle), 0, high | 900}},
+		{name: "next output", binding: "next", params: []uint64{uint64(queryHandle), high | 64}},
+		{name: "announcement request", binding: "announce", params: []uint64{uint64(namespaceHandle), high | 400, 900}},
+		{name: "announcement output", binding: "announce", params: []uint64{uint64(namespaceHandle), 400, high | 900}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			before := append([]byte(nil), host.memory...)
+			queryCalls, announcementCalls, nextCalls := backend.queryCalls, backend.announcementCalls, query.nextCalls
+			if status := callBinding(t, bindingByName(t, bindings, test.binding), host, test.params...); status != guest.StatusInvalidArgument {
+				t.Fatalf("status = %v", status)
+			}
+			if backend.queryCalls != queryCalls || backend.announcementCalls != announcementCalls || query.nextCalls != nextCalls {
+				t.Fatalf("backend work changed: query=%d announcement=%d next=%d", backend.queryCalls, backend.announcementCalls, query.nextCalls)
+			}
+			if !bytes.Equal(host.memory, before) {
+				t.Fatal("invalid alias mutated guest memory")
+			}
+		})
+	}
+}
+
 func TestBindingsPrevalidateQueryOutputsBeforeInstanceAndHandleLookup(t *testing.T) {
 	manager := instancecore.NewManager()
 	instance := new(wago.Instance)
