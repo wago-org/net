@@ -220,6 +220,48 @@ func TestUDPIngressRequiresLocalEthernetDestinationAndValidSource(t *testing.T) 
 	}
 }
 
+func TestUDPIngressConsumesInvalidIPv4SourcesWithoutQueueing(t *testing.T) {
+	for _, sourceAddress := range []netip.Addr{
+		netip.IPv4Unspecified(),
+		netip.AddrFrom4([4]byte{255, 255, 255, 255}),
+		netip.MustParseAddr("224.0.0.1"),
+	} {
+		t.Run(sourceAddress.String(), func(t *testing.T) {
+			sourceCore, sourceAdapter, _ := newTestAdapter(t, 53)
+			_, destinationAdapter, _ := newTestAdapter(t, 54)
+			sourceEndpoint := nscore.Endpoint{Address: netip.MustParseAddr("192.0.2.53"), Port: 4053}
+			destinationEndpoint := nscore.Endpoint{Address: netip.MustParseAddr("192.0.2.54"), Port: 4054}
+			source := bindTestSocket(t, sourceAdapter, sourceEndpoint)
+			destination := bindTestSocket(t, destinationAdapter, destinationEndpoint).(*udpSocket)
+			if progress, err := source.TrySend([]byte("payload"), destinationEndpoint); err != nil || progress != nscore.ProgressDone {
+				t.Fatalf("send = %v, %v", progress, err)
+			}
+			frame := serviceUDPFrame(t, sourceCore)
+			ethernetFrame, err := ethernet.NewFrame(frame)
+			if err != nil {
+				t.Fatal(err)
+			}
+			*ethernetFrame.DestinationHardwareAddr() = destinationAdapter.hardwareAddress
+			ipFrame, udpFrame := decodeUDPFrame(t, frame)
+			*ipFrame.SourceAddr() = sourceAddress.As4()
+			ipFrame.SetCRC(0)
+			ipFrame.SetCRC(ipFrame.CalculateHeaderCRC())
+			rechecksumUDPFrame(ipFrame, udpFrame)
+
+			destinationAdapter.core.Lock()
+			handled, err := destinationAdapter.ingressLocked(frame)
+			queued := destination.rx.count
+			destinationAdapter.core.Unlock()
+			if err != nil || !handled || queued != 0 {
+				t.Fatalf("invalid source ingress = handled %v, err %v, queued %d", handled, err, queued)
+			}
+			if ready := destination.Readiness(); ready&nscore.ReadyReadable != 0 {
+				t.Fatalf("invalid source became readable: %v", ready)
+			}
+		})
+	}
+}
+
 func TestUDPIngressDropsMalformedLocalDatagramsAndAcceptsFollowingValidFrame(t *testing.T) {
 	for _, test := range []struct {
 		name   string

@@ -641,7 +641,11 @@ func (n *Adapter) ingressLocked(frame []byte) (bool, error) {
 	if selected == nil || selected.closed {
 		return false, nil
 	}
-	source := nscore.Endpoint{Address: netip.AddrFrom4(*ipFrame.SourceAddr()), Port: udpFrame.SourcePort()}
+	sourceAddress := netip.AddrFrom4(*ipFrame.SourceAddr())
+	if sourceAddress.IsUnspecified() || sourceAddress.IsMulticast() || sourceAddress == netip.AddrFrom4([4]byte{255, 255, 255, 255}) {
+		return true, nil
+	}
+	source := nscore.Endpoint{Address: sourceAddress, Port: udpFrame.SourcePort()}
 	if !source.Valid() || source.Port == 0 {
 		return true, nil
 	}
