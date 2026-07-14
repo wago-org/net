@@ -343,11 +343,14 @@ func TestICMPv6AuthorityIsProtocolLocalAndDenyWins(t *testing.T) {
 	}
 	for _, operation := range []Operation{OperationICMPv6Echo, OperationICMPv6Resolve, OperationICMPv6Lookup, OperationICMPv6Seed, OperationICMPv6Remove} {
 		if !compiled.CheckAddress(operation, allowed) {
-			t.Fatalf("operation %d did not receive ICMPv6 grant", operation)
+			t.Fatalf("outbound operation %d did not receive ICMPv6 grant", operation)
 		}
 		if compiled.CheckAddress(operation, denied) {
-			t.Fatalf("operation %d ignored caller deny", operation)
+			t.Fatalf("outbound operation %d ignored caller deny", operation)
 		}
+	}
+	if compiled.CheckAddress(OperationICMPv6Respond, allowed) || compiled.CheckAddress(OperationICMPv6Advertise, allowed) {
+		t.Fatal("outbound-only authority widened automatic inbound responses")
 	}
 	if compiled.CheckAddress(OperationICMPv4Echo, allowed) {
 		t.Fatal("ICMPv6 authority widened ICMPv4")

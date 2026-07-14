@@ -72,7 +72,9 @@ const (
 	OperationLinkLocal4Defend
 	OperationIPv6Enable
 	OperationICMPv6Echo
+	OperationICMPv6Respond
 	OperationICMPv6Resolve
+	OperationICMPv6Advertise
 	OperationICMPv6Lookup
 	OperationICMPv6Seed
 	OperationICMPv6Remove
@@ -521,6 +523,8 @@ func operationAddress(operation Operation) (Transport, Direction, bool) {
 		return TransportIPv6, DirectionInbound, true
 	case OperationICMPv6Echo, OperationICMPv6Resolve, OperationICMPv6Lookup, OperationICMPv6Seed, OperationICMPv6Remove:
 		return TransportICMPv6, DirectionOutbound, true
+	case OperationICMPv6Respond, OperationICMPv6Advertise:
+		return TransportICMPv6, DirectionInbound, true
 	default:
 		return 0, 0, false
 	}
