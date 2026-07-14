@@ -186,8 +186,9 @@ func TestBindingsBindSendReceiveAtomicStatusesAndLifecycle(t *testing.T) {
 		t.Fatalf("failed receive = %v", status)
 	}
 	socket.receiveFailure = nil
+	socket.receivePayload = []byte("mutation")
 	socket.receiveResult = udpns.DatagramResult{Ready: true, Copied: 9, DatagramBytes: 9, Source: remote}
-	if status := callBinding(t, bindingByName(t, bindings, "receive"), host, uint64(socketHandle), payloadPtr, payloadLen, resultPtr); status != guest.StatusIO || !bytes.Equal(host.memory[resultPtr:resultPtr+uint64(udpabi.ReceiveResultV1Size)], resultBefore) {
+	if status := callBinding(t, bindingByName(t, bindings, "receive"), host, uint64(socketHandle), payloadPtr, payloadLen, resultPtr); status != guest.StatusIO || !bytes.Equal(host.memory[payloadPtr:payloadPtr+payloadLen], payloadBefore) || !bytes.Equal(host.memory[resultPtr:resultPtr+uint64(udpabi.ReceiveResultV1Size)], resultBefore) {
 		t.Fatalf("malformed receive = %v", status)
 	}
 	socket.receivePayload = []byte("response-data")
@@ -206,6 +207,12 @@ func TestBindingsBindSendReceiveAtomicStatusesAndLifecycle(t *testing.T) {
 
 	if status := callBinding(t, bindingByName(t, bindings, "send"), host, uint64(namespaceHandle), 64, 6, 96); status != guest.StatusBadHandle {
 		t.Fatalf("wrong-kind send = %v", status)
+	}
+	payloadBefore = append(payloadBefore[:0], host.memory[payloadPtr:payloadPtr+payloadLen]...)
+	resultBefore = append(resultBefore[:0], host.memory[resultPtr:resultPtr+uint64(udpabi.ReceiveResultV1Size)]...)
+	receiveCalls = socket.receiveCalls
+	if status := callBinding(t, bindingByName(t, bindings, "receive"), host, uint64(namespaceHandle), payloadPtr, payloadLen, resultPtr); status != guest.StatusBadHandle || socket.receiveCalls != receiveCalls || !bytes.Equal(host.memory[payloadPtr:payloadPtr+payloadLen], payloadBefore) || !bytes.Equal(host.memory[resultPtr:resultPtr+uint64(udpabi.ReceiveResultV1Size)], resultBefore) {
+		t.Fatalf("wrong-kind receive = %v, calls=%d", status, socket.receiveCalls)
 	}
 	if status := callBinding(t, bindingByName(t, bindings, "close"), host, uint64(socketHandle)); status != guest.StatusOK || socket.closeCalls != 1 {
 		t.Fatalf("close = %v, calls=%d", status, socket.closeCalls)
