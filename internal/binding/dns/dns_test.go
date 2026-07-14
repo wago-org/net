@@ -106,8 +106,13 @@ func TestBindingsResolveNextAtomicStatusesAndLifecycle(t *testing.T) {
 	}
 
 	query := &fakeQuery{next: dnsns.NextWouldBlock}
-	backend.next, backend.progress, backend.failure = query, nscore.ProgressDone, nil
-	if status := callBinding(t, bindingByName(t, bindings, "resolve"), host, uint64(namespaceHandle), 0, 320); status != guest.StatusOK || backend.calls != 2 || backend.request != request {
+	var typedNil *fakeQuery
+	backend.next, backend.progress, backend.failure = typedNil, nscore.ProgressDone, nil
+	if status := callBinding(t, bindingByName(t, bindings, "resolve"), host, uint64(namespaceHandle), 0, 320); status != guest.StatusIO || backend.calls != 2 || !bytes.Equal(host.memory[320:328], handleBefore) {
+		t.Fatalf("typed-nil resolve = %v, calls=%d", status, backend.calls)
+	}
+	backend.next = query
+	if status := callBinding(t, bindingByName(t, bindings, "resolve"), host, uint64(namespaceHandle), 0, 320); status != guest.StatusOK || backend.calls != 3 || backend.request != request {
 		t.Fatalf("resolve = %v, calls=%d request=%+v", status, backend.calls, backend.request)
 	}
 	queryHandle := resource.Handle(binary.LittleEndian.Uint64(host.memory[320:328]))
@@ -177,6 +182,31 @@ func TestBindingsResolveNextAtomicStatusesAndLifecycle(t *testing.T) {
 	}
 	if status := callBinding(t, bindingByName(t, bindings, "next"), host, uint64(queryHandle), 400); status != guest.StatusBadHandle {
 		t.Fatalf("stale next = %v", status)
+	}
+
+	fresh := &fakeQuery{next: dnsns.NextWouldBlock}
+	backend.next, backend.progress = fresh, nscore.ProgressInProgress
+	if status := callBinding(t, bindingByName(t, bindings, "resolve"), host, uint64(namespaceHandle), 0, 336); status != guest.StatusInProgress {
+		t.Fatalf("fresh resolve = %v", status)
+	}
+	freshHandle := resource.Handle(binary.LittleEndian.Uint64(host.memory[336:344]))
+	if freshHandle == queryHandle || uint16(freshHandle) != uint16(queryHandle) {
+		t.Fatalf("generation-safe slot reuse = old %v, fresh %v", queryHandle, freshHandle)
+	}
+	if status := callBinding(t, bindingByName(t, bindings, "cancel"), host, uint64(queryHandle)); status != guest.StatusBadHandle || fresh.cancelCalls != 0 {
+		t.Fatalf("stale cancel = %v, fresh calls=%d", status, fresh.cancelCalls)
+	}
+	if status := callBinding(t, bindingByName(t, bindings, "close"), host, uint64(queryHandle)); status != guest.StatusBadHandle || fresh.closeCalls != 0 {
+		t.Fatalf("stale close = %v, fresh calls=%d", status, fresh.closeCalls)
+	}
+	if status := callBinding(t, bindingByName(t, bindings, "next"), host, uint64(queryHandle), 400); status != guest.StatusBadHandle || fresh.nextCalls != 0 {
+		t.Fatalf("stale next after reuse = %v, fresh calls=%d", status, fresh.nextCalls)
+	}
+	if status := callBinding(t, bindingByName(t, bindings, "next"), host, uint64(freshHandle), 400); status != guest.StatusAgain || fresh.nextCalls != 1 {
+		t.Fatalf("fresh next = %v, calls=%d", status, fresh.nextCalls)
+	}
+	if status := callBinding(t, bindingByName(t, bindings, "close"), host, uint64(freshHandle)); status != guest.StatusOK || fresh.closeCalls != 1 {
+		t.Fatalf("fresh close = %v, calls=%d", status, fresh.closeCalls)
 	}
 	if status := callBinding(t, bindingByName(t, bindings, "close"), host, uint64(pendingHandle)); status != guest.StatusOK || pending.closeCalls != 1 {
 		t.Fatalf("close pending = %v, calls=%d", status, pending.closeCalls)
