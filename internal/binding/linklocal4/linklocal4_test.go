@@ -36,13 +36,14 @@ func (*fakeBase) TryService(nscore.ServiceBudget) (nscore.ServiceReport, nscore.
 }
 
 type fakeNamespace struct {
-	claim *fakeClaim
-	calls int
+	claim    *fakeClaim
+	progress nscore.Progress
+	calls    int
 }
 
 func (n *fakeNamespace) TryClaim(linklocalns.Request) (nscore.Resource, nscore.Progress, error) {
 	n.calls++
-	return n.claim, nscore.ProgressInProgress, nil
+	return n.claim, n.progress, nil
 }
 
 type fakeClaim struct {
@@ -69,7 +70,7 @@ func (c *fakeClaim) TryResult() (linklocalns.Result, linklocalns.ResultState, er
 
 func TestBindingsPrevalidateClaimAndPreserveResultOutputs(t *testing.T) {
 	claim := &fakeClaim{result: linklocalns.ResultWouldBlock}
-	backend := &fakeNamespace{claim: claim}
+	backend := &fakeNamespace{claim: claim, progress: nscore.ProgressInProgress}
 	manager, instance := attachManager(t, backend)
 	defer manager.Detach(instance)
 	host := testHost{instance: instance, memory: bytes.Repeat([]byte{0xa5}, 512)}
@@ -94,13 +95,18 @@ func TestBindingsPrevalidateClaimAndPreserveResultOutputs(t *testing.T) {
 		t.Fatalf("reserved claim = %v, calls=%d", status, backend.calls)
 	}
 	host.memory[16] = 0
+	invalidProgress := &fakeClaim{}
+	backend.claim, backend.progress = invalidProgress, nscore.ProgressWouldBlock
+	if status := callBinding(t, bindingByName(t, bindings, "claim"), host, namespaceHandle, 0, 64); status != guest.StatusIO || backend.calls != 1 || !invalidProgress.closed || !bytes.Equal(host.memory[64:72], outBefore) {
+		t.Fatalf("invalid-progress claim = %v, calls=%d, closed=%v", status, backend.calls, invalidProgress.closed)
+	}
 	var typedNil *fakeClaim
-	backend.claim = typedNil
-	if status := callBinding(t, bindingByName(t, bindings, "claim"), host, namespaceHandle, 0, 64); status != guest.StatusIO || backend.calls != 1 || !bytes.Equal(host.memory[64:72], outBefore) {
+	backend.claim, backend.progress = typedNil, nscore.ProgressDone
+	if status := callBinding(t, bindingByName(t, bindings, "claim"), host, namespaceHandle, 0, 64); status != guest.StatusIO || backend.calls != 2 || !bytes.Equal(host.memory[64:72], outBefore) {
 		t.Fatalf("typed-nil claim = %v, calls=%d", status, backend.calls)
 	}
-	backend.claim = claim
-	if status := callBinding(t, bindingByName(t, bindings, "claim"), host, namespaceHandle, 0, 64); status != guest.StatusInProgress || backend.calls != 2 {
+	backend.claim, backend.progress = claim, nscore.ProgressInProgress
+	if status := callBinding(t, bindingByName(t, bindings, "claim"), host, namespaceHandle, 0, 64); status != guest.StatusInProgress || backend.calls != 3 {
 		t.Fatalf("valid claim = %v, calls=%d", status, backend.calls)
 	}
 	claimHandle := binary.LittleEndian.Uint64(host.memory[64:72])
@@ -114,6 +120,13 @@ func TestBindingsPrevalidateClaimAndPreserveResultOutputs(t *testing.T) {
 		t.Fatalf("failed result = %v", status)
 	}
 	claim.failure = nil
+	claim.result = linklocalns.ResultState(255)
+	if status := callBinding(t, bindingByName(t, bindings, "result"), host, claimHandle, 128); status != guest.StatusIO || !bytes.Equal(host.memory[128:128+linklocalabi.ResultV1Size], resultBefore) {
+		t.Fatalf("invalid-state result = %v", status)
+	}
+	if status := callBinding(t, bindingByName(t, bindings, "result"), host, namespaceHandle, 128); status != guest.StatusBadHandle || !bytes.Equal(host.memory[128:128+linklocalabi.ResultV1Size], resultBefore) {
+		t.Fatalf("wrong-kind result = %v", status)
+	}
 	claim.value = validResult(t)
 	claim.result = linklocalns.ResultReady
 	if status := callBinding(t, bindingByName(t, bindings, "result"), host, claimHandle, 128); status != guest.StatusOK || binary.LittleEndian.Uint32(host.memory[160:164]) != 16 || binary.LittleEndian.Uint32(host.memory[172:176]) != 0 {
@@ -133,7 +146,7 @@ func TestBindingsPrevalidateClaimAndPreserveResultOutputs(t *testing.T) {
 	}
 
 	fresh := &fakeClaim{result: linklocalns.ResultWouldBlock}
-	backend.claim = fresh
+	backend.claim, backend.progress = fresh, nscore.ProgressInProgress
 	if status := callBinding(t, bindingByName(t, bindings, "claim"), host, namespaceHandle, 0, 72); status != guest.StatusInProgress {
 		t.Fatalf("fresh claim = %v", status)
 	}
