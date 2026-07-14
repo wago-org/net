@@ -89,6 +89,58 @@ func TestBoundedSolicitRequestReplyAndCopiedConfiguration(t *testing.T) {
 	core.Unlock()
 }
 
+func TestIngressAcceptsTrafficClassAndFlowLabels(t *testing.T) {
+	_, adapter, _ := newTestAdapter(t, defaultConfig())
+	resource, progress, err := adapter.TryAcquire()
+	if err != nil || progress != nscore.ProgressInProgress {
+		t.Fatalf("TryAcquire = %T %v %v", resource, progress, err)
+	}
+	lease := resource.(*leaseResource)
+	var scratch [1514]byte
+	if _, worked, err := adapter.egressLocked(scratch[:]); err != nil || !worked || lease.state != leaseWaitAdvertise {
+		t.Fatalf("Solicit egress = worked:%v err:%v state:%v", worked, err, lease.state)
+	}
+
+	serverAddr := netip.MustParseAddr("fe80::2")
+	serverMAC := [6]byte{0x02, 0, 0, 0, 0, 2}
+	serverDUID := []byte{0, 3, 0, 1, 2, 0, 0, 0, 0, 2}
+	assigned := netip.MustParseAddr("2001:db8::10")
+	advertise := buildServerPayload(t, lnetodhcp.MsgAdvertise, lease.xid, lease.clientDUID[:], serverDUID, lease.iaid, assigned, false)
+	malformedAdvertise := wrapServerFrame(t, adapter, serverAddr, serverMAC, advertise)
+	malformedIP, _ := lnetoipv6.NewFrame(malformedAdvertise[14:])
+	malformedIP.SetHopLimit(0)
+	if handled, err := adapter.ingressLocked(malformedAdvertise); err != nil || !handled || lease.state != leaseWaitAdvertise {
+		t.Fatalf("malformed Advertise = handled:%v err:%v state:%v", handled, err, lease.state)
+	}
+	advertiseFrame := wrapServerFrame(t, adapter, serverAddr, serverMAC, advertise)
+	advertiseIP, _ := lnetoipv6.NewFrame(advertiseFrame[14:])
+	advertiseIP.SetVersionTrafficAndFlow(6, 0xa5, 0xabcde)
+	if handled, err := adapter.ingressLocked(advertiseFrame); err != nil || !handled || lease.state != leaseRequestPending {
+		t.Fatalf("labeled Advertise = handled:%v err:%v state:%v", handled, err, lease.state)
+	}
+
+	if _, worked, err := adapter.egressLocked(scratch[:]); err != nil || !worked || lease.state != leaseWaitReply {
+		t.Fatalf("Request egress = worked:%v err:%v state:%v", worked, err, lease.state)
+	}
+	reply := buildServerPayload(t, lnetodhcp.MsgReply, lease.xid, lease.clientDUID[:], serverDUID, lease.iaid, assigned, true)
+	malformedReply := wrapServerFrame(t, adapter, serverAddr, serverMAC, reply)
+	malformedIP, _ = lnetoipv6.NewFrame(malformedReply[14:])
+	malformedIP.SetVersionTrafficAndFlow(5, 0x5a, 0x54321)
+	if handled, err := adapter.ingressLocked(malformedReply); err != nil || !handled || lease.state != leaseWaitReply {
+		t.Fatalf("malformed Reply = handled:%v err:%v state:%v", handled, err, lease.state)
+	}
+	replyFrame := wrapServerFrame(t, adapter, serverAddr, serverMAC, reply)
+	replyIP, _ := lnetoipv6.NewFrame(replyFrame[14:])
+	replyIP.SetVersionTrafficAndFlow(6, 0x5a, 0x54321)
+	if handled, err := adapter.ingressLocked(replyFrame); err != nil || !handled || lease.state != leaseBound {
+		t.Fatalf("labeled Reply = handled:%v err:%v state:%v", handled, err, lease.state)
+	}
+	configuration, state, err := lease.TryResult()
+	if err != nil || state != dhcpns.ResultReady || configuration.AssignedAddr != assigned {
+		t.Fatalf("result = %+v %v %v", configuration, state, err)
+	}
+}
+
 func TestOperationalRetriesMalformedTransportAndNamespaceClosePreserveLifecycle(t *testing.T) {
 	core, adapter, account := newTestAdapter(t, defaultConfig())
 	resource, progress, err := adapter.TryAcquire()

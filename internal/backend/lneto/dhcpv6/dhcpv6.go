@@ -575,8 +575,8 @@ func (a *Adapter) validateFrameLocked(frame []byte) ([]byte, netip.Addr, [6]byte
 	if err != nil {
 		return nil, netip.Addr{}, [6]byte{}, true
 	}
-	version, _, flow := ip.VersionTrafficAndFlow()
-	if version != 6 || flow != 0 || ip.NextHeader() != lneto.IPProtoUDP || ip.HopLimit() == 0 || int(ip.PayloadLength())+40 > len(eth.Payload()) {
+	version, _, _ := ip.VersionTrafficAndFlow()
+	if version != 6 || ip.NextHeader() != lneto.IPProtoUDP || ip.HopLimit() == 0 || int(ip.PayloadLength())+40 > len(eth.Payload()) {
 		return nil, netip.Addr{}, [6]byte{}, true
 	}
 	source := netip.AddrFrom16(*ip.SourceAddr())
