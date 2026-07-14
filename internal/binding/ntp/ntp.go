@@ -48,8 +48,8 @@ func NamespaceDefault(host plugin.Host, module wago.HostModule, params, results 
 		return
 	}
 	memory := guest.Memory(module)
-	out := uint32(params[0])
-	if !abicore.CheckRanges(memory, false, abicore.Range{Ptr: out, Length: abicore.HandleV1Size}) {
+	out, ok := abicore.NarrowUint32(params[0])
+	if !ok || !abicore.CheckRanges(memory, false, abicore.Range{Ptr: out, Length: abicore.HandleV1Size}) {
 		guest.SetStatus(results, guest.StatusInvalidArgument)
 		return
 	}
@@ -76,8 +76,8 @@ func Sync(host plugin.Host, module wago.HostModule, params, results []uint64) {
 		return
 	}
 	memory := guest.Memory(module)
-	out := uint32(params[1])
-	if !ntpabi.CheckSyncV1(memory, out) {
+	out, ok := abicore.NarrowUint32(params[1])
+	if !ok || !ntpabi.CheckSyncV1(memory, out) {
 		guest.SetStatus(results, guest.StatusInvalidArgument)
 		return
 	}
@@ -113,8 +113,8 @@ func Result(host plugin.Host, module wago.HostModule, params, results []uint64) 
 		return
 	}
 	memory := guest.Memory(module)
-	out := uint32(params[1])
-	if !ntpabi.CheckResultV1(memory, out) {
+	out, ok := abicore.NarrowUint32(params[1])
+	if !ok || !ntpabi.CheckResultV1(memory, out) {
 		guest.SetStatus(results, guest.StatusInvalidArgument)
 		return
 	}

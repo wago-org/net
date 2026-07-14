@@ -178,6 +178,32 @@ func TestBindingsSyncResultAtomicStatusesAndLifecycle(t *testing.T) {
 	}
 }
 
+func TestBindingsRejectHighBitI32AliasesBeforeBackendCalls(t *testing.T) {
+	backend := &fakeNamespace{}
+	manager, instance := attachManager(t, backend)
+	defer manager.Detach(instance)
+	host := testHost{instance: instance, memory: bytes.Repeat([]byte{0xa5}, 512)}
+	bindings := Bindings(plugin.NewHost(manager))
+	state, _ := manager.ForInstance(instance)
+	synchronization := &fakeSync{next: ntpns.NextWouldBlock}
+	handle, err := state.Resources().Add(resource.KindNTPSync, synchronization)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	const high = uint64(1) << 32
+	before := append([]byte(nil), host.memory...)
+	if status := callBinding(t, bindingByName(t, bindings, "namespace_default"), host, high+480); status != guest.StatusInvalidArgument || !bytes.Equal(host.memory, before) {
+		t.Fatalf("high namespace output = %v", status)
+	}
+	if status := callBinding(t, bindingByName(t, bindings, "sync"), host, uint64(state.NamespaceHandle()), high+32); status != guest.StatusInvalidArgument || backend.calls != 0 || !bytes.Equal(host.memory, before) {
+		t.Fatalf("high sync output = %v, calls=%d", status, backend.calls)
+	}
+	if status := callBinding(t, bindingByName(t, bindings, "result"), host, uint64(handle), high+128); status != guest.StatusInvalidArgument || synchronization.resultCalls != 0 || !bytes.Equal(host.memory, before) {
+		t.Fatalf("high result output = %v, calls=%d", status, synchronization.resultCalls)
+	}
+}
+
 func TestBindingsPrevalidateOutputsBeforeInstanceAndHandleLookup(t *testing.T) {
 	manager := instancecore.NewManager()
 	instance := new(wago.Instance)
