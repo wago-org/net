@@ -659,7 +659,10 @@ func (a *Adapter) acceptServerLocked(payload []byte) {
 	if !ok {
 		return
 	}
-	key := clientKey(frame)
+	key, canonicalOffset, identityOK := serverClientIdentity(frame)
+	if !identityOK {
+		return
+	}
 	known := keyIndex(a.serverClients, key) >= 0
 	newClient := message == lnetodhcp.MsgDiscover && !known
 	if newClient && len(a.serverClients) == cap(a.serverClients) {
@@ -668,7 +671,17 @@ func (a *Adapter) acceptServerLocked(payload []byte) {
 	if !known && message != lnetodhcp.MsgDiscover {
 		return
 	}
-	if err := a.server.Demux(payload, 0); err != nil {
+	if canonicalOffset >= 0 {
+		// The pinned server still recognizes its legacy option 60 spelling.
+		// Temporarily bridge standard option 61 in the consumed packet buffer;
+		// restore it immediately so no retained or shared input is changed.
+		payload[canonicalOffset] = byte(lnetodhcp.OptClientIdentifier)
+	}
+	err = a.server.Demux(payload, 0)
+	if canonicalOffset >= 0 {
+		payload[canonicalOffset] = byte(lnetodhcp.OptClientIdentifier1)
+	}
+	if err != nil {
 		return
 	}
 	if newClient {
@@ -721,6 +734,51 @@ func clientKey(frame lnetodhcp.Frame) serverClientKey {
 	key := serverClientKey{length: 6}
 	copy(key.value[:], frame.CHAddrAs6()[:])
 	return key
+}
+
+func serverClientIdentity(frame lnetodhcp.Frame) (serverClientKey, int, bool) {
+	var key serverClientKey
+	canonicalOffset := -1
+	options := frame.OptionsPayload()
+	if len(options) == 0 {
+		return serverClientKey{}, -1, false
+	}
+	for offset := 0; offset < len(options); {
+		option := lnetodhcp.OptNum(options[offset])
+		switch option {
+		case lnetodhcp.OptEnd:
+			offset = len(options)
+			continue
+		case lnetodhcp.OptWordAligned:
+			offset++
+			continue
+		}
+		if offset+1 >= len(options) {
+			return serverClientKey{}, -1, false
+		}
+		length := int(options[offset+1])
+		next := offset + 2 + length
+		if next > len(options) {
+			return serverClientKey{}, -1, false
+		}
+		if option == lnetodhcp.OptClientIdentifier1 || option == lnetodhcp.OptClientIdentifier {
+			if key.identifier || length == 0 || length > len(key.value) {
+				return serverClientKey{}, -1, false
+			}
+			key = serverClientKey{length: uint8(length), identifier: true}
+			copy(key.value[:], options[offset+2:next])
+			if option == lnetodhcp.OptClientIdentifier1 {
+				canonicalOffset = lnetodhcp.OptionsOffset + offset
+			}
+		}
+		offset = next
+	}
+	if key.identifier {
+		return key, canonicalOffset, true
+	}
+	key = serverClientKey{length: 6}
+	copy(key.value[:], frame.CHAddrAs6()[:])
+	return key, -1, true
 }
 
 func validUnicastMAC(mac [6]byte) bool {

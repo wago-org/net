@@ -687,6 +687,93 @@ func failureOf(err error) nscore.Failure {
 	return failure
 }
 
+func TestServerCanonicalClientIdentifiersRemainDistinctAcrossDiscoverRequestRelease(t *testing.T) {
+	firstCore, first := newClient(t, false)
+	secondCore, second := newClient(t, false)
+	serverCore, server := newServer(t, 2)
+	request := func(identifier string) dhcpns.Request {
+		var value dhcpns.Request
+		value.ClientIDLength = uint8(len(identifier))
+		copy(value.ClientID[:], identifier)
+		return value
+	}
+	firstResource, _, err := first.TryAcquire(request("client-a"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer firstResource.Close()
+	secondResource, _, err := second.TryAcquire(request("client-b"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer secondResource.Close()
+	firstDiscover := rewriteDHCPOptionNumber(t, serviceEgress(t, firstCore), lnetodhcp.OptClientIdentifier, lnetodhcp.OptClientIdentifier1)
+	secondDiscover := rewriteDHCPOptionNumber(t, serviceEgress(t, secondCore), lnetodhcp.OptClientIdentifier, lnetodhcp.OptClientIdentifier1)
+
+	serviceIngress(t, serverCore, firstDiscover)
+	serviceIngress(t, serverCore, secondDiscover)
+	if len(server.serverClients) != 2 || server.serverPending != 2 {
+		t.Fatalf("canonical discovers = clients:%d pending:%d", len(server.serverClients), server.serverPending)
+	}
+	assertResponses := func(message lnetodhcp.MessageType) {
+		t.Helper()
+		var assigned [2]netip.Addr
+		for i := range assigned {
+			response := serviceEgress(t, serverCore)
+			eth, err := ethernet.NewFrame(response)
+			if err != nil {
+				t.Fatal(err)
+			}
+			ip, err := ipv4.NewFrame(eth.Payload())
+			if err != nil {
+				t.Fatal(err)
+			}
+			udp, err := lnetoudp.NewFrame(ip.Payload())
+			if err != nil {
+				t.Fatal(err)
+			}
+			frame, err := lnetodhcp.NewFrame(udp.Payload())
+			if err != nil {
+				t.Fatal(err)
+			}
+			got, _, _, ok := inspectPacket(frame)
+			if !ok || got != message {
+				t.Fatalf("server response type = %v, want %v", got, message)
+			}
+			assigned[i] = netip.AddrFrom4(*frame.YIAddr())
+		}
+		if !assigned[0].IsValid() || !assigned[1].IsValid() || assigned[0] == assigned[1] {
+			t.Fatalf("server responses conflated canonical identities: %+v", assigned)
+		}
+		if server.serverPending != 0 || server.hasWorkLocked() {
+			t.Fatalf("server responses retained work: pending=%d work=%v", server.serverPending, server.hasWorkLocked())
+		}
+	}
+	assertResponses(lnetodhcp.MsgOffer)
+
+	serviceIngress(t, serverCore, rewriteDHCPMessageType(t, firstDiscover, lnetodhcp.MsgRequest))
+	serviceIngress(t, serverCore, rewriteDHCPMessageType(t, secondDiscover, lnetodhcp.MsgRequest))
+	if server.serverPending != 2 {
+		t.Fatalf("canonical requests pending = %d", server.serverPending)
+	}
+	assertResponses(lnetodhcp.MsgAck)
+
+	serviceIngress(t, serverCore, rewriteDHCPMessageType(t, firstDiscover, lnetodhcp.MsgRelease))
+	if len(server.serverClients) != 1 {
+		t.Fatalf("first canonical release clients = %d", len(server.serverClients))
+	}
+	serviceIngress(t, serverCore, rewriteDHCPMessageType(t, secondDiscover, lnetodhcp.MsgRelease))
+	if len(server.serverClients) != 0 || server.serverPending != 0 {
+		t.Fatalf("canonical releases retained state: clients=%d pending=%d", len(server.serverClients), server.serverPending)
+	}
+
+	duplicate := appendDHCPOption(t, firstDiscover, lnetodhcp.OptClientIdentifier, []byte("client-a"))
+	serviceIngress(t, serverCore, duplicate)
+	if len(server.serverClients) != 0 || server.serverPending != 0 {
+		t.Fatalf("duplicate client identifiers mutated server: clients=%d pending=%d", len(server.serverClients), server.serverPending)
+	}
+}
+
 func TestServerClientIdentityUsesIdentifierKindAndLength(t *testing.T) {
 	mac := [6]byte{2, 0, 0, 0, 0, 7}
 	short := clientKey(testClientFrame(t, mac, lnetodhcp.OptClientIdentifier1, []byte{1}))
@@ -734,10 +821,57 @@ func testClientFrame(t testing.TB, mac [6]byte, option lnetodhcp.OptNum, identif
 	return frame
 }
 
+func rewriteDHCPOptionNumber(t testing.TB, frame []byte, from, to lnetodhcp.OptNum) []byte {
+	t.Helper()
+	frame = append([]byte(nil), frame...)
+	eth, err := ethernet.NewFrame(frame)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ip, err := ipv4.NewFrame(eth.Payload())
+	if err != nil {
+		t.Fatal(err)
+	}
+	udp, err := lnetoudp.NewFrame(ip.Payload())
+	if err != nil {
+		t.Fatal(err)
+	}
+	dhcp, err := lnetodhcp.NewFrame(udp.Payload())
+	if err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	if err := dhcp.ForEachOption(func(offset int, option lnetodhcp.OptNum, _ []byte) error {
+		if option == from {
+			udp.Payload()[offset] = byte(to)
+			found = true
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if !found {
+		t.Fatalf("DHCP option %v not found", from)
+	}
+	udp.SetCRC(0)
+	var checksum lneto.CRC791
+	ip.CRCWriteUDPPseudo(&checksum, udp.Length())
+	udp.SetCRC(lneto.NeverZeroSum(checksum.PayloadSum16(udp.RawData()[:udp.Length()])))
+	return frame
+}
+
 func BenchmarkClientKey(b *testing.B) {
 	frame := testClientFrame(b, [6]byte{2, 0, 0, 0, 0, 7}, lnetodhcp.OptClientIdentifier1, []byte("bounded-client"))
 	b.ReportAllocs()
 	for b.Loop() {
 		_ = clientKey(frame)
+	}
+}
+
+func BenchmarkServerClientIdentityCanonical(b *testing.B) {
+	frame := testClientFrame(b, [6]byte{2, 0, 0, 0, 0, 7}, lnetodhcp.OptClientIdentifier1, []byte("bounded-client"))
+	b.ReportAllocs()
+	for b.Loop() {
+		_, _, _ = serverClientIdentity(frame)
 	}
 }
