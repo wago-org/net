@@ -402,6 +402,12 @@ func (a *Adapter) ingressLocked(frame []byte) (bool, error) {
 	if err != nil || ethernetFrame.EtherTypeOrSize() != ethernet.TypeIPv4 {
 		return false, err
 	}
+	if *ethernetFrame.DestinationHardwareAddr() != a.hardwareAddress {
+		return false, nil
+	}
+	if !validUnicastMAC(*ethernetFrame.SourceHardwareAddr()) {
+		return true, nil
+	}
 	ipFrame, err := ipv4.NewFrame(ethernetFrame.Payload())
 	if err != nil {
 		return false, err
@@ -458,6 +464,10 @@ func (a *Adapter) allocateIdentityLocked() (uint16, uint16, bool) {
 
 func identityKey(identifier, sequence uint16) uint32 {
 	return uint32(identifier)<<16 | uint32(sequence)
+}
+
+func validUnicastMAC(mac [6]byte) bool {
+	return mac != ([6]byte{}) && mac != ethernet.BroadcastAddr() && mac[0]&1 == 0
 }
 
 func removeEcho(owner *Adapter, target *echo) {

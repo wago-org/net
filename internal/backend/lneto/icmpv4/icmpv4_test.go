@@ -283,3 +283,64 @@ func TestEchoReplyBuilderPreservesWirePayload(t *testing.T) {
 		t.Fatalf("reply framing did not swap endpoints and preserve payload")
 	}
 }
+
+func TestICMPv4IngressRejectsForeignEthernetIdentity(t *testing.T) {
+	for _, test := range []struct {
+		name   string
+		mutate func(*ethernet.Frame)
+	}{
+		{
+			name: "foreign destination",
+			mutate: func(frame *ethernet.Frame) {
+				*frame.DestinationHardwareAddr() = [6]byte{2, 0, 0, 0, 0, 8}
+			},
+		},
+		{
+			name: "multicast source",
+			mutate: func(frame *ethernet.Frame) {
+				*frame.SourceHardwareAddr() = [6]byte{1, 0, 0, 0, 0, 1}
+			},
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			core, adapter, _ := newTestAdapter(t, Config{MaxEchoes: 1, MaxPayloadBytes: 16, MaxAttempts: 1, RetryServiceAttempts: 2})
+			resource, _, err := adapter.TryEcho(icmpns.Request{Destination: netip.MustParseAddr("192.0.2.99"), Payload: []byte("wire")})
+			if err != nil {
+				t.Fatal(err)
+			}
+			exchange := resource.(*echo)
+			request := serviceEgress(t, core)
+			reply := makeEchoReply(t, request, nil)
+			frame, err := ethernet.NewFrame(reply)
+			if err != nil {
+				t.Fatal(err)
+			}
+			test.mutate(&frame)
+			serviceIngress(t, core, reply)
+			if _, next, err := exchange.TryResult(nil); err != nil || next != icmpns.NextWouldBlock {
+				t.Fatalf("foreign frame completed exchange: next=%v err=%v", next, err)
+			}
+		})
+	}
+}
+
+func BenchmarkIngressEchoReply(b *testing.B) {
+	core, adapter, _ := newTestAdapter(b, Config{MaxEchoes: 1, MaxPayloadBytes: 16, MaxAttempts: 1, RetryServiceAttempts: 2})
+	resource, _, err := adapter.TryEcho(icmpns.Request{Destination: netip.MustParseAddr("192.0.2.99"), Payload: []byte("wire")})
+	if err != nil {
+		b.Fatal(err)
+	}
+	exchange := resource.(*echo)
+	request := serviceEgress(b, core)
+	reply := makeEchoReply(b, request, nil)
+	key := identityKey(exchange.identifier, exchange.sequence)
+	core.Lock()
+	defer core.Unlock()
+	b.ReportAllocs()
+	b.ResetTimer()
+	for b.Loop() {
+		exchange.state = echoWaiting
+		adapter.byIdentity[key] = exchange
+		_, _ = adapter.ingressLocked(reply)
+	}
+}
