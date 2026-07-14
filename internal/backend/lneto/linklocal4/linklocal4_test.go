@@ -225,6 +225,36 @@ func TestIdentityContentionPolicyCancelAndTimeoutFailClosed(t *testing.T) {
 	}
 }
 
+func TestClaimQuotaFailureRollsBackOnlyAttemptedOwnership(t *testing.T) {
+	baseLimits := quota.Limits{Resources: 4, LinkLocal4Resources: 4, LinkLocal4Work: 4, ServiceUnits: 128}
+	for _, test := range []struct {
+		name   string
+		limits quota.Limits
+	}{
+		{name: "retained resource denied", limits: func() quota.Limits { limits := baseLimits; limits.LinkLocal4Resources = 0; return limits }()},
+		{name: "work denied after retained acquisition", limits: func() quota.Limits { limits := baseLimits; limits.LinkLocal4Work = 0; return limits }()},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			core, adapter, account, _ := newAdapterWithPolicyLimits(t, Config{MaxClaims: 1, MaxConflicts: 2, MaxServiceAttempts: 16, Seed: 37}, netip.MustParsePrefix("169.254.0.0/16"), netip.Prefix{}, test.limits)
+			if resource, progress, err := adapter.TryClaim(linklocalns.Request{FirstCandidate: netip.MustParseAddr("169.254.42.7")}); resource != nil || progress != 0 || failureOf(t, err) != nscore.FailureResourceLimit {
+				t.Fatalf("TryClaim = %T %v %v", resource, progress, err)
+			}
+			if adapter.claim != nil {
+				t.Fatalf("failed claim published resource %p", adapter.claim)
+			}
+			if usage, _ := account.Snapshot(); usage != (quota.Usage{}) {
+				t.Fatalf("failed claim retained quota = %+v", usage)
+			}
+			core.Lock()
+			address := core.IPv4AddressLocked()
+			core.Unlock()
+			if !address.IsUnspecified() {
+				t.Fatalf("failed claim changed IPv4 identity = %v", address)
+			}
+		})
+	}
+}
+
 func TestConfigIsFiniteExplicitClockAndZeroDisabled(t *testing.T) {
 	if !ValidConfig(Config{}, nil, nil, false) {
 		t.Fatal("zero disabled config rejected")
@@ -253,6 +283,10 @@ func newTestAdapter(t testing.TB, config Config) (*lnetocore.Namespace, *Adapter
 }
 
 func newAdapterWithPolicy(t testing.TB, config Config, allow, deny netip.Prefix) (*lnetocore.Namespace, *Adapter, *quota.Account, *fakeClock) {
+	return newAdapterWithPolicyLimits(t, config, allow, deny, quota.Limits{Resources: 4, LinkLocal4Resources: 4, LinkLocal4Work: 4, ServiceUnits: 128})
+}
+
+func newAdapterWithPolicyLimits(t testing.TB, config Config, allow, deny netip.Prefix, limits quota.Limits) (*lnetocore.Namespace, *Adapter, *quota.Account, *fakeClock) {
 	t.Helper()
 	rules := []policy.Rule{{Action: policy.ActionAllow, Transports: []policy.Transport{policy.TransportLinkLocal4}, Directions: []policy.Direction{policy.DirectionOutbound}, Prefixes: []netip.Prefix{allow}}}
 	if deny.IsValid() {
@@ -262,7 +296,7 @@ func newAdapterWithPolicy(t testing.TB, config Config, allow, deny netip.Prefix)
 	if err != nil {
 		t.Fatal(err)
 	}
-	account := quota.NewAccount(quota.Limits{Resources: 4, LinkLocal4Resources: 4, LinkLocal4Work: 4, ServiceUnits: 128})
+	account := quota.NewAccount(limits)
 	core, err := lnetocore.New(lnetocore.Config{
 		Hostname: "linklocal4", RandSeed: 9,
 		HardwareAddress: [6]byte{2, 0, 0, 0, 0, 1}, GatewayHardwareAddress: [6]byte{2, 0, 0, 0, 0, 9},

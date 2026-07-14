@@ -453,6 +453,41 @@ func FuzzDHCPv6WireReply(f *testing.F) {
 	})
 }
 
+func TestAcquireQuotaFailureRollsBackOnlyAttemptedOwnership(t *testing.T) {
+	baseLimits := quota.Limits{Resources: 4, DHCPv6Resources: 4, DHCPv6Work: 4, QueuedBytes: 1 << 20, ServiceUnits: 64}
+	for _, test := range []struct {
+		name   string
+		limits quota.Limits
+	}{
+		{name: "retained resource denied", limits: func() quota.Limits { limits := baseLimits; limits.DHCPv6Resources = 0; return limits }()},
+		{name: "queued bytes denied", limits: func() quota.Limits {
+			limits := baseLimits
+			limits.QueuedBytes = retainedBytes(defaultConfig()) - 1
+			return limits
+		}()},
+		{name: "work denied after retained acquisition", limits: func() quota.Limits { limits := baseLimits; limits.DHCPv6Work = 0; return limits }()},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			core, adapter, account := newTestAdapterLimits(t, defaultConfig(), test.limits)
+			if resource, progress, err := adapter.TryAcquire(); resource != nil || progress != 0 || nscoreFailure(err) != nscore.FailureResourceLimit {
+				t.Fatalf("TryAcquire = %T %v %v", resource, progress, err)
+			}
+			if adapter.lease != nil {
+				t.Fatalf("failed acquisition published lease %p", adapter.lease)
+			}
+			if usage, _ := account.Snapshot(); usage != (quota.Usage{}) {
+				t.Fatalf("failed acquisition retained quota = %+v", usage)
+			}
+			core.Lock()
+			ports := core.UDPPortLeaseCountLocked()
+			core.Unlock()
+			if ports != 1 {
+				t.Fatalf("failed acquisition changed module port ownership = %d", ports)
+			}
+		})
+	}
+}
+
 func TestTimeoutCancellationPortOwnershipAndDeterministicClose(t *testing.T) {
 	config := defaultConfig()
 	config.MaxAttempts = 1
@@ -555,10 +590,18 @@ func defaultConfig() Config {
 }
 
 func newTestAdapter(t testing.TB, config Config) (*lnetocore.Namespace, *Adapter, *quota.Account) {
-	return newTestAdapterAddress(t, config, netip.MustParseAddr("fe80::1"))
+	return newTestAdapterLimits(t, config, quota.Limits{Resources: 4, DHCPv6Resources: 4, DHCPv6Work: 4, QueuedBytes: 1 << 20, ServiceUnits: 64})
+}
+
+func newTestAdapterLimits(t testing.TB, config Config, limits quota.Limits) (*lnetocore.Namespace, *Adapter, *quota.Account) {
+	return newTestAdapterAddressLimits(t, config, netip.MustParseAddr("fe80::1"), limits)
 }
 
 func newTestAdapterAddress(t testing.TB, config Config, address netip.Addr) (*lnetocore.Namespace, *Adapter, *quota.Account) {
+	return newTestAdapterAddressLimits(t, config, address, quota.Limits{Resources: 4, DHCPv6Resources: 4, DHCPv6Work: 4, QueuedBytes: 1 << 20, ServiceUnits: 64})
+}
+
+func newTestAdapterAddressLimits(t testing.TB, config Config, address netip.Addr, limits quota.Limits) (*lnetocore.Namespace, *Adapter, *quota.Account) {
 	t.Helper()
 	local := address
 	if !local.IsValid() {
@@ -575,7 +618,7 @@ func newTestAdapterAddress(t testing.TB, config Config, address netip.Addr) (*ln
 	if err != nil {
 		t.Fatal(err)
 	}
-	account := quota.NewAccount(quota.Limits{Resources: 4, DHCPv6Resources: 4, DHCPv6Work: 4, QueuedBytes: 1 << 20, ServiceUnits: 64})
+	account := quota.NewAccount(limits)
 	coreConfig := lnetocore.Config{
 		Hostname: "dhcp6", RandSeed: 41, HardwareAddress: [6]byte{0x02, 0, 0, 0, 0, 1}, GatewayHardwareAddress: [6]byte{0x02, 0, 0, 0, 0, 9},
 		IPv4Address: netip.MustParseAddr("192.0.2.1"), MTU: 1500,
