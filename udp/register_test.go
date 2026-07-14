@@ -156,6 +156,7 @@ func TestDefaultUDPAllowsEphemeralUnicastAndDeniesServerSpecialAndCallerDeniedAu
 	}{
 		{address: "192.0.2.20", want: wagonet.StatusOK},
 		{address: "192.0.2.77", want: wagonet.StatusAccessDenied},
+		{address: "127.0.0.1", want: wagonet.StatusInvalidArgument},
 		{address: "224.0.0.1", want: wagonet.StatusAccessDenied},
 		{address: "255.255.255.255", want: wagonet.StatusAccessDenied},
 	} {

@@ -448,7 +448,7 @@ func (s *udpSocket) TrySend(payload []byte, remote nscore.Endpoint) (nscore.Prog
 	if s.closed || s.owner.core.ClosedLocked() {
 		return 0, nscore.Fail(nscore.FailureClosed, net.ErrClosed)
 	}
-	if !remote.Valid() || !remote.Address.Is4() || remote.Port == 0 {
+	if !remote.Valid() || !remote.Address.Is4() || remote.Address.IsLoopback() || remote.Port == 0 {
 		return 0, nscore.Fail(nscore.FailureInvalidArgument, lneto.ErrInvalidAddr)
 	}
 	if !s.owner.policy.CheckEndpoint(policy.OperationUDPSend, remote.Address, remote.Port) {

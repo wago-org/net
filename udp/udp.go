@@ -99,7 +99,8 @@ func AllowPrivilegedBind() Option {
 	return WithPolicy(wagonet.PolicyConfig{PrivilegedBindTransports: []wagonet.PolicyTransport{wagonet.PolicyTransportUDP}})
 }
 
-// AllowLoopback permits otherwise granted loopback destinations.
+// AllowLoopback grants loopback policy authority. The physical link-backed
+// adapter still rejects loopback as a non-wire destination.
 func AllowLoopback() Option {
 	return WithPolicy(wagonet.PolicyConfig{LoopbackTransports: []wagonet.PolicyTransport{wagonet.PolicyTransportUDP}})
 }
@@ -114,8 +115,9 @@ func AllowBroadcast() Option {
 	return WithPolicy(wagonet.PolicyConfig{BroadcastTransports: []wagonet.PolicyTransport{wagonet.PolicyTransportUDP}})
 }
 
-// AllowAll conspicuously grants UDP authority in both directions and every
-// special endpoint class. Storage and quotas remain finite.
+// AllowAll conspicuously grants UDP policy authority in both directions and
+// every special endpoint class. The physical link-backed adapter still rejects
+// non-wire loopback destinations. Storage and quotas remain finite.
 func AllowAll() Option {
 	return WithPolicy(wagonet.PolicyConfig{
 		Rules: []wagonet.PolicyRule{{

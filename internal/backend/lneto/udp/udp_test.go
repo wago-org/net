@@ -374,6 +374,48 @@ func TestUDPIngressDropsMalformedLocalDatagramsAndAcceptsFollowingValidFrame(t *
 	}
 }
 
+func TestSocketTrySendRejectsLoopbackWithoutQueueMutation(t *testing.T) {
+	config := Config{MaxSockets: 1, ReceiveBytes: 32, TransmitBytes: 128, ReceiveDatagrams: 1, TransmitDatagrams: 4, MaxPayloadBytes: 32}
+	policyConfig := policy.Config{
+		Rules: []policy.Rule{{
+			Action: policy.ActionAllow, Transports: []policy.Transport{policy.TransportUDP},
+			Directions: []policy.Direction{policy.DirectionInbound, policy.DirectionOutbound},
+		}},
+		LoopbackTransports:  []policy.Transport{policy.TransportUDP},
+		MulticastTransports: []policy.Transport{policy.TransportUDP},
+		BroadcastTransports: []policy.Transport{policy.TransportUDP},
+	}
+	_, adapter, account := newTestAdapterWithConfigAndPolicy(t, 63, config, policyConfig)
+	local := nscore.Endpoint{Address: netip.MustParseAddr("192.0.2.63"), Port: 4063}
+	socket := bindTestSocket(t, adapter, local).(*udpSocket)
+	usageBefore, closedBefore := account.Snapshot()
+	readyBefore := socket.Readiness()
+	loopback := nscore.Endpoint{Address: netip.MustParseAddr("127.0.0.1"), Port: 53}
+	if progress, err := socket.TrySend([]byte("loopback"), loopback); progress != 0 || udpFailureOf(t, err) != nscore.FailureInvalidArgument {
+		t.Fatalf("loopback send = %v, %v", progress, err)
+	}
+	if socket.tx.count != 0 || socket.tx.bytes != 0 || socket.tx.head != 0 || socket.Readiness() != readyBefore {
+		t.Fatalf("rejected loopback mutated queue: count=%d bytes=%d head=%d readiness=%v/%v", socket.tx.count, socket.tx.bytes, socket.tx.head, socket.Readiness(), readyBefore)
+	}
+	if usage, closed := account.Snapshot(); usage != usageBefore || closed != closedBefore {
+		t.Fatalf("rejected loopback changed quota = %+v, closed=%v; want %+v, closed=%v", usage, closed, usageBefore, closedBefore)
+	}
+
+	for _, remote := range []nscore.Endpoint{
+		{Address: netip.MustParseAddr("192.0.2.64"), Port: 53},
+		{Address: netip.MustParseAddr("192.0.2.255"), Port: 53},
+		{Address: netip.MustParseAddr("224.0.0.1"), Port: 53},
+		{Address: netip.AddrFrom4([4]byte{255, 255, 255, 255}), Port: 53},
+	} {
+		if progress, err := socket.TrySend([]byte("wire"), remote); err != nil || progress != nscore.ProgressDone {
+			t.Fatalf("wire send to %v = %v, %v", remote, progress, err)
+		}
+	}
+	if socket.tx.count != 4 {
+		t.Fatalf("wire destinations queued = %d, want 4", socket.tx.count)
+	}
+}
+
 func TestSocketCloseDropsQueuedDatagramsAndReusesBackingWithoutStaleRevival(t *testing.T) {
 	_, adapter, account := newTestAdapter(t, 89)
 	local := nscore.Endpoint{Address: netip.MustParseAddr("192.0.2.89"), Port: 4089}
