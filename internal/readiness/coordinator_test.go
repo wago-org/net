@@ -34,12 +34,16 @@ type testService struct {
 	testPollable
 	attempts atomic.Int32
 	work     bool
+	failure  error
 }
 
 func (s *testService) TryService(budget namespace.ServiceBudget) (namespace.ServiceReport, namespace.Progress, error) {
 	s.attempts.Add(1)
 	if !budget.Valid() {
 		return namespace.ServiceReport{}, 0, namespace.Fail(namespace.FailureInvalidArgument, ErrInvalidBudget)
+	}
+	if s.failure != nil {
+		return namespace.ServiceReport{}, 0, s.failure
 	}
 	if !s.work {
 		return namespace.ServiceReport{}, namespace.ProgressWouldBlock, nil
@@ -218,6 +222,54 @@ func TestCoordinatorBoundsServiceAttemptsAndRotatesCursor(t *testing.T) {
 	}
 	if first.attempts.Load() != 1 || second.attempts.Load() != 1 {
 		t.Fatalf("rotated attempts = %d/%d", first.attempts.Load(), second.attempts.Load())
+	}
+}
+
+func TestUnregisterPreservesScanCursorAcrossTailReplacement(t *testing.T) {
+	table := newTable(t)
+	coordinator := newCoordinator(t, table, Config{MaxRegistrations: 3})
+	first := &testPollable{}
+	second := &testPollable{ready: namespace.ReadyReadable}
+	third := &testPollable{}
+	addAndRegister(t, table, coordinator, resource.KindPollable, first)
+	secondHandle := addAndRegister(t, table, coordinator, resource.KindPollable, second)
+	thirdHandle := addAndRegister(t, table, coordinator, resource.KindPollable, third)
+	budget := Budget{Scans: 1, Events: 1}
+	events := make([]Event, 1)
+	if report, progress, err := coordinator.TryPoll(events, budget); err != nil || progress != namespace.ProgressWouldBlock || report != (Report{Scanned: 1}) {
+		t.Fatalf("initial scan = %+v, %v, %v", report, progress, err)
+	}
+	if !coordinator.Unregister(thirdHandle) {
+		t.Fatal("tail unregister failed")
+	}
+	replacement := &testPollable{}
+	addAndRegister(t, table, coordinator, resource.KindPollable, replacement)
+	if report, progress, err := coordinator.TryPoll(events, budget); err != nil || progress != namespace.ProgressDone || report != (Report{Scanned: 1, Events: 1}) || events[0] != (Event{Handle: secondHandle, Readiness: namespace.ReadyReadable}) {
+		t.Fatalf("scan after tail replacement = %+v, %v, %v, events=%+v", report, progress, err, events)
+	}
+}
+
+func TestServiceErrorCursorRecoversAfterOffenderRemoval(t *testing.T) {
+	table := newTable(t)
+	coordinator := newCoordinator(t, table, Config{MaxRegistrations: 2})
+	failure := errors.New("service failed")
+	bad := &testService{failure: failure}
+	good := &testService{work: true}
+	badHandle := addAndRegister(t, table, coordinator, resource.KindNamespace, bad)
+	goodHandle := addAndRegister(t, table, coordinator, resource.KindNamespace, good)
+	budget := Budget{
+		Scans: 2, Events: 1, ServiceAttempts: 1,
+		Service: namespace.ServiceBudget{Packets: 1, Bytes: 64, Operations: 1},
+	}
+	events := make([]Event, 1)
+	if report, progress, err := coordinator.TryPoll(events, budget); !errors.Is(err, failure) || progress != namespace.ProgressWouldBlock || report != (Report{Scanned: 1, ServiceAttempts: 1}) || bad.attempts.Load() != 1 || good.attempts.Load() != 0 {
+		t.Fatalf("failed service = %+v, %v, %v, attempts=%d/%d", report, progress, err, bad.attempts.Load(), good.attempts.Load())
+	}
+	if !coordinator.Unregister(badHandle) {
+		t.Fatal("failed service unregister")
+	}
+	if report, progress, err := coordinator.TryPoll(events, budget); err != nil || progress != namespace.ProgressDone || report != (Report{Scanned: 1, Events: 1, ServiceAttempts: 1, ServiceCompleted: 1}) || events[0] != (Event{Handle: goodHandle, Readiness: namespace.ReadyReadable}) || good.attempts.Load() != 1 {
+		t.Fatalf("service after removal = %+v, %v, %v, events=%+v attempts=%d", report, progress, err, events, good.attempts.Load())
 	}
 }
 

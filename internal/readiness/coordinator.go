@@ -163,7 +163,6 @@ func (c *Coordinator) Unregister(handle resource.Handle) bool {
 		return false
 	}
 	c.removeAt(index)
-	c.cursor = 0
 	return true
 }
 
@@ -296,12 +295,18 @@ func (c *Coordinator) removeAt(index int) {
 		moved := c.regs[last]
 		c.regs[index] = moved
 		c.index[moved.handle] = index
+		if c.cursor == last {
+			c.cursor = index
+		}
 		if c.serviceCursor == last {
 			c.serviceCursor = index
 		}
 	}
 	c.regs[last] = registration{}
 	c.regs = c.regs[:last]
+	if len(c.regs) == 0 || c.cursor >= len(c.regs) {
+		c.cursor = 0
+	}
 	if len(c.regs) == 0 || c.serviceCursor >= len(c.regs) {
 		c.serviceCursor = 0
 	}
