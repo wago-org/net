@@ -4,6 +4,7 @@
 package mdns
 
 import (
+	"bytes"
 	"encoding/binary"
 	"errors"
 	"net"
@@ -813,7 +814,7 @@ func (a *Adapter) queueResponseLocked() {
 			if !a.policy.CheckDNS(policy.OperationMDNSRespond, service.Name) || !a.policy.CheckDNS(policy.OperationMDNSRespond, service.Host) {
 				continue
 			}
-			resources = appendServiceAnswers(resources, questionName, question.Type, service, a.serviceResources[i], int(a.config.MaxRecordsPerPacket))
+			resources = appendServiceAnswers(resources, questionName, question.Type, service, a.serviceResources[i], a.decode.Answers, int(a.config.MaxRecordsPerPacket))
 		}
 	}
 	if len(resources) == 0 {
@@ -911,7 +912,7 @@ func serviceResources(service mdnsns.Service, only lnetodns.Type) ([]lnetodns.Re
 	return resources, nil
 }
 
-func appendServiceAnswers(resources []lnetodns.Resource, name string, questionType lnetodns.Type, service mdnsns.Service, serviceRecords []lnetodns.Resource, limit int) []lnetodns.Resource {
+func appendServiceAnswers(resources []lnetodns.Resource, name string, questionType lnetodns.Type, service mdnsns.Service, serviceRecords, knownAnswers []lnetodns.Resource, limit int) []lnetodns.Resource {
 	if name == "" {
 		return resources
 	}
@@ -930,7 +931,7 @@ func appendServiceAnswers(resources []lnetodns.Resource, name string, questionTy
 		if len(resources) == limit {
 			break
 		}
-		if !duplicateWireResource(resources, resource) {
+		if !duplicateWireResource(resources, resource) && !suppressedByKnownAnswer(knownAnswers, resource) {
 			resources = append(resources, serviceRecords[i])
 		}
 	}
@@ -1033,6 +1034,43 @@ func duplicateWireResource(resources []lnetodns.Resource, candidate lnetodns.Res
 		}
 	}
 	return false
+}
+
+func suppressedByKnownAnswer(knownAnswers []lnetodns.Resource, candidate lnetodns.Resource) bool {
+	for _, known := range knownAnswers {
+		if sameKnownAnswer(known, candidate) {
+			return true
+		}
+	}
+	return false
+}
+
+func sameKnownAnswer(known, candidate lnetodns.Resource) bool {
+	knownHeader, candidateHeader := known.Header(), candidate.Header()
+	knownName, candidateName := canonicalName(knownHeader.Name), canonicalName(candidateHeader.Name)
+	if knownName == "" || knownName != candidateName || knownHeader.Type != candidateHeader.Type ||
+		lnetodns.Class(uint16(knownHeader.Class)&^cacheFlush) != lnetodns.ClassINET ||
+		uint64(knownHeader.TTL)*2 < uint64(candidateHeader.TTL) {
+		return false
+	}
+	knownData, candidateData := known.RawData(), candidate.RawData()
+	switch candidateHeader.Type {
+	case lnetodns.TypeA, lnetodns.TypeTXT:
+		return bytes.Equal(knownData, candidateData)
+	case lnetodns.TypePTR:
+		knownTarget, knownOK := decodeResourceName(knownData, 0)
+		candidateTarget, candidateOK := decodeResourceName(candidateData, 0)
+		return knownOK && candidateOK && knownTarget == candidateTarget
+	case lnetodns.TypeSRV:
+		if len(knownData) < 7 || len(candidateData) < 7 || !bytes.Equal(knownData[:6], candidateData[:6]) {
+			return false
+		}
+		knownTarget, knownOK := decodeResourceName(knownData, 6)
+		candidateTarget, candidateOK := decodeResourceName(candidateData, 6)
+		return knownOK && candidateOK && knownTarget == candidateTarget
+	default:
+		return false
+	}
 }
 
 func queryRetainedBytes(config Config) uint64 {

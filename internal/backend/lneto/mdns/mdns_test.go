@@ -518,6 +518,75 @@ func TestMDNSQueuedResponseNamespaceCloseAndStaleResourcesAreIsolated(t *testing
 	}
 }
 
+func TestMDNSCanonicalDuplicateQuestionsAndKnownAnswerSuppression(t *testing.T) {
+	service := testService("device", "192.0.2.11")
+	config := Config{
+		Services: []mdnsns.Service{service}, MaxServices: 1, MaxQueries: 1, MaxAnnouncements: 1,
+		MaxRecords: 8, MaxPacketBytes: 1200, MaxQueuedResponses: 1, MaxQuestionsPerPacket: 4,
+		MaxRecordsPerPacket: 4, MaxAttempts: 1, RetryServiceAttempts: 1,
+	}
+	core, adapter, _ := newTestAdapter(t, config, testPolicy())
+	wireName, err := lnetodns.NewName("_DEMO._UDP.LOCAL.")
+	if err != nil {
+		t.Fatal(err)
+	}
+	question := lnetodns.Question{Name: wireName, Type: lnetodns.TypePTR, Class: lnetodns.ClassINET}
+	message := lnetodns.Message{Questions: []lnetodns.Question{question, question}}
+	payload, err := message.AppendTo(make([]byte, 0, config.MaxPacketBytes), 0, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	serviceIngress(t, core, wrapMDNSFrame(t, payload, [6]byte{2, 0, 0, 0, 0, 33}, netip.MustParseAddr("192.0.2.33")))
+	response := serviceEgress(t, core)
+	eth, _ := ethernet.NewFrame(response)
+	ip, _ := ipv4.NewFrame(eth.Payload())
+	udp, _ := lnetoudp.NewFrame(ip.Payload())
+	dnsFrame, err := lnetodns.NewFrame(udp.Payload())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if answers := dnsFrame.ANCount(); answers != 1 {
+		t.Fatalf("canonical duplicate response answers = %d", answers)
+	}
+
+	known, err := serviceResources(service, lnetodns.TypePTR)
+	if err != nil {
+		t.Fatal(err)
+	}
+	message = lnetodns.Message{Questions: []lnetodns.Question{question}, Answers: known}
+	payload, err = message.AppendTo(make([]byte, 0, config.MaxPacketBytes), 0, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	serviceIngress(t, core, wrapMDNSFrame(t, payload, [6]byte{2, 0, 0, 0, 0, 33}, netip.MustParseAddr("192.0.2.33")))
+	core.Lock()
+	queued := adapter.responseCount
+	core.Unlock()
+	if queued != 0 {
+		t.Fatalf("known answer queued %d duplicate responses", queued)
+	}
+
+	lowTTLService := service
+	lowTTLService.TTLSeconds = service.TTLSeconds/2 - 1
+	lowTTL, err := serviceResources(lowTTLService, lnetodns.TypePTR)
+	if err != nil {
+		t.Fatal(err)
+	}
+	message = lnetodns.Message{Questions: []lnetodns.Question{question}, Answers: lowTTL}
+	payload, err = message.AppendTo(make([]byte, 0, config.MaxPacketBytes), 0, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	serviceIngress(t, core, wrapMDNSFrame(t, payload, [6]byte{2, 0, 0, 0, 0, 33}, netip.MustParseAddr("192.0.2.33")))
+	core.Lock()
+	queued = adapter.responseCount
+	core.Unlock()
+	if queued != 1 {
+		t.Fatalf("low-TTL known answer queued %d responses", queued)
+	}
+	_ = serviceEgress(t, core)
+}
+
 func BenchmarkIngressAutomaticResponse(b *testing.B) {
 	service := testService("device", "192.0.2.11")
 	core, adapter, _ := newTestAdapter(b, Config{
