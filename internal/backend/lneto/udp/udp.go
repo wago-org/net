@@ -535,6 +535,7 @@ func (n *Adapter) egressLocked(dst []byte) (int, error) {
 		return 0, nil
 	}
 	var selected *udpSocket
+	selectedIndex := 0
 	for offset := 0; offset < len(n.sockets); offset++ {
 		index := n.cursor + offset
 		if index >= len(n.sockets) {
@@ -543,10 +544,7 @@ func (n *Adapter) egressLocked(dst []byte) (int, error) {
 		socket := n.sockets[index]
 		if !socket.closed && socket.tx.count > 0 {
 			selected = socket
-			n.cursor = index + 1
-			if n.cursor == len(n.sockets) {
-				n.cursor = 0
-			}
+			selectedIndex = index
 			break
 		}
 	}
@@ -585,6 +583,10 @@ func (n *Adapter) egressLocked(dst []byte) (int, error) {
 	ipFrame.CRCWriteUDPPseudo(&checksum, udpFrame.Length())
 	udpFrame.SetCRC(lneto.NeverZeroSum(checksum.PayloadSum16(udpFrame.RawData()[:udpFrame.Length()])))
 	selected.tx.discardHead()
+	n.cursor = selectedIndex + 1
+	if n.cursor == len(n.sockets) {
+		n.cursor = 0
+	}
 	return frameBytes, nil
 }
 

@@ -1,6 +1,7 @@
 package udp
 
 import (
+	"bytes"
 	"errors"
 	"net/netip"
 	"sync"
@@ -82,6 +83,74 @@ func TestAdapterExchangeTruncationPortLeaseAndClose(t *testing.T) {
 	retainedReset := a.retained.ResetReleased()
 	if retainedReset || a.rx.storage != nil || a.tx.storage != nil {
 		t.Fatalf("closed socket retained graph state: retained_reset=%v rx=%v tx=%v", retainedReset, a.rx.storage != nil, a.tx.storage != nil)
+	}
+}
+
+func TestEgressShortBufferPreservesRoundRobinStateAndQueuedDatagrams(t *testing.T) {
+	common, adapter, account := newTestAdapter(t, 71)
+	firstLocal := nscore.Endpoint{Address: netip.MustParseAddr("192.0.2.71"), Port: 4071}
+	secondLocal := nscore.Endpoint{Address: netip.MustParseAddr("192.0.2.71"), Port: 4072}
+	remote := nscore.Endpoint{Address: netip.MustParseAddr("192.0.2.72"), Port: 53}
+	first := bindTestSocket(t, adapter, firstLocal).(*udpSocket)
+	second := bindTestSocket(t, adapter, secondLocal).(*udpSocket)
+	firstPayload := []byte("first")
+	secondPayload := []byte("second")
+	if progress, err := first.TrySend(firstPayload, remote); err != nil || progress != nscore.ProgressDone {
+		t.Fatalf("first send = %v, %v", progress, err)
+	}
+	if progress, err := second.TrySend(secondPayload, remote); err != nil || progress != nscore.ProgressDone {
+		t.Fatalf("second send = %v, %v", progress, err)
+	}
+	usageBefore, _ := account.Snapshot()
+	firstReady := first.Readiness()
+	secondReady := second.Readiness()
+	short := bytes.Repeat([]byte{0xa5}, 14+20+8+len(firstPayload)-1)
+
+	common.Lock()
+	n, err := adapter.egressLocked(short)
+	cursor := adapter.cursor
+	firstQueued, _, firstOK := first.tx.peek()
+	secondQueued, _, secondOK := second.tx.peek()
+	common.Unlock()
+	if n != 0 || !errors.Is(err, lneto.ErrShortBuffer) {
+		t.Fatalf("short egress = %d, %v", n, err)
+	}
+	if !bytes.Equal(short, bytes.Repeat([]byte{0xa5}, len(short))) {
+		t.Fatalf("short egress mutated destination = %x", short)
+	}
+	if cursor != 0 || !firstOK || !secondOK || !bytes.Equal(firstQueued, firstPayload) || !bytes.Equal(secondQueued, secondPayload) {
+		t.Fatalf("short egress mutated scheduler or queues: cursor=%d first=%q/%v second=%q/%v", cursor, firstQueued, firstOK, secondQueued, secondOK)
+	}
+	if first.Readiness() != firstReady || second.Readiness() != secondReady {
+		t.Fatalf("short egress changed readiness: first=%v/%v second=%v/%v", first.Readiness(), firstReady, second.Readiness(), secondReady)
+	}
+	if usage, _ := account.Snapshot(); usage != usageBefore {
+		t.Fatalf("short egress changed quota = %+v, want %+v", usage, usageBefore)
+	}
+
+	frame := make([]byte, common.Link().MaxFrameBytes())
+	common.Lock()
+	firstBytes, err := adapter.egressLocked(frame)
+	cursorAfterFirst := adapter.cursor
+	common.Unlock()
+	if err != nil || firstBytes != 14+20+8+len(firstPayload) || cursorAfterFirst != 1 {
+		t.Fatalf("first retry = %d, %v, cursor=%d", firstBytes, err, cursorAfterFirst)
+	}
+	firstIP, firstUDP := decodeUDPFrame(t, frame[:firstBytes])
+	if firstIP.ID() != 72 || firstUDP.SourcePort() != firstLocal.Port || string(firstUDP.Payload()) != string(firstPayload) {
+		t.Fatalf("first retry frame = id=%d source=%d payload=%q", firstIP.ID(), firstUDP.SourcePort(), firstUDP.Payload())
+	}
+
+	common.Lock()
+	secondBytes, err := adapter.egressLocked(frame)
+	cursorAfterSecond := adapter.cursor
+	common.Unlock()
+	if err != nil || secondBytes != 14+20+8+len(secondPayload) || cursorAfterSecond != 0 {
+		t.Fatalf("second egress = %d, %v, cursor=%d", secondBytes, err, cursorAfterSecond)
+	}
+	secondIP, secondUDP := decodeUDPFrame(t, frame[:secondBytes])
+	if secondIP.ID() != 73 || secondUDP.SourcePort() != secondLocal.Port || string(secondUDP.Payload()) != string(secondPayload) {
+		t.Fatalf("second frame = id=%d source=%d payload=%q", secondIP.ID(), secondUDP.SourcePort(), secondUDP.Payload())
 	}
 }
 
