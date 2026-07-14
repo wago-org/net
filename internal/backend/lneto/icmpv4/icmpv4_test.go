@@ -135,6 +135,23 @@ func TestICMPv4PolicyLimitsTimeoutCancelAndClose(t *testing.T) {
 	}
 }
 
+func TestICMPv4ZeroConfigRetainsTruthfulServiceSemantics(t *testing.T) {
+	core, adapter, _ := newTestAdapter(t, Config{})
+	if _, _, err := adapter.TryEcho(icmpns.Request{}); failureOf(t, err) != nscore.FailureInvalidArgument {
+		t.Fatalf("invalid disabled echo = %v", err)
+	}
+	request := icmpns.Request{Destination: netip.MustParseAddr("192.0.2.99")}
+	if _, _, err := adapter.TryEcho(request); failureOf(t, err) != nscore.FailureNotSupported {
+		t.Fatalf("disabled echo = %v", err)
+	}
+	if err := core.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := adapter.TryEcho(request); failureOf(t, err) != nscore.FailureClosed {
+		t.Fatalf("closed disabled echo = %v", err)
+	}
+}
+
 func TestICMPv4ConfigIsFiniteAndZeroDisables(t *testing.T) {
 	if !ValidConfig(Config{}, 1500, nil, nil, false) {
 		t.Fatal("zero disabled config rejected")

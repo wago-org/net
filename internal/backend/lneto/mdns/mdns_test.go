@@ -164,6 +164,28 @@ func TestMDNSRejectsMalformedOrIrrelevantResponses(t *testing.T) {
 	}
 }
 
+func TestMDNSZeroConfigRetainsTruthfulServiceSemantics(t *testing.T) {
+	core, adapter, _ := newTestAdapter(t, Config{}, policy.Config{})
+	for name, call := range map[string]func() error{
+		"invalid query": func() error { _, _, err := adapter.TryQuery(mdnsns.Request{}); return err },
+		"valid query": func() error {
+			_, _, err := adapter.TryQuery(mdnsns.Request{Name: "peer.local", Types: mdnsns.RecordsA})
+			return err
+		},
+		"announcement": func() error { _, _, err := adapter.TryAnnounce(0); return err },
+	} {
+		if err := call(); failureOf(t, err) != nscore.FailureNotSupported {
+			t.Fatalf("%s = %v", name, err)
+		}
+	}
+	if err := core.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := adapter.TryQuery(mdnsns.Request{Name: "peer.local", Types: mdnsns.RecordsA}); failureOf(t, err) != nscore.FailureClosed {
+		t.Fatalf("closed disabled query = %v", err)
+	}
+}
+
 func TestMDNSConfigIsFiniteAndCopiesServices(t *testing.T) {
 	if !ValidConfig(Config{}, 1500, nil, nil, false) {
 		t.Fatal("zero disabled config rejected")

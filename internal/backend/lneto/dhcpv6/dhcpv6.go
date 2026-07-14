@@ -147,6 +147,10 @@ func New(common *lnetocore.Namespace, config Config) (*Adapter, error) {
 	if a.nextXID == 0 {
 		a.nextXID = 1
 	}
+	if config == (Config{}) {
+		common.Unlock()
+		return a, nil
+	}
 	if a.operationalAddress() {
 		if !a.policy.CheckEndpoint(policy.OperationDHCPv6ClientBind, a.address, dhcpns.ClientPort) ||
 			!a.policy.CheckEndpoint(policy.OperationDHCPv6ClientSend, allServersAndRelays, dhcpns.ServerPort) {

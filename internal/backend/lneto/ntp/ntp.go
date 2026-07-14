@@ -105,9 +105,14 @@ func New(common *lnetocore.Namespace, config Config) (*Adapter, error) {
 		core: common, config: config,
 		hardwareAddress:        common.HardwareAddressLocked(),
 		gatewayHardwareAddress: common.GatewayHardwareAddressLocked(), policy: common.PolicyLocked(), quotas: common.QuotasLocked(),
-		syncs: make([]*syncResource, 0, config.MaxSyncs), byPort: make(map[uint16]*syncResource, config.MaxSyncs),
 		nextPort: firstEphemeralNTPPort,
 	}
+	if config.MaxSyncs == 0 {
+		common.Unlock()
+		return adapter, nil
+	}
+	adapter.syncs = make([]*syncResource, 0, config.MaxSyncs)
+	adapter.byPort = make(map[uint16]*syncResource, config.MaxSyncs)
 	common.Unlock()
 	if err := common.Install(lnetocore.Participant{
 		IngressOrder: serviceOrder,

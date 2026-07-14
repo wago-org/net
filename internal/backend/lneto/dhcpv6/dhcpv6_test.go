@@ -265,6 +265,22 @@ func TestTimeoutCancellationPortOwnershipAndDeterministicClose(t *testing.T) {
 	}
 }
 
+func TestZeroConfigRetainsTruthfulServiceSemantics(t *testing.T) {
+	core, adapter, _ := newTestAdapter(t, Config{})
+	if operations := adapter.Operations(); operations != 0 {
+		t.Fatalf("disabled operations = %v", operations)
+	}
+	if _, _, err := adapter.TryAcquire(); nscoreFailure(err) != nscore.FailureNotSupported {
+		t.Fatalf("disabled acquire = %v", err)
+	}
+	if err := core.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := adapter.TryAcquire(); nscoreFailure(err) != nscore.FailureClosed {
+		t.Fatalf("closed disabled acquire = %v", err)
+	}
+}
+
 func TestNoIPv6OrGlobalIPv6IsTruthfullyUnsupported(t *testing.T) {
 	for _, address := range []netip.Addr{netip.Addr{}, netip.MustParseAddr("2001:db8::1")} {
 		core, adapter, _ := newTestAdapterAddress(t, defaultConfig(), address)

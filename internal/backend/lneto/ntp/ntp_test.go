@@ -239,6 +239,19 @@ func TestNTPPolicyLimitsTimeoutCancelAndClose(t *testing.T) {
 	}
 }
 
+func TestNTPZeroConfigRetainsTruthfulServiceSemantics(t *testing.T) {
+	core, adapter, _ := newTestAdapter(t, nil, Config{})
+	if _, _, err := adapter.TrySync(); failureOf(t, err) != nscore.FailureNotSupported {
+		t.Fatalf("disabled sync = %v", err)
+	}
+	if err := core.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := adapter.TrySync(); failureOf(t, err) != nscore.FailureClosed {
+		t.Fatalf("closed disabled sync = %v", err)
+	}
+}
+
 func TestNTPConfigIsFiniteExplicitClockAndZeroDisables(t *testing.T) {
 	if !ValidConfig(Config{}, nil, nil, false) {
 		t.Fatal("zero disabled config rejected")

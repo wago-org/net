@@ -170,11 +170,18 @@ func New(common *lnetocore.Namespace, config Config) (*Adapter, error) {
 		core: common, config: config, policy: common.PolicyLocked(), quotas: common.QuotasLocked(),
 		hardwareAddress: common.HardwareAddressLocked(), gatewayHardwareAddress: common.GatewayHardwareAddressLocked(),
 		address: common.IPv6AddressLocked(), scopeID: common.IPv6ScopeIDLocked(),
-		echoes: make([]*echo, 0, config.MaxEchoes), byIdentity: make(map[uint32]*echo, config.MaxEchoes),
-		resolutions: make([]*resolution, 0, config.MaxResolutions), byTarget: make(map[netip.Addr]*resolution, config.MaxResolutions),
-		neighbors: make(map[netip.Addr]*neighborEntry, config.MaxNeighbors), responses: make([]*response, 0, config.MaxQueuedResponses),
 		nextIdentifier: seed, nextSequence: 1,
 	}
+	if config == (Config{}) {
+		common.Unlock()
+		return adapter, nil
+	}
+	adapter.echoes = make([]*echo, 0, config.MaxEchoes)
+	adapter.byIdentity = make(map[uint32]*echo, config.MaxEchoes)
+	adapter.resolutions = make([]*resolution, 0, config.MaxResolutions)
+	adapter.byTarget = make(map[netip.Addr]*resolution, config.MaxResolutions)
+	adapter.neighbors = make(map[netip.Addr]*neighborEntry, config.MaxNeighbors)
+	adapter.responses = make([]*response, 0, config.MaxQueuedResponses)
 	common.Unlock()
 	if err := common.Install(lnetocore.Participant{
 		IngressOrder: serviceOrder, Ingress: adapter.ingressLocked,

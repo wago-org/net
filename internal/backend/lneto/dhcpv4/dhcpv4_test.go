@@ -158,6 +158,19 @@ func TestClientIngressAllowsRelayEthernetSource(t *testing.T) {
 	}
 }
 
+func TestDHCPv4ZeroConfigRetainsTruthfulServiceSemantics(t *testing.T) {
+	core, adapter := newAdapter(t, netip.MustParseAddr("192.0.2.9"), [6]byte{2, 0, 0, 0, 0, 9}, Config{}, policy.Config{})
+	if _, _, err := adapter.TryAcquire(dhcpns.Request{}); failureOf(err) != nscore.FailureNotSupported {
+		t.Fatalf("disabled acquire = %v", err)
+	}
+	if err := core.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := adapter.TryAcquire(dhcpns.Request{}); failureOf(err) != nscore.FailureClosed {
+		t.Fatalf("closed disabled acquire = %v", err)
+	}
+}
+
 func newClient(t testing.TB, apply bool) (*lnetocore.Namespace, *Adapter) {
 	t.Helper()
 	config := defaultConfig()

@@ -155,6 +155,29 @@ func TestConfigRejectsUnrepresentableEchoPayload(t *testing.T) {
 	}
 }
 
+func TestZeroConfigRetainsTruthfulServiceSemantics(t *testing.T) {
+	core, _ := newTestAdapter(t, 8, "2001:db8::8")
+	adapter, err := New(core, Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if operations := adapter.Operations(); operations != 0 {
+		t.Fatalf("disabled operations = %v", operations)
+	}
+	if _, _, err := adapter.TryEcho(icmpns.EchoRequest{}); nscoreFailure(err) != nscore.FailureNotSupported {
+		t.Fatalf("disabled echo = %v", err)
+	}
+	if _, _, err := adapter.TryResolve(icmpns.NeighborRequest{}); nscoreFailure(err) != nscore.FailureNotSupported {
+		t.Fatalf("disabled resolve = %v", err)
+	}
+	if err := core.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := adapter.TryEcho(icmpns.EchoRequest{}); nscoreFailure(err) != nscore.FailureClosed {
+		t.Fatalf("closed disabled echo = %v", err)
+	}
+}
+
 func TestUnconfiguredIPv6IsTruthfullyUnsupported(t *testing.T) {
 	compiled, err := policy.Compile(policy.Config{Rules: []policy.Rule{{Action: policy.ActionAllow, Transports: []policy.Transport{policy.TransportICMPv6}, Directions: []policy.Direction{policy.DirectionInbound, policy.DirectionOutbound}}}})
 	if err != nil {
@@ -178,6 +201,11 @@ func TestUnconfiguredIPv6IsTruthfullyUnsupported(t *testing.T) {
 	} else if failure, ok := nscore.FailureOf(err); !ok || failure != nscore.FailureNotSupported {
 		t.Fatalf("disabled echo = %v", err)
 	}
+}
+
+func nscoreFailure(err error) nscore.Failure {
+	failure, _ := nscore.FailureOf(err)
+	return failure
 }
 
 func newTestAdapter(t testing.TB, id byte, addressText string) (*lnetocore.Namespace, *Adapter) {

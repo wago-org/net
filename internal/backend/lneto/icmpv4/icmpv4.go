@@ -99,9 +99,14 @@ func New(common *lnetocore.Namespace, config Config) (*Adapter, error) {
 		core: common, config: config,
 		hardwareAddress:        common.HardwareAddressLocked(),
 		gatewayHardwareAddress: common.GatewayHardwareAddressLocked(), policy: common.PolicyLocked(), quotas: common.QuotasLocked(),
-		echoes: make([]*echo, 0, config.MaxEchoes), byIdentity: make(map[uint32]*echo, config.MaxEchoes),
 		nextIdentifier: seed, nextSequence: 1,
 	}
+	if config.MaxEchoes == 0 {
+		common.Unlock()
+		return adapter, nil
+	}
+	adapter.echoes = make([]*echo, 0, config.MaxEchoes)
+	adapter.byIdentity = make(map[uint32]*echo, config.MaxEchoes)
 	common.Unlock()
 	if err := common.Install(lnetocore.Participant{
 		IngressOrder: serviceOrder,

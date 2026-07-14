@@ -128,9 +128,14 @@ func New(common *lnetocore.Namespace, config Config) (*Adapter, error) {
 	}
 	a := &Adapter{
 		core: common, config: cloneConfig(config), hardwareAddress: common.HardwareAddressLocked(),
-		policy: common.PolicyLocked(), quotas: common.QuotasLocked(), queries: make([]*query, 0, config.MaxQueries),
-		announcements: make([]*announcement, 0, config.MaxAnnouncements),
+		policy: common.PolicyLocked(), quotas: common.QuotasLocked(),
 	}
+	if zeroConfig(config) {
+		common.Unlock()
+		return a, nil
+	}
+	a.queries = make([]*query, 0, config.MaxQueries)
+	a.announcements = make([]*announcement, 0, config.MaxAnnouncements)
 	a.services = a.config.Services
 	if config.MaxQueries != 0 || len(config.Services) != 0 {
 		if !common.TryLeaseUDPPortIntoLocked(&a.portLease, Port) {

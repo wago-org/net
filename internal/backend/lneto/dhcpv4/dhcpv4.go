@@ -111,6 +111,10 @@ func New(common *lnetocore.Namespace, config Config) (*Adapter, error) {
 		return nil, nscore.Fail(nscore.FailureInvalidArgument, lneto.ErrInvalidConfig)
 	}
 	a := &Adapter{core: common, config: config, hardwareAddress: common.HardwareAddressLocked(), policy: common.PolicyLocked(), quotas: common.QuotasLocked(), nextXID: uint32(common.RandSeedLocked()) | 1}
+	if config == (Config{}) {
+		common.Unlock()
+		return a, nil
+	}
 	if config.MaxLeases != 0 {
 		if !common.TryLeaseUDPPortIntoLocked(&a.clientPort, dhcpns.ClientPort) {
 			common.Unlock()
