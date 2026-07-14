@@ -276,6 +276,56 @@ func TestClientNACKRetiresWorkClearsOnCloseAndIsolatesFreshLease(t *testing.T) {
 	}
 }
 
+func TestCombinedInitializationRollbackReleasesOnlyNewPortOwnership(t *testing.T) {
+	combined := defaultConfig()
+	combined.Server = ServerConfig{
+		ServerAddr: netip.MustParseAddr("192.0.2.1"), Gateway: netip.MustParseAddr("192.0.2.1"), DNS: netip.MustParseAddr("192.0.2.53"),
+		Subnet: netip.MustParsePrefix("192.0.2.0/24"), LeaseSeconds: 3600, MaxClients: 1,
+	}
+
+	t.Run("server policy denial releases client port", func(t *testing.T) {
+		core, _, _ := newDHCPv4Core(t, combined.Server.ServerAddr, [6]byte{2, 0, 0, 0, 0, 1}, clientPolicy())
+		if adapter, err := New(core, combined); adapter != nil || failureOf(err) != nscore.FailureAccessDenied {
+			t.Fatalf("New = %p, %v", adapter, err)
+		}
+		core.Lock()
+		ports := core.UDPPortLeaseCountLocked()
+		var clientPort lnetocore.UDPPortLease
+		clientAvailable := core.TryLeaseUDPPortIntoLocked(&clientPort, dhcpns.ClientPort)
+		clientPort.ReleaseLocked()
+		core.Unlock()
+		if ports != 0 || !clientAvailable {
+			t.Fatalf("policy rollback = ports:%d clientAvailable:%v", ports, clientAvailable)
+		}
+	})
+
+	t.Run("server port conflict preserves prior owner and releases client port", func(t *testing.T) {
+		core, _, _ := newDHCPv4Core(t, combined.Server.ServerAddr, [6]byte{2, 0, 0, 0, 0, 1}, policy.Merge(clientPolicy(), serverPolicy()))
+		core.Lock()
+		var held lnetocore.UDPPortLease
+		if !core.TryLeaseUDPPortIntoLocked(&held, dhcpns.ServerPort) {
+			core.Unlock()
+			t.Fatal("failed to reserve server port")
+		}
+		core.Unlock()
+
+		if adapter, err := New(core, combined); adapter != nil || failureOf(err) != nscore.FailureAddressInUse {
+			t.Fatalf("New = %p, %v", adapter, err)
+		}
+		core.Lock()
+		ports := core.UDPPortLeaseCountLocked()
+		var clientPort lnetocore.UDPPortLease
+		clientAvailable := core.TryLeaseUDPPortIntoLocked(&clientPort, dhcpns.ClientPort)
+		clientPort.ReleaseLocked()
+		held.ReleaseLocked()
+		remaining := core.UDPPortLeaseCountLocked()
+		core.Unlock()
+		if ports != 1 || !clientAvailable || remaining != 0 {
+			t.Fatalf("port-conflict rollback = ports:%d clientAvailable:%v remaining:%d", ports, clientAvailable, remaining)
+		}
+	})
+}
+
 func TestServerRejectedDiscoverDoesNotConsumeFiniteClientCapacity(t *testing.T) {
 	firstCore, first := newClient(t, false)
 	secondCore, second := newAdapter(t, netip.IPv4Unspecified(), [6]byte{2, 0, 0, 0, 0, 3}, defaultConfig(), clientPolicy())
