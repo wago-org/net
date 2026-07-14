@@ -22,6 +22,9 @@ func Echo(state *core.State, namespaceHandle resource.Handle, request icmpns.Req
 		exchange, backendProgress, backendErr := backend.TryEcho(request)
 		progress = backendProgress
 		if backendErr != nil {
+			if !resource.IsNil(exchange) {
+				_ = exchange.Close()
+			}
 			return backendErr
 		}
 		typed, ok := exchange.(icmpns.Echo)
@@ -45,6 +48,9 @@ func Echo(state *core.State, namespaceHandle resource.Handle, request icmpns.Req
 		}
 		return nil
 	})
+	if err != nil {
+		handle, progress = 0, 0
+	}
 	return
 }
 

@@ -28,16 +28,24 @@ func (*fakeBase) TryService(nscore.ServiceBudget) (nscore.ServiceReport, nscore.
 	return nscore.ServiceReport{}, nscore.ProgressWouldBlock, nil
 }
 
-type fakeNamespace struct{ next nscore.Resource }
+type fakeNamespace struct {
+	next     nscore.Resource
+	progress nscore.Progress
+	failure  error
+}
 
 func (n *fakeNamespace) TryEcho(icmpns.Request) (nscore.Resource, nscore.Progress, error) {
+	if n.progress != 0 || n.failure != nil {
+		return n.next, n.progress, n.failure
+	}
 	return n.next, nscore.ProgressInProgress, nil
 }
 
 type fakeEcho struct {
-	payload  []byte
-	canceled bool
-	closed   bool
+	payload    []byte
+	canceled   bool
+	closed     bool
+	closeCalls int
 }
 
 type mutatingEcho struct {
@@ -56,7 +64,11 @@ func (e *mutatingEcho) TryResult(dst []byte) (icmpns.Result, icmpns.Next, error)
 	return result, e.next, e.failure
 }
 
-func (e *fakeEcho) Close() error { e.closed = true; return nil }
+func (e *fakeEcho) Close() error {
+	e.closed = true
+	e.closeCalls++
+	return nil
+}
 func (e *fakeEcho) Cancel() error {
 	e.canceled = true
 	return nil
@@ -105,6 +117,47 @@ func failureOf(err error) nscore.Failure {
 	return failure
 }
 
+func TestEchoErrorsCloseResourcesAndCanonicalizeOutputs(t *testing.T) {
+	adapter := &fakeNamespace{}
+	manager, err := instancecore.NewManagerConfigured(instancecore.Config{
+		Limits: quota.DefaultLimits(), Readiness: instancecore.DefaultConfig().Readiness,
+		NamespaceFactory: func(*policy.Policy, *quota.Account) (nscore.Namespace, error) {
+			return nscore.ComposeNamespace(&fakeBase{}, nscore.Service{Key: icmpns.ServiceKey, Value: adapter})
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	instance := new(wago.Instance)
+	if err := manager.Attach(instance); err != nil {
+		t.Fatal(err)
+	}
+	defer manager.Detach(instance)
+	state, _ := manager.ForInstance(instance)
+	resourcesBefore := state.Resources().Len()
+	readinessBefore := state.Readiness().Snapshot()
+	failure := nscore.Fail(nscore.FailureTemporary, errors.New("backend failed"))
+	request := icmpns.Request{Destination: netip.MustParseAddr("192.0.2.1")}
+
+	exchange := new(fakeEcho)
+	adapter.next, adapter.progress, adapter.failure = exchange, nscore.ProgressDone, failure
+	if handle, progress, err := Echo(state, state.NamespaceHandle(), request); handle != 0 || progress != 0 || failureOf(err) != nscore.FailureTemporary {
+		t.Fatalf("failed echo = %v, %v, %v", handle, progress, err)
+	}
+	if exchange.closeCalls != 1 || state.Resources().Len() != resourcesBefore || state.Readiness().Snapshot() != readinessBefore {
+		t.Fatalf("failed echo published state: closes=%d resources=%d readiness=%+v", exchange.closeCalls, state.Resources().Len(), state.Readiness().Snapshot())
+	}
+
+	var typedNil *fakeEcho
+	adapter.next = typedNil
+	if handle, progress, err := Echo(state, state.NamespaceHandle(), request); handle != 0 || progress != 0 || failureOf(err) != nscore.FailureTemporary {
+		t.Fatalf("typed-nil failed echo = %v, %v, %v", handle, progress, err)
+	}
+	if state.Resources().Len() != resourcesBefore || state.Readiness().Snapshot() != readinessBefore {
+		t.Fatalf("typed-nil failed echo published state: resources=%d readiness=%+v", state.Resources().Len(), state.Readiness().Snapshot())
+	}
+}
+
 func TestInstanceICMPv4ExactKindLifecycle(t *testing.T) {
 	exchange := &fakeEcho{payload: []byte("reply")}
 	adapter := &fakeNamespace{next: exchange}
@@ -138,8 +191,8 @@ func TestInstanceICMPv4ExactKindLifecycle(t *testing.T) {
 	if err := Cancel(state, handle); err != nil || !exchange.canceled {
 		t.Fatalf("Cancel = %v, canceled=%v", err, exchange.canceled)
 	}
-	if err := state.CloseHandle(handle, resource.KindICMPv4Echo); err != nil || !exchange.closed {
-		t.Fatalf("CloseHandle = %v, closed=%v", err, exchange.closed)
+	if err := state.CloseHandle(handle, resource.KindICMPv4Echo); err != nil || !exchange.closed || exchange.closeCalls != 1 {
+		t.Fatalf("CloseHandle = %v, closed=%v calls=%d", err, exchange.closed, exchange.closeCalls)
 	}
 	if _, _, err := Result(state, handle, dst[:]); !errors.Is(err, resource.ErrBadHandle) {
 		t.Fatalf("stale result = %v", err)
