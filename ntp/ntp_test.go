@@ -171,6 +171,9 @@ func TestNTPOptionsRequireExplicitClockAndFiniteConfiguration(t *testing.T) {
 	if err := Register(wagonet.New(), Server("224.0.0.1"), WithClock(clock)); err != ErrInvalidServer {
 		t.Fatalf("multicast server error = %v", err)
 	}
+	if err := Register(wagonet.New(), Server("127.0.0.1"), WithClock(clock), AllowLoopback()); err != ErrInvalidServer {
+		t.Fatalf("loopback server error = %v", err)
+	}
 	if err := Register(wagonet.New(), AllowServers()); err != ErrInvalidOption {
 		t.Fatalf("empty server authority error = %v", err)
 	}

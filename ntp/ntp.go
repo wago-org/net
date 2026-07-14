@@ -142,14 +142,16 @@ func AllowServers(prefixes ...netip.Prefix) Option {
 	}}})
 }
 
-// AllowLoopback permits an otherwise granted loopback NTP server.
+// AllowLoopback grants loopback policy authority. NTP server configuration
+// still rejects loopback as a non-wire identity.
 func AllowLoopback() Option {
 	return WithPolicy(wagonet.PolicyConfig{LoopbackTransports: []wagonet.PolicyTransport{wagonet.PolicyTransportNTP}})
 }
 
-// AllowAll conspicuously grants port 123 on every structurally valid unicast
-// IPv4 destination, including loopback. Resources, attempts, and service remain
-// finite and the adapter still uses only its one configured server.
+// AllowAll conspicuously grants policy authority for port 123 on every
+// structurally valid unicast IPv4 destination class. NTP server configuration
+// still rejects loopback; resources, attempts, and service remain finite and
+// the adapter still uses only its one configured server.
 func AllowAll() Option {
 	return WithPolicy(wagonet.PolicyConfig{
 		Rules: []wagonet.PolicyRule{{
@@ -246,6 +248,6 @@ func Register(network *wagonet.Network, options ...Option) error {
 }
 
 func validServer(address netip.Addr) bool {
-	return address.Is4() && !address.Is4In6() && !address.IsUnspecified() && address.Zone() == "" &&
+	return address.Is4() && !address.Is4In6() && !address.IsUnspecified() && !address.IsLoopback() && address.Zone() == "" &&
 		!address.IsMulticast() && address != netip.AddrFrom4([4]byte{255, 255, 255, 255})
 }
