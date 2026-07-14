@@ -215,6 +215,28 @@ func TestBindingsEchoAtomicStatusesAndLifecycle(t *testing.T) {
 	if status := callLifecycleBinding(t, bindingByName(t, bindings, "echo_result"), host, uint64(echoHandle), payloadPtr, payloadLen, resultPtr); status != guest.StatusBadHandle {
 		t.Fatalf("stale echo result = %v", status)
 	}
+
+	fresh := &lifecycleEcho{next: icmpns.NextWouldBlock}
+	backend.echo = fresh
+	if status := callLifecycleBinding(t, bindingByName(t, bindings, "echo"), host, uint64(namespaceHandle), 0, 128); status != guest.StatusInProgress {
+		t.Fatalf("fresh echo = %v", status)
+	}
+	freshHandle := resource.Handle(binary.LittleEndian.Uint64(host.memory[128:136]))
+	if freshHandle == echoHandle || uint16(freshHandle) != uint16(echoHandle) {
+		t.Fatalf("generation-safe echo slot reuse = old %v, fresh %v", echoHandle, freshHandle)
+	}
+	if status := callLifecycleBinding(t, bindingByName(t, bindings, "cancel_echo"), host, uint64(echoHandle)); status != guest.StatusBadHandle || fresh.cancelCalls != 0 {
+		t.Fatalf("stale echo cancel after reuse = %v calls=%d", status, fresh.cancelCalls)
+	}
+	if status := callLifecycleBinding(t, bindingByName(t, bindings, "close_echo"), host, uint64(echoHandle)); status != guest.StatusBadHandle || fresh.closeCalls != 0 {
+		t.Fatalf("stale echo close after reuse = %v calls=%d", status, fresh.closeCalls)
+	}
+	if status := callLifecycleBinding(t, bindingByName(t, bindings, "echo_result"), host, uint64(echoHandle), payloadPtr, payloadLen, resultPtr); status != guest.StatusBadHandle || fresh.resultCalls != 0 {
+		t.Fatalf("stale echo result after reuse = %v calls=%d", status, fresh.resultCalls)
+	}
+	if status := callLifecycleBinding(t, bindingByName(t, bindings, "echo_result"), host, uint64(freshHandle), payloadPtr, payloadLen, resultPtr); status != guest.StatusAgain || fresh.resultCalls != 1 {
+		t.Fatalf("fresh echo result = %v calls=%d", status, fresh.resultCalls)
+	}
 }
 
 func TestBindingsNeighborAtomicStatusesCacheAndLifecycle(t *testing.T) {
@@ -323,6 +345,28 @@ func TestBindingsNeighborAtomicStatusesCacheAndLifecycle(t *testing.T) {
 	}
 	if status := callLifecycleBinding(t, bindingByName(t, bindings, "neighbor_result"), host, uint64(resolutionHandle), resultPtr); status != guest.StatusBadHandle {
 		t.Fatalf("stale neighbor result = %v", status)
+	}
+
+	fresh := &lifecycleResolution{next: icmpns.NextWouldBlock}
+	backend.resolution = fresh
+	if status := callLifecycleBinding(t, bindingByName(t, bindings, "resolve"), host, uint64(namespaceHandle), 0, 64); status != guest.StatusInProgress {
+		t.Fatalf("fresh resolution = %v", status)
+	}
+	freshHandle := resource.Handle(binary.LittleEndian.Uint64(host.memory[64:72]))
+	if freshHandle == resolutionHandle || uint16(freshHandle) != uint16(resolutionHandle) {
+		t.Fatalf("generation-safe neighbor slot reuse = old %v, fresh %v", resolutionHandle, freshHandle)
+	}
+	if status := callLifecycleBinding(t, bindingByName(t, bindings, "cancel_neighbor"), host, uint64(resolutionHandle)); status != guest.StatusBadHandle || fresh.cancelCalls != 0 {
+		t.Fatalf("stale neighbor cancel after reuse = %v calls=%d", status, fresh.cancelCalls)
+	}
+	if status := callLifecycleBinding(t, bindingByName(t, bindings, "close_neighbor"), host, uint64(resolutionHandle)); status != guest.StatusBadHandle || fresh.closeCalls != 0 {
+		t.Fatalf("stale neighbor close after reuse = %v calls=%d", status, fresh.closeCalls)
+	}
+	if status := callLifecycleBinding(t, bindingByName(t, bindings, "neighbor_result"), host, uint64(resolutionHandle), resultPtr); status != guest.StatusBadHandle || fresh.resultCalls != 0 {
+		t.Fatalf("stale neighbor result after reuse = %v calls=%d", status, fresh.resultCalls)
+	}
+	if status := callLifecycleBinding(t, bindingByName(t, bindings, "neighbor_result"), host, uint64(freshHandle), resultPtr); status != guest.StatusAgain || fresh.resultCalls != 1 {
+		t.Fatalf("fresh neighbor result = %v calls=%d", status, fresh.resultCalls)
 	}
 }
 
