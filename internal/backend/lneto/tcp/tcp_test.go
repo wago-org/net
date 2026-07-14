@@ -153,6 +153,69 @@ func TestOutboundStreamCountTracksReuseAndCoreClose(t *testing.T) {
 	}
 }
 
+func TestOutboundStorageAndPortReuseClearDataAndIsolateStaleStream(t *testing.T) {
+	_, adapter := newTestAdapter(t, 5, 0, 1)
+	remote := nscore.Endpoint{Address: netip.MustParseAddr("192.0.2.6"), Port: 4206}
+	firstValue, progress, err := adapter.TryConnect(remote)
+	if err != nil || progress != nscore.ProgressInProgress {
+		t.Fatalf("first connect = %T, %v, %v", firstValue, progress, err)
+	}
+	stale := firstValue.(*tcpStream)
+	stalePort := stale.local.Port
+	storage := stale.storage
+	for i := range storage {
+		storage[i] = byte(i | 1)
+	}
+	storageAddress := &storage[0]
+	if err := stale.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if stale.storage != nil || stale.conn != nil || stale.allocation != nil || !stale.closed {
+		t.Fatalf("closed stale stream retained state: storage=%v conn=%p allocation=%p closed=%v", stale.storage, stale.conn, stale.allocation, stale.closed)
+	}
+	if len(adapter.freeOutboundStorage) != 1 || &adapter.freeOutboundStorage[0][0] != storageAddress {
+		t.Fatalf("outbound storage was not retained for bounded reuse: pools=%d", len(adapter.freeOutboundStorage))
+	}
+	for i, value := range adapter.freeOutboundStorage[0] {
+		if value != 0 {
+			t.Fatalf("recycled storage byte %d = %d", i, value)
+		}
+	}
+	adapter.nextPort = stalePort
+	freshValue, progress, err := adapter.TryConnect(remote)
+	if err != nil || progress != nscore.ProgressInProgress {
+		t.Fatalf("fresh connect = %T, %v, %v", freshValue, progress, err)
+	}
+	fresh := freshValue.(*tcpStream)
+	if fresh == stale || fresh.local.Port != stalePort || &fresh.storage[0] != storageAddress {
+		t.Fatalf("fresh reuse = same wrapper %v, port %d want %d, storage reused %v", fresh == stale, fresh.local.Port, stalePort, &fresh.storage[0] == storageAddress)
+	}
+	if progress, err := stale.TryFinishConnect(); progress != 0 || failureOf(t, err) != nscore.FailureClosed {
+		t.Fatalf("stale finish connect = %v, %v", progress, err)
+	}
+	if result, err := stale.TryRead(make([]byte, 1)); result != (nscore.IOResult{}) || failureOf(t, err) != nscore.FailureClosed {
+		t.Fatalf("stale read = %+v, %v", result, err)
+	}
+	if result, err := stale.TryWrite([]byte{1}); result != (nscore.IOResult{}) || failureOf(t, err) != nscore.FailureClosed {
+		t.Fatalf("stale write = %+v, %v", result, err)
+	}
+	if err := stale.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if fresh.closed || fresh.conn == nil || fresh.storage == nil {
+		t.Fatalf("stale operations mutated fresh stream: %+v", fresh)
+	}
+	if usage, closed := adapter.quotas.Snapshot(); closed || usage != (quota.Usage{Resources: 1, TCPResources: 1, QueuedBytes: 512}) {
+		t.Fatalf("fresh quota = %+v, closed=%v", usage, closed)
+	}
+	if err := fresh.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if usage, _ := adapter.quotas.Snapshot(); usage != (quota.Usage{}) {
+		t.Fatalf("final quota = %+v", usage)
+	}
+}
+
 func TestAcceptedCloseRetainsSlotUntilChargedMaintenance(t *testing.T) {
 	clientCore, client := newTestAdapter(t, 1, 0, 2)
 	serverCore, server := newTestAdapter(t, 2, 1, 0)
