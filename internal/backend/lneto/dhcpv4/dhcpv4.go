@@ -624,16 +624,21 @@ func inspectPacket(frame lnetodhcp.Frame) (lnetodhcp.MessageType, netip.Addr, in
 	var message lnetodhcp.MessageType
 	var server netip.Addr
 	var dnsCount int
+	var messageSeen, serverSeen bool
 	err := frame.ForEachOption(func(_ int, option lnetodhcp.OptNum, data []byte) error {
 		switch option {
 		case lnetodhcp.OptMessageType:
-			if len(data) == 1 {
-				message = lnetodhcp.MessageType(data[0])
+			if messageSeen || len(data) != 1 {
+				return lneto.ErrInvalidField
 			}
+			messageSeen = true
+			message = lnetodhcp.MessageType(data[0])
 		case lnetodhcp.OptServerIdentification:
-			if len(data) == 4 {
-				server = netip.AddrFrom4([4]byte(data))
+			if serverSeen || len(data) != 4 {
+				return lneto.ErrInvalidField
 			}
+			serverSeen = true
+			server = netip.AddrFrom4([4]byte(data))
 		case lnetodhcp.OptDNSServers:
 			if len(data)%4 != 0 {
 				return lneto.ErrInvalidLengthField
@@ -642,7 +647,7 @@ func inspectPacket(frame lnetodhcp.Frame) (lnetodhcp.MessageType, netip.Addr, in
 		}
 		return nil
 	})
-	return message, server, dnsCount, err == nil && message != 0
+	return message, server, dnsCount, err == nil && messageSeen && message != 0
 }
 
 func (a *Adapter) acceptServerLocked(payload []byte) {

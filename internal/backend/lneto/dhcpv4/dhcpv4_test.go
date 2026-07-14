@@ -120,6 +120,30 @@ func TestClientTimeoutCancellationQuotaAndPortOwnership(t *testing.T) {
 	core.Unlock()
 }
 
+func TestClientRejectsAmbiguousDuplicateMessageType(t *testing.T) {
+	clientCore, client := newClient(t, false)
+	serverCore, _ := newServer(t, 1)
+	resource, progress, err := client.TryAcquire(dhcpns.Request{})
+	if err != nil || progress != nscore.ProgressInProgress {
+		t.Fatalf("acquire = %T, %v, %v", resource, progress, err)
+	}
+	lease := resource.(*leaseResource)
+	transferOne(t, clientCore, serverCore)
+	transferOne(t, serverCore, clientCore)
+	transferOne(t, clientCore, serverCore)
+	ack := serviceEgress(t, serverCore)
+	ambiguous := appendDHCPOption(t, ack, lnetodhcp.OptMessageType, []byte{byte(lnetodhcp.MsgNack)})
+
+	serviceIngress(t, clientCore, ambiguous)
+	if lease.state != leaseWaitACK || lease.Readiness() != 0 {
+		t.Fatalf("ambiguous ACK/NACK response mutated lease: state=%v readiness=%v", lease.state, lease.Readiness())
+	}
+	serviceIngress(t, clientCore, ack)
+	if result, state, err := lease.TryResult(); err != nil || state != dhcpns.ResultReady || !result.Valid() {
+		t.Fatalf("valid ACK after ambiguous response = %+v, %v, %v", result, state, err)
+	}
+}
+
 func TestClientNACKRetiresWorkClearsOnCloseAndIsolatesFreshLease(t *testing.T) {
 	clientCore, client := newClient(t, false)
 	serverCore, _ := newServer(t, 1)
@@ -425,6 +449,60 @@ func rewriteDHCPMessageType(t testing.TB, frame []byte, message lnetodhcp.Messag
 	if !found {
 		t.Fatal("DHCP message type option not found")
 	}
+	udp.SetCRC(0)
+	var checksum lneto.CRC791
+	ip.CRCWriteUDPPseudo(&checksum, udp.Length())
+	udp.SetCRC(lneto.NeverZeroSum(checksum.PayloadSum16(udp.RawData()[:udp.Length()])))
+	return frame
+}
+
+func appendDHCPOption(t testing.TB, frame []byte, option lnetodhcp.OptNum, data []byte) []byte {
+	t.Helper()
+	extra := 2 + len(data)
+	frame = append(append([]byte(nil), frame...), make([]byte, extra)...)
+	eth, err := ethernet.NewFrame(frame)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ip, err := ipv4.NewFrame(eth.Payload())
+	if err != nil {
+		t.Fatal(err)
+	}
+	ip.SetTotalLength(ip.TotalLength() + uint16(extra))
+	udp, err := lnetoudp.NewFrame(ip.Payload())
+	if err != nil {
+		t.Fatal(err)
+	}
+	udp.SetLength(udp.Length() + uint16(extra))
+	dhcp, err := lnetodhcp.NewFrame(udp.Payload())
+	if err != nil {
+		t.Fatal(err)
+	}
+	options := dhcp.OptionsPayload()
+	end := -1
+	for offset := 0; offset < len(options); {
+		switch lnetodhcp.OptNum(options[offset]) {
+		case lnetodhcp.OptWordAligned:
+			offset++
+		case lnetodhcp.OptEnd:
+			end = offset
+			offset = len(options)
+		default:
+			if offset+1 >= len(options) {
+				t.Fatal("truncated DHCP option header")
+			}
+			offset += 2 + int(options[offset+1])
+		}
+	}
+	if end < 0 || end+3+len(data) > len(options) {
+		t.Fatalf("no room to append DHCP option %v", option)
+	}
+	options[end] = byte(option)
+	options[end+1] = byte(len(data))
+	copy(options[end+2:], data)
+	options[end+2+len(data)] = byte(lnetodhcp.OptEnd)
+	ip.SetCRC(0)
+	ip.SetCRC(ip.CalculateHeaderCRC())
 	udp.SetCRC(0)
 	var checksum lneto.CRC791
 	ip.CRCWriteUDPPseudo(&checksum, udp.Length())
