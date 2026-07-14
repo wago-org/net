@@ -552,8 +552,11 @@ func (a *Adapter) validateFrameLocked(frame []byte) ([]byte, netip.Addr, [6]byte
 	if err != nil || eth.EtherTypeOrSize() != ethernet.TypeIPv6 {
 		return nil, netip.Addr{}, [6]byte{}, false
 	}
-	if *eth.DestinationHardwareAddr() != a.hardwareAddress || !validUnicastMAC(*eth.SourceHardwareAddr()) {
+	if *eth.DestinationHardwareAddr() != a.hardwareAddress {
 		return nil, netip.Addr{}, [6]byte{}, false
+	}
+	if !validUnicastMAC(*eth.SourceHardwareAddr()) {
+		return nil, netip.Addr{}, [6]byte{}, true
 	}
 	ip, err := lnetoipv6.NewFrame(eth.Payload())
 	if err != nil {

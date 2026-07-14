@@ -225,6 +225,51 @@ func TestOperationalRetriesMalformedTransportAndNamespaceClosePreserveLifecycle(
 	core.Unlock()
 }
 
+func TestIngressConsumesRelevantInvalidEthernetSources(t *testing.T) {
+	_, adapter, _ := newTestAdapter(t, defaultConfig())
+	resource, _, err := adapter.TryAcquire()
+	if err != nil {
+		t.Fatal(err)
+	}
+	lease := resource.(*leaseResource)
+	var scratch [1514]byte
+	if _, _, err := adapter.egressLocked(scratch[:]); err != nil {
+		t.Fatal(err)
+	}
+	serverAddr := netip.MustParseAddr("fe80::2")
+	serverDUID := []byte{0, 3, 0, 1, 2, 0, 0, 0, 0, 2}
+	advertise := buildServerPayload(t, lnetodhcp.MsgAdvertise, lease.xid, lease.clientDUID[:], serverDUID, lease.iaid, netip.MustParseAddr("2001:db8::10"), false)
+
+	for name, source := range map[string][6]byte{
+		"zero": {}, "broadcast": {0xff, 0xff, 0xff, 0xff, 0xff, 0xff}, "multicast": {1, 0, 94, 0, 0, 1},
+	} {
+		t.Run(name, func(t *testing.T) {
+			frame := wrapServerFrame(t, adapter, serverAddr, source, advertise)
+			if handled, err := adapter.ingressLocked(frame); err != nil || !handled {
+				t.Fatalf("relevant invalid source = handled:%v err:%v", handled, err)
+			}
+			if lease.state != leaseWaitAdvertise || lease.serverLen != 0 || lease.result != (dhcpns.Configuration{}) || lease.failure != nil {
+				t.Fatalf("invalid source mutated lease: state=%v serverLen=%d result=%+v failure=%v", lease.state, lease.serverLen, lease.result, lease.failure)
+			}
+		})
+	}
+
+	foreign := wrapServerFrame(t, adapter, serverAddr, [6]byte{}, advertise)
+	eth, err := ethernet.NewFrame(foreign)
+	if err != nil {
+		t.Fatal(err)
+	}
+	*eth.DestinationHardwareAddr() = [6]byte{0x02, 0, 0, 0, 0, 99}
+	if handled, err := adapter.ingressLocked(foreign); err != nil || handled {
+		t.Fatalf("foreign destination = handled:%v err:%v", handled, err)
+	}
+
+	valid := wrapServerFrame(t, adapter, serverAddr, [6]byte{0x02, 0, 0, 0, 0, 2}, advertise)
+	if handled, err := adapter.ingressLocked(valid); err != nil || !handled || lease.state != leaseRequestPending {
+		t.Fatalf("valid advertise after drops = handled:%v err:%v state:%v", handled, err, lease.state)
+	}
+}
+
 func TestMalformedCorrelationStatusAndRepeatedBoundsDoNotMutate(t *testing.T) {
 	_, adapter, account := newTestAdapter(t, defaultConfig())
 	resource, _, err := adapter.TryAcquire()
