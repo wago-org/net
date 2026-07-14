@@ -345,6 +345,105 @@ func TestDNSIngressRequiresLocalEthernetDestinationAndValidSource(t *testing.T) 
 	}
 }
 
+func TestDNSIngressDropsMalformedCorrelatedTransportAndAcceptsFollowingValidResponse(t *testing.T) {
+	for _, test := range []struct {
+		name   string
+		mutate func(*testing.T, []byte)
+	}{
+		{
+			name: "bad IPv4 checksum",
+			mutate: func(_ *testing.T, frame []byte) {
+				frame[14+8] ^= 1
+			},
+		},
+		{
+			name: "fragmented IPv4",
+			mutate: func(t *testing.T, frame []byte) {
+				ethernetFrame, err := ethernet.NewFrame(frame)
+				if err != nil {
+					t.Fatal(err)
+				}
+				ipFrame, err := ipv4.NewFrame(ethernetFrame.Payload())
+				if err != nil {
+					t.Fatal(err)
+				}
+				ipFrame.SetFlags(ipv4.FlagMoreFragments)
+				ipFrame.SetCRC(0)
+				ipFrame.SetCRC(ipFrame.CalculateHeaderCRC())
+			},
+		},
+		{
+			name: "bad UDP checksum",
+			mutate: func(t *testing.T, frame []byte) {
+				ethernetFrame, err := ethernet.NewFrame(frame)
+				if err != nil {
+					t.Fatal(err)
+				}
+				ipFrame, err := ipv4.NewFrame(ethernetFrame.Payload())
+				if err != nil {
+					t.Fatal(err)
+				}
+				udpFrame, err := lnetoudp.NewFrame(ipFrame.Payload())
+				if err != nil {
+					t.Fatal(err)
+				}
+				udpFrame.Payload()[len(udpFrame.Payload())-1] ^= 1
+			},
+		},
+		{
+			name: "short UDP length",
+			mutate: func(t *testing.T, frame []byte) {
+				ethernetFrame, err := ethernet.NewFrame(frame)
+				if err != nil {
+					t.Fatal(err)
+				}
+				ipFrame, err := ipv4.NewFrame(ethernetFrame.Payload())
+				if err != nil {
+					t.Fatal(err)
+				}
+				udpFrame, err := lnetoudp.NewFrame(ipFrame.Payload())
+				if err != nil {
+					t.Fatal(err)
+				}
+				udpFrame.SetLength(7)
+			},
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			config := dnsTestConfig(t, 47)
+			ns := newTestNamespace(t, config)
+			request := namespace.DNSRequest{Name: "example.com", Types: namespace.DNSRecordsA | namespace.DNSRecordsAAAA}
+			resource, progress, err := ns.TryResolve(request)
+			if err != nil || progress != namespace.ProgressInProgress {
+				t.Fatalf("resolve = %T, %v, %v", resource, progress, err)
+			}
+			query := resource.(*dnsQuery)
+			outgoing := serviceDNSPacket(t, ns)
+			txid, localPort := dnsPacketIdentity(t, outgoing)
+			valid := buildDNSResponseFrame(t, config, txid, localPort, request.Name)
+			malformed := append([]byte(nil), valid...)
+			test.mutate(t, malformed)
+
+			ns.core.Lock()
+			handled, err := ns.adapter.ingressLocked(malformed)
+			ns.core.Unlock()
+			if err != nil || !handled {
+				t.Fatalf("malformed ingress = handled %v, err %v", handled, err)
+			}
+			if query.state != dnsQueryWaiting || query.Readiness() != 0 || len(query.records) != 0 || ns.adapter.byPort[localPort] != query {
+				t.Fatalf("malformed transport terminalized query: state=%v readiness=%v records=%d mapped=%v", query.state, query.Readiness(), len(query.records), ns.adapter.byPort[localPort] == query)
+			}
+
+			ns.core.Lock()
+			handled, err = ns.adapter.ingressLocked(valid)
+			ns.core.Unlock()
+			if err != nil || !handled || query.state != dnsQueryDone || query.Readiness() != namespace.ReadyDNSResult {
+				t.Fatalf("valid ingress after malformed = handled %v, err %v, state=%v readiness=%v", handled, err, query.state, query.Readiness())
+			}
+		})
+	}
+}
+
 func TestDNSTerminalCompletionRetiresTransportAndIgnoresLateResponses(t *testing.T) {
 	config := dnsTestConfig(t, 44)
 	ns := newTestNamespace(t, config)

@@ -504,16 +504,13 @@ func (n *Adapter) ingressLocked(frame []byte) (bool, error) {
 	var validator lneto.Validator
 	ipFrame.ValidateExceptCRC(&validator)
 	if err := validator.ErrPop(); err != nil {
-		query.failLocked(nscore.FailureIO, err)
 		return true, nil
 	}
 	if ipFrame.CalculateHeaderCRC() != 0 || ipFrame.Flags().MoreFragments() || ipFrame.Flags().FragmentOffset() != 0 {
-		query.failLocked(nscore.FailureIO, lneto.ErrBadCRC)
 		return true, nil
 	}
 	udpFrame.ValidateSize(&validator)
 	if err := validator.ErrPop(); err != nil {
-		query.failLocked(nscore.FailureIO, err)
 		return true, nil
 	}
 	udpLength := udpFrame.Length()
@@ -521,7 +518,6 @@ func (n *Adapter) ingressLocked(frame []byte) (bool, error) {
 		var checksum lneto.CRC791
 		ipFrame.CRCWriteUDPPseudo(&checksum, udpLength)
 		if checksum.PayloadSum16(udpFrame.RawData()[:udpLength]) != 0 {
-			query.failLocked(nscore.FailureIO, lneto.ErrBadCRC)
 			return true, nil
 		}
 	}
