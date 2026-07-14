@@ -357,6 +357,88 @@ func TestConnectedStatePersistsThroughHalfClose(t *testing.T) {
 	}
 }
 
+func TestSimultaneousShutdownReachesStableEOFAndAcceptedSlotReuse(t *testing.T) {
+	clientCore, listener, client, serverCore, server := newEstablishedPair(t)
+	serverAdapter := listener.owner
+	clientAdapter := client.owner
+	endpoint := listener.local
+
+	if progress, err := client.TryShutdownWrite(); err != nil || progress != nscore.ProgressDone {
+		t.Fatalf("client shutdown = %v, %v", progress, err)
+	}
+	if progress, err := server.TryShutdownWrite(); err != nil || progress != nscore.ProgressDone {
+		t.Fatalf("server shutdown = %v, %v", progress, err)
+	}
+	for range 8 {
+		moved := tryTransferTCP(t, clientCore, serverCore)
+		moved = tryTransferTCP(t, serverCore, clientCore) || moved
+		clientResult, clientErr := client.TryRead(make([]byte, 1))
+		serverResult, serverErr := server.TryRead(make([]byte, 1))
+		if clientErr == nil && serverErr == nil && clientResult.State == nscore.IOEOF && serverResult.State == nscore.IOEOF {
+			break
+		}
+		if !moved {
+			t.Fatalf("simultaneous shutdown stalled: client=%+v/%v server=%+v/%v", clientResult, clientErr, serverResult, serverErr)
+		}
+	}
+
+	for name, stream := range map[string]*tcpStream{"client": client, "server": server} {
+		if ready := stream.Readiness(); ready&nscore.ReadyConnected == 0 || ready&nscore.ReadyClosed == 0 || ready&(nscore.ReadyReadable|nscore.ReadyWritable|nscore.ReadyError) != 0 {
+			t.Fatalf("%s simultaneous-close readiness = %v", name, ready)
+		}
+		if result, err := stream.TryRead(make([]byte, 1)); err != nil || result.State != nscore.IOEOF {
+			t.Fatalf("%s simultaneous-close read = %+v, %v", name, result, err)
+		}
+		if progress, err := stream.TryFinishConnect(); err != nil || progress != nscore.ProgressDone {
+			t.Fatalf("%s finish after simultaneous close = %v, %v", name, progress, err)
+		}
+	}
+
+	if err := server.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if len(listener.pool.slots) != 1 || !listener.pool.slots[0].inUse || listener.pool.slots[0].stream == nil || listener.pool.slots[0].quotaOwned {
+		t.Fatalf("accepted close slot = %+v", listener.pool.slots)
+	}
+	serverCore.Lock()
+	serverCore.SetNextIngressLocked(false)
+	required := serverCore.RequiredFrameBytesLocked()
+	serverCore.Unlock()
+	report, progress, err := serverCore.TryService(nscore.ServiceBudget{Packets: 1, Bytes: uint32(required), Operations: 1})
+	if err != nil || progress != nscore.ProgressDone || report != (nscore.ServiceReport{Operations: 1}) {
+		t.Fatalf("accepted retirement maintenance = %+v, %v, %v", report, progress, err)
+	}
+	if slot := &listener.pool.slots[0]; slot.inUse || slot.stream != nil || slot.quotaOwned {
+		t.Fatalf("accepted slot retained after maintenance: in_use=%v stream=%p quota_owned=%v", slot.inUse, slot.stream, slot.quotaOwned)
+	}
+
+	if err := client.Close(); err != nil {
+		t.Fatal(err)
+	}
+	replacementValue, progress, err := clientAdapter.TryConnect(endpoint)
+	if err != nil || progress != nscore.ProgressInProgress {
+		t.Fatalf("replacement connect = %T, %v, %v", replacementValue, progress, err)
+	}
+	replacementClient := replacementValue.(*tcpStream)
+	transferTCP(t, clientCore, serverCore)
+	transferTCP(t, serverCore, clientCore)
+	transferTCP(t, clientCore, serverCore)
+	if progress, err := replacementClient.TryFinishConnect(); err != nil || progress != nscore.ProgressDone {
+		t.Fatalf("replacement finish = %v, %v", progress, err)
+	}
+	replacementServerValue, progress, err := listener.TryAccept()
+	if err != nil || progress != nscore.ProgressDone {
+		t.Fatalf("replacement accept = %T, %v, %v", replacementServerValue, progress, err)
+	}
+	replacementServer := replacementServerValue.(*tcpStream)
+	if replacementServer == server || server.conn != nil || server.slot != nil || !server.closed {
+		t.Fatalf("stale accepted wrapper reused: old=%p new=%p conn=%p slot=%p closed=%v", server, replacementServer, server.conn, server.slot, server.closed)
+	}
+	if usage, _ := serverAdapter.quotas.Snapshot(); usage != (quota.Usage{Resources: 2, TCPResources: 2, QueuedBytes: 512}) {
+		t.Fatalf("replacement server quota = %+v", usage)
+	}
+}
+
 func TestEstablishedResetIsAConnectionEventNotServiceFailure(t *testing.T) {
 	clientCore, _, client, serverCore, server := newEstablishedPair(t)
 	if result, err := client.TryWrite([]byte{0x5a}); err != nil || result != (nscore.IOResult{Bytes: 1, State: nscore.IOReady}) {
@@ -735,6 +817,44 @@ func transferTCP(t testing.TB, from, to *lnetocore.Namespace) {
 	if err != nil || progress != nscore.ProgressDone || report.Packets != 1 {
 		t.Fatalf("ingress = %+v, %v, %v", report, progress, err)
 	}
+}
+
+func tryTransferTCP(t testing.TB, from, to *lnetocore.Namespace) bool {
+	t.Helper()
+	from.Lock()
+	from.SetNextIngressLocked(false)
+	required := from.RequiredFrameBytesLocked()
+	from.Unlock()
+	budget := nscore.ServiceBudget{Packets: 1, Bytes: uint32(required), Operations: 1}
+	report, progress, err := from.TryService(budget)
+	if err != nil {
+		t.Fatalf("optional egress = %+v, %v, %v", report, progress, err)
+	}
+	if report.Packets == 0 {
+		if progress != nscore.ProgressWouldBlock && report.Operations == 0 {
+			t.Fatalf("optional egress without packet = %+v, %v", report, progress)
+		}
+		return false
+	}
+	if progress != nscore.ProgressDone || report.Packets != 1 {
+		t.Fatalf("optional egress = %+v, %v", report, progress)
+	}
+	buffer := make([]byte, from.Link().MaxFrameBytes())
+	result, err := from.Link().TryDequeue(packetlink.Egress, buffer)
+	if err != nil || !result.Ready || result.Truncated || result.FrameBytes == 0 {
+		t.Fatalf("optional dequeue = %+v, %v", result, err)
+	}
+	if err := to.Link().TryEnqueue(packetlink.Ingress, buffer[:result.FrameBytes]); err != nil {
+		t.Fatal(err)
+	}
+	to.Lock()
+	to.SetNextIngressLocked(true)
+	to.Unlock()
+	report, progress, err = to.TryService(budget)
+	if err != nil || progress != nscore.ProgressDone || report.Packets != 1 {
+		t.Fatalf("optional ingress = %+v, %v, %v", report, progress, err)
+	}
+	return true
 }
 
 func nextTCPFrame(t testing.TB, from *lnetocore.Namespace) []byte {
