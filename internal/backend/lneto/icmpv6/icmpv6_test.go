@@ -152,6 +152,78 @@ func TestICMPv6ReplyIgnoresBytesBeyondIPv6PayloadLength(t *testing.T) {
 	}
 }
 
+func TestMalformedCorrelatedEchoRepliesAreDroppedWithoutRetiringExchange(t *testing.T) {
+	coreA, a := newTestAdapter(t, 23, "2001:db8::23")
+	coreB, b := newTestAdapter(t, 24, "2001:db8::24")
+	defer coreA.Close()
+	defer coreB.Close()
+	if err := a.SeedNeighbor(icmpns.Neighbor{Address: b.address, MAC: b.hardwareAddress}); err != nil {
+		t.Fatal(err)
+	}
+	resource, _, err := a.TryEcho(icmpns.EchoRequest{Destination: b.address, Payload: []byte("correlated")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	exchange := resource.(*echo)
+	key := identityKey(exchange.identifier, exchange.sequence)
+	var storage [1514]byte
+	n, worked, err := a.egressLocked(storage[:])
+	if err != nil || !worked || n == 0 {
+		t.Fatalf("echo request = %d, %v, %v", n, worked, err)
+	}
+	if handled, err := b.ingressLocked(storage[:n]); err != nil || !handled {
+		t.Fatalf("echo request ingress = %v, %v", handled, err)
+	}
+	n, worked, err = b.egressLocked(storage[:])
+	if err != nil || !worked || n == 0 {
+		t.Fatalf("echo reply = %d, %v, %v", n, worked, err)
+	}
+	valid := append([]byte(nil), storage[:n]...)
+	for _, test := range []struct {
+		name   string
+		mutate func([]byte)
+	}{
+		{name: "bad checksum", mutate: func(frame []byte) {
+			frame[14+40+2] ^= 0x80
+		}},
+		{name: "declared payload exceeds frame", mutate: func(frame []byte) {
+			ethernetFrame, _ := ethernet.NewFrame(frame)
+			ipFrame, _ := lnetoipv6.NewFrame(ethernetFrame.Payload())
+			ipFrame.SetPayloadLength(ipFrame.PayloadLength() + 1)
+		}},
+		{name: "payload mismatch", mutate: func(frame []byte) {
+			ethernetFrame, _ := ethernet.NewFrame(frame)
+			ipFrame, _ := lnetoipv6.NewFrame(ethernetFrame.Payload())
+			icmpFrame, _ := lnetoicmp.NewFrame(ipFrame.Payload())
+			ipFrame.Payload()[icmpHeader] ^= 0x01
+			setChecksum(ipFrame, icmpFrame, ipFrame.Payload())
+		}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			frame := append([]byte(nil), valid...)
+			test.mutate(frame)
+			if handled, err := a.ingressLocked(frame); err != nil || !handled {
+				t.Fatalf("malformed ingress = %v, %v", handled, err)
+			}
+			if exchange.Readiness() != 0 || a.byIdentity[key] != exchange || exchange.state != stateWaiting {
+				t.Fatalf("malformed reply retired exchange: readiness=%v mapped=%p state=%v", exchange.Readiness(), a.byIdentity[key], exchange.state)
+			}
+			if usage, _ := a.quotas.Snapshot(); usage.ICMPv6Work != 1 {
+				t.Fatalf("malformed reply released work quota: %+v", usage)
+			}
+		})
+	}
+	if handled, err := a.ingressLocked(valid); err != nil || !handled {
+		t.Fatalf("valid ingress = %v, %v", handled, err)
+	}
+	if exchange.Readiness() != nscore.ReadyICMPv6Reply || a.byIdentity[key] != nil {
+		t.Fatalf("valid reply completion: readiness=%v mapped=%p", exchange.Readiness(), a.byIdentity[key])
+	}
+	if usage, _ := a.quotas.Snapshot(); usage.ICMPv6Work != 0 {
+		t.Fatalf("valid reply retained work quota: %+v", usage)
+	}
+}
+
 func TestStrictNDPValidationAndTimeoutCancellation(t *testing.T) {
 	coreA, a := newTestAdapter(t, 3, "fe80::3")
 	coreB, b := newTestAdapter(t, 4, "fe80::4")
