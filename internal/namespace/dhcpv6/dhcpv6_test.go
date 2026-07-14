@@ -48,6 +48,20 @@ func TestConfigurationOwnsBoundedInlineResults(t *testing.T) {
 	}
 }
 
+func TestDelegatedPrefixRejectsNonUnicastIdentities(t *testing.T) {
+	valid := DelegatedPrefix{Prefix: netip.MustParsePrefix("fd00:1::/48"), PreferredLifetime: 1800, ValidLifetime: 3600}
+	if !valid.Valid() {
+		t.Fatal("unique-local delegated prefix rejected")
+	}
+	for _, value := range []string{"::/64", "::1/128", "fe80::/64", "ff05::/64"} {
+		prefix := valid
+		prefix.Prefix = netip.MustParsePrefix(value)
+		if prefix.Valid() {
+			t.Fatalf("non-unicast delegated prefix %s accepted", value)
+		}
+	}
+}
+
 func TestNameValidationRejectsNoncanonicalAndPadding(t *testing.T) {
 	if _, ok := NewName("Example.COM"); ok {
 		t.Fatal("uppercase name accepted")

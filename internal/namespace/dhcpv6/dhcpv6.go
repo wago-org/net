@@ -119,8 +119,10 @@ type DelegatedPrefix struct {
 }
 
 func (prefix DelegatedPrefix) Valid() bool {
-	return prefix.Prefix.IsValid() && prefix.Prefix.Addr().Is6() && !prefix.Prefix.Addr().Is4In6() &&
-		prefix.Prefix.Addr().Zone() == "" && prefix.Prefix.Bits() > 0 && prefix.Prefix == prefix.Prefix.Masked() &&
+	address := prefix.Prefix.Addr()
+	return prefix.Prefix.IsValid() && address.Is6() && !address.Is4In6() && address.Zone() == "" &&
+		!address.IsUnspecified() && !address.IsLoopback() && !address.IsMulticast() && !address.IsLinkLocalUnicast() &&
+		prefix.Prefix.Bits() > 0 && prefix.Prefix == prefix.Prefix.Masked() &&
 		prefix.ValidLifetime > 0 && prefix.PreferredLifetime <= prefix.ValidLifetime
 }
 

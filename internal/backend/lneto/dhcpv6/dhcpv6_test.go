@@ -321,6 +321,54 @@ func TestMalformedCorrelationStatusAndRepeatedBoundsDoNotMutate(t *testing.T) {
 	}
 }
 
+func TestReplyDropsNonUnicastDelegatedPrefixesBeforePinnedMutation(t *testing.T) {
+	for _, value := range []string{"::/64", "::1/128", "fe80::/64", "ff05::/64"} {
+		t.Run(value, func(t *testing.T) {
+			_, adapter, account := newTestAdapter(t, defaultConfig())
+			resource, _, err := adapter.TryAcquire()
+			if err != nil {
+				t.Fatal(err)
+			}
+			lease := resource.(*leaseResource)
+			var scratch [1514]byte
+			if _, _, err := adapter.egressLocked(scratch[:]); err != nil {
+				t.Fatal(err)
+			}
+			serverAddr := netip.MustParseAddr("fe80::2")
+			serverMAC := [6]byte{0x02, 0, 0, 0, 0, 2}
+			serverDUID := []byte{0, 3, 0, 1, 2, 0, 0, 0, 0, 2}
+			assigned := netip.MustParseAddr("2001:db8::10")
+			advertise := buildServerPayload(t, lnetodhcp.MsgAdvertise, lease.xid, lease.clientDUID[:], serverDUID, lease.iaid, assigned, false)
+			if handled, err := adapter.ingressLocked(wrapServerFrame(t, adapter, serverAddr, serverMAC, advertise)); err != nil || !handled || lease.state != leaseRequestPending {
+				t.Fatalf("Advertise = %v %v state=%v", handled, err, lease.state)
+			}
+			if _, _, err := adapter.egressLocked(scratch[:]); err != nil || lease.state != leaseWaitReply {
+				t.Fatalf("Request = %v state=%v", err, lease.state)
+			}
+
+			requestBefore := append([]byte(nil), lease.packet...)
+			clientState := lease.client.State()
+			before, _ := account.Snapshot()
+			bad := buildServerPayload(t, lnetodhcp.MsgReply, lease.xid, lease.clientDUID[:], serverDUID, lease.iaid, assigned, false)
+			bad = appendDelegatedPrefix(bad, lease.iaid, netip.MustParsePrefix(value), 1800, 3600)
+			if handled, err := adapter.ingressLocked(wrapServerFrame(t, adapter, serverAddr, serverMAC, bad)); err != nil || !handled {
+				t.Fatalf("invalid Reply ingress = %v %v", handled, err)
+			}
+			if lease.state != leaseWaitReply || lease.client.State() != clientState || !bytes.Equal(lease.packet, requestBefore) || lease.result != (dhcpns.Configuration{}) || lease.failure != nil {
+				t.Fatalf("invalid delegated prefix mutated lifecycle: state=%v client=%v result=%+v failure=%v", lease.state, lease.client.State(), lease.result, lease.failure)
+			}
+			if usage, _ := account.Snapshot(); usage != before {
+				t.Fatalf("invalid delegated prefix changed quota = %+v, want %+v", usage, before)
+			}
+
+			good := buildServerPayload(t, lnetodhcp.MsgReply, lease.xid, lease.clientDUID[:], serverDUID, lease.iaid, assigned, true)
+			if handled, err := adapter.ingressLocked(wrapServerFrame(t, adapter, serverAddr, serverMAC, good)); err != nil || !handled || lease.state != leaseBound {
+				t.Fatalf("valid Reply after drop = %v %v state=%v", handled, err, lease.state)
+			}
+		})
+	}
+}
+
 func TestWireNamesAreCanonicalizedWithoutRetainingInput(t *testing.T) {
 	wire := encodeName("EXAMPLE.Com")
 	var names [dhcpns.MaxDomainSearch]dhcpns.Name
@@ -624,6 +672,21 @@ func buildServerPayload(t testing.TB, typ lnetodhcp.MsgType, xid uint32, clientD
 	iapd = appendOption(iapd, lnetodhcp.OptIAPrefix, prefixData)
 	payload = appendOption(payload, lnetodhcp.OptIAPD, iapd)
 	return payload
+}
+
+func appendDelegatedPrefix(payload []byte, iaid [4]byte, prefix netip.Prefix, preferred, valid uint32) []byte {
+	prefixData := make([]byte, 25)
+	binary.BigEndian.PutUint32(prefixData[:4], preferred)
+	binary.BigEndian.PutUint32(prefixData[4:8], valid)
+	prefixData[8] = byte(prefix.Bits())
+	address := prefix.Addr().As16()
+	copy(prefixData[9:], address[:])
+	iapd := make([]byte, 12)
+	copy(iapd[:4], iaid[:])
+	binary.BigEndian.PutUint32(iapd[4:8], preferred/2)
+	binary.BigEndian.PutUint32(iapd[8:12], preferred)
+	iapd = appendOption(iapd, lnetodhcp.OptIAPrefix, prefixData)
+	return appendOption(payload, lnetodhcp.OptIAPD, iapd)
 }
 
 func appendOption(dst []byte, code lnetodhcp.OptCode, data []byte) []byte {
