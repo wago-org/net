@@ -75,7 +75,8 @@ func New(common *lnetocore.Namespace, config Config) (*Adapter, error) {
 		return nil, nscore.Fail(nscore.FailureInvalidArgument, lneto.ErrInvalidConfig)
 	}
 	common.Lock()
-	if common.ClosedLocked() || !ValidConfig(config, common.RequiredFrameBytesLocked()-14, common.PolicyLocked(), common.QuotasLocked(), true) {
+	if common.ClosedLocked() || !ValidConfig(config, common.RequiredFrameBytesLocked()-14, common.PolicyLocked(), common.QuotasLocked(), true) ||
+		(config.MaxQueries != 0 && !common.GatewayHardwareAddressUsableLocked()) {
 		common.Unlock()
 		return nil, nscore.Fail(nscore.FailureInvalidArgument, lneto.ErrInvalidConfig)
 	}

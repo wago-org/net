@@ -46,6 +46,35 @@ func TestConfigRejectsMulticastAndBroadcastResolvers(t *testing.T) {
 	}
 }
 
+func TestAdapterRequiresUnicastGatewayHardwareAddressWhenEnabled(t *testing.T) {
+	for name, gateway := range map[string][6]byte{
+		"zero":      {},
+		"multicast": {0x01, 0, 0, 0, 0, 1},
+		"broadcast": {0xff, 0xff, 0xff, 0xff, 0xff, 0xff},
+	} {
+		t.Run(name, func(t *testing.T) {
+			config := dnsTestConfig(t, 104)
+			config.GatewayHardwareAddress = gateway
+			common, err := lnetocore.New(lnetocore.Config{
+				Hostname: config.Hostname, RandSeed: config.RandSeed,
+				HardwareAddress: config.HardwareAddress, GatewayHardwareAddress: config.GatewayHardwareAddress,
+				IPv4Address: config.IPv4Address, MTU: config.MTU, Link: config.Link,
+				Policy: config.Policy, Quotas: config.Quotas,
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer common.Close()
+			if _, err := New(common, config.DNS); err == nil {
+				t.Fatalf("enabled DNS accepted gateway hardware address %v", gateway)
+			}
+			if _, err := New(common, Config{}); err != nil {
+				t.Fatalf("disabled DNS rejected irrelevant gateway hardware address %v: %v", gateway, err)
+			}
+		})
+	}
+}
+
 func TestBuildDNSQueryPacketDirectEncoding(t *testing.T) {
 	request := namespace.DNSRequest{Name: "service.api.example.com", Types: namespace.DNSRecordsA | namespace.DNSRecordsAAAA}
 	packet, err := buildDNSQueryPacket(request, 0x1234, 1232)
