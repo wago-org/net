@@ -21,13 +21,14 @@ type protocolDependency struct {
 }
 
 var protocolDependencies = map[string]protocolDependency{
-	"tcp":    {public: modulePath + "/tcp", register: modulePath + "/tcp/register", binding: modulePath + "/internal/binding/tcp", operation: modulePath + "/internal/instance/tcp", abi: modulePath + "/internal/abi/tcp", namespace: modulePath + "/internal/namespace/tcp", adapter: modulePath + "/internal/backend/lneto/tcp"},
-	"udp":    {public: modulePath + "/udp", register: modulePath + "/udp/register", binding: modulePath + "/internal/binding/udp", operation: modulePath + "/internal/instance/udp", abi: modulePath + "/internal/abi/udp", namespace: modulePath + "/internal/namespace/udp", adapter: modulePath + "/internal/backend/lneto/udp"},
-	"dns":    {public: modulePath + "/dns", register: modulePath + "/dns/register", binding: modulePath + "/internal/binding/dns", operation: modulePath + "/internal/instance/dns", abi: modulePath + "/internal/abi/dns", namespace: modulePath + "/internal/namespace/dns", adapter: modulePath + "/internal/backend/lneto/dns"},
-	"icmpv4": {public: modulePath + "/icmpv4", register: modulePath + "/icmpv4/register", binding: modulePath + "/internal/binding/icmpv4", operation: modulePath + "/internal/instance/icmpv4", abi: modulePath + "/internal/abi/icmpv4", namespace: modulePath + "/internal/namespace/icmpv4", adapter: modulePath + "/internal/backend/lneto/icmpv4"},
-	"ntp":    {public: modulePath + "/ntp", register: modulePath + "/ntp/register", binding: modulePath + "/internal/binding/ntp", operation: modulePath + "/internal/instance/ntp", abi: modulePath + "/internal/abi/ntp", namespace: modulePath + "/internal/namespace/ntp", adapter: modulePath + "/internal/backend/lneto/ntp"},
-	"mdns":   {public: modulePath + "/mdns", register: modulePath + "/mdns/register", binding: modulePath + "/internal/binding/mdns", operation: modulePath + "/internal/instance/mdns", abi: modulePath + "/internal/abi/mdns", namespace: modulePath + "/internal/namespace/mdns", adapter: modulePath + "/internal/backend/lneto/mdns"},
-	"dhcpv4": {public: modulePath + "/dhcpv4", register: modulePath + "/dhcpv4/register", binding: modulePath + "/internal/binding/dhcpv4", operation: modulePath + "/internal/instance/dhcpv4", abi: modulePath + "/internal/abi/dhcpv4", namespace: modulePath + "/internal/namespace/dhcpv4", adapter: modulePath + "/internal/backend/lneto/dhcpv4"},
+	"tcp":        {public: modulePath + "/tcp", register: modulePath + "/tcp/register", binding: modulePath + "/internal/binding/tcp", operation: modulePath + "/internal/instance/tcp", abi: modulePath + "/internal/abi/tcp", namespace: modulePath + "/internal/namespace/tcp", adapter: modulePath + "/internal/backend/lneto/tcp"},
+	"udp":        {public: modulePath + "/udp", register: modulePath + "/udp/register", binding: modulePath + "/internal/binding/udp", operation: modulePath + "/internal/instance/udp", abi: modulePath + "/internal/abi/udp", namespace: modulePath + "/internal/namespace/udp", adapter: modulePath + "/internal/backend/lneto/udp"},
+	"dns":        {public: modulePath + "/dns", register: modulePath + "/dns/register", binding: modulePath + "/internal/binding/dns", operation: modulePath + "/internal/instance/dns", abi: modulePath + "/internal/abi/dns", namespace: modulePath + "/internal/namespace/dns", adapter: modulePath + "/internal/backend/lneto/dns"},
+	"icmpv4":     {public: modulePath + "/icmpv4", register: modulePath + "/icmpv4/register", binding: modulePath + "/internal/binding/icmpv4", operation: modulePath + "/internal/instance/icmpv4", abi: modulePath + "/internal/abi/icmpv4", namespace: modulePath + "/internal/namespace/icmpv4", adapter: modulePath + "/internal/backend/lneto/icmpv4"},
+	"ntp":        {public: modulePath + "/ntp", register: modulePath + "/ntp/register", binding: modulePath + "/internal/binding/ntp", operation: modulePath + "/internal/instance/ntp", abi: modulePath + "/internal/abi/ntp", namespace: modulePath + "/internal/namespace/ntp", adapter: modulePath + "/internal/backend/lneto/ntp"},
+	"mdns":       {public: modulePath + "/mdns", register: modulePath + "/mdns/register", binding: modulePath + "/internal/binding/mdns", operation: modulePath + "/internal/instance/mdns", abi: modulePath + "/internal/abi/mdns", namespace: modulePath + "/internal/namespace/mdns", adapter: modulePath + "/internal/backend/lneto/mdns"},
+	"dhcpv4":     {public: modulePath + "/dhcpv4", register: modulePath + "/dhcpv4/register", binding: modulePath + "/internal/binding/dhcpv4", operation: modulePath + "/internal/instance/dhcpv4", abi: modulePath + "/internal/abi/dhcpv4", namespace: modulePath + "/internal/namespace/dhcpv4", adapter: modulePath + "/internal/backend/lneto/dhcpv4"},
+	"linklocal4": {public: modulePath + "/linklocal4", register: modulePath + "/linklocal4/register", binding: modulePath + "/internal/binding/linklocal4", operation: modulePath + "/internal/instance/linklocal4", abi: modulePath + "/internal/abi/linklocal4", namespace: modulePath + "/internal/namespace/linklocal4", adapter: modulePath + "/internal/backend/lneto/linklocal4"},
 }
 
 func TestFixtureDependencyBoundaries(t *testing.T) {
@@ -43,10 +44,11 @@ func TestFixtureDependencyBoundaries(t *testing.T) {
 		{name: "ntp", selected: map[string]bool{"ntp": true}},
 		{name: "mdns", selected: map[string]bool{"mdns": true}},
 		{name: "dhcpv4", selected: map[string]bool{"dhcpv4": true}},
+		{name: "linklocal4", selected: map[string]bool{"linklocal4": true}},
 		{name: "tcpudp", selected: map[string]bool{"tcp": true, "udp": true}},
 		{name: "tcpdns", selected: map[string]bool{"tcp": true, "dns": true}},
 		{name: "udpdns", selected: map[string]bool{"udp": true, "dns": true}},
-		{name: "all", selected: map[string]bool{"tcp": true, "udp": true, "dns": true, "icmpv4": true, "ntp": true, "mdns": true, "dhcpv4": true}},
+		{name: "all", selected: map[string]bool{"tcp": true, "udp": true, "dns": true, "icmpv4": true, "ntp": true, "mdns": true, "dhcpv4": true, "linklocal4": true}},
 	}
 
 	for _, test := range tests {
@@ -102,7 +104,8 @@ func TestSelfRegisterPackageDependencyBoundaries(t *testing.T) {
 		{name: "ntp", fixture: "../../ntp/register", selected: map[string]bool{"ntp": true}},
 		{name: "mdns", fixture: "../../mdns/register", selected: map[string]bool{"mdns": true}},
 		{name: "dhcpv4", fixture: "../../dhcpv4/register", selected: map[string]bool{"dhcpv4": true}},
-		{name: "all", fixture: "../../register", selected: map[string]bool{"tcp": true, "udp": true, "dns": true, "icmpv4": true, "ntp": true, "mdns": true, "dhcpv4": true}},
+		{name: "linklocal4", fixture: "../../linklocal4/register", selected: map[string]bool{"linklocal4": true}},
+		{name: "all", fixture: "../../register", selected: map[string]bool{"tcp": true, "udp": true, "dns": true, "icmpv4": true, "ntp": true, "mdns": true, "dhcpv4": true, "linklocal4": true}},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {

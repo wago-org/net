@@ -1,6 +1,7 @@
 # lneto protocol expansion plan
 
-Status: active implementation plan. ICMPv4, NTP, mDNS, and DHCPv4 are complete; later modules remain planned.
+Status: active implementation plan. ICMPv4, NTP, mDNS, DHCPv4, and IPv4
+link-local/APIPA are complete; IPv6 and later modules remain planned.
 
 ## Goal
 
@@ -25,7 +26,7 @@ DNS modules:
 | `ntp` | `ntp` | complete: bounded two-exchange client sampling using an explicit host clock |
 | `mdns` | `dns/mdns` | complete: bounded multicast query, response, and announcement operations |
 | `dhcpv4` | `dhcp/dhcpv4` | complete: bounded client DORA leases and explicitly authorized finite server operation |
-| `linklocal4` | `ipv4/linklocal4` | bounded RFC 3927 claim-and-defend address selection |
+| `linklocal4` | `ipv4/linklocal4` | complete: bounded RFC 3927 claim-and-defend address selection |
 | `ipv6` | `ipv6` and `x/xnet` IPv6 stack | configured IPv6 namespace and transport enablement |
 | `icmpv6` | `ipv6/icmpv6` | bounded echo and Neighbor Discovery operations |
 | `dhcpv6` | `dhcp/dhcpv6` | the finite client/configuration subset implemented by the pinned library |
@@ -126,7 +127,7 @@ non-basic responses, and returns offset, nonnegative round-trip delay, stratum,
 reference ID, and a corrected observation without adjusting any system clock.
 Caller deny rules win over the configured server grant, and general UDP
 authority cannot widen NTP. Selective dependency fixtures reject every omitted NTP layer; the composition
-matrix established here has since expanded to all 128 combinations of the seven
+matrix established here has since expanded to all 256 combinations of the eight
 completed protocols, and granular plus aggregate registration are documented
 and tested.
 No TLS or NTS behavior is included.
@@ -176,7 +177,34 @@ The pinned client implements immediate Discover/Offer/Request/Ack only: automati
 renew/rebind and wire DHCPRELEASE are not claimed; `release` is explicitly local
 identity rollback. Resource, retained-byte, active-work, port, parser, queue, and
 service dimensions are finite. Selective dependency fixtures reject every
-omitted DHCPv4 layer, runtime composition covers all 128 combinations of the
-seven completed protocols, and granular plus aggregate registration are tested.
+omitted DHCPv4 layer, runtime composition now covers all 256 combinations of the
+eight completed protocols, and granular plus aggregate registration are tested.
 No HTTP, TLS, HTTPS, NTS, raw Ethernet, ARP, IPv4, PHY/MDIO, or packet-capture
 guest API is added.
+
+IPv4 link-local/APIPA is exposed as independently selectable
+`linklocal4.Register`, capability `net.linklocal4`, and seven-function import
+module `wago_net_linklocal4`. Registration remains truthfully disabled until a
+nonzero deterministic seed and explicit host clock are supplied; finite defaults
+permit one exact claim, sixteen cumulative conflicts, and 256 service attempts.
+Its checked fixed ABI uses a 32-byte inline first-candidate request and atomic
+48-byte claimed result, exact-instance generation/kind-checked claim handles,
+link-local result readiness, finite protocol resource/active-work quota,
+cancellation, release, bounded poll, and synchronous close. The immediate
+adapter uses only the pinned exported heapless `ipv4/linklocal4.Handler` plus
+Ethernet II and ARP codecs. It bounds candidates, conflicts, scheduling attempts,
+frames, resources, and work; validates ARP framing before conflict observation;
+and applies protocol-local candidate/defense policy on every emitted operation,
+with caller denies winning over the default RFC 3927 prefix grant. ARP remains
+internal infrastructure: no raw frame or ARP import is exposed. A configured
+static `0.0.0.0` placeholder is required. Link-local and DHCPv4 share the same
+single exact transactional `IPv4IdentityLease` domain, so neither can replace
+the other's active identity; contention returns `INVALID_STATE` without
+mutation. Repeated defense conflict releases only the exact link-local owner
+before bounded reconfiguration, and guest release/close restores the configured
+placeholder synchronously. The adapter uses no lneto blocking wrapper, deadline,
+sleep, retry/backoff helper, goroutine, ambient clock, or retained guest slice.
+Selective dependency fixtures reject every omitted link-local layer, runtime
+composition covers all 256 combinations of the eight completed protocols, and
+granular plus aggregate registration are tested. Ethernet II, ARP, IPv4,
+PHY/MDIO, and packet capture remain internal rather than guest APIs.

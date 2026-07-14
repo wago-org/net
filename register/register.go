@@ -7,6 +7,7 @@ import (
 	"github.com/wago-org/net/dhcpv4"
 	"github.com/wago-org/net/dns"
 	"github.com/wago-org/net/icmpv4"
+	"github.com/wago-org/net/linklocal4"
 	"github.com/wago-org/net/mdns"
 	"github.com/wago-org/net/ntp"
 	"github.com/wago-org/net/tcp"
@@ -24,6 +25,7 @@ func init() {
 		mustRegister(ntp.Register(network))
 		mustRegister(mdns.Register(network))
 		mustRegister(dhcpv4.Register(network))
+		mustRegister(linklocal4.Register(network))
 		return network
 	})
 }

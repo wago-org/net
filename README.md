@@ -3,8 +3,8 @@
 Capability-gated networking plugins for the [Wago](https://github.com/wago-org/wago)
 WebAssembly runtime, backed initially by [lneto](https://github.com/soypat/lneto).
 UDP, TCP, DNS, bounded ICMPv4 echo, explicit-clock NTP, bounded IPv4 multicast
-DNS, and DHCPv4 are implemented today; IPv4 link-local, IPv6, ICMPv6/NDP, and
-DHCPv6 remain absent and are not advertised.
+DNS, DHCPv4, and IPv4 link-local/APIPA are implemented today; IPv6,
+ICMPv6/NDP, and DHCPv6 remain absent and are not advertised.
 
 > [!WARNING]
 > This module is private and experimental. Use it only with the exact Wago
@@ -15,8 +15,8 @@ DHCPv6 remain absent and are not advertised.
 
 The repository exposes the experimental `wago_net.abi_version` core import plus
 separately capability-gated `wago_net_udp`, `wago_net_tcp`, `wago_net_dns`,
-`wago_net_icmpv4`, `wago_net_ntp`, `wago_net_mdns`, and `wago_net_dhcpv4`
-modules. UDP covers configured-namespace discovery, bind, send,
+`wago_net_icmpv4`, `wago_net_ntp`, `wago_net_mdns`, `wago_net_dhcpv4`, and
+`wago_net_linklocal4` modules. UDP covers configured-namespace discovery, bind, send,
 receive, close, and bounded poll. TCP covers discovery, listen, nonblocking
 connect completion, accept, partial read/write, write-half shutdown,
 kind-specific close, and its own bounded poll. DNS covers configured resolver
@@ -32,7 +32,13 @@ set, finite service announcements, cancellation, exact-kind close, and bounded
 poll over 224.0.0.251 with TTL 255. DHCPv4 owns exact shared UDP port 68 for one
 bounded immediate DORA lease and optionally port 67 for an explicitly configured
 finite server pool; accepted address/subnet identity can be applied
-transactionally over a `0.0.0.0` placeholder and rolls back on release or close. The low-level `InfoImports` /
+transactionally over a `0.0.0.0` placeholder and rolls back on release or close.
+IPv4 link-local uses the pinned immediate RFC 3927 state machine with an explicit
+host clock and deterministic seed, emits only internal ARP probes/announcements,
+keeps bounded defense active, and shares DHCPv4's exact single dynamic IPv4
+identity lease domain. Repeated defense conflict rolls back the exact identity
+before bounded reconfiguration; release and close restore the static
+`0.0.0.0` placeholder. The low-level `InfoImports` /
 zero-config `Imports(Config{})` path remains core-only
 and exposes only `wago_net.abi_version`; resource-owning protocol imports require
 Runtime lifecycle ownership.
@@ -106,8 +112,14 @@ one observation-only DORA lease, a 576-byte packet bound, four copied DNS
 servers, and finite response service attempts; `dhcpv4.ApplyLeaseIdentity()`
 requires a configured `0.0.0.0` placeholder, while `dhcpv4.WithServer` explicitly
 enables a finite server pool. Caller policy remains deny-wins; neither NTP,
-mDNS, nor DHCPv4 authority inherits general UDP or DNS authority. The pinned DHCPv4 client does not implement immediate renewal, rebinding, or wire
-DHCPRELEASE; the guest `release` operation is truthful local identity rollback.
+mDNS, DHCPv4, nor link-local authority inherits general UDP, DNS, ICMPv4, or
+raw ARP authority. Link-local requires `linklocal4.WithSeed` plus
+`linklocal4.WithClock`; defaults permit one claim, sixteen conflicts, and 256
+service attempts. It requires a configured `0.0.0.0` placeholder and fails with
+`INVALID_STATE` if DHCPv4 or another exact dynamic identity already owns the
+namespace. The pinned DHCPv4 client does not implement immediate renewal,
+rebinding, or wire DHCPRELEASE; the guest `release` operation is truthful local
+identity rollback.
 
 Registering only TCP exposes `net.info` and `net.tcp`, with
 `wago_net.abi_version` and the eleven `wago_net_tcp` imports. Registering only
@@ -118,32 +130,37 @@ the six `wago_net_dns` imports. Registering only ICMPv4 exposes `net.info`,
 Registering only NTP exposes `net.info`, `net.ntp`, the shared ABI import, and the
 six `wago_net_ntp` imports. Registering only mDNS exposes `net.info`, `net.mdns`, the shared ABI import, and
 ten `wago_net_mdns` imports. Registering only DHCPv4 exposes `net.info`,
-`net.dhcpv4`, the shared ABI import, and seven `wago_net_dhcpv4` imports. Unregistered protocol
+`net.dhcpv4`, the shared ABI import, and seven `wago_net_dhcpv4` imports.
+Registering only IPv4 link-local exposes `net.info`, `net.linklocal4`, the shared
+ABI import, and seven `wago_net_linklocal4` imports. Unregistered protocol
 imports are absent and fail normal WebAssembly import resolution. The public TCP,
-UDP, DNS, ICMPv4, NTP, and mDNS facades each construct an opaque descriptor, and
-all seven checked host tables live in protocol-specific
+UDP, DNS, ICMPv4, NTP, mDNS, DHCPv4, and link-local facades each construct an
+opaque descriptor, and all eight checked host tables live in protocol-specific
 internal binding packages. The
 root package no longer imports those public or binding packages. Dependency and
-runtime-inspection fixtures cover no protocol and all 128 combinations of the
-seven implemented protocols. Omitted public, binding, instance-operation, and fixed ABI
+runtime-inspection fixtures cover no protocol and all 256 combinations of the
+eight implemented protocols. Omitted public, binding, instance-operation, and fixed ABI
 packages are rejected from each fixture's Go dependency graph. Shared checked
 memory, endpoint/handle codecs, and poll layouts live in `internal/abi/core`;
-TCP, UDP, DNS, ICMPv4, NTP, and mDNS layouts live only in
-`internal/abi/tcp`, `/udp`, `/dns`, `/icmpv4`, `/ntp`, `/mdns`, and `/dhcpv4`.
+TCP, UDP, DNS, ICMPv4, NTP, mDNS, DHCPv4, and link-local layouts live only in
+`internal/abi/tcp`, `/udp`, `/dns`, `/icmpv4`, `/ntp`, `/mdns`, `/dhcpv4`, and
+`/linklocal4`.
 The dependency
 matrix also rejects each omitted protocol's namespace facet and
-`internal/backend/lneto/{tcp,udp,dns,icmpv4,ntp,mdns}`
+`internal/backend/lneto/{tcp,udp,dns,icmpv4,ntp,mdns,dhcpv4,linklocal4}`
 adapter, and rejects the temporary
 aggregate lneto assembler from every selective production graph. One
 protocol-neutral instance core still owns exact attachment, resource identity,
 readiness, quotas, polling, and teardown, while
 `internal/instance/tcp`, `internal/instance/udp`, `internal/instance/dns`, and
 `internal/instance/icmpv4`, `internal/instance/ntp`, and
-`internal/instance/mdns`, and `internal/instance/dhcpv4` serialize their
+`internal/instance/mdns`, `internal/instance/dhcpv4`, and
+`internal/instance/linklocal4` serialize their
 operations through that core.
 Namespace ownership is likewise split: `internal/namespace/core` owns shared
 endpoint, failure, readiness, resource, and bounded-service contracts, while
-`/tcp`, `/udp`, `/dns`, `/icmpv4`, `/ntp`, `/mdns`, and `/dhcpv4` own
+`/tcp`, `/udp`, `/dns`, `/icmpv4`, `/ntp`, `/mdns`, `/dhcpv4`, and
+`/linklocal4` own
 narrow protocol facets and values. Production graphs no longer reach the former
 aggregate namespace compatibility package. `internal/backend/lneto/core` now
 owns the single lifecycle lock, `StackAsync`, packet link, IPv4 identity, frame
@@ -152,10 +169,10 @@ charging, shared UDP-port leases, and deterministic close. TCP listeners and
 streams, UDP sockets and queues, DNS query/wire state, ICMPv4 echo state, NTP
 synchronization state, and mDNS query/response/announcement state now live
 independently in `internal/backend/lneto/tcp`, `/udp`, `/dns`, `/icmpv4`, `/ntp`,
-`/mdns`, and `/dhcpv4`. Focused tests preserve immediate operations, shared
-UDP/DNS/NTP/mDNS/DHCPv4
-port ownership, packet and maintenance
-accounting, response filtering, quotas, and ordered cleanup. Protocol descriptors
+`/mdns`, `/dhcpv4`, and `/linklocal4`. Focused tests preserve immediate
+operations, shared UDP/DNS/NTP/mDNS/DHCPv4 port ownership, exact
+DHCPv4/link-local identity contention, bounded ARP claim/defense, packet and
+maintenance accounting, response filtering, quotas, and ordered cleanup. Protocol descriptors
 now contribute only their exact adapter after registration freezes. The root
 creates one shared lneto core per exact instance, installs selected adapters
 transactionally before publishing the namespace, and exposes them through an

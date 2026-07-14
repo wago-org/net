@@ -17,13 +17,14 @@ import (
 type ModuleKey string
 
 const (
-	ModuleUDP    ModuleKey = "udp"
-	ModuleTCP    ModuleKey = "tcp"
-	ModuleDNS    ModuleKey = "dns"
-	ModuleICMPv4 ModuleKey = "icmpv4"
-	ModuleNTP    ModuleKey = "ntp"
-	ModuleMDNS   ModuleKey = "mdns"
-	ModuleDHCPv4 ModuleKey = "dhcpv4"
+	ModuleUDP        ModuleKey = "udp"
+	ModuleTCP        ModuleKey = "tcp"
+	ModuleDNS        ModuleKey = "dns"
+	ModuleICMPv4     ModuleKey = "icmpv4"
+	ModuleNTP        ModuleKey = "ntp"
+	ModuleMDNS       ModuleKey = "mdns"
+	ModuleDHCPv4     ModuleKey = "dhcpv4"
+	ModuleLinkLocal4 ModuleKey = "linklocal4"
 )
 
 var (

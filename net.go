@@ -1,7 +1,7 @@
 // Package net provides the core of Wago's capability-gated networking plugin
 // suite. The guest ABI is backend-neutral; lneto is the first backend and is
 // not part of the public contract. Complete UDP, TCP, bounded DNS, ICMPv4 echo,
-// explicit-clock NTP, bounded mDNS, and DHCPv4 modules are independently capability-gated. Runtime registration requires physical
+// explicit-clock NTP, bounded mDNS, DHCPv4, and IPv4 link-local modules are independently capability-gated. Runtime registration requires physical
 // reinstantiation between class leases so instance-owned network state cannot
 // survive an in-place Wasm memory reset.
 package net
@@ -40,6 +40,8 @@ const (
 	MDNSModule = "wago_net_mdns"
 	// DHCPv4Module owns bounded client leases and explicitly configured server service.
 	DHCPv4Module = "wago_net_dhcpv4"
+	// LinkLocal4Module owns bounded RFC 3927 claim-and-defend operations.
+	LinkLocal4Module = "wago_net_linklocal4"
 
 	// ABIVersion1 encodes ABI version 1.0 as major in the upper 16 bits and minor
 	// in the lower 16 bits.
@@ -61,6 +63,8 @@ const (
 	CapMDNS wago.Capability = "net.mdns"
 	// CapDHCPv4 permits checked bounded DHCPv4 lease operations and poll access.
 	CapDHCPv4 wago.Capability = "net.dhcpv4"
+	// CapLinkLocal4 permits checked bounded IPv4 link-local claim operations and poll access.
+	CapLinkLocal4 wago.Capability = "net.linklocal4"
 )
 
 // PolicyConfig and related aliases expose the backend-neutral authority model
@@ -76,13 +80,14 @@ const (
 	PolicyDeny  = policy.ActionDeny
 	PolicyAllow = policy.ActionAllow
 
-	PolicyTransportUDP    = policy.TransportUDP
-	PolicyTransportTCP    = policy.TransportTCP
-	PolicyTransportDNS    = policy.TransportDNS
-	PolicyTransportICMPv4 = policy.TransportICMPv4
-	PolicyTransportNTP    = policy.TransportNTP
-	PolicyTransportMDNS   = policy.TransportMDNS
-	PolicyTransportDHCPv4 = policy.TransportDHCPv4
+	PolicyTransportUDP        = policy.TransportUDP
+	PolicyTransportTCP        = policy.TransportTCP
+	PolicyTransportDNS        = policy.TransportDNS
+	PolicyTransportICMPv4     = policy.TransportICMPv4
+	PolicyTransportNTP        = policy.TransportNTP
+	PolicyTransportMDNS       = policy.TransportMDNS
+	PolicyTransportDHCPv4     = policy.TransportDHCPv4
+	PolicyTransportLinkLocal4 = policy.TransportLinkLocal4
 
 	PolicyInbound  = policy.DirectionInbound
 	PolicyOutbound = policy.DirectionOutbound
@@ -172,7 +177,7 @@ var (
 )
 
 // Option configures shared network composition. Protocol-specific options live
-// in the tcp, udp, dns, icmpv4, ntp, mdns, and dhcpv4 packages rather than in the root package.
+// in the tcp, udp, dns, icmpv4, ntp, mdns, dhcpv4, and linklocal4 packages rather than in the root package.
 type Option interface {
 	applyNetwork(*Config) error
 }

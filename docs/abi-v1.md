@@ -12,7 +12,7 @@ and minor version 0.
 Except for `abi_version`, networking imports return one `i32` status and write
 additional values through checked guest-memory output pointers. `InfoImports()`
 and the historical zero-config `Imports(Config{})` helper intentionally expose
-only `wago_net.abi_version`; every resource-owning UDP/TCP/DNS/ICMPv4/NTP/mDNS/DHCPv4 import requires
+only `wago_net.abi_version`; every resource-owning UDP/TCP/DNS/ICMPv4/NTP/mDNS/DHCPv4/link-local import requires
 exact Runtime lifecycle identity and is therefore available only through
 extension registration. The completed `internal/backend/lneto/core` plus `/tcp`,
 `/udp`, and `/dns` adapter extraction and selective opaque contribution assembly
@@ -67,10 +67,10 @@ call.
 
 The implementation keeps these shared memory, address, endpoint, handle, and
 poll codecs in `internal/abi/core`. TCP stream/I/O, UDP receive-result, DNS name/query/record, ICMPv4 echo, NTP sample, mDNS name/query/record/announcement, and DHCPv4
-request/lease layouts are separate compilation units in
-`internal/abi/tcp`, `internal/abi/udp`, `internal/abi/dns`,
-`internal/abi/icmpv4`, `internal/abi/ntp`, `internal/abi/mdns`, and
-`internal/abi/dhcpv4`. This package
+request/lease and link-local request/result layouts are separate compilation
+units in `internal/abi/tcp`, `internal/abi/udp`, `internal/abi/dns`,
+`internal/abi/icmpv4`, `internal/abi/ntp`, `internal/abi/mdns`,
+`internal/abi/dhcpv4`, and `internal/abi/linklocal4`. This package
 split changes no guest-visible size, offset, validation rule, or numeric value.
 
 ## UDP module and signatures
@@ -440,6 +440,54 @@ does not claim those wire operations. Explicitly configured host server mode is
 automatic bounded namespace service rather than a raw guest packet API; it owns
 port 67, a finite client pool, and protocol-local inbound/outbound authority.
 
+## IPv4 link-local module, signatures, and layouts
+
+The checked RFC 3927/APIPA ABI is independently gated in
+`wago_net_linklocal4` by `net.linklocal4`:
+
+```text
+namespace_default(out_handle_ptr: i32) -> i32
+claim(namespace: i64, request_ptr: i32, out_handle_ptr: i32) -> i32
+result(claim: i64, out_result_ptr: i32) -> i32
+cancel(claim: i64) -> i32
+release(claim: i64) -> i32
+close(claim: i64) -> i32
+poll(events_ptr: i32, event_capacity: i32, budget_ptr: i32, out_result_ptr: i32) -> i32
+```
+
+`wago_net_linklocal4_request_v1` is the fixed 32-byte address structure. Its
+port, scope, flow, flags, and reserved fields are zero. Address `0.0.0.0`
+requests deterministic selection from the configured finite candidate sequence;
+a nonzero address must be in `169.254.1.0` through `169.254.254.255` and is tried
+first. The request and handle output must be disjoint and completely checked
+before policy, quota, clock, or backend work.
+
+`wago_net_linklocal4_result_v1` is 48 bytes:
+
+```c
+struct wago_net_linklocal4_result_v1 {
+    struct wago_net_addr_v1 address; // offset 0, usable IPv4 link-local address
+    uint32_t subnet_bits;            // offset 32, exactly 16
+    uint32_t conflicts;              // offset 36, bounded cumulative conflicts
+    uint32_t flags;                  // offset 40, bit 1 = identity applied
+    uint32_t reserved;               // offset 44, zero
+};
+```
+
+The module requires an explicitly injected host clock and nonzero deterministic
+seed before finite defaults activate. It exposes claim/result/cancel/release
+semantics rather than raw ARP. The immediate backend emits bounded internal ARP
+probes, announcements, and at most one defense per permitted defense interval;
+a repeated conflict rolls back the exact identity and returns the resource to
+bounded claim progress. `result` returns `AGAIN` while initially claiming or
+reconfiguring and writes atomically only while the exact identity remains
+applied. The configured static IPv4 identity must be `0.0.0.0`. DHCPv4 and
+link-local share one exact dynamic `IPv4IdentityLease` domain, so a competing
+owner causes `INVALID_STATE` without replacement or mutation. `release` and
+`close` synchronously restore the configured static placeholder. General UDP,
+ICMPv4, or raw-packet authority cannot widen link-local authority, caller denies
+win, and no raw ARP guest API exists.
+
 ## Bounded poll layouts
 
 `wago_net_poll_budget_v1` is 24 bytes, containing six consecutive `uint32_t`
@@ -453,7 +501,8 @@ readiness`, and a zero `uint32_t reserved` field. Readiness is level-triggered:
 bit `1` readable, bit `2` writable, bit `4` accept, bit `8` connected, bit `16`
 DNS result, bit `32` error, bit `64` closed, bit `128` ICMPv4 reply, bit `256`
 NTP result, bit `512` mDNS query result, bit `1024` mDNS announcement completion, and bit
-`2048` DHCPv4 lease result. Unknown bits are invalid.
+`2048` DHCPv4 lease result, and bit `4096` IPv4 link-local result. Unknown bits
+are invalid.
 
 `wago_net_poll_result_v1` is 24 bytes, containing six consecutive `uint32_t`
 fields: `events`, `scanned`, `service_attempts`, `service_completed`,
@@ -510,7 +559,8 @@ bits.
 Endpoint-changing imports enforce immutable instance policy on every bind,
 listen, connect, datagram destination, DNS request, ICMPv4 echo destination,
 NTP server synchronization, mDNS query/announcement/response authority, and
-DHCPv4 client/server endpoint authority.
+DHCPv4 client/server endpoint authority, and IPv4 link-local candidate and
+defense authority.
 Unmatched or malformed requests are denied. Wildcard binds, loopback, multicast,
 limited IPv4 broadcast, and local bind/listen ports below 1024 require separate
 explicit grants so a broad prefix rule cannot grant them accidentally.
@@ -518,8 +568,8 @@ IPv4-mapped IPv6 addresses are rejected rather than reinterpreted across policy
 families.
 
 Resource creation, retained packet bytes, DNS work, active ICMPv4 work, active
-NTP work, active mDNS query/announcement work, active DHCPv4 DORA work, and
-manual service work are also
+NTP work, active mDNS query/announcement work, active DHCPv4 DORA work, active
+IPv4 link-local claim/defense work, and manual service work are also
 subject to finite per-instance quotas. A failed operation must roll back its
 tentative reservation, and instance teardown clears both committed allocations
 and abandoned reservations. Exact default limits remain implementation policy,

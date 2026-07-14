@@ -11,6 +11,7 @@ import (
 	"github.com/wago-org/net/dhcpv4"
 	"github.com/wago-org/net/dns"
 	"github.com/wago-org/net/icmpv4"
+	"github.com/wago-org/net/linklocal4"
 	"github.com/wago-org/net/mdns"
 	"github.com/wago-org/net/ntp"
 	"github.com/wago-org/net/tcp"
@@ -36,6 +37,7 @@ var publicProtocols = []protocolSelection{
 	{name: "ntp", module: wagonet.NTPModule, capability: wagonet.CapNTP, imports: 6, register: func(network *wagonet.Network) error { return ntp.Register(network) }},
 	{name: "mdns", module: wagonet.MDNSModule, capability: wagonet.CapMDNS, imports: 10, register: func(network *wagonet.Network) error { return mdns.Register(network) }},
 	{name: "dhcpv4", module: wagonet.DHCPv4Module, capability: wagonet.CapDHCPv4, imports: 7, register: func(network *wagonet.Network) error { return dhcpv4.Register(network) }},
+	{name: "linklocal4", module: wagonet.LinkLocal4Module, capability: wagonet.CapLinkLocal4, imports: 7, register: func(network *wagonet.Network) error { return linklocal4.Register(network) }},
 }
 
 func TestPublicSelectiveCompositionMatrix(t *testing.T) {
