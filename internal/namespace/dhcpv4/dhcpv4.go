@@ -41,7 +41,7 @@ func (r Request) Valid() bool {
 	if r.HostnameLength > MaxHostnameBytes || r.ClientIDLength > MaxClientIDBytes {
 		return false
 	}
-	if r.RequestedAddr.IsValid() && (!r.RequestedAddr.Is4() || r.RequestedAddr.Is4In6() || r.RequestedAddr.Zone() != "" || r.RequestedAddr.IsMulticast()) {
+	if r.RequestedAddr.IsValid() && (!r.RequestedAddr.Is4() || r.RequestedAddr.Is4In6() || r.RequestedAddr.Zone() != "" || r.RequestedAddr.IsMulticast() || r.RequestedAddr == limitedBroadcast) {
 		return false
 	}
 	for _, value := range r.Hostname[r.HostnameLength:] {

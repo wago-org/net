@@ -18,6 +18,12 @@ func TestRequestOwnsFiniteInlineValues(t *testing.T) {
 	}
 }
 
+func TestRequestRejectsLimitedBroadcastAddress(t *testing.T) {
+	if request := (Request{RequestedAddr: limitedBroadcast}); request.Valid() {
+		t.Fatalf("limited-broadcast request accepted: %+v", request)
+	}
+}
+
 func TestLeaseValidationBoundsOptions(t *testing.T) {
 	lease := Lease{
 		AssignedAddr: netip.MustParseAddr("192.0.2.10"), ServerAddr: netip.MustParseAddr("192.0.2.1"),

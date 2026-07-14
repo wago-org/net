@@ -39,7 +39,10 @@ func TestRequestRejectsMalformedFixedFields(t *testing.T) {
 	for name, mutate := range map[string]func([]byte){
 		"unknown family": func(encoded []byte) { encoded[0] = 0xff },
 		"address flags":  func(encoded []byte) { encoded[1] = 1 },
-		"port":           func(encoded []byte) { binary.LittleEndian.PutUint16(encoded[2:4], 68) },
+		"limited broadcast": func(encoded []byte) {
+			copy(encoded[8:12], []byte{255, 255, 255, 255})
+		},
+		"port": func(encoded []byte) { binary.LittleEndian.PutUint16(encoded[2:4], 68) },
 		"hostname length": func(encoded []byte) {
 			binary.LittleEndian.PutUint16(encoded[requestHostnameLength:requestHostnameLength+2], ^uint16(0))
 		},
@@ -58,6 +61,10 @@ func TestRequestRejectsMalformedFixedFields(t *testing.T) {
 	}
 	if CheckRequestV1(memory, ^uint32(0)-RequestV1Size+2, 0) || CheckRequestV1(memory, 0, ^uint32(0)) {
 		t.Fatal("overflowing fixed range accepted")
+	}
+	before := append([]byte(nil), memory...)
+	if EncodeRequestV1(memory, 0, dhcpns.Request{RequestedAddr: netip.MustParseAddr("255.255.255.255")}) || !bytes.Equal(memory, before) {
+		t.Fatal("limited-broadcast request encoding was accepted or mutated output")
 	}
 }
 

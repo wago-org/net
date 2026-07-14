@@ -93,6 +93,26 @@ func TestBoundLeaseCloseRollsBackIdentityAndAllowsFreshAcquisition(t *testing.T)
 	}
 }
 
+func TestClientRejectsLimitedBroadcastRequestBeforeQuotaOwnership(t *testing.T) {
+	core, adapter := newClient(t, false)
+	resource, progress, err := adapter.TryAcquire(dhcpns.Request{RequestedAddr: limitedBroadcast})
+	if resource != nil || progress != 0 || failureOf(err) != nscore.FailureInvalidArgument {
+		t.Fatalf("acquire = %T, %v, %v", resource, progress, err)
+	}
+	if adapter.lease != nil {
+		t.Fatalf("rejected request installed lease %p", adapter.lease)
+	}
+	if usage, _ := adapter.quotas.Snapshot(); usage != (quota.Usage{}) {
+		t.Fatalf("rejected request quota = %+v", usage)
+	}
+	core.Lock()
+	ports := core.UDPPortLeaseCountLocked()
+	core.Unlock()
+	if ports != 1 {
+		t.Fatalf("rejected request changed namespace client port ownership: %d", ports)
+	}
+}
+
 func TestClientTimeoutCancellationQuotaAndPortOwnership(t *testing.T) {
 	core, adapter := newClient(t, false)
 	resource, _, err := adapter.TryAcquire(dhcpns.Request{})
