@@ -162,6 +162,27 @@ func TestEndpointSnapshotsSerializeWithResourceClose(t *testing.T) {
 	}
 }
 
+func TestQuotaDeniedConnectDoesNotAllocateOrRetainOutboundStorage(t *testing.T) {
+	_, adapter := newTestAdapter(t, 34, 0, 1)
+	var occupied quota.Charge
+	if err := adapter.quotas.AcquireQueuedBytes(&occupied, 16<<10); err != nil {
+		t.Fatal(err)
+	}
+	remote := nscore.Endpoint{Address: netip.MustParseAddr("192.0.2.35"), Port: 4035}
+	if value, progress, err := adapter.TryConnect(remote); value != nil || progress != 0 || failureOf(t, err) != nscore.FailureResourceLimit {
+		t.Fatalf("quota denied connect = %T, %v, %v", value, progress, err)
+	}
+	if len(adapter.freeOutboundStorage) != 0 || len(adapter.streams) != 0 || len(adapter.ports) != 0 || adapter.outboundStreams != 0 {
+		t.Fatalf("quota denied connect retained state: storage=%d streams=%d ports=%d outbound=%d", len(adapter.freeOutboundStorage), len(adapter.streams), len(adapter.ports), adapter.outboundStreams)
+	}
+	if usage, closed := adapter.quotas.Snapshot(); closed || usage != (quota.Usage{QueuedBytes: 16 << 10}) {
+		t.Fatalf("quota denied usage = %+v, closed=%v", usage, closed)
+	}
+	if !occupied.Release() || !occupied.ResetReleased() {
+		t.Fatal("release occupied quota")
+	}
+}
+
 func TestOutboundStreamCountTracksReuseAndCoreClose(t *testing.T) {
 	core, adapter := newTestAdapter(t, 4, 0, 2)
 	remote := nscore.Endpoint{Address: netip.MustParseAddr("192.0.2.5"), Port: 4205}

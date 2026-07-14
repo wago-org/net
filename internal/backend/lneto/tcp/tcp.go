@@ -235,25 +235,22 @@ func (n *Adapter) recycleListenerLocked(listener *tcpListener) {
 	listener.closed = true
 }
 
-func (n *Adapter) acquireOutboundStreamLocked(local, remote nscore.Endpoint) *tcpStream {
+func (n *Adapter) acquireOutboundStreamLocked(local, remote nscore.Endpoint, retained uint64) (*tcpStream, error) {
 	if n == nil {
-		return nil
+		return nil, lneto.ErrInvalidConfig
 	}
-	var storage []byte
+	stream := &tcpStream{owner: n, local: local, remote: remote, outbound: true}
+	if err := n.quotas.AcquireResourceAndQueuedBytes(&stream.retained, quota.ResourceTCP, 1, retained); err != nil {
+		return nil, err
+	}
+	stream.allocation = &stream.retained
 	if len(n.freeOutboundStorage) == 0 {
-		retained, _ := tcpStreamStorageBytes(n.config)
-		storage = make([]byte, int(retained))
+		stream.storage = make([]byte, int(retained))
 	} else {
-		storage = n.freeOutboundStorage[len(n.freeOutboundStorage)-1]
+		stream.storage = n.freeOutboundStorage[len(n.freeOutboundStorage)-1]
 		n.freeOutboundStorage = n.freeOutboundStorage[:len(n.freeOutboundStorage)-1]
 	}
-	return &tcpStream{
-		owner:    n,
-		storage:  storage,
-		local:    local,
-		remote:   remote,
-		outbound: true,
-	}
+	return stream, nil
 }
 
 func (n *Adapter) recycleOutboundStreamLocked(stream *tcpStream) {
@@ -556,15 +553,10 @@ func (n *Adapter) TryConnect(remote nscore.Endpoint) (nscore.Resource, nscore.Pr
 			local.ScopeID = n.core.IPv6ScopeIDLocked()
 		}
 	}
-	stream := n.acquireOutboundStreamLocked(local, remote)
-	if stream == nil {
-		return nil, 0, nscore.Fail(nscore.FailureResourceLimit, lneto.ErrExhausted)
-	}
-	if err := n.quotas.AcquireResourceAndQueuedBytes(&stream.retained, quota.ResourceTCP, 1, retained); err != nil {
-		n.recycleOutboundStreamLocked(stream)
+	stream, err := n.acquireOutboundStreamLocked(local, remote, retained)
+	if err != nil {
 		return nil, 0, lnetocore.MapError(err)
 	}
-	stream.allocation = &stream.retained
 	conn := &stream.connValue
 	if err := conn.Configure(lnetotcp.ConnConfig{
 		RxBuf:             stream.storage[:n.config.ReceiveBytes],
