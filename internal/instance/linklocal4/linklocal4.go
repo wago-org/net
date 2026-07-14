@@ -17,6 +17,7 @@ func Claim(state *core.State, namespaceHandle resource.Handle, request linklocal
 		value, backendProgress, backendErr := backend.TryClaim(request)
 		progress = backendProgress
 		if backendErr != nil {
+			progress = 0
 			return backendErr
 		}
 		claim, ok := value.(linklocalns.Resource)
@@ -24,11 +25,13 @@ func Claim(state *core.State, namespaceHandle resource.Handle, request linklocal
 			if !resource.IsNil(value) {
 				_ = value.Close()
 			}
+			progress = 0
 			return nscore.Fail(nscore.FailureIO, core.ErrInvalidBackendResult)
 		}
 		handle, err = locked.Resources.Add(resource.KindLinkLocal4Claim, claim)
 		if err != nil {
 			_ = claim.Close()
+			progress = 0
 			return err
 		}
 		if err = locked.Readiness.Register(handle, resource.KindLinkLocal4Claim); err != nil {
@@ -48,15 +51,19 @@ func Result(state *core.State, handle resource.Handle) (result linklocalns.Resul
 			return lookupErr
 		}
 		result, stateResult, err = value.TryResult()
-		if err == nil && stateResult == linklocalns.ResultReady && !result.Valid() {
+		if err != nil {
+			result, stateResult = linklocalns.Result{}, 0
+			return err
+		}
+		if stateResult == linklocalns.ResultWouldBlock {
+			result = linklocalns.Result{}
+			return nil
+		}
+		if stateResult != linklocalns.ResultReady || !result.Valid() {
 			result, stateResult = linklocalns.Result{}, 0
 			return nscore.Fail(nscore.FailureIO, core.ErrInvalidBackendResult)
 		}
-		if err == nil && stateResult != linklocalns.ResultReady && stateResult != linklocalns.ResultWouldBlock {
-			result, stateResult = linklocalns.Result{}, 0
-			return nscore.Fail(nscore.FailureIO, core.ErrInvalidBackendResult)
-		}
-		return err
+		return nil
 	})
 	return
 }

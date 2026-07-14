@@ -17,6 +17,7 @@ func Acquire(state *core.State, namespaceHandle resource.Handle, request dhcpns.
 		value, backendProgress, backendErr := backend.TryAcquire(request)
 		progress = backendProgress
 		if backendErr != nil {
+			progress = 0
 			return backendErr
 		}
 		lease, ok := value.(dhcpns.Resource)
@@ -24,11 +25,13 @@ func Acquire(state *core.State, namespaceHandle resource.Handle, request dhcpns.
 			if !resource.IsNil(value) {
 				_ = value.Close()
 			}
+			progress = 0
 			return nscore.Fail(nscore.FailureIO, core.ErrInvalidBackendResult)
 		}
 		handle, err = locked.Resources.Add(resource.KindDHCPv4Lease, lease)
 		if err != nil {
 			_ = lease.Close()
+			progress = 0
 			return err
 		}
 		if err = locked.Readiness.Register(handle, resource.KindDHCPv4Lease); err != nil {
@@ -48,15 +51,19 @@ func Result(state *core.State, handle resource.Handle) (lease dhcpns.Lease, resu
 			return lookupErr
 		}
 		lease, result, err = value.TryResult()
-		if err == nil && result == dhcpns.ResultReady && !lease.Valid() {
+		if err != nil {
+			lease, result = dhcpns.Lease{}, 0
+			return err
+		}
+		if result == dhcpns.ResultWouldBlock {
+			lease = dhcpns.Lease{}
+			return nil
+		}
+		if result != dhcpns.ResultReady || !lease.Valid() {
 			lease, result = dhcpns.Lease{}, 0
 			return nscore.Fail(nscore.FailureIO, core.ErrInvalidBackendResult)
 		}
-		if err == nil && result != dhcpns.ResultReady && result != dhcpns.ResultWouldBlock {
-			lease, result = dhcpns.Lease{}, 0
-			return nscore.Fail(nscore.FailureIO, core.ErrInvalidBackendResult)
-		}
-		return err
+		return nil
 	})
 	return
 }

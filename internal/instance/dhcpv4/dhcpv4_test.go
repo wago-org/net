@@ -114,7 +114,7 @@ func TestAcquireRejectsInvalidBackendResourcesAndRollsBackRegistration(t *testin
 	var typedNil *fakeLease
 	backend := &fakeNamespace{next: typedNil, progress: nscore.ProgressDone}
 	state, manager, instance, _ := attachState(t, backend, 4)
-	if handle, progress, err := Acquire(state, state.NamespaceHandle(), dhcpns.Request{}); handle != 0 || progress != nscore.ProgressDone || failureOf(err) != nscore.FailureIO {
+	if handle, progress, err := Acquire(state, state.NamespaceHandle(), dhcpns.Request{}); handle != 0 || progress != 0 || failureOf(err) != nscore.FailureIO {
 		t.Fatalf("typed nil acquire = %v, %v, %v", handle, progress, err)
 	}
 	if state.Resources().Len() != 1 || state.Readiness().Snapshot().Registrations != 1 {
@@ -142,10 +142,17 @@ func TestAcquireRejectsInvalidBackendResourcesAndRollsBackRegistration(t *testin
 	}
 }
 
-func TestResultRejectsMalformedBackendStates(t *testing.T) {
-	lease := &fakeLease{result: dhcpns.ResultWouldBlock}
-	backend := &fakeNamespace{next: lease, progress: nscore.ProgressDone}
+func TestBackendFailuresAndMalformedResultsClearOutputs(t *testing.T) {
+	backend := &fakeNamespace{progress: nscore.ProgressDone, failure: nscore.Fail(nscore.FailureTemporary, errors.New("acquire"))}
 	state, manager, instance, _ := attachState(t, backend, 4)
+	if handle, progress, err := Acquire(state, state.NamespaceHandle(), dhcpns.Request{}); handle != 0 || progress != 0 || failureOf(err) != nscore.FailureTemporary {
+		t.Fatalf("failed acquire = %v, %v, %v", handle, progress, err)
+	}
+	_ = manager.Detach(instance)
+
+	lease := &fakeLease{lease: validLease(t), result: dhcpns.ResultWouldBlock}
+	backend = &fakeNamespace{next: lease, progress: nscore.ProgressDone}
+	state, manager, instance, _ = attachState(t, backend, 4)
 	defer manager.Detach(instance)
 	handle, _, err := Acquire(state, state.NamespaceHandle(), dhcpns.Request{})
 	if err != nil {
@@ -154,7 +161,13 @@ func TestResultRejectsMalformedBackendStates(t *testing.T) {
 	if got, result, err := Result(state, handle); err != nil || result != dhcpns.ResultWouldBlock || got != (dhcpns.Lease{}) {
 		t.Fatalf("would block = %+v, %v, %v", got, result, err)
 	}
+	lease.failure = nscore.Fail(nscore.FailureTemporary, errors.New("result"))
 	lease.result = dhcpns.ResultReady
+	if got, result, err := Result(state, handle); failureOf(err) != nscore.FailureTemporary || got != (dhcpns.Lease{}) || result != 0 {
+		t.Fatalf("failed result = %+v, %v, %v", got, result, err)
+	}
+	lease.failure = nil
+	lease.lease = dhcpns.Lease{}
 	if got, result, err := Result(state, handle); failureOf(err) != nscore.FailureIO || got != (dhcpns.Lease{}) || result != 0 {
 		t.Fatalf("invalid ready lease = %+v, %v, %v", got, result, err)
 	}

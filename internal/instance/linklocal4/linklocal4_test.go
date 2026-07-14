@@ -112,7 +112,7 @@ func TestClaimRejectsInvalidBackendResourcesAndRollsBackRegistration(t *testing.
 	var typedNil *fakeClaim
 	backend := &fakeNamespace{next: typedNil, progress: nscore.ProgressDone}
 	state, manager, instance, _ := attachState(t, backend, 4)
-	if handle, progress, err := Claim(state, state.NamespaceHandle(), linklocalns.Request{}); handle != 0 || progress != nscore.ProgressDone || failureOf(err) != nscore.FailureIO {
+	if handle, progress, err := Claim(state, state.NamespaceHandle(), linklocalns.Request{}); handle != 0 || progress != 0 || failureOf(err) != nscore.FailureIO {
 		t.Fatalf("typed nil claim = %v, %v, %v", handle, progress, err)
 	}
 	if state.Resources().Len() != 1 || state.Readiness().Snapshot().Registrations != 1 {
@@ -140,10 +140,17 @@ func TestClaimRejectsInvalidBackendResourcesAndRollsBackRegistration(t *testing.
 	}
 }
 
-func TestResultRejectsMalformedBackendStates(t *testing.T) {
-	claim := &fakeClaim{result: linklocalns.ResultWouldBlock}
-	backend := &fakeNamespace{next: claim, progress: nscore.ProgressDone}
+func TestBackendFailuresAndMalformedResultsClearOutputs(t *testing.T) {
+	backend := &fakeNamespace{progress: nscore.ProgressDone, failure: nscore.Fail(nscore.FailureTemporary, errors.New("claim"))}
 	state, manager, instance, _ := attachState(t, backend, 4)
+	if handle, progress, err := Claim(state, state.NamespaceHandle(), linklocalns.Request{}); handle != 0 || progress != 0 || failureOf(err) != nscore.FailureTemporary {
+		t.Fatalf("failed claim = %v, %v, %v", handle, progress, err)
+	}
+	_ = manager.Detach(instance)
+
+	claim := &fakeClaim{value: validResult(t), result: linklocalns.ResultWouldBlock}
+	backend = &fakeNamespace{next: claim, progress: nscore.ProgressDone}
+	state, manager, instance, _ = attachState(t, backend, 4)
 	defer manager.Detach(instance)
 	handle, _, err := Claim(state, state.NamespaceHandle(), linklocalns.Request{})
 	if err != nil {
@@ -152,7 +159,13 @@ func TestResultRejectsMalformedBackendStates(t *testing.T) {
 	if got, result, err := Result(state, handle); err != nil || result != linklocalns.ResultWouldBlock || got != (linklocalns.Result{}) {
 		t.Fatalf("would block = %+v, %v, %v", got, result, err)
 	}
+	claim.failure = nscore.Fail(nscore.FailureTemporary, errors.New("result"))
 	claim.result = linklocalns.ResultReady
+	if got, result, err := Result(state, handle); failureOf(err) != nscore.FailureTemporary || got != (linklocalns.Result{}) || result != 0 {
+		t.Fatalf("failed result = %+v, %v, %v", got, result, err)
+	}
+	claim.failure = nil
+	claim.value = linklocalns.Result{}
 	if got, result, err := Result(state, handle); failureOf(err) != nscore.FailureIO || got != (linklocalns.Result{}) || result != 0 {
 		t.Fatalf("invalid ready result = %+v, %v, %v", got, result, err)
 	}
