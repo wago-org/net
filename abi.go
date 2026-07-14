@@ -16,6 +16,11 @@ const (
 	DNSRecordV1Size         uint32 = 560
 	ICMPv4EchoRequestV1Size uint32 = 48
 	ICMPv4EchoResultV1Size  uint32 = 48
+	ICMPv6EchoRequestV1Size uint32 = 48
+	ICMPv6EchoResultV1Size  uint32 = 48
+	ICMPv6NeighborKeyV1Size uint32 = 32
+	ICMPv6NeighborV1Size    uint32 = 40
+	ICMPv6OperationsV1Size  uint32 = 4
 	NTPSampleV1Size         uint32 = 72
 	MDNSNameV1Size          uint32 = 260
 	MDNSQueryV1Size         uint32 = 268
@@ -42,4 +47,10 @@ const (
 	MDNSRecordTypeSRV        uint32 = 3
 	MDNSRecordTypeTXT        uint32 = 4
 	MDNSRecordFlagCacheFlush uint32 = 1
+
+	ICMPv6OperationEcho            uint32 = 1
+	ICMPv6OperationNeighborResolve uint32 = 2
+	ICMPv6OperationNeighborLookup  uint32 = 4
+	ICMPv6OperationNeighborSeed    uint32 = 8
+	ICMPv6OperationNeighborRemove  uint32 = 16
 )

@@ -1,8 +1,8 @@
 # lneto protocol expansion plan
 
-Status: active implementation plan. ICMPv4, NTP, mDNS, DHCPv4, and IPv4
-link-local/APIPA and IPv6 namespace/transport enablement are complete;
-ICMPv6/NDP plus DHCPv6 remain planned.
+Status: active implementation plan. ICMPv4, NTP, mDNS, DHCPv4, IPv4
+link-local/APIPA, IPv6 namespace/transport enablement, and ICMPv6/NDP are
+complete; the implemented DHCPv6 subset remains planned.
 
 ## Goal
 
@@ -29,7 +29,7 @@ DNS modules:
 | `dhcpv4` | `dhcp/dhcpv4` | complete: bounded client DORA leases and explicitly authorized finite server operation |
 | `linklocal4` | `ipv4/linklocal4` | complete: bounded RFC 3927 claim-and-defend address selection |
 | `ipv6` | `ipv6` and `x/xnet` IPv6 stack | configured IPv6 namespace and transport enablement |
-| `icmpv6` | `ipv6/icmpv6` | bounded echo and Neighbor Discovery operations |
+| `icmpv6` | `ipv6/icmpv6` | complete: bounded echo and Neighbor Discovery operations |
 | `dhcpv6` | `dhcp/dhcpv6` | the finite client/configuration subset implemented by the pinned library |
 
 DHCPv6 must truthfully document and return `NOT_SUPPORTED` for functionality the
@@ -118,13 +118,16 @@ are likewise not set by the pinned transport path and remain zero.
 The pinned ICMPv6 client implements echo plus finite Neighbor Solicitation and
 Neighbor Advertisement cache operations. It does not implement router
 solicitation/advertisement processing, redirects, Duplicate Address Detection,
-SLAAC, prefix/router lifetime management, or a route table. Enabling ICMPv6 in
-`x/xnet` also enables its NDP cache and deferred MAC patching; that behavior is
-reserved for the separately selectable ICMPv6/NDP module. Until that module is
-selected, IPv6 transport uses the namespace's explicitly configured gateway MAC
-and no NDP behavior is claimed. Static global or link-local identity, prefix,
-and numeric single-interface scope are configuration data rather than raw IPv6
-packet access.
+SLAAC, prefix/router lifetime management, or a route table. The completed
+selective ICMPv6 module uses the pinned exported immediate IPv6/ICMPv6 codecs
+with Wago-owned bounded state so host-boundary checks are stricter than the
+pinned combined client: hop limit 255, code zero, checksum, exact target/source,
+solicited-node multicast, Ethernet multicast mapping, option type/length/MAC,
+and pending-query correlation are enforced before cache mutation. IPv6 TCP
+continues to use the namespace's explicit gateway MAC; the guest NDP cache is
+not advertised as a transport route table. Static global or link-local
+identity, prefix, and numeric single-interface scope remain configuration data
+rather than raw IPv6 packet access.
 
 The initial selectable IPv6 module exposes the transport family only where the
 existing Wago adapter can preserve its immediate lifecycle contract: TCP connect
@@ -262,8 +265,31 @@ jumbograms, IPv6 UDP, DNS-over-IPv6, router discovery, DAD, SLAAC, ICMPv6/NDP,
 and DHCPv6 are not claimed. Without ICMPv6/NDP, outbound transport uses the
 explicit configured gateway MAC. No raw IPv6 frame, route table, neighbor cache,
 blocking/backoff/deadline/sleep/goroutine API, or retained guest slice is
-exposed. Selective dependency fixtures reject every omitted IPv6 layer, runtime
-composition covers all 512 combinations of the nine completed protocols, and
-granular plus aggregate registration are tested. Ethernet II, ARP, IPv4, IPv6,
-PHY/MDIO, and packet capture remain internal infrastructure rather than raw
-guest APIs.
+exposed. Selective dependency fixtures reject every omitted IPv6 layer. Ethernet II,
+ARP, IPv4, IPv6, PHY/MDIO, and packet capture remain internal infrastructure
+rather than raw guest APIs.
+
+ICMPv6/NDP is exposed as independently selectable `icmpv6.Register`, capability
+`net.icmpv6`, and fourteen-function import module `wago_net_icmpv6`. Its checked
+ABI has copied bounded echo payloads, exact echo and neighbor-resolution handles,
+atomic neighbor/cache results, a truthful supported-operation bitset, explicit
+lookup/seed/remove cache operations, cancellation, kind-safe close, and bounded
+poll. The immediate adapter owns finite echo, pending solicitation, cache,
+automatic echo-reply, and solicited advertisement state. It validates Ethernet
+II and direct IPv6 base headers, mandatory pseudo-header checksums, zero flow
+labels, exact configured scope, unicast sources, echo identity/payload, NDP hop
+limit 255 and code zero, exact 32-byte link-layer options, solicited-node IPv6
+and `33:33:ff` Ethernet mapping, target/source equality, solicited non-router
+advertisements, and exact pending-query correlation before mutation. Every
+resource, copied payload, queued response, cache entry, active exchange,
+transmission attempt, retry countdown, and service operation is finite and
+quota-accounted; teardown synchronously clears all entries and charges. Caller
+denies win over protocol defaults, and IPv6/TCP authority cannot widen ICMPv6.
+Router solicitation/advertisement, redirects, DAD, SLAAC, prefix/router
+lifetimes, route tables, raw ICMPv6 packets, and multicast echo remain truthfully
+unsupported. The module uses no blocking/backoff/deadline/sleep/goroutine API or
+retained guest slice. Selective dependency fixtures reject every omitted layer,
+runtime composition covers all 1024 combinations of the ten completed modules,
+and granular plus aggregate registration are tested. IPv6 TCP continues to use
+the configured gateway MAC rather than claiming the guest cache as transport
+routing state.

@@ -12,6 +12,7 @@ import (
 	"github.com/wago-org/net/dhcpv4"
 	"github.com/wago-org/net/dns"
 	"github.com/wago-org/net/icmpv4"
+	"github.com/wago-org/net/icmpv6"
 	"github.com/wago-org/net/ipv6"
 	"github.com/wago-org/net/linklocal4"
 	"github.com/wago-org/net/mdns"
@@ -43,6 +44,7 @@ var publicProtocols = []protocolSelection{
 	{name: "ipv6", module: wagonet.IPv6Module, capability: wagonet.CapIPv6, imports: 3, register: func(network *wagonet.Network) error {
 		return ipv6.Register(network, ipv6.WithConfig(ipv6.DefaultConfig(netip.MustParseAddr("2001:db8::1"), 64, 0)))
 	}},
+	{name: "icmpv6", module: wagonet.ICMPv6Module, capability: wagonet.CapICMPv6, imports: 14, register: func(network *wagonet.Network) error { return icmpv6.Register(network) }},
 }
 
 func TestPublicSelectiveCompositionMatrix(t *testing.T) {

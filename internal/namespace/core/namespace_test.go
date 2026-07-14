@@ -47,6 +47,9 @@ func TestProtocolResultReadinessIsKnown(t *testing.T) {
 	if !ReadyMDNSResult.Valid() || !ReadyMDNSAnnouncement.Valid() || !(ReadyMDNSResult | ReadyMDNSAnnouncement | ReadyError | ReadyClosed).Valid() {
 		t.Fatal("mDNS readiness rejected")
 	}
+	if !ReadyICMPv6Reply.Valid() || !ReadyICMPv6Neighbor.Valid() || !(ReadyICMPv6Reply | ReadyICMPv6Neighbor | ReadyError | ReadyClosed).Valid() {
+		t.Fatal("ICMPv6 readiness rejected")
+	}
 	if Readiness(1 << 31).Valid() {
 		t.Fatal("unknown readiness bit accepted")
 	}

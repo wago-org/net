@@ -3,9 +3,9 @@
 Capability-gated networking plugins for the [Wago](https://github.com/wago-org/wago)
 WebAssembly runtime, backed initially by [lneto](https://github.com/soypat/lneto).
 UDP, TCP, DNS, bounded ICMPv4 echo, explicit-clock NTP, bounded IPv4 multicast
-DNS, DHCPv4, IPv4 link-local/APIPA, and configured IPv6 TCP transport
-enablement are implemented today; ICMPv6/NDP and DHCPv6 remain absent and are
-not advertised.
+DNS, DHCPv4, IPv4 link-local/APIPA, configured IPv6 TCP transport enablement,
+and bounded ICMPv6/NDP are implemented today; DHCPv6 remains absent and is not
+advertised.
 
 > [!WARNING]
 > This module is private and experimental. Use it only with the exact Wago
@@ -17,7 +17,7 @@ not advertised.
 The repository exposes the experimental `wago_net.abi_version` core import plus
 separately capability-gated `wago_net_udp`, `wago_net_tcp`, `wago_net_dns`,
 `wago_net_icmpv4`, `wago_net_ntp`, `wago_net_mdns`, `wago_net_dhcpv4`,
-`wago_net_linklocal4`, and `wago_net_ipv6` modules. UDP covers configured-namespace discovery, bind, send,
+`wago_net_linklocal4`, `wago_net_ipv6`, and `wago_net_icmpv6` modules. UDP covers configured-namespace discovery, bind, send,
 receive, close, and bounded poll. TCP covers discovery, listen, nonblocking
 connect completion, accept, partial read/write, write-half shutdown,
 kind-specific close, and its own bounded poll. DNS covers configured resolver
@@ -128,7 +128,13 @@ identity rollback. IPv6 requires `ipv6.WithConfig` with a finite static address,
 prefix, and exact link-local scope when applicable. Its three imports provide
 namespace discovery, atomic 64-byte configuration, and bounded shared poll.
 Caller denies on the configured identity prevent publication, and raw IPv6
-packets remain internal.
+packets remain internal. ICMPv6 independently provides copied bounded echo,
+finite Neighbor Solicitation/Advertisement resolution, explicit cache
+lookup/seed/remove, automatic bounded echo replies and solicited advertisements,
+exact link-local scope, strict hop-limit/checksum/option/target correlation,
+cancellation, close, and bounded poll. Router discovery, redirects, DAD, SLAAC,
+multicast echo, raw ICMPv6, and transport routing through the guest neighbor
+cache are not claimed; IPv6 TCP continues to use the configured gateway MAC.
 
 Registering only TCP exposes `net.info` and `net.tcp`, with
 `wago_net.abi_version` and the eleven `wago_net_tcp` imports. Registering only
@@ -141,25 +147,28 @@ six `wago_net_ntp` imports. Registering only mDNS exposes `net.info`, `net.mdns`
 ten `wago_net_mdns` imports. Registering only DHCPv4 exposes `net.info`,
 `net.dhcpv4`, the shared ABI import, and seven `wago_net_dhcpv4` imports.
 Registering only IPv4 link-local exposes `net.info`, `net.linklocal4`, the shared
-ABI import, and seven `wago_net_linklocal4` imports. Registering only IPv6
-exposes `net.info`, `net.ipv6`, the shared ABI import, and three
-`wago_net_ipv6` imports; its zero deployment configuration is truthfully
-disabled until explicit composition supplies static identity. Unregistered protocol
+ABI import, and seven `wago_net_linklocal4` imports. Registering only IPv6 exposes `net.info`, `net.ipv6`, the shared ABI import,
+and three `wago_net_ipv6` imports; its zero deployment configuration is
+truthfully disabled until explicit composition supplies static identity.
+Registering only ICMPv6 exposes `net.info`, `net.icmpv6`, the shared ABI import,
+and fourteen `wago_net_icmpv6` imports; without configured IPv6 identity its
+operation bitset and work operations return `NOT_SUPPORTED` without output
+mutation. Unregistered protocol
 imports are absent and fail normal WebAssembly import resolution. The public TCP,
-UDP, DNS, ICMPv4, NTP, mDNS, DHCPv4, link-local, and IPv6 facades each construct
-an opaque descriptor, and all nine checked host tables live in protocol-specific
+UDP, DNS, ICMPv4, NTP, mDNS, DHCPv4, link-local, IPv6, and ICMPv6 facades each construct
+an opaque descriptor, and all ten checked host tables live in protocol-specific
 internal binding packages. The
 root package no longer imports those public or binding packages. Dependency and
-runtime-inspection fixtures cover no protocol and all 512 combinations of the
-nine implemented protocols. Omitted public, binding, instance-operation, and fixed ABI
+runtime-inspection fixtures cover no protocol and all 1024 combinations of the
+ten implemented protocols. Omitted public, binding, instance-operation, and fixed ABI
 packages are rejected from each fixture's Go dependency graph. Shared checked
 memory, endpoint/handle codecs, and poll layouts live in `internal/abi/core`;
-TCP, UDP, DNS, ICMPv4, NTP, mDNS, DHCPv4, and link-local layouts live only in
-`internal/abi/tcp`, `/udp`, `/dns`, `/icmpv4`, `/ntp`, `/mdns`, `/dhcpv4`,
-`/linklocal4`, and `/ipv6`.
+TCP, UDP, DNS, ICMPv4, NTP, mDNS, DHCPv4, link-local, IPv6, and ICMPv6 layouts
+live only in `internal/abi/tcp`, `/udp`, `/dns`, `/icmpv4`, `/ntp`, `/mdns`,
+`/dhcpv4`, `/linklocal4`, `/ipv6`, and `/icmpv6`.
 The dependency
 matrix also rejects each omitted protocol's namespace facet and
-`internal/backend/lneto/{tcp,udp,dns,icmpv4,ntp,mdns,dhcpv4,linklocal4,ipv6}`
+`internal/backend/lneto/{tcp,udp,dns,icmpv4,ntp,mdns,dhcpv4,linklocal4,ipv6,icmpv6}`
 adapter, and rejects the temporary
 aggregate lneto assembler from every selective production graph. One
 protocol-neutral instance core still owns exact attachment, resource identity,
@@ -172,7 +181,7 @@ operations through that core.
 Namespace ownership is likewise split: `internal/namespace/core` owns shared
 endpoint, failure, readiness, resource, and bounded-service contracts, while
 `/tcp`, `/udp`, `/dns`, `/icmpv4`, `/ntp`, `/mdns`, `/dhcpv4`, `/linklocal4`,
-and `/ipv6` own
+`/ipv6`, and `/icmpv6` own
 narrow protocol facets and values. Production graphs no longer reach the former
 aggregate namespace compatibility package. `internal/backend/lneto/core` now
 owns the single lifecycle lock, `StackAsync`, packet link, IPv4 identity, frame
@@ -181,7 +190,7 @@ charging, shared UDP-port leases, and deterministic close. TCP listeners and
 streams, UDP sockets and queues, DNS query/wire state, ICMPv4 echo state, NTP
 synchronization state, and mDNS query/response/announcement state now live
 independently in `internal/backend/lneto/tcp`, `/udp`, `/dns`, `/icmpv4`, `/ntp`,
-`/mdns`, `/dhcpv4`, `/linklocal4`, and `/ipv6`. Focused tests preserve immediate
+`/mdns`, `/dhcpv4`, `/linklocal4`, `/ipv6`, and `/icmpv6`. Focused tests preserve immediate
 operations, shared UDP/DNS/NTP/mDNS/DHCPv4 port ownership, exact
 DHCPv4/link-local identity contention, bounded ARP claim/defense, packet and
 maintenance accounting, response filtering, quotas, and ordered cleanup. Protocol descriptors
@@ -232,6 +241,7 @@ import _ "github.com/wago-org/net/tcp/register" // extension key: net-tcp
 // or github.com/wago-org/net/udp/register       // extension key: net-udp
 // or github.com/wago-org/net/dns/register       // extension key: net-dns
 // or github.com/wago-org/net/ipv6/register      // extension key: net-ipv6
+// or github.com/wago-org/net/icmpv6/register    // extension key: net-icmpv6
 ```
 
 The root package remains the explicit all-protocol bundle:

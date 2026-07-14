@@ -13,7 +13,7 @@ Except for `abi_version`, networking imports return one `i32` status and write
 additional values through checked guest-memory output pointers. `InfoImports()`
 and the historical zero-config `Imports(Config{})` helper intentionally expose
 only `wago_net.abi_version`; every resource-owning UDP/TCP/DNS/ICMPv4/NTP/mDNS/
-DHCPv4/link-local import and the configured IPv6 namespace import require exact
+DHCPv4/link-local/ICMPv6 imports and the configured IPv6 namespace import require exact
 Runtime lifecycle identity and are therefore available only through
 extension registration. The completed `internal/backend/lneto/core` plus `/tcp`,
 `/udp`, and `/dns` adapter extraction and selective opaque contribution assembly
@@ -71,7 +71,7 @@ poll codecs in `internal/abi/core`. TCP stream/I/O, UDP receive-result, DNS name
 request/lease and link-local request/result layouts are separate compilation
 units in `internal/abi/tcp`, `internal/abi/udp`, `internal/abi/dns`,
 `internal/abi/icmpv4`, `internal/abi/ntp`, `internal/abi/mdns`,
-`internal/abi/dhcpv4`, `internal/abi/linklocal4`, and `internal/abi/ipv6`. This package
+`internal/abi/dhcpv4`, `internal/abi/linklocal4`, `internal/abi/ipv6`, and `internal/abi/icmpv6`. This package
 split changes no guest-visible size, offset, validation rule, or numeric value.
 
 ## UDP module and signatures
@@ -542,6 +542,64 @@ resource quota; shared `poll` remains scan/event/service bounded and quota
 accounted. Caller denies on the exact configured IPv6 identity win over the
 module's default exact-address grant and prevent namespace publication.
 
+## ICMPv6/NDP module, signatures, and layouts
+
+The checked ICMPv6/NDP ABI is independently gated in `wago_net_icmpv6` by
+`net.icmpv6`:
+
+```text
+namespace_default(out_handle_ptr: i32) -> i32
+operations(namespace: i64, out_operations_ptr: i32) -> i32
+echo(namespace: i64, request_ptr: i32, out_echo_ptr: i32) -> i32
+echo_result(echo: i64, payload_ptr: i32, payload_capacity: i32, out_result_ptr: i32) -> i32
+cancel_echo(echo: i64) -> i32
+close_echo(echo: i64) -> i32
+resolve(namespace: i64, neighbor_key_ptr: i32, out_neighbor_handle_ptr: i32) -> i32
+neighbor_result(neighbor_handle: i64, out_neighbor_ptr: i32) -> i32
+cancel_neighbor(neighbor_handle: i64) -> i32
+close_neighbor(neighbor_handle: i64) -> i32
+lookup_neighbor(namespace: i64, neighbor_key_ptr: i32, out_neighbor_ptr: i32) -> i32
+seed_neighbor(namespace: i64, neighbor_ptr: i32) -> i32
+remove_neighbor(namespace: i64, neighbor_key_ptr: i32) -> i32
+poll(events_ptr: i32, event_capacity: i32, budget_ptr: i32, out_result_ptr: i32) -> i32
+```
+
+`operations` atomically writes one little-endian `uint32_t`. Bits 1 through 5
+mean echo, neighbor resolve, lookup, seed, and remove. Router discovery,
+redirects, DAD, SLAAC, and raw-packet operations have no supported bit and are
+not accepted by another import.
+
+`wago_net_icmpv6_echo_request_v1` is 48 bytes and matches the ICMPv4 request
+shape: a 32-byte IPv6 destination with zero port and flow information, payload
+pointer/length at offsets 32/36, and eight reserved zero bytes at 40. Link-local
+unicast requires the exact configured nonzero scope ID; global unicast requires
+scope zero. The fixed request, indirect payload, and handle output are pairwise
+disjoint and checked before work. Payload bytes are copied immediately.
+
+`wago_net_icmpv6_echo_result_v1` is 48 bytes: IPv6 source at offset 0,
+identifier/sequence at 32/34, copied and complete payload byte counts at 36/40,
+and zero reserved word at 44. `echo_result` writes payload and metadata only on
+`OK`; `AGAIN`, cancellation, timeout, and errors leave outputs unchanged.
+
+`wago_net_icmpv6_neighbor_key_v1` is the 32-byte address structure with zero
+port and flow information. `wago_net_icmpv6_neighbor_v1` is 40 bytes: the same
+key at offset 0, a six-byte unicast nonzero Ethernet address at offset 32, and
+two reserved zero bytes at 38. `lookup_neighbor` returns `AGAIN` without output
+mutation when no complete entry exists. Seed and remove are explicit finite
+cache operations checked by protocol-local authority. A pending resolution owns
+an exact generation/kind-checked handle; its result is copied atomically.
+
+The immediate implementation accepts only direct IPv6 base-header ICMPv6. Echo
+replies require exact source, identifier, sequence, payload, checksum, and
+configured destination correlation. NDP requires hop limit 255, code zero,
+mandatory checksum, exact 32-byte source/target link-layer option, solicited-node
+IPv6 destination and `33:33:ff` Ethernet mapping for solicitations, exact target
+and source rules, solicited non-router advertisements, and an existing pending
+query before cache mutation. Router solicitation/advertisement, redirects, DAD,
+SLAAC, prefix/router lifetimes, route tables, multicast echo, and raw packet
+access are unsupported. IPv6 TCP continues to use the explicitly configured
+gateway MAC; the guest cache is not a transport route table.
+
 ## Bounded poll layouts
 
 `wago_net_poll_budget_v1` is 24 bytes, containing six consecutive `uint32_t`
@@ -554,9 +612,10 @@ Each 16-byte `wago_net_poll_event_v1` contains `uint64_t handle`, `uint32_t
 readiness`, and a zero `uint32_t reserved` field. Readiness is level-triggered:
 bit `1` readable, bit `2` writable, bit `4` accept, bit `8` connected, bit `16`
 DNS result, bit `32` error, bit `64` closed, bit `128` ICMPv4 reply, bit `256`
-NTP result, bit `512` mDNS query result, bit `1024` mDNS announcement completion, and bit
-`2048` DHCPv4 lease result, and bit `4096` IPv4 link-local result. Unknown bits
-are invalid.
+NTP result, bit `512` mDNS query result, bit `1024` mDNS announcement completion,
+bit `2048` DHCPv4 lease result, bit `4096` IPv4 link-local result, bit `8192`
+ICMPv6 echo reply, and bit `16384` ICMPv6 neighbor result. Unknown bits are
+invalid.
 
 `wago_net_poll_result_v1` is 24 bytes, containing six consecutive `uint32_t`
 fields: `events`, `scanned`, `service_attempts`, `service_completed`,
@@ -614,7 +673,8 @@ Endpoint-changing imports enforce immutable instance policy on every bind,
 listen, connect, datagram destination, DNS request, ICMPv4 echo destination,
 NTP server synchronization, mDNS query/announcement/response authority, and
 DHCPv4 client/server endpoint authority, IPv4 link-local candidate and defense
-authority, and the configured IPv6 namespace identity.
+authority, the configured IPv6 namespace identity, and every ICMPv6 echo,
+response, neighbor resolution, lookup, seed, and remove address.
 Unmatched or malformed requests are denied. Wildcard binds, loopback, multicast,
 limited IPv4 broadcast, and local bind/listen ports below 1024 require separate
 explicit grants so a broad prefix rule cannot grant them accidentally.
@@ -623,8 +683,9 @@ families.
 
 Resource creation, retained packet bytes, DNS work, active ICMPv4 work, active
 NTP work, active mDNS query/announcement work, active DHCPv4 DORA work, active
-IPv4 link-local claim/defense work, configured IPv6 namespace ownership, and
-manual service work are also subject to finite per-instance quotas. A failed operation must roll back its
+IPv4 link-local claim/defense work, configured IPv6 namespace ownership,
+ICMPv6 resources/cache/queued bytes and active echo/resolution work, and manual
+service work are also subject to finite per-instance quotas. A failed operation must roll back its
 tentative reservation, and instance teardown clears both committed allocations
 and abandoned reservations. Exact default limits remain implementation policy,
 not ABI constants.
