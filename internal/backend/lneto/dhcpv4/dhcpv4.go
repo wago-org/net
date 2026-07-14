@@ -516,6 +516,9 @@ func (a *Adapter) validateFrame(frame []byte) ([]byte, netip.Addr, uint16, uint1
 	if !portsMatch {
 		return nil, netip.Addr{}, 0, 0, false, nil
 	}
+	if !validUnicastMAC(*eth.SourceHardwareAddr()) {
+		return nil, netip.Addr{}, 0, 0, true, nil
+	}
 	var validator lneto.Validator
 	ip.ValidateExceptCRC(&validator)
 	if validator.ErrPop() != nil || ip.CalculateHeaderCRC() != 0 || ip.Flags().MoreFragments() || ip.Flags().FragmentOffset() != 0 {
@@ -708,6 +711,10 @@ func clientKey(frame lnetodhcp.Frame) serverClientKey {
 	key := serverClientKey{length: 6}
 	copy(key.value[:], frame.CHAddrAs6()[:])
 	return key
+}
+
+func validUnicastMAC(mac [6]byte) bool {
+	return mac != ([6]byte{}) && mac != broadcastMAC && mac[0]&1 == 0
 }
 
 func keyIndex(keys []serverClientKey, key serverClientKey) int {

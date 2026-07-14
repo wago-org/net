@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	lnetodhcp "github.com/soypat/lneto/dhcp/dhcpv4"
+	"github.com/soypat/lneto/ethernet"
 	lnetocore "github.com/wago-org/net/internal/backend/lneto/core"
 	nscore "github.com/wago-org/net/internal/namespace/core"
 	dhcpns "github.com/wago-org/net/internal/namespace/dhcpv4"
@@ -84,6 +85,79 @@ func TestServerClientBoundAndPoolAreFinite(t *testing.T) {
 	}
 }
 
+func TestClientIngressRejectsInvalidEthernetSources(t *testing.T) {
+	invalid := map[string][6]byte{
+		"zero":      {},
+		"broadcast": broadcastMAC,
+		"multicast": {1, 0, 94, 0, 0, 1},
+	}
+	for name, source := range invalid {
+		t.Run(name, func(t *testing.T) {
+			clientCore, client := newClient(t, false)
+			serverCore, _ := newServer(t, 1)
+			resource, _, err := client.TryAcquire(dhcpns.Request{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			lease := resource.(*leaseResource)
+			transferOne(t, clientCore, serverCore)
+			offer := serviceEgress(t, serverCore)
+
+			serviceIngress(t, clientCore, rewriteEthernetSource(t, offer, source))
+			if lease.state != leaseWaitOffer || lease.wait != client.config.ResponseServiceAttempts {
+				t.Fatalf("malformed offer mutated lease: state=%v wait=%d", lease.state, lease.wait)
+			}
+			serviceIngress(t, clientCore, offer)
+			if lease.state != leaseRequest || lease.wait != 0 {
+				t.Fatalf("valid offer not accepted after malformed source: state=%v wait=%d", lease.state, lease.wait)
+			}
+		})
+	}
+}
+
+func TestServerIngressRejectsInvalidEthernetSources(t *testing.T) {
+	invalid := map[string][6]byte{
+		"zero":      {},
+		"broadcast": broadcastMAC,
+		"multicast": {1, 0, 94, 0, 0, 1},
+	}
+	for name, source := range invalid {
+		t.Run(name, func(t *testing.T) {
+			clientCore, client := newClient(t, false)
+			serverCore, server := newServer(t, 1)
+			if _, _, err := client.TryAcquire(dhcpns.Request{}); err != nil {
+				t.Fatal(err)
+			}
+			discover := serviceEgress(t, clientCore)
+
+			serviceIngress(t, serverCore, rewriteEthernetSource(t, discover, source))
+			if len(server.serverClients) != 0 || server.serverPending != 0 {
+				t.Fatalf("malformed discover mutated server: clients=%d pending=%d", len(server.serverClients), server.serverPending)
+			}
+			serviceIngress(t, serverCore, discover)
+			if len(server.serverClients) != 1 || server.serverPending != 1 {
+				t.Fatalf("valid discover not accepted after malformed source: clients=%d pending=%d", len(server.serverClients), server.serverPending)
+			}
+		})
+	}
+}
+
+func TestClientIngressAllowsRelayEthernetSource(t *testing.T) {
+	clientCore, client := newClient(t, false)
+	serverCore, _ := newServer(t, 1)
+	resource, _, err := client.TryAcquire(dhcpns.Request{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	lease := resource.(*leaseResource)
+	transferOne(t, clientCore, serverCore)
+	offer := rewriteEthernetSource(t, serviceEgress(t, serverCore), [6]byte{2, 0, 0, 0, 0, 99})
+	serviceIngress(t, clientCore, offer)
+	if lease.state != leaseRequest {
+		t.Fatalf("relay-delivered offer state = %v, want request", lease.state)
+	}
+}
+
 func newClient(t testing.TB, apply bool) (*lnetocore.Namespace, *Adapter) {
 	t.Helper()
 	config := defaultConfig()
@@ -139,17 +213,32 @@ func serverPolicy() policy.Config {
 
 func transferOne(t testing.TB, from, to *lnetocore.Namespace) {
 	t.Helper()
-	frame := serviceEgress(t, from)
-	if err := to.Link().TryEnqueue(packetlink.Ingress, frame); err != nil {
+	serviceIngress(t, to, serviceEgress(t, from))
+}
+
+func serviceIngress(t testing.TB, core *lnetocore.Namespace, frame []byte) {
+	t.Helper()
+	if err := core.Link().TryEnqueue(packetlink.Ingress, frame); err != nil {
 		t.Fatal(err)
 	}
-	to.Lock()
-	to.SetNextIngressLocked(true)
-	to.Unlock()
-	report, progress, err := to.TryService(nscore.ServiceBudget{Packets: 1, Bytes: 1514, Operations: 1})
+	core.Lock()
+	core.SetNextIngressLocked(true)
+	core.Unlock()
+	report, progress, err := core.TryService(nscore.ServiceBudget{Packets: 1, Bytes: 1514, Operations: 1})
 	if err != nil || progress != nscore.ProgressDone || report.Packets != 1 {
 		t.Fatalf("ingress = %+v, %v, %v", report, progress, err)
 	}
+}
+
+func rewriteEthernetSource(t testing.TB, frame []byte, source [6]byte) []byte {
+	t.Helper()
+	frame = append([]byte(nil), frame...)
+	eth, err := ethernet.NewFrame(frame)
+	if err != nil {
+		t.Fatal(err)
+	}
+	*eth.SourceHardwareAddr() = source
+	return frame
 }
 
 func serviceEgress(t testing.TB, core *lnetocore.Namespace) []byte {
