@@ -1,10 +1,13 @@
 package linklocal4
 
 import (
+	"bytes"
+	"errors"
 	"net/netip"
 	"testing"
 	"time"
 
+	lneto "github.com/soypat/lneto"
 	"github.com/soypat/lneto/arp"
 	"github.com/soypat/lneto/ethernet"
 	lnetolinklocal "github.com/soypat/lneto/ipv4/linklocal4"
@@ -81,6 +84,56 @@ func TestClaimDefendReconfigureAndReleaseIdentity(t *testing.T) {
 	}
 	if usage, _ := account.Snapshot(); usage != (quota.Usage{}) {
 		t.Fatalf("closed quota = %+v", usage)
+	}
+}
+
+func TestEgressShortBufferPreservesClaimLifecycleAndServiceBudget(t *testing.T) {
+	core, adapter, account, clock := newTestAdapter(t, Config{MaxClaims: 1, MaxConflicts: 2, MaxServiceAttempts: 1, Seed: 31})
+	resource, _, err := adapter.TryClaim(linklocalns.Request{FirstCandidate: netip.MustParseAddr("169.254.42.7")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	claim := resource.(*claimResource)
+	stateBefore := claim.handler.State()
+	candidateBefore := claim.handler.Candidate()
+	conflictsBefore := claim.handler.Conflicts()
+	readyBefore := claim.Readiness()
+	usageBefore, _ := account.Snapshot()
+	short := bytes.Repeat([]byte{0xa5}, arpFrameSize-1)
+
+	core.Lock()
+	written, worked, err := adapter.egressLocked(short)
+	core.Unlock()
+	if written != 0 || worked || !errors.Is(err, lneto.ErrShortBuffer) {
+		t.Fatalf("short claim egress = %d, %v, %v", written, worked, err)
+	}
+	if !bytes.Equal(short, bytes.Repeat([]byte{0xa5}, len(short))) {
+		t.Fatalf("short claim egress mutated destination = %x", short)
+	}
+	if claim.state != stateActive || claim.failure != nil || claim.serviceAttempts != 0 || claim.defensePending || claim.handler.State() != stateBefore || claim.handler.Candidate() != candidateBefore || claim.handler.Conflicts() != conflictsBefore {
+		t.Fatalf("short claim egress mutated lifecycle: state=%v handler=%v attempts=%d defense=%v failure=%v", claim.state, claim.handler.State(), claim.serviceAttempts, claim.defensePending, claim.failure)
+	}
+	if claim.Readiness() != readyBefore {
+		t.Fatalf("short claim egress changed readiness = %v, want %v", claim.Readiness(), readyBefore)
+	}
+	if usage, _ := account.Snapshot(); usage != usageBefore {
+		t.Fatalf("short claim egress changed quota = %+v, want %+v", usage, usageBefore)
+	}
+
+	clock.advance(3 * time.Second)
+	frame := make([]byte, arpFrameSize)
+	core.Lock()
+	written, worked, err = adapter.egressLocked(frame)
+	core.Unlock()
+	if err != nil || !worked || written != arpFrameSize || claim.state != stateActive || claim.failure != nil || claim.serviceAttempts != 1 {
+		t.Fatalf("claim retry = %d, %v, %v state=%v attempts=%d failure=%v", written, worked, err, claim.state, claim.serviceAttempts, claim.failure)
+	}
+	eth, err := ethernet.NewFrame(frame[:written])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if eth.EtherTypeOrSize() != ethernet.TypeARP || *eth.SourceHardwareAddr() != ([6]byte{2, 0, 0, 0, 0, 1}) {
+		t.Fatalf("claim retry frame = etherType=%v source=%v", eth.EtherTypeOrSize(), *eth.SourceHardwareAddr())
 	}
 }
 

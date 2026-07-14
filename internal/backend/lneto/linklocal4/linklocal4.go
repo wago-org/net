@@ -318,7 +318,6 @@ func (a *Adapter) egressLocked(dst []byte) (int, bool, error) {
 		r.failLocked(nscore.FailureTimedOut, errServiceLimit)
 		return 0, true, nil
 	}
-	r.serviceAttempts++
 	operation := policy.OperationLinkLocal4Claim
 	if r.handler.State().IsBound() {
 		operation = policy.OperationLinkLocal4Defend
@@ -330,6 +329,7 @@ func (a *Adapter) egressLocked(dst []byte) (int, bool, error) {
 	if len(dst) < arpFrameSize {
 		return 0, false, lneto.ErrShortBuffer
 	}
+	r.serviceAttempts++
 	frame := dst[:arpFrameSize]
 	clear(frame)
 	before := r.handler.State()
