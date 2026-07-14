@@ -318,6 +318,91 @@ func TestConnectResetBeforeEstablishment(t *testing.T) {
 	}
 }
 
+func TestConnectedStatePersistsThroughHalfClose(t *testing.T) {
+	clientCore, _, client, serverCore, server := newEstablishedPair(t)
+	payload := []byte("buffered before FIN")
+	if result, err := client.TryWrite(payload); err != nil || result != (nscore.IOResult{Bytes: len(payload), State: nscore.IOReady}) {
+		t.Fatalf("write before shutdown = %+v, %v", result, err)
+	}
+	if progress, err := client.TryShutdownWrite(); err != nil || progress != nscore.ProgressDone {
+		t.Fatalf("shutdown write = %v, %v", progress, err)
+	}
+	transferTCP(t, clientCore, serverCore)
+	if ready := server.Readiness(); ready&nscore.ReadyReadable == 0 || ready&nscore.ReadyClosed != 0 {
+		t.Fatalf("buffered readiness before FIN = %v", ready)
+	}
+	buffer := make([]byte, len(payload))
+	if result, err := server.TryRead(buffer); err != nil || result != (nscore.IOResult{Bytes: len(payload), State: nscore.IOReady}) || string(buffer) != string(payload) {
+		t.Fatalf("buffered read = %+v, %v, %q", result, err, buffer)
+	}
+	if result, err := server.TryRead(buffer); err != nil || result.State != nscore.IOWouldBlock {
+		t.Fatalf("read before FIN = %+v, %v", result, err)
+	}
+	transferTCP(t, serverCore, clientCore)
+	transferTCP(t, clientCore, serverCore)
+	if ready := client.Readiness(); ready&nscore.ReadyConnected == 0 || ready&(nscore.ReadyWritable|nscore.ReadyClosed|nscore.ReadyError) != 0 {
+		t.Fatalf("local half-close readiness = %v", ready)
+	}
+	if progress, err := client.TryFinishConnect(); err != nil || progress != nscore.ProgressDone {
+		t.Fatalf("finish after half-close = %v, %v", progress, err)
+	}
+	if ready := server.Readiness(); ready&nscore.ReadyConnected == 0 || ready&nscore.ReadyWritable == 0 || ready&nscore.ReadyClosed == 0 || ready&nscore.ReadyReadable != 0 {
+		t.Fatalf("peer half-close readiness = %v", ready)
+	}
+	if result, err := server.TryRead(buffer); err != nil || result.State != nscore.IOEOF {
+		t.Fatalf("read after FIN = %+v, %v", result, err)
+	}
+}
+
+func TestListenerCloseDetachesAcceptedStreamBeforePoolReuse(t *testing.T) {
+	clientCore, listener, client, serverCore, server := newEstablishedPair(t)
+	serverAdapter := listener.owner
+	clientAdapter := client.owner
+	endpoint := listener.local
+	if err := listener.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if ready := server.Readiness(); ready != nscore.ReadyClosed {
+		t.Fatalf("detached accepted readiness = %v", ready)
+	}
+	if result, err := server.TryRead(make([]byte, 1)); err != nil || result.State != nscore.IOEOF {
+		t.Fatalf("detached accepted read = %+v, %v", result, err)
+	}
+	if usage, _ := serverAdapter.quotas.Snapshot(); usage != (quota.Usage{}) {
+		t.Fatalf("listener close quota = %+v", usage)
+	}
+	replacementValue, progress, err := serverAdapter.TryListen(endpoint)
+	if err != nil || progress != nscore.ProgressDone {
+		t.Fatalf("replacement listen = %T, %v, %v", replacementValue, progress, err)
+	}
+	replacement := replacementValue.(*tcpListener)
+	if replacement == listener {
+		t.Fatal("listener wrapper unexpectedly reused")
+	}
+	secondClientValue, progress, err := clientAdapter.TryConnect(endpoint)
+	if err != nil || progress != nscore.ProgressInProgress {
+		t.Fatalf("second connect = %T, %v, %v", secondClientValue, progress, err)
+	}
+	secondClient := secondClientValue.(*tcpStream)
+	transferTCP(t, clientCore, serverCore)
+	transferTCP(t, serverCore, clientCore)
+	transferTCP(t, clientCore, serverCore)
+	if progress, err := secondClient.TryFinishConnect(); err != nil || progress != nscore.ProgressDone {
+		t.Fatalf("second finish connect = %v, %v", progress, err)
+	}
+	secondServerValue, progress, err := replacement.TryAccept()
+	if err != nil || progress != nscore.ProgressDone {
+		t.Fatalf("second accept = %T, %v, %v", secondServerValue, progress, err)
+	}
+	secondServer := secondServerValue.(*tcpStream)
+	if secondServer == server || server.conn != nil || server.slot != nil || !server.terminal {
+		t.Fatalf("stale accepted stream reused: old=%p new=%p conn=%p slot=%p terminal=%v", server, secondServer, server.conn, server.slot, server.terminal)
+	}
+	if ready := server.Readiness(); ready != nscore.ReadyClosed {
+		t.Fatalf("stale accepted readiness after reuse = %v", ready)
+	}
+}
+
 func newIPv6TestAdapter(t testing.TB, id byte, address netip.Addr, listeners, outbound uint16) (*lnetocore.Namespace, *Adapter) {
 	t.Helper()
 	prefix := netip.MustParsePrefix("2001:db8::/32")

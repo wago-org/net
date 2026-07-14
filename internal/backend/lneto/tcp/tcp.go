@@ -725,6 +725,8 @@ func (s *tcpStream) Readiness() nscore.Readiness {
 	var ready nscore.Readiness
 	if state == lnetotcp.StateEstablished || state == lnetotcp.StateCloseWait {
 		s.connected = true
+	}
+	if s.connected {
 		ready |= nscore.ReadyConnected
 	}
 	if h.BufferedInput() > 0 {
@@ -752,6 +754,9 @@ func (s *tcpStream) TryFinishConnect() (nscore.Progress, error) {
 	}
 	if s.terminal || s.conn == nil {
 		return 0, nscore.Fail(nscore.FailureConnectionRefused, net.ErrClosed)
+	}
+	if s.connected {
+		return nscore.ProgressDone, nil
 	}
 	state := s.conn.InternalHandler().State()
 	if state == lnetotcp.StateEstablished || state == lnetotcp.StateCloseWait {
