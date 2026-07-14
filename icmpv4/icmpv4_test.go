@@ -36,7 +36,7 @@ func TestSelectiveICMPv4RegistrationAndActualBackendLifecycle(t *testing.T) {
 			Link: wagonet.PacketLinkConfig{MaxFrameBytes: 1514, IngressFrames: 2, EgressFrames: 2},
 		},
 	}))
-	if err := Register(network, WithConfig(Config{MaxEchoes: 1, MaxPayloadBytes: 16, MaxAttempts: 1, RetryServiceAttempts: 1})); err != nil {
+	if err := Register(network, WithConfig(Config{MaxEchoes: 1, MaxPayloadBytes: 16, MaxAttempts: 1, RetryServiceAttempts: 1}), AllowLoopback()); err != nil {
 		t.Fatal(err)
 	}
 
@@ -79,6 +79,16 @@ func TestSelectiveICMPv4RegistrationAndActualBackendLifecycle(t *testing.T) {
 	}
 	namespaceHandle := resource.Handle(binary.LittleEndian.Uint64(host.memory[80:88]))
 	copy(host.memory[128:], "echo")
+	if !icmpabi.EncodeEchoRequestV1(host.memory, 0, nscore.Endpoint{Address: netip.MustParseAddr("127.0.0.1")}, 128, 4) {
+		t.Fatal("encode loopback echo request")
+	}
+	beforeLoopback := append([]byte(nil), host.memory[64:72]...)
+	if got := callImport(t, runtime, host, "echo", uint64(namespaceHandle), 0, 64); got != guest.StatusInvalidArgument {
+		t.Fatalf("loopback echo = %v", got)
+	}
+	if !bytes.Equal(host.memory[64:72], beforeLoopback) {
+		t.Fatal("loopback echo mutated handle output")
+	}
 	if !icmpabi.EncodeEchoRequestV1(host.memory, 0, nscore.Endpoint{Address: netip.MustParseAddr("192.0.2.99")}, 128, 4) {
 		t.Fatal("encode echo request")
 	}

@@ -37,6 +37,58 @@ func TestAdapterRequiresUnicastGatewayHardwareAddressWhenEnabled(t *testing.T) {
 	}
 }
 
+func TestTryEchoRejectsLoopbackBeforePolicyOwnershipAndAdapterMutation(t *testing.T) {
+	compiled, err := policy.Compile(policy.Config{
+		Rules: []policy.Rule{{
+			Action: policy.ActionAllow, Transports: []policy.Transport{policy.TransportICMPv4},
+			Directions: []policy.Direction{policy.DirectionOutbound},
+		}},
+		LoopbackTransports: []policy.Transport{policy.TransportICMPv4},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	account := quota.NewAccount(quota.Limits{Resources: 4, ICMPv4Resources: 4, QueuedBytes: 1024, ICMPv4Work: 4})
+	core, err := lnetocore.New(lnetocore.Config{
+		Hostname: "icmpv4-loopback", RandSeed: 9,
+		HardwareAddress: [6]byte{2, 0, 0, 0, 0, 9}, GatewayHardwareAddress: [6]byte{2, 0, 0, 0, 0, 1},
+		IPv4Address: netip.MustParseAddr("192.0.2.9"), MTU: 1500,
+		Link: packetlink.Config{MaxFrameBytes: 1514, IngressFrames: 4, EgressFrames: 4}, Policy: compiled, Quotas: account,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = core.Close() })
+	adapter, err := New(core, Config{MaxEchoes: 2, MaxPayloadBytes: 32, MaxAttempts: 2, RetryServiceAttempts: 2})
+	if err != nil {
+		t.Fatal(err)
+	}
+	payload := []byte("owned-only-on-success")
+	identifier, sequence, cursor := adapter.nextIdentifier, adapter.nextSequence, adapter.cursor
+	if resource, progress, err := adapter.TryEcho(icmpns.Request{Destination: netip.MustParseAddr("127.0.0.1"), Payload: payload}); resource != nil || progress != 0 || failureOf(t, err) != nscore.FailureInvalidArgument {
+		t.Fatalf("loopback echo = %T, %v, %v", resource, progress, err)
+	}
+	if string(payload) != "owned-only-on-success" || len(adapter.echoes) != 0 || len(adapter.byIdentity) != 0 || adapter.cursor != cursor || adapter.nextIdentifier != identifier || adapter.nextSequence != sequence || adapter.hasWorkLocked() {
+		t.Fatalf("loopback echo mutated adapter: echoes=%d identities=%d cursor=%d next=%d/%d work=%v payload=%q", len(adapter.echoes), len(adapter.byIdentity), adapter.cursor, adapter.nextIdentifier, adapter.nextSequence, adapter.hasWorkLocked(), payload)
+	}
+	if usage, closed := account.Snapshot(); closed || usage != (quota.Usage{}) {
+		t.Fatalf("loopback echo quota = %+v, closed=%v", usage, closed)
+	}
+
+	resource, progress, err := adapter.TryEcho(icmpns.Request{Destination: netip.MustParseAddr("192.0.2.99"), Payload: payload})
+	if err != nil || progress != nscore.ProgressInProgress || resource == nil {
+		t.Fatalf("valid echo after loopback = %T, %v, %v", resource, progress, err)
+	}
+	frame := serviceEgress(t, core)
+	ipFrame, err := ipv4.NewFrame(frame[14:])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if destination := netip.AddrFrom4(*ipFrame.DestinationAddr()); destination != netip.MustParseAddr("192.0.2.99") {
+		t.Fatalf("valid echo destination = %v", destination)
+	}
+}
+
 func TestICMPv4ExchangeCopiesPayloadValidatesReplyAndReleasesQuota(t *testing.T) {
 	core, adapter, account := newTestAdapter(t, Config{MaxEchoes: 2, MaxPayloadBytes: 64, MaxAttempts: 2, RetryServiceAttempts: 2})
 	guestPayload := []byte("bounded-echo")

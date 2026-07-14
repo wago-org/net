@@ -85,7 +85,8 @@ func AllowDestinations(prefixes ...netip.Prefix) Option {
 	}}})
 }
 
-// AllowLoopback permits otherwise granted loopback echo destinations.
+// AllowLoopback grants loopback policy authority. The physical link-backed
+// adapter still rejects loopback as a non-wire destination.
 func AllowLoopback() Option {
 	return WithPolicy(wagonet.PolicyConfig{LoopbackTransports: []wagonet.PolicyTransport{wagonet.PolicyTransportICMPv4}})
 }
@@ -100,8 +101,9 @@ func AllowBroadcast() Option {
 	return WithPolicy(wagonet.PolicyConfig{BroadcastTransports: []wagonet.PolicyTransport{wagonet.PolicyTransportICMPv4}})
 }
 
-// AllowAll conspicuously grants every structurally valid IPv4 destination
-// class. Payloads, resources, retries, service, and quotas remain finite.
+// AllowAll conspicuously grants policy authority for every structurally valid
+// IPv4 destination class. The physical link-backed adapter still rejects
+// loopback; payloads, resources, retries, service, and quotas remain finite.
 func AllowAll() Option {
 	return WithPolicy(wagonet.PolicyConfig{
 		Rules: []wagonet.PolicyRule{{
