@@ -17,7 +17,7 @@ func Configuration(state *core.State, namespaceHandle resource.Handle) (configur
 			return lookupErr
 		}
 		backend, ok := nscore.ResolveNamespaceService(value, ipv6ns.ServiceKey).(ipv6ns.Namespace)
-		if !ok {
+		if !ok || resource.IsNil(backend) {
 			return nscore.Fail(nscore.FailureNotSupported, core.ErrInvalidBackendResult)
 		}
 		configuration = backend.Configuration()

@@ -16,7 +16,7 @@ func Bind(state *core.State, namespaceHandle resource.Handle, local nscore.Endpo
 			return lookupErr
 		}
 		backend, ok := nscore.ResolveNamespaceService(value, udpns.ServiceKey).(udpns.Namespace)
-		if !ok {
+		if !ok || resource.IsNil(backend) {
 			return nscore.Fail(nscore.FailureIO, core.ErrInvalidBackendResult)
 		}
 		socket, backendProgress, backendErr := backend.TryBindUDP(local)
@@ -25,23 +25,18 @@ func Bind(state *core.State, namespaceHandle resource.Handle, local nscore.Endpo
 			return backendErr
 		}
 		if progress == nscore.ProgressWouldBlock {
-			if socket != nil {
+			if !resource.IsNil(socket) {
 				_ = socket.Close()
 				progress = 0
 				return nscore.Fail(nscore.FailureIO, core.ErrInvalidBackendResult)
 			}
 			return nil
 		}
-		if progress != nscore.ProgressDone || socket == nil {
-			if socket != nil {
+		typedSocket, ok := socket.(udpns.Socket)
+		if progress != nscore.ProgressDone || !ok || resource.IsNil(typedSocket) {
+			if !resource.IsNil(socket) {
 				_ = socket.Close()
 			}
-			progress = 0
-			return nscore.Fail(nscore.FailureIO, core.ErrInvalidBackendResult)
-		}
-		typedSocket, ok := socket.(udpns.Socket)
-		if !ok {
-			_ = socket.Close()
 			progress = 0
 			return nscore.Fail(nscore.FailureIO, core.ErrInvalidBackendResult)
 		}

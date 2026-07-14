@@ -19,15 +19,11 @@ func Acquire(state *core.State, namespaceHandle resource.Handle, request dhcpns.
 		if backendErr != nil {
 			return backendErr
 		}
-		if value == nil || (progress != nscore.ProgressDone && progress != nscore.ProgressInProgress) {
-			if value != nil {
+		lease, ok := value.(dhcpns.Resource)
+		if (progress != nscore.ProgressDone && progress != nscore.ProgressInProgress) || !ok || resource.IsNil(lease) {
+			if !resource.IsNil(value) {
 				_ = value.Close()
 			}
-			return nscore.Fail(nscore.FailureIO, core.ErrInvalidBackendResult)
-		}
-		lease, ok := value.(dhcpns.Resource)
-		if !ok {
-			_ = value.Close()
 			return nscore.Fail(nscore.FailureIO, core.ErrInvalidBackendResult)
 		}
 		handle, err = locked.Resources.Add(resource.KindDHCPv4Lease, lease)
@@ -89,7 +85,7 @@ func namespace(locked core.LockedState, handle resource.Handle) (dhcpns.Namespac
 		return nil, err
 	}
 	backend, ok := nscore.ResolveNamespaceService(value, dhcpns.ServiceKey).(dhcpns.Namespace)
-	if !ok {
+	if !ok || resource.IsNil(backend) {
 		return nil, nscore.Fail(nscore.FailureIO, core.ErrInvalidBackendResult)
 	}
 	return backend, nil

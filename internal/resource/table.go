@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"reflect"
 	"sync"
 	"sync/atomic"
 )
@@ -43,6 +44,23 @@ var (
 // Resource is the common lifetime contract for instance-owned networking state.
 type Resource interface {
 	Close() error
+}
+
+// IsNil reports whether value is nil, including an interface containing a
+// typed nil pointer, map, slice, function, channel, or interface. Backend
+// contracts use interface values extensively, so a plain value == nil check is
+// insufficient before publishing or invoking a returned implementation.
+func IsNil(value any) bool {
+	if value == nil {
+		return true
+	}
+	reflected := reflect.ValueOf(value)
+	switch reflected.Kind() {
+	case reflect.Chan, reflect.Func, reflect.Interface, reflect.Map, reflect.Pointer, reflect.Slice:
+		return reflected.IsNil()
+	default:
+		return false
+	}
 }
 
 const noSlot = uint32(math.MaxUint32)
@@ -85,7 +103,7 @@ func NewTable() (*Table, error) {
 
 // Add inserts a resource and returns its nonzero handle in O(1) time.
 func (t *Table) Add(kind Kind, r Resource) (Handle, error) {
-	if t == nil || kind == KindInvalid || r == nil {
+	if t == nil || kind == KindInvalid || IsNil(r) {
 		return 0, ErrBadHandle
 	}
 	t.mu.Lock()

@@ -19,15 +19,11 @@ func Claim(state *core.State, namespaceHandle resource.Handle, request linklocal
 		if backendErr != nil {
 			return backendErr
 		}
-		if value == nil || (progress != nscore.ProgressDone && progress != nscore.ProgressInProgress) {
-			if value != nil {
+		claim, ok := value.(linklocalns.Resource)
+		if (progress != nscore.ProgressDone && progress != nscore.ProgressInProgress) || !ok || resource.IsNil(claim) {
+			if !resource.IsNil(value) {
 				_ = value.Close()
 			}
-			return nscore.Fail(nscore.FailureIO, core.ErrInvalidBackendResult)
-		}
-		claim, ok := value.(linklocalns.Resource)
-		if !ok {
-			_ = value.Close()
 			return nscore.Fail(nscore.FailureIO, core.ErrInvalidBackendResult)
 		}
 		handle, err = locked.Resources.Add(resource.KindLinkLocal4Claim, claim)
@@ -89,7 +85,7 @@ func namespace(locked core.LockedState, handle resource.Handle) (linklocalns.Nam
 		return nil, err
 	}
 	backend, ok := nscore.ResolveNamespaceService(value, linklocalns.ServiceKey).(linklocalns.Namespace)
-	if !ok {
+	if !ok || resource.IsNil(backend) {
 		return nil, nscore.Fail(nscore.FailureIO, core.ErrInvalidBackendResult)
 	}
 	return backend, nil

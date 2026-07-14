@@ -19,16 +19,12 @@ func Query(state *core.State, namespaceHandle resource.Handle, request mdnsns.Re
 		if backendErr != nil {
 			return backendErr
 		}
-		if (progress != nscore.ProgressDone && progress != nscore.ProgressInProgress) || value == nil {
-			if value != nil {
+		typed, ok := value.(mdnsns.Query)
+		if (progress != nscore.ProgressDone && progress != nscore.ProgressInProgress) || !ok || resource.IsNil(typed) {
+			if !resource.IsNil(value) {
 				_ = value.Close()
 			}
 			progress = 0
-			return nscore.Fail(nscore.FailureIO, core.ErrInvalidBackendResult)
-		}
-		typed, ok := value.(mdnsns.Query)
-		if !ok {
-			_ = value.Close()
 			return nscore.Fail(nscore.FailureIO, core.ErrInvalidBackendResult)
 		}
 		handle, err = locked.Resources.Add(resource.KindMDNSQuery, typed)
@@ -87,16 +83,12 @@ func Announce(state *core.State, namespaceHandle resource.Handle, service uint16
 		if backendErr != nil {
 			return backendErr
 		}
-		if (progress != nscore.ProgressDone && progress != nscore.ProgressInProgress) || value == nil {
-			if value != nil {
+		typed, ok := value.(mdnsns.Announcement)
+		if (progress != nscore.ProgressDone && progress != nscore.ProgressInProgress) || !ok || resource.IsNil(typed) {
+			if !resource.IsNil(value) {
 				_ = value.Close()
 			}
 			progress = 0
-			return nscore.Fail(nscore.FailureIO, core.ErrInvalidBackendResult)
-		}
-		typed, ok := value.(mdnsns.Announcement)
-		if !ok {
-			_ = value.Close()
 			return nscore.Fail(nscore.FailureIO, core.ErrInvalidBackendResult)
 		}
 		handle, err = locked.Resources.Add(resource.KindMDNSAnnouncement, typed)
@@ -146,7 +138,7 @@ func namespace(locked core.LockedState, handle resource.Handle) (mdnsns.Namespac
 		return nil, err
 	}
 	backend, ok := nscore.ResolveNamespaceService(value, mdnsns.ServiceKey).(mdnsns.Namespace)
-	if !ok {
+	if !ok || resource.IsNil(backend) {
 		return nil, nscore.Fail(nscore.FailureIO, core.ErrInvalidBackendResult)
 	}
 	return backend, nil

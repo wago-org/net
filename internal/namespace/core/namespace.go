@@ -7,6 +7,7 @@ package core
 import (
 	"errors"
 	"net/netip"
+	"reflect"
 )
 
 var (
@@ -171,13 +172,13 @@ const InlineServiceCapacity = 16
 // readiness, bounded service, and close; selected protocol adapters remain
 // reachable only through their exact service keys.
 func ComposeNamespace(base Namespace, services ...Service) (Namespace, error) {
-	if base == nil {
+	if nilInterface(base) {
 		return nil, ErrInvalidNamespaceComposition
 	}
 	composed := &composedNamespace{base: base}
 	if len(services) <= InlineServiceCapacity {
 		for i, service := range services {
-			if service.Key == "" || service.Value == nil {
+			if service.Key == "" || nilInterface(service.Value) {
 				return nil, ErrInvalidNamespaceComposition
 			}
 			for previous := 0; previous < i; previous++ {
@@ -192,7 +193,7 @@ func ComposeNamespace(base Namespace, services ...Service) (Namespace, error) {
 	}
 	values := make(map[ServiceKey]any, len(services))
 	for _, service := range services {
-		if service.Key == "" || service.Value == nil {
+		if service.Key == "" || nilInterface(service.Value) {
 			return nil, ErrInvalidNamespaceComposition
 		}
 		if _, exists := values[service.Key]; exists {
@@ -326,6 +327,19 @@ func (r ServiceReport) ValidResult(b ServiceBudget, progress Progress) bool {
 		return r.Packets != 0 || r.Bytes != 0 || r.Operations != 0
 	case ProgressWouldBlock:
 		return r == (ServiceReport{})
+	default:
+		return false
+	}
+}
+
+func nilInterface(value any) bool {
+	if value == nil {
+		return true
+	}
+	reflected := reflect.ValueOf(value)
+	switch reflected.Kind() {
+	case reflect.Chan, reflect.Func, reflect.Interface, reflect.Map, reflect.Pointer, reflect.Slice:
+		return reflected.IsNil()
 	default:
 		return false
 	}

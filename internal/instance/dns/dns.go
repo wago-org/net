@@ -16,7 +16,7 @@ func Resolve(state *core.State, namespaceHandle resource.Handle, request dnsns.R
 			return lookupErr
 		}
 		backend, ok := nscore.ResolveNamespaceService(value, dnsns.ServiceKey).(dnsns.Namespace)
-		if !ok {
+		if !ok || resource.IsNil(backend) {
 			return nscore.Fail(nscore.FailureIO, core.ErrInvalidBackendResult)
 		}
 		query, backendProgress, backendErr := backend.TryResolve(request)
@@ -24,16 +24,11 @@ func Resolve(state *core.State, namespaceHandle resource.Handle, request dnsns.R
 		if backendErr != nil {
 			return backendErr
 		}
-		if (progress != nscore.ProgressDone && progress != nscore.ProgressInProgress) || query == nil {
-			if query != nil {
+		typedQuery, ok := query.(dnsns.Query)
+		if (progress != nscore.ProgressDone && progress != nscore.ProgressInProgress) || !ok || resource.IsNil(typedQuery) {
+			if !resource.IsNil(query) {
 				_ = query.Close()
 			}
-			progress = 0
-			return nscore.Fail(nscore.FailureIO, core.ErrInvalidBackendResult)
-		}
-		typedQuery, ok := query.(dnsns.Query)
-		if !ok {
-			_ = query.Close()
 			progress = 0
 			return nscore.Fail(nscore.FailureIO, core.ErrInvalidBackendResult)
 		}

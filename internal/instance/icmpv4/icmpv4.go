@@ -16,7 +16,7 @@ func Echo(state *core.State, namespaceHandle resource.Handle, request icmpns.Req
 			return lookupErr
 		}
 		backend, ok := nscore.ResolveNamespaceService(value, icmpns.ServiceKey).(icmpns.Namespace)
-		if !ok {
+		if !ok || resource.IsNil(backend) {
 			return nscore.Fail(nscore.FailureIO, core.ErrInvalidBackendResult)
 		}
 		exchange, backendProgress, backendErr := backend.TryEcho(request)
@@ -24,16 +24,11 @@ func Echo(state *core.State, namespaceHandle resource.Handle, request icmpns.Req
 		if backendErr != nil {
 			return backendErr
 		}
-		if (progress != nscore.ProgressDone && progress != nscore.ProgressInProgress) || exchange == nil {
-			if exchange != nil {
+		typed, ok := exchange.(icmpns.Echo)
+		if (progress != nscore.ProgressDone && progress != nscore.ProgressInProgress) || !ok || resource.IsNil(typed) {
+			if !resource.IsNil(exchange) {
 				_ = exchange.Close()
 			}
-			progress = 0
-			return nscore.Fail(nscore.FailureIO, core.ErrInvalidBackendResult)
-		}
-		typed, ok := exchange.(icmpns.Echo)
-		if !ok {
-			_ = exchange.Close()
 			progress = 0
 			return nscore.Fail(nscore.FailureIO, core.ErrInvalidBackendResult)
 		}

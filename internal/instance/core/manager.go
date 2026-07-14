@@ -270,7 +270,7 @@ func (s *State) createNamespace(factory NamespaceFactory) (resource.Handle, erro
 		reservation.Rollback()
 		return 0, err
 	}
-	if backend == nil {
+	if resource.IsNil(backend) {
 		reservation.Rollback()
 		return 0, ErrInvalidConfig
 	}
@@ -309,11 +309,11 @@ func (s *State) LookupNamespace(namespaceHandle resource.Handle) (nscore.Namespa
 	if err != nil {
 		return nil, err
 	}
-	if owned, ok := value.(*ownedNamespace); ok && owned.Namespace != nil {
+	if owned, ok := value.(*ownedNamespace); ok && !resource.IsNil(owned.Namespace) {
 		return owned.Namespace, nil
 	}
 	backend, ok := value.(nscore.Namespace)
-	if !ok {
+	if !ok || resource.IsNil(backend) {
 		return nil, nscore.Fail(nscore.FailureIO, ErrInvalidBackendResult)
 	}
 	return backend, nil

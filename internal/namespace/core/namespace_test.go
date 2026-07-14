@@ -209,6 +209,8 @@ func TestNamespaceCompositionExactServicesAndLifecycle(t *testing.T) {
 
 func TestNamespaceCompositionRejectsInvalidAndDuplicateServices(t *testing.T) {
 	base := new(compositionBase)
+	var typedNilBase *compositionBase
+	var typedNilService *int
 	for _, test := range []struct {
 		name     string
 		base     Namespace
@@ -216,8 +218,10 @@ func TestNamespaceCompositionRejectsInvalidAndDuplicateServices(t *testing.T) {
 		want     error
 	}{
 		{name: "nil base", want: ErrInvalidNamespaceComposition},
+		{name: "typed nil base", base: typedNilBase, want: ErrInvalidNamespaceComposition},
 		{name: "empty key", base: base, services: []Service{{Value: new(int)}}, want: ErrInvalidNamespaceComposition},
 		{name: "nil value", base: base, services: []Service{{Key: "tcp"}}, want: ErrInvalidNamespaceComposition},
+		{name: "typed nil value", base: base, services: []Service{{Key: "tcp", Value: typedNilService}}, want: ErrInvalidNamespaceComposition},
 		{name: "duplicate", base: base, services: []Service{{Key: "tcp", Value: new(int)}, {Key: "tcp", Value: new(int)}}, want: ErrDuplicateNamespaceService},
 	} {
 		t.Run(test.name, func(t *testing.T) {
@@ -225,6 +229,15 @@ func TestNamespaceCompositionRejectsInvalidAndDuplicateServices(t *testing.T) {
 				t.Fatalf("ComposeNamespace error = %v, want %v", err, test.want)
 			}
 		})
+	}
+
+	many := make([]Service, InlineServiceCapacity+1)
+	for i := range many {
+		many[i] = Service{Key: ServiceKey(fmt.Sprintf("service-%d", i)), Value: new(int)}
+	}
+	many[len(many)-1].Value = typedNilService
+	if _, err := ComposeNamespace(base, many...); !errors.Is(err, ErrInvalidNamespaceComposition) {
+		t.Fatalf("fallback typed nil service error = %v, want %v", err, ErrInvalidNamespaceComposition)
 	}
 
 	direct := new(compositionBase)

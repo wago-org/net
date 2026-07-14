@@ -112,6 +112,32 @@ func TestInstanceDHCPv6ExactKindLifecycleAndUnsupportedValidation(t *testing.T) 
 	}
 }
 
+func TestStartRejectsTypedNilBackendResource(t *testing.T) {
+	var lease *fakeLease
+	adapter := &fakeNamespace{operations: dhcpns.SupportedOperations, next: lease, progress: nscore.ProgressDone}
+	manager, err := instancecore.NewManagerConfigured(instancecore.Config{
+		Limits: quota.DefaultLimits(), Readiness: instancecore.DefaultConfig().Readiness,
+		NamespaceFactory: func(*policy.Policy, *quota.Account) (nscore.Namespace, error) {
+			return nscore.ComposeNamespace(&fakeBase{}, nscore.Service{Key: dhcpns.ServiceKey, Value: adapter})
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	instance := new(wago.Instance)
+	if err := manager.Attach(instance); err != nil {
+		t.Fatal(err)
+	}
+	defer manager.Detach(instance)
+	state, _ := manager.ForInstance(instance)
+	if handle, progress, err := Start(state, state.NamespaceHandle(), dhcpns.OperationAcquire); handle != 0 || progress != nscore.ProgressDone || failureOf(err) != nscore.FailureIO {
+		t.Fatalf("typed nil backend start = %v, %v, %v", handle, progress, err)
+	}
+	if state.Resources().Len() != 1 || state.Readiness().Snapshot().Registrations != 1 {
+		t.Fatalf("typed nil backend resource published: resources=%d readiness=%+v", state.Resources().Len(), state.Readiness().Snapshot())
+	}
+}
+
 func TestStartClosesInvalidBackendResource(t *testing.T) {
 	lease := &fakeLease{configuration: validConfiguration(t)}
 	adapter := &fakeNamespace{operations: dhcpns.SupportedOperations, next: lease, progress: 99}

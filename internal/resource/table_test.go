@@ -35,6 +35,25 @@ func newTable(t testing.TB) *Table {
 	return table
 }
 
+func TestIsNilAndTableAddRejectTypedNilResources(t *testing.T) {
+	var typedNil *testResource
+	var resource Resource = typedNil
+	if !IsNil(nil) || !IsNil(typedNil) || !IsNil(resource) {
+		t.Fatal("IsNil did not recognize nil interface and typed nil values")
+	}
+	if IsNil(&testResource{}) || IsNil(testResource{}) || IsNil(0) {
+		t.Fatal("IsNil rejected usable values")
+	}
+
+	table := newTable(t)
+	if handle, err := table.Add(KindUDPSocket, resource); handle != 0 || !errors.Is(err, ErrBadHandle) {
+		t.Fatalf("Add typed nil = %v, %v, want zero, ErrBadHandle", handle, err)
+	}
+	if table.Len() != 0 {
+		t.Fatalf("live resources = %d, want 0", table.Len())
+	}
+}
+
 func TestTableRejectsInvalidStaleWrongKindAndCrossTableHandles(t *testing.T) {
 	first := newTable(t)
 	second := newTable(t)

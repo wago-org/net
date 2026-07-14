@@ -16,7 +16,7 @@ func Sync(state *core.State, namespaceHandle resource.Handle) (handle resource.H
 			return lookupErr
 		}
 		backend, ok := nscore.ResolveNamespaceService(value, ntpns.ServiceKey).(ntpns.Namespace)
-		if !ok {
+		if !ok || resource.IsNil(backend) {
 			return nscore.Fail(nscore.FailureIO, core.ErrInvalidBackendResult)
 		}
 		synchronization, backendProgress, backendErr := backend.TrySync()
@@ -24,16 +24,11 @@ func Sync(state *core.State, namespaceHandle resource.Handle) (handle resource.H
 		if backendErr != nil {
 			return backendErr
 		}
-		if (progress != nscore.ProgressDone && progress != nscore.ProgressInProgress) || synchronization == nil {
-			if synchronization != nil {
+		typed, ok := synchronization.(ntpns.Sync)
+		if (progress != nscore.ProgressDone && progress != nscore.ProgressInProgress) || !ok || resource.IsNil(typed) {
+			if !resource.IsNil(synchronization) {
 				_ = synchronization.Close()
 			}
-			progress = 0
-			return nscore.Fail(nscore.FailureIO, core.ErrInvalidBackendResult)
-		}
-		typed, ok := synchronization.(ntpns.Sync)
-		if !ok {
-			_ = synchronization.Close()
 			progress = 0
 			return nscore.Fail(nscore.FailureIO, core.ErrInvalidBackendResult)
 		}

@@ -44,8 +44,8 @@ func Start(state *core.State, namespaceHandle resource.Handle, operation dhcpns.
 			return backendErr
 		}
 		lease, ok := value.(dhcpns.Resource)
-		if !ok || (progress != nscore.ProgressDone && progress != nscore.ProgressInProgress) {
-			if value != nil {
+		if !ok || resource.IsNil(lease) || (progress != nscore.ProgressDone && progress != nscore.ProgressInProgress) {
+			if !resource.IsNil(value) {
 				_ = value.Close()
 			}
 			return nscore.Fail(nscore.FailureIO, core.ErrInvalidBackendResult)
@@ -99,7 +99,7 @@ func namespace(locked core.LockedState, handle resource.Handle) (dhcpns.Namespac
 		return nil, err
 	}
 	backend, ok := nscore.ResolveNamespaceService(value, dhcpns.ServiceKey).(dhcpns.Namespace)
-	if !ok {
+	if !ok || resource.IsNil(backend) {
 		return nil, nscore.Fail(nscore.FailureIO, core.ErrInvalidBackendResult)
 	}
 	return backend, nil

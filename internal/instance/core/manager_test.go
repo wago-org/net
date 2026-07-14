@@ -431,6 +431,25 @@ func TestNamespaceCreationRollsBackEveryOwnedStage(t *testing.T) {
 		}
 	})
 
+	t.Run("typed nil factory result releases reservation", func(t *testing.T) {
+		config := DefaultConfig()
+		config.Limits.Resources = 1
+		config.NamespaceFactory = func(*policy.Policy, *quota.Account) (nscore.Namespace, error) {
+			var backend *fakeNamespace
+			return backend, nil
+		}
+		manager, err := NewManagerConfigured(config)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := manager.Attach(new(wago.Instance)); !errors.Is(err, ErrInvalidConfig) {
+			t.Fatalf("typed nil factory result = %v, want ErrInvalidConfig", err)
+		}
+		if manager.Len() != 0 {
+			t.Fatal("typed nil factory result published state")
+		}
+	})
+
 	t.Run("registration failure closes backend and releases quota", func(t *testing.T) {
 		table, err := resource.NewTable()
 		if err != nil {

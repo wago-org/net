@@ -127,6 +127,32 @@ func TestOperationsPreserveReadinessPartialIOAndKindSafety(t *testing.T) {
 	}
 }
 
+func TestTypedNilBackendResourcesFailClosed(t *testing.T) {
+	local := nscore.Endpoint{Address: netip.MustParseAddr("192.0.2.1"), Port: 4302}
+	var nilListener *fakeListener
+	var nilStream *fakeStream
+	backend := &fakeNamespace{listener: nilListener, stream: nilStream}
+	state, manager, instance := attachState(t, backend, 4)
+	defer manager.Detach(instance)
+
+	if handle, progress, err := Listen(state, state.NamespaceHandle(), local); handle != 0 || progress != 0 || !errors.Is(err, core.ErrInvalidBackendResult) {
+		t.Fatalf("typed nil Listen = %v, %v, %v", handle, progress, err)
+	}
+	if handle, progress, err := Connect(state, state.NamespaceHandle(), local); handle != 0 || progress != 0 || !errors.Is(err, core.ErrInvalidBackendResult) {
+		t.Fatalf("typed nil Connect = %v, %v, %v", handle, progress, err)
+	}
+
+	listener := &fakeListener{local: local, accepted: nilStream}
+	backend.listener = listener
+	listenerHandle, progress, err := Listen(state, state.NamespaceHandle(), local)
+	if err != nil || progress != nscore.ProgressDone {
+		t.Fatalf("setup Listen = %v, %v", progress, err)
+	}
+	if handle, progress, err := Accept(state, listenerHandle); handle != 0 || progress != 0 || !errors.Is(err, core.ErrInvalidBackendResult) {
+		t.Fatalf("typed nil Accept = %v, %v, %v", handle, progress, err)
+	}
+}
+
 func TestRegistrationRollbackAndCloseRace(t *testing.T) {
 	local := nscore.Endpoint{Address: netip.MustParseAddr("192.0.2.1"), Port: 4302}
 	listener := &fakeListener{local: local}

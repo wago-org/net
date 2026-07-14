@@ -16,7 +16,7 @@ func Listen(state *core.State, namespaceHandle resource.Handle, local nscore.End
 			return lookupErr
 		}
 		backend, ok := nscore.ResolveNamespaceService(value, tcpns.ServiceKey).(tcpns.Namespace)
-		if !ok {
+		if !ok || resource.IsNil(backend) {
 			return nscore.Fail(nscore.FailureIO, core.ErrInvalidBackendResult)
 		}
 		listener, backendProgress, backendErr := backend.TryListenTCP(local)
@@ -24,16 +24,11 @@ func Listen(state *core.State, namespaceHandle resource.Handle, local nscore.End
 		if backendErr != nil {
 			return backendErr
 		}
-		if progress != nscore.ProgressDone || listener == nil {
-			if listener != nil {
+		typedListener, ok := listener.(tcpns.Listener)
+		if progress != nscore.ProgressDone || !ok || resource.IsNil(typedListener) {
+			if !resource.IsNil(listener) {
 				_ = listener.Close()
 			}
-			progress = 0
-			return nscore.Fail(nscore.FailureIO, core.ErrInvalidBackendResult)
-		}
-		typedListener, ok := listener.(tcpns.Listener)
-		if !ok {
-			_ = listener.Close()
 			progress = 0
 			return nscore.Fail(nscore.FailureIO, core.ErrInvalidBackendResult)
 		}
@@ -61,7 +56,7 @@ func Connect(state *core.State, namespaceHandle resource.Handle, remote nscore.E
 			return lookupErr
 		}
 		backend, ok := nscore.ResolveNamespaceService(value, tcpns.ServiceKey).(tcpns.Namespace)
-		if !ok {
+		if !ok || resource.IsNil(backend) {
 			return nscore.Fail(nscore.FailureIO, core.ErrInvalidBackendResult)
 		}
 		stream, backendProgress, backendErr := backend.TryConnectTCP(remote)
@@ -69,16 +64,11 @@ func Connect(state *core.State, namespaceHandle resource.Handle, remote nscore.E
 		if backendErr != nil {
 			return backendErr
 		}
-		if (progress != nscore.ProgressDone && progress != nscore.ProgressInProgress) || stream == nil {
-			if stream != nil {
+		typedStream, ok := stream.(tcpns.Stream)
+		if (progress != nscore.ProgressDone && progress != nscore.ProgressInProgress) || !ok || resource.IsNil(typedStream) {
+			if !resource.IsNil(stream) {
 				_ = stream.Close()
 			}
-			progress = 0
-			return nscore.Fail(nscore.FailureIO, core.ErrInvalidBackendResult)
-		}
-		typedStream, ok := stream.(tcpns.Stream)
-		if !ok {
-			_ = stream.Close()
 			progress = 0
 			return nscore.Fail(nscore.FailureIO, core.ErrInvalidBackendResult)
 		}
@@ -108,23 +98,18 @@ func Accept(state *core.State, listenerHandle resource.Handle) (handle resource.
 			return backendErr
 		}
 		if progress == nscore.ProgressWouldBlock {
-			if stream != nil {
+			if !resource.IsNil(stream) {
 				_ = stream.Close()
 				progress = 0
 				return nscore.Fail(nscore.FailureIO, core.ErrInvalidBackendResult)
 			}
 			return nil
 		}
-		if progress != nscore.ProgressDone || stream == nil {
-			if stream != nil {
+		typedStream, ok := stream.(tcpns.Stream)
+		if progress != nscore.ProgressDone || !ok || resource.IsNil(typedStream) {
+			if !resource.IsNil(stream) {
 				_ = stream.Close()
 			}
-			progress = 0
-			return nscore.Fail(nscore.FailureIO, core.ErrInvalidBackendResult)
-		}
-		typedStream, ok := stream.(tcpns.Stream)
-		if !ok {
-			_ = stream.Close()
 			progress = 0
 			return nscore.Fail(nscore.FailureIO, core.ErrInvalidBackendResult)
 		}
