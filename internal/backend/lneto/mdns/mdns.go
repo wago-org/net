@@ -725,6 +725,9 @@ func (a *Adapter) validateFrame(frame []byte) ([]byte, netip.Addr, bool, error) 
 	if destinationMAC != multicastMAC && destinationMAC != a.hardwareAddress {
 		return nil, netip.Addr{}, false, nil
 	}
+	if !validUnicastMAC(*eth.SourceHardwareAddr()) {
+		return nil, netip.Addr{}, true, lneto.ErrInvalidAddr
+	}
 	ip, err := ipv4.NewFrame(eth.Payload())
 	if err != nil {
 		return nil, netip.Addr{}, false, err
@@ -1081,6 +1084,10 @@ func sameResourceData(left, right lnetodns.Resource) bool {
 	default:
 		return false
 	}
+}
+
+func validUnicastMAC(mac [6]byte) bool {
+	return mac != ([6]byte{}) && mac != ([6]byte{0xff, 0xff, 0xff, 0xff, 0xff, 0xff}) && mac[0]&1 == 0
 }
 
 func queryRetainedBytes(config Config) uint64 {

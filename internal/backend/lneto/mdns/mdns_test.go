@@ -1,6 +1,7 @@
 package mdns
 
 import (
+	"net"
 	"net/netip"
 	"testing"
 
@@ -431,6 +432,51 @@ func TestMDNSIngressRelevanceConsumesLocalMalformedAndLeavesForeignUnhandled(t *
 			}
 			if queued != 0 {
 				t.Fatalf("malformed or foreign frame queued %d responses", queued)
+			}
+		})
+	}
+}
+
+func TestMDNSRejectsInvalidEthernetSourcesWithoutMutatingOperations(t *testing.T) {
+	for _, sourceMAC := range [][6]byte{
+		{},
+		{0xff, 0xff, 0xff, 0xff, 0xff, 0xff},
+		{0x01, 0, 0x5e, 0, 0, 1},
+	} {
+		t.Run(net.HardwareAddr(sourceMAC[:]).String(), func(t *testing.T) {
+			service := testService("device", "192.0.2.11")
+			core, adapter, _ := newTestAdapter(t, Config{
+				Services: []mdnsns.Service{service}, MaxServices: 1, MaxQueries: 1, MaxAnnouncements: 1,
+				MaxRecords: 8, MaxPacketBytes: 1200, MaxQueuedResponses: 1, MaxQuestionsPerPacket: 4,
+				MaxRecordsPerPacket: 16, MaxAttempts: 1, RetryServiceAttempts: 1,
+			}, testPolicy())
+			resource, _, err := adapter.TryQuery(mdnsns.Request{Name: "peer.local", Types: mdnsns.RecordsA})
+			if err != nil {
+				t.Fatal(err)
+			}
+			query := resource.(*query)
+			_ = serviceEgress(t, core)
+
+			question, err := buildQueryPacket(mdnsns.Request{Name: "_demo._udp.local", Types: mdnsns.RecordsPTR}, 1200)
+			if err != nil {
+				t.Fatal(err)
+			}
+			response, err := buildServicePacket(testService("peer", "192.0.2.22"), lnetodns.TypeA, 1200)
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, payload := range [][]byte{question, response} {
+				frame := wrapMDNSFrame(t, payload, sourceMAC, netip.MustParseAddr("192.0.2.22"))
+				core.Lock()
+				handled, ingressErr := adapter.ingressLocked(frame)
+				queued := adapter.responseCount
+				core.Unlock()
+				if ingressErr != nil || !handled {
+					t.Fatalf("ingress = handled %v, err %v", handled, ingressErr)
+				}
+				if queued != 0 || query.Readiness() != 0 {
+					t.Fatalf("invalid source mutated operations: queued=%d readiness=%v", queued, query.Readiness())
+				}
 			}
 		})
 	}
