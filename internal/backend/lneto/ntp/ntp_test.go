@@ -177,6 +177,80 @@ func TestNTPRejectsMalformedServerResponseAndIgnoresOriginMismatch(t *testing.T)
 	}
 }
 
+func TestNTPMalformedTerminalRetiresTransportBeforeCloseAndStaleCloseCannotAffectFreshSync(t *testing.T) {
+	clock := &manualClock{now: time.Date(2026, 7, 14, 12, 0, 0, 0, time.UTC)}
+	core, adapter, account := newTestAdapter(t, clock, Config{
+		Server: netip.MustParseAddr("192.0.2.123"), Clock: clock, MaxSyncs: 1,
+		MaxAttempts: 1, RetryServiceAttempts: 2, Precision: -20,
+	})
+	resource, _, err := adapter.TrySync()
+	if err != nil {
+		t.Fatal(err)
+	}
+	failed := resource.(*syncResource)
+	request := serviceEgress(t, core)
+	failedPort := failed.portLease.UDPPort()
+	malformed, arrival := makeNTPResponse(t, request, 100*time.Millisecond, 20*time.Millisecond)
+	ntpFrame := ntpPayload(t, malformed)
+	ntpFrame.SetFlags(lnetontp.ModeClient, lnetontp.Version4, lnetontp.LeapNoWarning)
+	rechecksumUDP(t, malformed)
+	clock.now = arrival
+	serviceIngress(t, core, malformed)
+
+	if failed.Readiness() != nscore.ReadyError {
+		t.Fatalf("failed readiness = %v", failed.Readiness())
+	}
+	if _, _, err := failed.TryResult(); failureOf(t, err) != nscore.FailureTemporary {
+		t.Fatalf("failed result = %v", err)
+	}
+	core.Lock()
+	mapped := adapter.byPort[failedPort]
+	leases := core.UDPPortLeaseCountLocked()
+	core.Unlock()
+	if mapped != nil || failed.portLease.UDPPort() != 0 || leases != 0 {
+		t.Fatalf("terminal transport retained: mapped=%p port=%d leases=%d", mapped, failed.portLease.UDPPort(), leases)
+	}
+	if usage, _ := account.Snapshot(); usage != (quota.Usage{Resources: 1, NTPResources: 1}) {
+		t.Fatalf("terminal quota = %+v", usage)
+	}
+
+	valid, _ := makeNTPResponse(t, request, 100*time.Millisecond, 20*time.Millisecond)
+	core.Lock()
+	handled, err := adapter.ingressLocked(valid)
+	core.Unlock()
+	if err != nil || handled || failed.Readiness() != nscore.ReadyError {
+		t.Fatalf("retired transport accepted late response: handled=%v err=%v readiness=%v", handled, err, failed.Readiness())
+	}
+	if _, _, err := adapter.TrySync(); failureOf(t, err) != nscore.FailureResourceLimit {
+		t.Fatalf("terminal resource concurrency = %v", err)
+	}
+	if err := failed.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if failed.Readiness() != nscore.ReadyClosed || failed.request != ([lnetontp.SizeHeader]byte{}) || failed.sample != (ntpns.Sample{}) || failed.failure != nil || failed.clockSample != (time.Time{}) || failed.attempts != 0 || failed.retry != 0 {
+		t.Fatalf("closed terminal resource retained state: %+v", failed)
+	}
+	if usage, _ := account.Snapshot(); usage != (quota.Usage{}) {
+		t.Fatalf("closed terminal quota = %+v", usage)
+	}
+
+	resource, _, err = adapter.TrySync()
+	if err != nil {
+		t.Fatal(err)
+	}
+	fresh := resource.(*syncResource)
+	freshPort := fresh.portLease.UDPPort()
+	if fresh == failed || freshPort == 0 || freshPort == failedPort || adapter.byPort[freshPort] != fresh {
+		t.Fatalf("fresh sync transport = stale:%p fresh:%p ports:%d/%d mapped:%p", failed, fresh, failedPort, freshPort, adapter.byPort[freshPort])
+	}
+	if err := failed.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if usage, _ := account.Snapshot(); usage != (quota.Usage{Resources: 1, NTPResources: 1, NTPWork: 1}) || adapter.byPort[freshPort] != fresh {
+		t.Fatalf("stale close affected fresh sync: usage=%+v mapped=%p", usage, adapter.byPort[freshPort])
+	}
+}
+
 func TestNTPPolicyLimitsTimeoutCancelAndClose(t *testing.T) {
 	clock := &manualClock{now: time.Date(2026, 7, 13, 22, 0, 0, 0, time.UTC)}
 	core, adapter, account := newTestAdapterWithPolicy(t, clock, Config{
