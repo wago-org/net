@@ -103,6 +103,53 @@ func TestListenerAndConnectReuseReduceSteadyStateAllocations(t *testing.T) {
 	}
 }
 
+func TestOutboundStreamCountTracksReuseAndCoreClose(t *testing.T) {
+	core, adapter := newTestAdapter(t, 4, 0, 2)
+	remote := nscore.Endpoint{Address: netip.MustParseAddr("192.0.2.5"), Port: 4205}
+	firstValue, _, err := adapter.TryConnect(remote)
+	if err != nil {
+		t.Fatal(err)
+	}
+	secondValue, _, err := adapter.TryConnect(remote)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := adapter.outboundTCPStreamsLocked(); got != 2 {
+		t.Fatalf("active outbound streams = %d", got)
+	}
+	if _, _, err := adapter.TryConnect(remote); failureOf(t, err) != nscore.FailureResourceLimit {
+		t.Fatalf("outbound limit = %v", err)
+	}
+	if err := firstValue.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if got := adapter.outboundTCPStreamsLocked(); got != 1 {
+		t.Fatalf("active outbound streams after close = %d", got)
+	}
+	thirdValue, _, err := adapter.TryConnect(remote)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := adapter.outboundTCPStreamsLocked(); got != 2 {
+		t.Fatalf("active outbound streams after reuse = %d", got)
+	}
+	if err := core.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if got := adapter.outboundTCPStreamsLocked(); got != 0 {
+		t.Fatalf("active outbound streams after core close = %d", got)
+	}
+	if ready := secondValue.(*tcpStream).Readiness(); ready != nscore.ReadyClosed {
+		t.Fatalf("second readiness after core close = %v", ready)
+	}
+	if ready := thirdValue.(*tcpStream).Readiness(); ready != nscore.ReadyClosed {
+		t.Fatalf("third readiness after core close = %v", ready)
+	}
+	if usage, _ := adapter.quotas.Snapshot(); usage != (quota.Usage{}) {
+		t.Fatalf("core close quota = %+v", usage)
+	}
+}
+
 func TestAcceptedCloseRetainsSlotUntilChargedMaintenance(t *testing.T) {
 	clientCore, client := newTestAdapter(t, 1, 0, 2)
 	serverCore, server := newTestAdapter(t, 2, 1, 0)

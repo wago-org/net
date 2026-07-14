@@ -36,6 +36,7 @@ type Adapter struct {
 	listeners           []*tcpListener
 	freeListenerPools   []tcpPool
 	streams             []*tcpStream
+	outboundStreams     int
 	freeOutboundStorage [][]byte
 	ports               map[uint16]struct{}
 	nextPort            uint16
@@ -540,7 +541,7 @@ func (n *Adapter) TryConnect(remote nscore.Endpoint) (nscore.Resource, nscore.Pr
 	if !n.policy.CheckEndpoint(policy.OperationTCPConnect, remote.Address, remote.Port) {
 		return nil, 0, nscore.Fail(nscore.FailureAccessDenied, ErrPolicyDenied)
 	}
-	if n.outboundTCPStreamsLocked() == int(n.config.MaxOutboundStreams) {
+	if n.outboundTCPStreamsLocked() >= int(n.config.MaxOutboundStreams) {
 		return nil, 0, nscore.Fail(nscore.FailureResourceLimit, lneto.ErrExhausted)
 	}
 	localPort, ok := n.allocateTCPPortLocked()
@@ -586,6 +587,7 @@ func (n *Adapter) TryConnect(remote nscore.Endpoint) (nscore.Resource, nscore.Pr
 	stream.conn = conn
 	n.ports[localPort] = struct{}{}
 	n.streams = append(n.streams, stream)
+	n.outboundStreams++
 	return stream, nscore.ProgressInProgress, nil
 }
 
@@ -881,6 +883,9 @@ func (s *tcpStream) closeLocked() error {
 	}
 	if s.outbound && s.owner != nil {
 		delete(s.owner.ports, s.local.Port)
+		if s.owner.outboundStreams > 0 {
+			s.owner.outboundStreams--
+		}
 	}
 	if s.allocation != nil {
 		s.allocation.Release()
@@ -946,13 +951,10 @@ func (n *Adapter) allocateTCPPortLocked() (uint16, bool) {
 }
 
 func (n *Adapter) outboundTCPStreamsLocked() int {
-	count := 0
-	for _, stream := range n.streams {
-		if stream != nil && stream.outbound && !stream.closed {
-			count++
-		}
+	if n == nil {
+		return 0
 	}
-	return count
+	return n.outboundStreams
 }
 
 // CloseLocked releases every TCP resource. The caller must hold the shared
@@ -979,6 +981,7 @@ func (n *Adapter) CloseLocked() {
 	n.listeners = nil
 	n.freeOutboundStorage = nil
 	n.streams = nil
+	n.outboundStreams = 0
 	n.stack = nil
 }
 

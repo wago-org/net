@@ -70,7 +70,7 @@ func BenchmarkAdapterTryConnectClose(b *testing.B) {
 func BenchmarkOutboundStreamCountScaling(b *testing.B) {
 	for _, count := range []int{1, 16, 256} {
 		b.Run(fmt.Sprintf("streams=%d", count), func(b *testing.B) {
-			adapter := &Adapter{streams: make([]*tcpStream, count)}
+			adapter := &Adapter{outboundStreams: count, streams: make([]*tcpStream, count)}
 			for i := range adapter.streams {
 				adapter.streams[i] = &tcpStream{outbound: true}
 			}
