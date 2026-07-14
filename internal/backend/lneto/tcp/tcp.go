@@ -464,7 +464,27 @@ func (n *Adapter) ingressLocked(frame []byte) (bool, error) {
 		return false, nil
 	}
 	flags := ipFrame.Flags()
-	return flags.MoreFragments() || flags.FragmentOffset() != 0, nil
+	if flags.MoreFragments() || flags.FragmentOffset() != 0 {
+		return true, nil
+	}
+	payload := ipFrame.RawData()[headerLength:totalLength]
+	tcpFrame, err := lnetotcp.NewFrame(payload)
+	if err != nil {
+		return false, nil
+	}
+	if _, owned := n.ports[tcpFrame.DestinationPort()]; !owned {
+		return false, nil
+	}
+	tcpHeaderLength := tcpFrame.HeaderLength()
+	if tcpFrame.SourcePort() == 0 || tcpHeaderLength < 20 || tcpHeaderLength > len(payload) {
+		return true, nil
+	}
+	var checksum lneto.CRC791
+	ipFrame.CRCWriteTCPPseudo(&checksum)
+	if checksum.PayloadSum16(payload) != 0 {
+		return true, nil
+	}
+	return false, nil
 }
 
 // TryListenTCP implements the narrow TCP namespace facet.

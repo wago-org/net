@@ -562,6 +562,79 @@ func TestFragmentedIPv4SYNIsHandledDropAndListenerRemainsRetryable(t *testing.T)
 	}
 }
 
+func TestCorrelatedMalformedIPv4TCPIsHandledDropAndListenerRemainsRetryable(t *testing.T) {
+	clientCore, client := newTestAdapter(t, 49, 0, 1)
+	serverCore, server := newTestAdapter(t, 50, 1, 0)
+	setGateways(clientCore, [6]byte{0x02, 0, 0, 0, 0, 50})
+	setGateways(serverCore, [6]byte{0x02, 0, 0, 0, 0, 49})
+	endpoint := nscore.Endpoint{Address: netip.MustParseAddr("192.0.2.50"), Port: 4250}
+	listenerValue, progress, err := server.TryListen(endpoint)
+	if err != nil || progress != nscore.ProgressDone {
+		t.Fatalf("listen = %T, %v, %v", listenerValue, progress, err)
+	}
+	listener := listenerValue.(*tcpListener)
+	clientValue, progress, err := client.TryConnect(endpoint)
+	if err != nil || progress != nscore.ProgressInProgress {
+		t.Fatalf("connect = %T, %v, %v", clientValue, progress, err)
+	}
+	clientStream := clientValue.(*tcpStream)
+	validSYN := nextTCPFrame(t, clientCore)
+	for _, test := range []struct {
+		name   string
+		mutate func(ipv4.Frame, lnetotcp.Frame)
+	}{
+		{name: "bad TCP checksum", mutate: func(_ ipv4.Frame, tcpFrame lnetotcp.Frame) {
+			tcpFrame.SetCRC(tcpFrame.CRC() ^ 1)
+		}},
+		{name: "invalid TCP header length", mutate: func(ipFrame ipv4.Frame, tcpFrame lnetotcp.Frame) {
+			_, flags := tcpFrame.OffsetAndFlags()
+			tcpFrame.SetOffsetAndFlags(4, flags)
+			tcpFrame.SetCRC(0)
+			var checksum lneto.CRC791
+			ipFrame.CRCWriteTCPPseudo(&checksum)
+			tcpFrame.SetCRC(checksum.PayloadSum16(tcpFrame.RawData()))
+		}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			malformed := append([]byte(nil), validSYN...)
+			ethernetFrame, err := ethernet.NewFrame(malformed)
+			if err != nil {
+				t.Fatal(err)
+			}
+			ipFrame, err := ipv4.NewFrame(ethernetFrame.Payload())
+			if err != nil {
+				t.Fatal(err)
+			}
+			tcpFrame, err := lnetotcp.NewFrame(ipFrame.Payload())
+			if err != nil {
+				t.Fatal(err)
+			}
+			test.mutate(ipFrame, tcpFrame)
+			serviceTCPIngressFrame(t, serverCore, malformed)
+			serverCore.Lock()
+			serverCore.SetNextIngressLocked(false)
+			required := serverCore.RequiredFrameBytesLocked()
+			serverCore.Unlock()
+			if report, progress, err := serverCore.TryService(nscore.ServiceBudget{Packets: 1, Bytes: uint32(required), Operations: 1}); err != nil || progress != nscore.ProgressWouldBlock || report != (nscore.ServiceReport{}) {
+				t.Fatalf("malformed SYN scheduled response = %+v, %v, %v", report, progress, err)
+			}
+			if ready := listener.Readiness(); ready != 0 {
+				t.Fatalf("malformed SYN listener readiness = %v", ready)
+			}
+		})
+	}
+
+	serviceTCPIngressFrame(t, serverCore, validSYN)
+	serviceTCPIngressFrame(t, clientCore, nextTCPFrame(t, serverCore))
+	serviceTCPIngressFrame(t, serverCore, nextTCPFrame(t, clientCore))
+	if progress, err := clientStream.TryFinishConnect(); err != nil || progress != nscore.ProgressDone {
+		t.Fatalf("finish after valid retry = %v, %v", progress, err)
+	}
+	if ready := listener.Readiness(); ready != nscore.ReadyAccept {
+		t.Fatalf("valid retry listener readiness = %v", ready)
+	}
+}
+
 func TestConnectResetBeforeEstablishment(t *testing.T) {
 	common, adapter := newTestAdapter(t, 3, 0, 1)
 	remote := nscore.Endpoint{Address: netip.MustParseAddr("192.0.2.4"), Port: 4299}
