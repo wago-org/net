@@ -42,8 +42,9 @@ func NamespaceDefault(host plugin.Host, module wago.HostModule, params, results 
 		guest.SetStatus(results, guest.StatusInvalidArgument)
 		return
 	}
-	memory, out := guest.Memory(module), uint32(params[0])
-	if !abicore.CheckRanges(memory, false, abicore.Range{Ptr: out, Length: abicore.HandleV1Size}) {
+	memory := guest.Memory(module)
+	out, ok := abicore.NarrowUint32(params[0])
+	if !ok || !abicore.CheckRanges(memory, false, abicore.Range{Ptr: out, Length: abicore.HandleV1Size}) {
 		guest.SetStatus(results, guest.StatusInvalidArgument)
 		return
 	}
@@ -69,8 +70,9 @@ func Operations(host plugin.Host, module wago.HostModule, params, results []uint
 		guest.SetStatus(results, guest.StatusInvalidArgument)
 		return
 	}
-	memory, out := guest.Memory(module), uint32(params[1])
-	if !abicore.CheckRanges(memory, false, abicore.Range{Ptr: out, Length: dhcpabi.OperationsV1Size}) {
+	memory := guest.Memory(module)
+	out, ok := abicore.NarrowUint32(params[1])
+	if !ok || !abicore.CheckRanges(memory, false, abicore.Range{Ptr: out, Length: dhcpabi.OperationsV1Size}) {
 		guest.SetStatus(results, guest.StatusInvalidArgument)
 		return
 	}
@@ -96,8 +98,9 @@ func Start(host plugin.Host, module wago.HostModule, params, results []uint64) {
 		guest.SetStatus(results, guest.StatusInvalidArgument)
 		return
 	}
-	memory, out := guest.Memory(module), uint32(params[2])
-	if !abicore.CheckRanges(memory, false, abicore.Range{Ptr: out, Length: abicore.HandleV1Size}) {
+	memory := guest.Memory(module)
+	out, ok := abicore.NarrowUint32(params[2])
+	if !ok || !abicore.CheckRanges(memory, false, abicore.Range{Ptr: out, Length: abicore.HandleV1Size}) {
 		guest.SetStatus(results, guest.StatusInvalidArgument)
 		return
 	}
@@ -131,8 +134,9 @@ func Result(host plugin.Host, module wago.HostModule, params, results []uint64) 
 		guest.SetStatus(results, guest.StatusInvalidArgument)
 		return
 	}
-	memory, out := guest.Memory(module), uint32(params[1])
-	if !abicore.CheckRanges(memory, false, abicore.Range{Ptr: out, Length: dhcpabi.ConfigurationV1Size}) {
+	memory := guest.Memory(module)
+	out, ok := abicore.NarrowUint32(params[1])
+	if !ok || !abicore.CheckRanges(memory, false, abicore.Range{Ptr: out, Length: dhcpabi.ConfigurationV1Size}) {
 		guest.SetStatus(results, guest.StatusInvalidArgument)
 		return
 	}

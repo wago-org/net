@@ -35,11 +35,15 @@ func (*fakeBase) TryService(nscore.ServiceBudget) (nscore.ServiceReport, nscore.
 }
 
 type fakeNamespace struct {
-	lease *fakeLease
-	calls int
+	lease           *fakeLease
+	calls           int
+	operationsCalls int
 }
 
-func (*fakeNamespace) Operations() dhcpns.Operations { return dhcpns.SupportedOperations }
+func (n *fakeNamespace) Operations() dhcpns.Operations {
+	n.operationsCalls++
+	return dhcpns.SupportedOperations
+}
 func (n *fakeNamespace) TryAcquire() (nscore.Resource, nscore.Progress, error) {
 	n.calls++
 	return n.lease, nscore.ProgressInProgress, nil
@@ -116,6 +120,51 @@ func TestResultBindingChecksMemoryAndEncodesReadyConfiguration(t *testing.T) {
 	if ready.status != guest.StatusOK || binary.LittleEndian.Uint32(host.memory[:4]) != configuration.TransactionID ||
 		host.memory[dhcpabi.ConfigurationV1Size-1] != 0 {
 		t.Fatalf("ready result = %v xid=%x", ready.status, binary.LittleEndian.Uint32(host.memory[:4]))
+	}
+}
+
+func TestBindingsRejectHighBitI32AliasesBeforeStateAndBackendWork(t *testing.T) {
+	lease := &fakeLease{result: dhcpns.ResultWouldBlock}
+	backend := &fakeNamespace{lease: lease}
+	manager, instance := attachManager(t, backend)
+	defer manager.Detach(instance)
+	host := testHost{instance: instance, memory: bytes.Repeat([]byte{0x6d}, 4096)}
+	bindings := Bindings(plugin.NewHost(manager))
+	state, ok := manager.ForInstance(instance)
+	if !ok {
+		t.Fatal("attached state missing")
+	}
+	namespaceHandle := state.NamespaceHandle()
+	leaseHandle, err := state.Resources().Add(resource.KindDHCPv6Lease, lease)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	high := uint64(1) << 32
+	tests := []struct {
+		name    string
+		binding string
+		params  []uint64
+	}{
+		{name: "namespace output", binding: "namespace_default", params: []uint64{high | 400}},
+		{name: "operations output", binding: "operations", params: []uint64{uint64(namespaceHandle), high | 256}},
+		{name: "start output", binding: "start", params: []uint64{uint64(namespaceHandle), uint64(dhcpns.OperationAcquire), high | 320}},
+		{name: "result output", binding: "result", params: []uint64{uint64(leaseHandle), high | 512}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			before := append([]byte(nil), host.memory...)
+			acquireCalls, operationsCalls, resultCalls := backend.calls, backend.operationsCalls, lease.resultCalls
+			if status := callBinding(t, bindingByName(t, bindings, test.binding), host, test.params...).status; status != guest.StatusInvalidArgument {
+				t.Fatalf("status = %v", status)
+			}
+			if backend.calls != acquireCalls || backend.operationsCalls != operationsCalls || lease.resultCalls != resultCalls {
+				t.Fatalf("backend work changed: acquire=%d operations=%d result=%d", backend.calls, backend.operationsCalls, lease.resultCalls)
+			}
+			if !bytes.Equal(host.memory, before) {
+				t.Fatal("invalid alias mutated guest memory")
+			}
+		})
 	}
 }
 
@@ -208,6 +257,24 @@ func TestBindingsRejectTypedNilAndIsolateReusedLeaseGeneration(t *testing.T) {
 	}
 }
 
+func attachManager(t testing.TB, backend *fakeNamespace) (*instancecore.Manager, *wago.Instance) {
+	t.Helper()
+	manager, err := instancecore.NewManagerConfigured(instancecore.Config{
+		Limits: quota.DefaultLimits(), Readiness: instancecore.DefaultConfig().Readiness,
+		NamespaceFactory: func(*policy.Policy, *quota.Account) (nscore.Namespace, error) {
+			return nscore.ComposeNamespace(&fakeBase{}, nscore.Service{Key: dhcpns.ServiceKey, Value: backend})
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	instance := new(wago.Instance)
+	if err := manager.Attach(instance); err != nil {
+		t.Fatal(err)
+	}
+	return manager, instance
+}
+
 type bindingResult struct{ status guest.Status }
 
 func bindingByName(t testing.TB, bindings []plugin.Binding, name string) wago.HostFunc {
@@ -226,4 +293,39 @@ func callBinding(t testing.TB, function wago.HostFunc, host testHost, params ...
 	var results [1]uint64
 	function(host, params, results[:])
 	return bindingResult{status: guest.Status(int32(results[0]))}
+}
+
+func BenchmarkResultBindingReady(b *testing.B) {
+	configuration := dhcpns.Configuration{
+		TransactionID:            0x123456,
+		IAID:                     [4]byte{2, 0, 0, 1},
+		AssignedAddr:             netip.MustParseAddr("2001:db8::10"),
+		ServerAddr:               netip.MustParseAddr("fe80::2"),
+		ServerScopeID:            7,
+		ServerDUIDLength:         10,
+		PreferredLifetimeSeconds: 1800,
+		ValidLifetimeSeconds:     3600,
+	}
+	copy(configuration.ServerDUID[:], []byte{0, 3, 0, 1, 2, 0, 0, 0, 0, 2})
+	lease := &fakeLease{configuration: configuration, result: dhcpns.ResultReady}
+	manager, instance := attachManager(b, &fakeNamespace{lease: lease})
+	defer manager.Detach(instance)
+	state, _ := manager.ForInstance(instance)
+	handle, err := state.Resources().Add(resource.KindDHCPv6Lease, lease)
+	if err != nil {
+		b.Fatal(err)
+	}
+	host := testHost{instance: instance, memory: make([]byte, dhcpabi.ConfigurationV1Size)}
+	function := bindingByName(b, Bindings(plugin.NewHost(manager)), "result")
+	params := []uint64{uint64(handle), 0}
+	var results [1]uint64
+	function(host, params, results[:])
+	if status := guest.Status(int32(results[0])); status != guest.StatusOK {
+		b.Fatalf("warmup status = %v", status)
+	}
+	b.ReportAllocs()
+	b.ResetTimer()
+	for b.Loop() {
+		function(host, params, results[:])
+	}
 }
