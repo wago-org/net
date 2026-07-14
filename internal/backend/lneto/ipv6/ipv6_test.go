@@ -98,11 +98,6 @@ func TestValidateIngressFrameRejectsExtensionsAndMalformedAddresses(t *testing.T
 		t.Fatal("fragment extension header accepted")
 	}
 	ipFrame.SetNextHeader(17)
-	ipFrame.SetVersionTrafficAndFlow(6, 0, 1)
-	if _, valid := ValidateIngressFrame(frame); valid {
-		t.Fatal("nonzero flow label accepted")
-	}
-	ipFrame.SetVersionTrafficAndFlow(6, 0, 0)
 	*ipFrame.SourceAddr() = [16]byte{}
 	if _, valid := ValidateIngressFrame(frame); valid {
 		t.Fatal("unspecified source accepted")
@@ -110,5 +105,33 @@ func TestValidateIngressFrameRejectsExtensionsAndMalformedAddresses(t *testing.T
 	ipFrame.SetVersionTrafficAndFlow(4, 0, 0)
 	if _, valid := ValidateIngressFrame(frame); valid {
 		t.Fatal("wrong IP version accepted")
+	}
+}
+
+func TestValidateIngressFrameAcceptsTrafficClassAndFlowLabel(t *testing.T) {
+	frame := make([]byte, 14+40+8)
+	ethernetFrame, _ := ethernet.NewFrame(frame)
+	ethernetFrame.SetEtherType(ethernet.TypeIPv6)
+	ipFrame, _ := lnetoipv6.NewFrame(ethernetFrame.Payload())
+	ipFrame.SetPayloadLength(8)
+	ipFrame.SetNextHeader(17)
+	*ipFrame.SourceAddr() = netip.MustParseAddr("2001:db8::1").As16()
+	*ipFrame.DestinationAddr() = netip.MustParseAddr("2001:db8::2").As16()
+
+	for _, test := range []struct {
+		name    string
+		traffic lnetoipv6.ToS
+		flow    uint32
+	}{
+		{name: "traffic class", traffic: 0xa5},
+		{name: "flow label", flow: 0xabcde},
+		{name: "traffic class and flow label", traffic: 0x5a, flow: 0x54321},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			ipFrame.SetVersionTrafficAndFlow(6, test.traffic, test.flow)
+			if relevant, valid := ValidateIngressFrame(frame); !relevant || !valid {
+				t.Fatalf("labeled base frame = relevant %v valid %v", relevant, valid)
+			}
+		})
 	}
 }
