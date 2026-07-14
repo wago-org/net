@@ -1,6 +1,8 @@
 package ntp
 
 import (
+	"bytes"
+	"errors"
 	"net/netip"
 	"testing"
 	"time"
@@ -18,9 +20,15 @@ import (
 	"github.com/wago-org/net/internal/quota"
 )
 
-type manualClock struct{ now time.Time }
+type manualClock struct {
+	now   time.Time
+	calls int
+}
 
-func (c *manualClock) Now() time.Time { return c.now }
+func (c *manualClock) Now() time.Time {
+	c.calls++
+	return c.now
+}
 
 func TestNTPExchangeUsesExplicitClockValidatesRepliesAndReleasesQuota(t *testing.T) {
 	clock := &manualClock{now: time.Date(2026, 7, 13, 22, 0, 0, 0, time.UTC)}
@@ -76,6 +84,77 @@ func TestNTPExchangeUsesExplicitClockValidatesRepliesAndReleasesQuota(t *testing
 	}
 	if sync.sample != (ntpns.Sample{}) || sync.failure != nil || sync.portLease.UDPPort() != 0 {
 		t.Fatalf("close retained state: %+v", sync)
+	}
+}
+
+func TestEgressShortBufferPreservesPrepareStateClockAndRoundRobinOrder(t *testing.T) {
+	clock := &manualClock{now: time.Date(2026, 7, 14, 17, 0, 0, 0, time.UTC)}
+	core, adapter, account := newTestAdapter(t, clock, Config{
+		Server: netip.MustParseAddr("192.0.2.123"), Clock: clock, MaxSyncs: 2,
+		MaxAttempts: 2, RetryServiceAttempts: 2, Precision: -20,
+	})
+	firstResource, _, err := adapter.TrySync()
+	if err != nil {
+		t.Fatal(err)
+	}
+	secondResource, _, err := adapter.TrySync()
+	if err != nil {
+		t.Fatal(err)
+	}
+	first := firstResource.(*syncResource)
+	second := secondResource.(*syncResource)
+	firstRequest, secondRequest := first.request, second.request
+	firstSample, secondSample := first.clockSample, second.clockSample
+	clockCalls := clock.calls
+	usageBefore, _ := account.Snapshot()
+	firstReady, secondReady := first.Readiness(), second.Readiness()
+	short := bytes.Repeat([]byte{0xa5}, 14+20+8+lnetontp.SizeHeader-1)
+
+	core.Lock()
+	written, worked, err := adapter.egressLocked(short)
+	cursor := adapter.cursor
+	core.Unlock()
+	if written != 0 || worked || !errors.Is(err, lneto.ErrShortBuffer) {
+		t.Fatalf("short egress = %d, %v, %v", written, worked, err)
+	}
+	if !bytes.Equal(short, bytes.Repeat([]byte{0xa5}, len(short))) {
+		t.Fatalf("short egress mutated destination = %x", short)
+	}
+	if cursor != 0 || clock.calls != clockCalls || first.state != syncPrepare || second.state != syncPrepare || first.attempts != 0 || second.attempts != 0 || first.retry != 0 || second.retry != 0 || first.request != firstRequest || second.request != secondRequest || first.clockSample != firstSample || second.clockSample != secondSample {
+		t.Fatalf("short egress mutated scheduler or syncs: cursor=%d clock=%d/%d first=%v/%d/%d second=%v/%d/%d", cursor, clock.calls, clockCalls, first.state, first.attempts, first.retry, second.state, second.attempts, second.retry)
+	}
+	if first.Readiness() != firstReady || second.Readiness() != secondReady {
+		t.Fatalf("short egress changed readiness: first=%v/%v second=%v/%v", first.Readiness(), firstReady, second.Readiness(), secondReady)
+	}
+	if usage, _ := account.Snapshot(); usage != usageBefore {
+		t.Fatalf("short egress changed quota = %+v, want %+v", usage, usageBefore)
+	}
+
+	frame := make([]byte, core.Link().MaxFrameBytes())
+	core.Lock()
+	firstBytes, firstWorked, err := adapter.egressLocked(frame)
+	cursorAfterFirst := adapter.cursor
+	core.Unlock()
+	if err != nil || !firstWorked || firstBytes != 14+20+8+lnetontp.SizeHeader || cursorAfterFirst != 1 {
+		t.Fatalf("first retry = %d, %v, %v, cursor=%d", firstBytes, firstWorked, err, cursorAfterFirst)
+	}
+	firstIP := ipv4Payload(t, frame[:firstBytes])
+	firstUDP := udpPayload(t, frame[:firstBytes])
+	if firstIP.ID() != 11 || firstUDP.SourcePort() != first.portLease.UDPPort() || first.state != syncWaiting || first.attempts != 1 || first.retry != 2 {
+		t.Fatalf("first retry frame/state = id=%d port=%d state=%v attempts=%d retry=%d", firstIP.ID(), firstUDP.SourcePort(), first.state, first.attempts, first.retry)
+	}
+
+	core.Lock()
+	secondBytes, secondWorked, err := adapter.egressLocked(frame)
+	cursorAfterSecond := adapter.cursor
+	core.Unlock()
+	if err != nil || !secondWorked || secondBytes != 14+20+8+lnetontp.SizeHeader || cursorAfterSecond != 0 {
+		t.Fatalf("second egress = %d, %v, %v, cursor=%d", secondBytes, secondWorked, err, cursorAfterSecond)
+	}
+	secondIP := ipv4Payload(t, frame[:secondBytes])
+	secondUDP := udpPayload(t, frame[:secondBytes])
+	if secondIP.ID() != 12 || secondUDP.SourcePort() != second.portLease.UDPPort() || second.state != syncWaiting || second.attempts != 1 || second.retry != 2 {
+		t.Fatalf("second frame/state = id=%d port=%d state=%v attempts=%d retry=%d", secondIP.ID(), secondUDP.SourcePort(), second.state, second.attempts, second.retry)
 	}
 }
 

@@ -349,11 +349,11 @@ func (a *Adapter) egressLocked(dst []byte) (written int, worked bool, err error)
 		if sync == nil || (sync.state != syncPrepare && sync.state != syncSend && sync.state != syncWaiting) {
 			continue
 		}
-		a.cursor = index + 1
-		if a.cursor == len(a.syncs) {
-			a.cursor = 0
-		}
 		if sync.state == syncWaiting {
+			a.cursor = index + 1
+			if a.cursor == len(a.syncs) {
+				a.cursor = 0
+			}
 			if sync.retry > 1 {
 				sync.retry--
 				return 0, true, nil
@@ -365,30 +365,42 @@ func (a *Adapter) egressLocked(dst []byte) (written int, worked bool, err error)
 			sync.state = syncSend
 			return 0, true, nil
 		}
+		frameBytes := 14 + 20 + 8 + lnetontp.SizeHeader
+		if len(dst) < frameBytes {
+			return 0, false, lneto.ErrShortBuffer
+		}
 		if sync.state == syncPrepare {
 			sync.clockSample = a.config.Clock.Now().UTC()
 			if _, clockErr := lnetontp.TimestampFromTime(sync.clockSample); clockErr != nil {
 				sync.failLocked(nscore.FailureInvalidState, clockErr)
+				a.cursor = index + 1
+				if a.cursor == len(a.syncs) {
+					a.cursor = 0
+				}
 				return 0, true, nil
 			}
 			clear(sync.request[:])
 			n, encodeErr := sync.client.Encapsulate(sync.request[:], 0, 0)
 			if encodeErr != nil {
 				sync.failLocked(nscore.FailureInvalidState, encodeErr)
+				a.cursor = index + 1
+				if a.cursor == len(a.syncs) {
+					a.cursor = 0
+				}
 				return 0, true, nil
 			}
 			if n != lnetontp.SizeHeader {
 				sync.failLocked(nscore.FailureIO, lneto.ErrMismatchLen)
+				a.cursor = index + 1
+				if a.cursor == len(a.syncs) {
+					a.cursor = 0
+				}
 				return 0, true, nil
 			}
 			sync.attempts = 0
 			sync.state = syncSend
 		}
 
-		frameBytes := 14 + 20 + 8 + lnetontp.SizeHeader
-		if len(dst) < frameBytes {
-			return 0, false, lneto.ErrShortBuffer
-		}
 		frame := dst[:frameBytes]
 		clear(frame)
 		ethernetFrame, _ := ethernet.NewFrame(frame)
@@ -418,6 +430,10 @@ func (a *Adapter) egressLocked(dst []byte) (written int, worked bool, err error)
 		sync.attempts++
 		sync.retry = a.config.RetryServiceAttempts
 		sync.state = syncWaiting
+		a.cursor = index + 1
+		if a.cursor == len(a.syncs) {
+			a.cursor = 0
+		}
 		return frameBytes, true, nil
 	}
 	return 0, false, nil
