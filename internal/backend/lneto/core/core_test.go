@@ -34,6 +34,28 @@ func TestConfigurationRequiresUnicastHardwareIdentity(t *testing.T) {
 	}
 }
 
+func TestConfigurationRejectsNonHostIPv4Identity(t *testing.T) {
+	base := testConfig(2)
+	unspecified := base
+	unspecified.IPv4Address = netip.IPv4Unspecified()
+	if err := ValidateConfig(unspecified); err != nil {
+		t.Fatalf("dynamic unspecified IPv4 identity rejected: %v", err)
+	}
+	for name, address := range map[string]netip.Addr{
+		"loopback":          netip.MustParseAddr("127.0.0.1"),
+		"multicast":         netip.MustParseAddr("224.0.0.1"),
+		"limited broadcast": netip.AddrFrom4([4]byte{255, 255, 255, 255}),
+	} {
+		t.Run(name, func(t *testing.T) {
+			invalid := base
+			invalid.IPv4Address = address
+			if err := ValidateConfig(invalid); err == nil {
+				t.Fatalf("accepted non-host IPv4 identity %v", address)
+			}
+		})
+	}
+}
+
 func TestIPv6ConfigurationRequiresUsableStaticIdentityAndMTU(t *testing.T) {
 	base := Config{
 		Hostname: "core6", RandSeed: 6, HardwareAddress: [6]byte{2, 0, 0, 0, 0, 6},

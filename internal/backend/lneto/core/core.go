@@ -460,8 +460,7 @@ func (n *Namespace) tryEgress(remainingBytes uint32) (bool, bool, int, error) {
 }
 
 func validConfig(config Config) bool {
-	if config.Hostname == "" || config.RandSeed == 0 || !validUnicastHardwareAddress(config.HardwareAddress) ||
-		!config.IPv4Address.Is4() || config.IPv4Address.Is4In6() || config.IPv4Address.Zone() != "" {
+	if config.Hostname == "" || config.RandSeed == 0 || !validUnicastHardwareAddress(config.HardwareAddress) || !validIPv4Identity(config.IPv4Address) {
 		return false
 	}
 	ipv6Configured := config.IPv6Address.IsValid() || config.IPv6PrefixBits != 0 || config.IPv6ScopeID != 0
@@ -477,6 +476,11 @@ func validConfig(config Config) bool {
 
 func validUnicastHardwareAddress(address [6]byte) bool {
 	return address != ([6]byte{}) && address[0]&1 == 0
+}
+
+func validIPv4Identity(address netip.Addr) bool {
+	return address.Is4() && !address.Is4In6() && address.Zone() == "" &&
+		(address.IsUnspecified() || (!address.IsLoopback() && !address.IsMulticast() && address != netip.AddrFrom4([4]byte{255, 255, 255, 255})))
 }
 
 func validIPv6Config(address netip.Addr, prefixBits uint8, scopeID uint32) bool {
