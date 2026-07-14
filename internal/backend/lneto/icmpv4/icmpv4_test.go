@@ -2,6 +2,7 @@ package icmpv4
 
 import (
 	"bytes"
+	"errors"
 	"net/netip"
 	"testing"
 
@@ -58,6 +59,86 @@ func TestICMPv4ExchangeCopiesPayloadValidatesReplyAndReleasesQuota(t *testing.T)
 	}
 	if exchange.payload != nil || exchange.destination.IsValid() || exchange.identifier != 0 || exchange.sequence != 0 || exchange.failure != nil {
 		t.Fatalf("close retained state: %+v", exchange)
+	}
+}
+
+func TestEgressShortBufferPreservesRoundRobinStateAndPendingEchoes(t *testing.T) {
+	core, adapter, account := newTestAdapter(t, Config{MaxEchoes: 2, MaxPayloadBytes: 32, MaxAttempts: 2, RetryServiceAttempts: 2})
+	firstResource, _, err := adapter.TryEcho(icmpns.Request{Destination: netip.MustParseAddr("192.0.2.98"), Payload: []byte("first")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	secondResource, _, err := adapter.TryEcho(icmpns.Request{Destination: netip.MustParseAddr("192.0.2.99"), Payload: []byte("second")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	first := firstResource.(*echo)
+	second := secondResource.(*echo)
+	firstPayload := append([]byte(nil), first.payload...)
+	secondPayload := append([]byte(nil), second.payload...)
+	usageBefore, _ := account.Snapshot()
+	firstReady, secondReady := first.Readiness(), second.Readiness()
+	short := bytes.Repeat([]byte{0xa5}, 14+20+8+len(first.payload)-1)
+
+	core.Lock()
+	written, worked, err := adapter.egressLocked(short)
+	cursor := adapter.cursor
+	core.Unlock()
+	if written != 0 || worked || !errors.Is(err, lneto.ErrShortBuffer) {
+		t.Fatalf("short egress = %d, %v, %v", written, worked, err)
+	}
+	if !bytes.Equal(short, bytes.Repeat([]byte{0xa5}, len(short))) {
+		t.Fatalf("short egress mutated destination = %x", short)
+	}
+	if cursor != 0 || first.state != echoPending || second.state != echoPending || first.attempts != 0 || second.attempts != 0 || first.retry != 0 || second.retry != 0 || !bytes.Equal(first.payload, firstPayload) || !bytes.Equal(second.payload, secondPayload) {
+		t.Fatalf("short egress mutated scheduler or echoes: cursor=%d first=%v/%d/%d second=%v/%d/%d", cursor, first.state, first.attempts, first.retry, second.state, second.attempts, second.retry)
+	}
+	if first.Readiness() != firstReady || second.Readiness() != secondReady {
+		t.Fatalf("short egress changed readiness: first=%v/%v second=%v/%v", first.Readiness(), firstReady, second.Readiness(), secondReady)
+	}
+	if usage, _ := account.Snapshot(); usage != usageBefore {
+		t.Fatalf("short egress changed quota = %+v, want %+v", usage, usageBefore)
+	}
+
+	frame := make([]byte, core.Link().MaxFrameBytes())
+	core.Lock()
+	firstBytes, firstWorked, err := adapter.egressLocked(frame)
+	cursorAfterFirst := adapter.cursor
+	core.Unlock()
+	if err != nil || !firstWorked || firstBytes == 0 || cursorAfterFirst != 1 {
+		t.Fatalf("first retry = %d, %v, %v, cursor=%d", firstBytes, firstWorked, err, cursorAfterFirst)
+	}
+	firstIP, err := ipv4.NewFrame(frame[14:firstBytes])
+	if err != nil {
+		t.Fatal(err)
+	}
+	firstICMP, err := lnetoicmp.NewFrame(firstIP.Payload())
+	if err != nil {
+		t.Fatal(err)
+	}
+	firstEcho := lnetoicmp.FrameEcho{Frame: firstICMP}
+	if firstIP.ID() != 9 || firstEcho.Identifier() != first.identifier || firstEcho.SequenceNumber() != first.sequence || !bytes.Equal(firstEcho.Data(), firstPayload) {
+		t.Fatalf("first retry frame = id=%d identity=%d/%d payload=%q", firstIP.ID(), firstEcho.Identifier(), firstEcho.SequenceNumber(), firstEcho.Data())
+	}
+
+	core.Lock()
+	secondBytes, secondWorked, err := adapter.egressLocked(frame)
+	cursorAfterSecond := adapter.cursor
+	core.Unlock()
+	if err != nil || !secondWorked || secondBytes == 0 || cursorAfterSecond != 0 {
+		t.Fatalf("second egress = %d, %v, %v, cursor=%d", secondBytes, secondWorked, err, cursorAfterSecond)
+	}
+	secondIP, err := ipv4.NewFrame(frame[14:secondBytes])
+	if err != nil {
+		t.Fatal(err)
+	}
+	secondICMP, err := lnetoicmp.NewFrame(secondIP.Payload())
+	if err != nil {
+		t.Fatal(err)
+	}
+	secondEcho := lnetoicmp.FrameEcho{Frame: secondICMP}
+	if secondIP.ID() != 10 || secondEcho.Identifier() != second.identifier || secondEcho.SequenceNumber() != second.sequence || !bytes.Equal(secondEcho.Data(), secondPayload) {
+		t.Fatalf("second frame = id=%d identity=%d/%d payload=%q", secondIP.ID(), secondEcho.Identifier(), secondEcho.SequenceNumber(), secondEcho.Data())
 	}
 }
 

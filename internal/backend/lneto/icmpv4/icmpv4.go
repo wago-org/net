@@ -346,11 +346,11 @@ func (a *Adapter) egressLocked(dst []byte) (written int, worked bool, err error)
 		if exchange == nil || (exchange.state != echoPending && exchange.state != echoWaiting) {
 			continue
 		}
-		a.cursor = index + 1
-		if a.cursor == len(a.echoes) {
-			a.cursor = 0
-		}
 		if exchange.state == echoWaiting {
+			a.cursor = index + 1
+			if a.cursor == len(a.echoes) {
+				a.cursor = 0
+			}
 			if exchange.retry > 1 {
 				exchange.retry--
 				return 0, true, nil
@@ -397,6 +397,10 @@ func (a *Adapter) egressLocked(dst []byte) (written int, worked bool, err error)
 		exchange.attempts++
 		exchange.retry = a.config.RetryServiceAttempts
 		exchange.state = echoWaiting
+		a.cursor = index + 1
+		if a.cursor == len(a.echoes) {
+			a.cursor = 0
+		}
 		return frameBytes, true, nil
 	}
 	return 0, false, nil
