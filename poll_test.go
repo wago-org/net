@@ -3,10 +3,13 @@ package net
 import (
 	"bytes"
 	"encoding/binary"
+	"errors"
 	"sync"
 	"testing"
 
 	"github.com/wago-org/net/internal/namespace"
+	"github.com/wago-org/net/internal/packetlink"
+	"github.com/wago-org/net/internal/quota"
 	"github.com/wago-org/net/internal/resource"
 	wago "github.com/wago-org/wago"
 )
@@ -143,6 +146,90 @@ func TestGuestUDPPollConcurrentInstanceClose(t *testing.T) {
 	wait.Wait()
 	if got := callUDP(t, extension, "poll", host, 64, 2, 0, 128); got != StatusInvalidState {
 		t.Fatalf("poll after close = %v", got)
+	}
+}
+
+func TestGuestUDPPollTracksDirectPacketLinkCloseAndIdempotentNamespaceCleanup(t *testing.T) {
+	extension, _, instance, host := newGuestUDPInstance(t, 53, 54)
+	state, ok := extension.instanceManager().ForInstance(instance)
+	if !ok {
+		t.Fatal("instance state missing")
+	}
+	namespaceHandle := guestNamespaceFromExtension(t, extension, host)
+	backend := concreteNamespace(t, state)
+	link := backend.Link()
+	writePollBudget(host.memory, 0, 1, 1, 1, 1, 1514, 1)
+
+	start := make(chan struct{})
+	statuses := make(chan Status, 800)
+	var wait sync.WaitGroup
+	for range 8 {
+		wait.Add(1)
+		go func() {
+			defer wait.Done()
+			<-start
+			for range 100 {
+				memory := make([]byte, len(host.memory))
+				copy(memory, host.memory)
+				localHost := udpHostModule{instance: instance, memory: memory}
+				statuses <- callUDP(t, extension, "poll", localHost, 64, 1, 0, 128)
+			}
+		}()
+	}
+	wait.Add(1)
+	go func() {
+		defer wait.Done()
+		<-start
+		if err := link.Close(); err != nil {
+			t.Errorf("direct link close: %v", err)
+		}
+	}()
+	close(start)
+	wait.Wait()
+	close(statuses)
+	for status := range statuses {
+		if status != StatusOK {
+			t.Fatalf("concurrent direct-close poll = %v", status)
+		}
+	}
+
+	if ready := backend.Readiness(); ready != namespace.ReadyClosed {
+		t.Fatalf("direct-close namespace readiness = %v", ready)
+	}
+	budget := namespace.ServiceBudget{Packets: 1, Bytes: 1514, Operations: 1}
+	if report, progress, err := backend.TryService(budget); report != (namespace.ServiceReport{}) || progress != namespace.ProgressWouldBlock {
+		t.Fatalf("direct-close service = %+v, %v, %v", report, progress, err)
+	} else if failure, ok := namespace.FailureOf(err); !ok || failure != namespace.FailureClosed || !errors.Is(err, packetlink.ErrClosed) {
+		t.Fatalf("direct-close service failure = %v", err)
+	}
+
+	writePollBudget(host.memory, 0, 1, 1, 1, 1, 1514, 1)
+	if got := callUDP(t, extension, "poll", host, 64, 1, 0, 128); got != StatusOK {
+		t.Fatalf("terminal direct-close poll = %v", got)
+	}
+	report := decodePollResult(host.memory, 128)
+	events := decodePollEvents(host.memory, 64, report[0])
+	if report != [6]uint32{1, 1, 1, 0, 0, 0} || !hasPollEvent(events, namespaceHandle, namespace.ReadyClosed) {
+		t.Fatalf("terminal direct-close report/events = %v %+v", report, events)
+	}
+	if usage, closed := state.Quotas().Snapshot(); closed || usage.ServiceUnits != 0 {
+		t.Fatalf("direct-close poll quota = %+v, closed=%v", usage, closed)
+	}
+
+	if err := backend.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := backend.Close(); err != nil {
+		t.Fatalf("second namespace close: %v", err)
+	}
+	if err := instance.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if snapshot := state.Readiness().Snapshot(); !snapshot.Closed || snapshot.Registrations != 0 {
+		t.Fatalf("instance cleanup readiness = %+v", snapshot)
+	}
+	if usage, closed := state.Quotas().Snapshot(); !closed || usage != (quota.Usage{}) {
+		t.Fatalf("instance cleanup quota = %+v, closed=%v", usage, closed)
 	}
 }
 
