@@ -25,18 +25,22 @@ func (h pollTestHost) Memory() []byte           { return h.memory }
 func (h pollTestHost) Instance() *wago.Instance { return h.instance }
 
 type pollNamespace struct {
-	ready         nscore.Readiness
-	report        nscore.ServiceReport
-	progress      nscore.Progress
-	failure       error
-	serviceCalls  int
-	closeCalls    int
-	quota         *quota.Account
-	serviceUsage  quota.Usage
-	serviceClosed bool
+	ready          nscore.Readiness
+	report         nscore.ServiceReport
+	progress       nscore.Progress
+	failure        error
+	readinessCalls int
+	serviceCalls   int
+	closeCalls     int
+	quota          *quota.Account
+	serviceUsage   quota.Usage
+	serviceClosed  bool
 }
 
-func (n *pollNamespace) Readiness() nscore.Readiness { return n.ready }
+func (n *pollNamespace) Readiness() nscore.Readiness {
+	n.readinessCalls++
+	return n.ready
+}
 func (n *pollNamespace) Close() error {
 	n.closeCalls++
 	return nil
@@ -91,6 +95,52 @@ func TestPollPrevalidatesBudgetAndCompleteOutputs(t *testing.T) {
 	}
 	if status := callPoll(pluginHost, host, 32, 1, 0, 64); status != StatusInvalidState || !bytes.Equal(host.memory, before) {
 		t.Fatalf("unattached poll = %v", status)
+	}
+}
+
+func TestPollRejectsHighBitI32AliasesBeforeStateQuotaAndPollWork(t *testing.T) {
+	backend := &pollNamespace{ready: nscore.ReadyReadable}
+	manager, instance := attachPollManager(t, backend, quota.DefaultLimits())
+	defer manager.Detach(instance)
+	host := pollTestHost{instance: instance, memory: bytes.Repeat([]byte{0x6d}, 128)}
+	writePollBudget(host.memory, 0, 1, 1, 0, 0, 0, 0)
+	pluginHost := plugin.NewHost(manager)
+	state, ok := manager.ForInstance(instance)
+	if !ok {
+		t.Fatal("attached state missing")
+	}
+	high := uint64(1) << 32
+	tests := []struct {
+		name   string
+		params [4]uint64
+	}{
+		{name: "events pointer", params: [4]uint64{high | 32, 1, 0, 64}},
+		{name: "event capacity", params: [4]uint64{32, high | 1, 0, 64}},
+		{name: "budget pointer", params: [4]uint64{32, 1, high, 64}},
+		{name: "result pointer", params: [4]uint64{32, 1, 0, high | 64}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			beforeMemory := append([]byte(nil), host.memory...)
+			beforeReadiness := state.Readiness().Snapshot()
+			beforeQuota, beforeClosed := state.Quotas().Snapshot()
+			readinessCalls, serviceCalls := backend.readinessCalls, backend.serviceCalls
+			if status := callPollRaw(pluginHost, host, test.params); status != StatusInvalidArgument {
+				t.Fatalf("status = %v", status)
+			}
+			if backend.readinessCalls != readinessCalls || backend.serviceCalls != serviceCalls {
+				t.Fatalf("poll work changed: readiness=%d service=%d", backend.readinessCalls, backend.serviceCalls)
+			}
+			if after := state.Readiness().Snapshot(); after != beforeReadiness {
+				t.Fatalf("readiness state changed: before=%+v after=%+v", beforeReadiness, after)
+			}
+			if after, closed := state.Quotas().Snapshot(); after != beforeQuota || closed != beforeClosed {
+				t.Fatalf("quota state changed: before=%+v/%v after=%+v/%v", beforeQuota, beforeClosed, after, closed)
+			}
+			if !bytes.Equal(host.memory, beforeMemory) {
+				t.Fatal("invalid alias mutated guest memory")
+			}
+		})
 	}
 }
 
@@ -254,8 +304,12 @@ func attachPollManager(t testing.TB, backend *pollNamespace, limits quota.Limits
 }
 
 func callPoll(host plugin.Host, module pollTestHost, eventsPtr, capacity, budgetPtr, resultPtr uint32) Status {
+	return callPollRaw(host, module, [4]uint64{uint64(eventsPtr), uint64(capacity), uint64(budgetPtr), uint64(resultPtr)})
+}
+
+func callPollRaw(host plugin.Host, module pollTestHost, params [4]uint64) Status {
 	var results [1]uint64
-	Poll(host, module, []uint64{uint64(eventsPtr), uint64(capacity), uint64(budgetPtr), uint64(resultPtr)}, results[:])
+	Poll(host, module, params[:], results[:])
 	return Status(int32(results[0]))
 }
 

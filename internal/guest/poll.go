@@ -20,8 +20,15 @@ func Poll(host plugin.Host, module wago.HostModule, params, results []uint64) {
 		return
 	}
 	memory := Memory(module)
-	eventsPtr, eventCapacity := uint32(params[0]), uint32(params[1])
-	budget, ok := abicore.DecodePollBudgetV1(memory, uint32(params[2]))
+	eventsPtr, eventsOK := abicore.NarrowUint32(params[0])
+	eventCapacity, capacityOK := abicore.NarrowUint32(params[1])
+	budgetPtr, budgetOK := abicore.NarrowUint32(params[2])
+	resultPtr, resultOK := abicore.NarrowUint32(params[3])
+	if !eventsOK || !capacityOK || !budgetOK || !resultOK {
+		SetStatus(results, StatusInvalidArgument)
+		return
+	}
+	budget, ok := abicore.DecodePollBudgetV1(memory, budgetPtr)
 	if !ok || budget.Events > eventCapacity {
 		SetStatus(results, StatusInvalidArgument)
 		return
@@ -31,7 +38,6 @@ func Poll(host plugin.Host, module wago.HostModule, params, results []uint64) {
 		SetStatus(results, StatusInvalidArgument)
 		return
 	}
-	resultPtr := uint32(params[3])
 	if !abicore.CheckRanges(memory, true,
 		abicore.Range{Ptr: eventsPtr, Length: uint32(eventBytes)},
 		abicore.Range{Ptr: resultPtr, Length: abicore.PollResultV1Size},
