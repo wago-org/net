@@ -151,8 +151,9 @@ func ValidConfig(config Config, mtu int, compiled *policy.Policy, account *quota
 		config.MaxQueuedResponses > 0 && config.MaxAttempts > 0 && config.RetryServiceAttempts > 0
 }
 
-// New installs the ICMPv6 participant. A selected module on a namespace without
-// configured IPv6 remains present but truthfully returns NOT_SUPPORTED.
+// New installs the ICMPv6 participant only when the namespace has an immutable
+// operational IPv6 identity. Otherwise the selected service remains present
+// and truthfully returns NOT_SUPPORTED without retaining protocol backing.
 func New(common *lnetocore.Namespace, config Config) (*Adapter, error) {
 	if common == nil || !ValidConfig(config, 1500, nil, nil, false) {
 		return nil, nscore.Fail(nscore.FailureInvalidArgument, lneto.ErrInvalidConfig)
@@ -172,7 +173,7 @@ func New(common *lnetocore.Namespace, config Config) (*Adapter, error) {
 		address: common.IPv6AddressLocked(), scopeID: common.IPv6ScopeIDLocked(),
 		nextIdentifier: seed, nextSequence: 1,
 	}
-	if config == (Config{}) {
+	if config == (Config{}) || !adapter.operationalAddress() {
 		common.Unlock()
 		return adapter, nil
 	}
@@ -194,14 +195,23 @@ func New(common *lnetocore.Namespace, config Config) (*Adapter, error) {
 }
 
 func (a *Adapter) Operations() icmpns.Operations {
-	if a == nil || a.config == (Config{}) || !a.address.IsValid() || !a.address.Is6() {
+	if a == nil {
+		return 0
+	}
+	a.core.Lock()
+	defer a.core.Unlock()
+	if a.core.ClosedLocked() || !a.enabledLocked() {
 		return 0
 	}
 	return icmpns.SupportedOperations
 }
 
+func (a *Adapter) operationalAddress() bool {
+	return a.config != (Config{}) && a.address.IsValid() && a.address.Is6()
+}
+
 func (a *Adapter) enabledLocked() bool {
-	return a != nil && !a.closed && a.config != (Config{}) && a.address.IsValid() && a.address.Is6()
+	return a != nil && !a.closed && a.operationalAddress()
 }
 
 func (a *Adapter) scopeMatches(address netip.Addr, scopeID uint32) bool {

@@ -124,6 +124,9 @@ func TestStrictNDPValidationAndTimeoutCancellation(t *testing.T) {
 
 func TestSeedLookupRemoveAndQuotaCleanup(t *testing.T) {
 	core, adapter := newTestAdapter(t, 5, "2001:db8::5")
+	if operations := adapter.Operations(); operations != icmpns.SupportedOperations {
+		t.Fatalf("operational operations = %v", operations)
+	}
 	neighbor := icmpns.Neighbor{Address: netip.MustParseAddr("2001:db8::55"), MAC: [6]byte{0x02, 5, 5, 5, 5, 5}}
 	if err := adapter.SeedNeighbor(neighbor); err != nil {
 		t.Fatal(err)
@@ -144,6 +147,9 @@ func TestSeedLookupRemoveAndQuotaCleanup(t *testing.T) {
 	}
 	if usage, closed := account.Snapshot(); closed || usage != (quota.Usage{}) {
 		t.Fatalf("close usage = %+v closed=%v", usage, closed)
+	}
+	if operations := adapter.Operations(); operations != 0 {
+		t.Fatalf("closed operations = %v", operations)
 	}
 }
 
@@ -196,10 +202,25 @@ func TestUnconfiguredIPv6IsTruthfullyUnsupported(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	if operations := adapter.Operations(); operations != 0 {
+		t.Fatalf("unconfigured operations = %v", operations)
+	}
 	if _, _, err := adapter.TryEcho(icmpns.EchoRequest{Destination: netip.MustParseAddr("2001:db8::1"), Payload: []byte{1}}); err == nil {
 		t.Fatal("disabled echo unexpectedly succeeded")
 	} else if failure, ok := nscore.FailureOf(err); !ok || failure != nscore.FailureNotSupported {
 		t.Fatalf("disabled echo = %v", err)
+	}
+	if len(adapter.echoes) != 0 || adapter.byIdentity != nil || adapter.resolutions != nil || adapter.byTarget != nil || adapter.neighbors != nil || adapter.responses != nil {
+		t.Fatal("unconfigured adapter allocated operational backing")
+	}
+	if err := core.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if adapter.closed {
+		t.Fatal("unconfigured adapter unexpectedly installed a close participant")
+	}
+	if _, _, err := adapter.TryEcho(icmpns.EchoRequest{}); nscoreFailure(err) != nscore.FailureClosed {
+		t.Fatalf("closed unconfigured echo = %v", err)
 	}
 }
 

@@ -295,6 +295,18 @@ func TestNoIPv6OrGlobalIPv6IsTruthfullyUnsupported(t *testing.T) {
 			t.Fatalf("address %v port leases = %d", address, got)
 		}
 		core.Unlock()
+		if err := core.Close(); err != nil {
+			t.Fatal(err)
+		}
+		if adapter.closed {
+			t.Fatalf("address %v unexpectedly installed a close participant", address)
+		}
+		if operations := adapter.Operations(); operations != 0 {
+			t.Fatalf("closed address %v operations = %v", address, operations)
+		}
+		if _, _, err := adapter.TryAcquire(); nscoreFailure(err) != nscore.FailureClosed {
+			t.Fatalf("closed address %v acquire = %v", address, err)
+		}
 	}
 }
 

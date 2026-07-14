@@ -10,9 +10,15 @@ import (
 	icmpv6backend "github.com/wago-org/net/internal/backend/lneto/icmpv6"
 	mdnsbackend "github.com/wago-org/net/internal/backend/lneto/mdns"
 	ntpbackend "github.com/wago-org/net/internal/backend/lneto/ntp"
+	dhcpv6ns "github.com/wago-org/net/internal/namespace/dhcpv6"
+	"github.com/wago-org/net/internal/policy"
+	"github.com/wago-org/net/internal/quota"
 )
 
-var benchmarkDisabledSelectiveAdapters [6]any
+var (
+	benchmarkDisabledSelectiveAdapters       [6]any
+	benchmarkInoperableIPv6SelectiveAdapters [2]any
+)
 
 func BenchmarkDisabledSelectiveAdaptersNew(b *testing.B) {
 	config := testConfig(93)
@@ -43,6 +49,43 @@ func BenchmarkDisabledSelectiveAdaptersNew(b *testing.B) {
 			b.Fatal(err)
 		}
 		benchmarkDisabledSelectiveAdapters = adapters
+		if err := common.Close(); err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
+func BenchmarkInoperableIPv6SelectiveAdaptersNew(b *testing.B) {
+	compiled, err := policy.Compile(policy.Config{})
+	if err != nil {
+		b.Fatal(err)
+	}
+	icmpConfig := icmpv6backend.Config{MaxEchoes: 4, MaxPayloadBytes: 256, MaxNeighbors: 8, MaxResolutions: 4, MaxQueuedResponses: 4, MaxAttempts: 2, RetryServiceAttempts: 2}
+	dhcpConfig := dhcpv6backend.Config{
+		MaxLeases: 1, MaxPacketBytes: 1024, MaxAttempts: 2, ResponseServiceAttempts: 2,
+		MaxServerDUIDBytes: dhcpv6ns.MaxServerDUIDBytes, MaxDNSServers: dhcpv6ns.MaxDNSServers,
+		MaxDomainSearch: dhcpv6ns.MaxDomainSearch, MaxNTPServers: dhcpv6ns.MaxNTPServers,
+		MaxNTPMulticastServers: dhcpv6ns.MaxNTPMulticastServers, MaxNTPServerNames: dhcpv6ns.MaxNTPServerNames,
+		MaxDelegatedPrefixes: dhcpv6ns.MaxDelegatedPrefixes,
+	}
+	config := testConfig(94)
+	config.Policy = compiled
+	b.ReportAllocs()
+	for b.Loop() {
+		config.Quotas = quota.NewAccount(quota.DefaultLimits())
+		common, err := lnetocore.New(coreConfig(config))
+		if err != nil {
+			b.Fatal(err)
+		}
+		adapters := [2]any{}
+		if adapters[0], err = icmpv6backend.New(common, icmpConfig); err == nil {
+			adapters[1], err = dhcpv6backend.New(common, dhcpConfig)
+		}
+		if err != nil {
+			_ = common.Close()
+			b.Fatal(err)
+		}
+		benchmarkInoperableIPv6SelectiveAdapters = adapters
 		if err := common.Close(); err != nil {
 			b.Fatal(err)
 		}

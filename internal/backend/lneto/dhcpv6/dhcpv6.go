@@ -147,20 +147,18 @@ func New(common *lnetocore.Namespace, config Config) (*Adapter, error) {
 	if a.nextXID == 0 {
 		a.nextXID = 1
 	}
-	if config == (Config{}) {
+	if config == (Config{}) || !a.operationalAddress() {
 		common.Unlock()
 		return a, nil
 	}
-	if a.operationalAddress() {
-		if !a.policy.CheckEndpoint(policy.OperationDHCPv6ClientBind, a.address, dhcpns.ClientPort) ||
-			!a.policy.CheckEndpoint(policy.OperationDHCPv6ClientSend, allServersAndRelays, dhcpns.ServerPort) {
-			common.Unlock()
-			return nil, nscore.Fail(nscore.FailureAccessDenied, errPolicyDenied)
-		}
-		if !common.TryLeaseUDPPortIntoLocked(&a.clientPort, dhcpns.ClientPort) {
-			common.Unlock()
-			return nil, nscore.Fail(nscore.FailureAddressInUse, errPortInUse)
-		}
+	if !a.policy.CheckEndpoint(policy.OperationDHCPv6ClientBind, a.address, dhcpns.ClientPort) ||
+		!a.policy.CheckEndpoint(policy.OperationDHCPv6ClientSend, allServersAndRelays, dhcpns.ServerPort) {
+		common.Unlock()
+		return nil, nscore.Fail(nscore.FailureAccessDenied, errPolicyDenied)
+	}
+	if !common.TryLeaseUDPPortIntoLocked(&a.clientPort, dhcpns.ClientPort) {
+		common.Unlock()
+		return nil, nscore.Fail(nscore.FailureAddressInUse, errPortInUse)
 	}
 	common.Unlock()
 	if err := common.Install(lnetocore.Participant{
