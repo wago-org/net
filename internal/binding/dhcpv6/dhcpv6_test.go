@@ -145,6 +145,9 @@ func TestBindingsRejectTypedNilAndIsolateReusedLeaseGeneration(t *testing.T) {
 
 	outPtr := uint64(320)
 	outBefore := append([]byte(nil), host.memory[outPtr:outPtr+uint64(8)]...)
+	if status := callBinding(t, bindingByName(t, bindings, "start"), host, uint64(namespaceHandle), uint64(dhcpns.OperationAcquire)+256, outPtr); status.status != guest.StatusInvalidArgument || backend.calls != 0 || !bytes.Equal(host.memory[outPtr:outPtr+uint64(8)], outBefore) {
+		t.Fatalf("truncated operation start = %v calls=%d", status.status, backend.calls)
+	}
 	if status := callBinding(t, bindingByName(t, bindings, "start"), host, uint64(namespaceHandle), uint64(dhcpns.OperationAcquire), uint64(len(host.memory)-1)); status.status != guest.StatusInvalidArgument || backend.calls != 0 {
 		t.Fatalf("out-of-bounds start = %v calls=%d", status.status, backend.calls)
 	}

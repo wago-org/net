@@ -101,7 +101,12 @@ func Start(host plugin.Host, module wago.HostModule, params, results []uint64) {
 		guest.SetStatus(results, guest.StatusInvalidArgument)
 		return
 	}
-	operation := dhcpns.Operation(uint32(params[1]))
+	operationValue := uint32(params[1])
+	if params[1] != uint64(operationValue) || operationValue < uint32(dhcpns.OperationAcquire) || operationValue > uint32(dhcpns.OperationRawPacket) {
+		guest.SetStatus(results, guest.StatusInvalidArgument)
+		return
+	}
+	operation := dhcpns.Operation(operationValue)
 	state, status := instanceState(host, module)
 	if status != guest.StatusOK {
 		guest.SetStatus(results, status)
