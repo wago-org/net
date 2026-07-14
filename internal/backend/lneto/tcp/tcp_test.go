@@ -412,6 +412,118 @@ func TestEstablishedResetIsAConnectionEventNotServiceFailure(t *testing.T) {
 	}
 }
 
+func TestListenerBacklogCloseDetachesAllSlotsBeforePoolReuse(t *testing.T) {
+	clientCore1, client1 := newTestAdapter(t, 61, 0, 1)
+	clientCore2, client2 := newTestAdapter(t, 62, 0, 1)
+	serverCore, server := newTestAdapterWithBacklog(t, 63, 1, 0, 2)
+	serverMAC := [6]byte{0x02, 0, 0, 0, 0, 63}
+	clientMAC1 := [6]byte{0x02, 0, 0, 0, 0, 61}
+	clientMAC2 := [6]byte{0x02, 0, 0, 0, 0, 62}
+	setGateways(clientCore1, serverMAC)
+	setGateways(clientCore2, serverMAC)
+
+	endpoint := nscore.Endpoint{Address: netip.MustParseAddr("192.0.2.63"), Port: 4263}
+	listenerValue, progress, err := server.TryListen(endpoint)
+	if err != nil || progress != nscore.ProgressDone {
+		t.Fatalf("listen = %T, %v, %v", listenerValue, progress, err)
+	}
+	listener := listenerValue.(*tcpListener)
+	connect := func(clientCore *lnetocore.Namespace, client *Adapter, clientMAC [6]byte) *tcpStream {
+		t.Helper()
+		value, progress, err := client.TryConnect(endpoint)
+		if err != nil || progress != nscore.ProgressInProgress {
+			t.Fatalf("connect = %T, %v, %v", value, progress, err)
+		}
+		stream := value.(*tcpStream)
+		transferTCP(t, clientCore, serverCore)
+		setGateways(serverCore, clientMAC)
+		transferTCP(t, serverCore, clientCore)
+		transferTCP(t, clientCore, serverCore)
+		if progress, err := stream.TryFinishConnect(); err != nil || progress != nscore.ProgressDone {
+			t.Fatalf("finish connect = %v, %v", progress, err)
+		}
+		return stream
+	}
+	firstClient := connect(clientCore1, client1, clientMAC1)
+	connect(clientCore2, client2, clientMAC2)
+	if ready := listener.Readiness(); ready != nscore.ReadyAccept {
+		t.Fatalf("full backlog readiness = %v", ready)
+	}
+	if usage, closed := server.quotas.Snapshot(); closed || usage != (quota.Usage{Resources: 3, TCPResources: 3, QueuedBytes: 1024}) {
+		t.Fatalf("full backlog quota = %+v, closed=%v", usage, closed)
+	}
+
+	acceptedValue, progress, err := listener.TryAccept()
+	if err != nil || progress != nscore.ProgressDone {
+		t.Fatalf("accept = %T, %v, %v", acceptedValue, progress, err)
+	}
+	accepted := acceptedValue.(*tcpStream)
+	if len(listener.pool.slots) != 2 || (listener.pool.slots[0].stream == nil && listener.pool.slots[1].stream == nil) {
+		t.Fatalf("accepted slot state = %+v", listener.pool.slots)
+	}
+	if ready := listener.Readiness(); ready != nscore.ReadyAccept {
+		t.Fatalf("remaining backlog readiness = %v", ready)
+	}
+
+	if err := listener.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if ready := listener.Readiness(); ready != nscore.ReadyClosed {
+		t.Fatalf("closed listener readiness = %v", ready)
+	}
+	if value, progress, err := listener.TryAccept(); value != nil || progress != 0 || failureOf(t, err) != nscore.FailureClosed {
+		t.Fatalf("closed listener accept = %T, %v, %v", value, progress, err)
+	}
+	if ready := accepted.Readiness(); ready != nscore.ReadyClosed {
+		t.Fatalf("detached accepted readiness = %v", ready)
+	}
+	if result, err := accepted.TryRead(make([]byte, 1)); err != nil || result.State != nscore.IOEOF {
+		t.Fatalf("detached accepted read = %+v, %v", result, err)
+	}
+	if result, err := accepted.TryWrite([]byte{1}); err == nil || failureOf(t, err) != nscore.FailureConnectionBroken {
+		t.Fatalf("detached accepted write = %+v, %v", result, err)
+	}
+	if accepted.conn != nil || accepted.slot != nil || !accepted.terminal {
+		t.Fatalf("detached accepted graph = conn=%p slot=%p terminal=%v", accepted.conn, accepted.slot, accepted.terminal)
+	}
+	if usage, _ := server.quotas.Snapshot(); usage != (quota.Usage{}) {
+		t.Fatalf("listener close quota = %+v", usage)
+	}
+	if len(server.freeListenerPools) != 1 {
+		t.Fatalf("free listener pools = %d", len(server.freeListenerPools))
+	}
+	for i := range server.freeListenerPools[0].slots {
+		slot := &server.freeListenerPools[0].slots[i]
+		if slot.inUse || slot.stream != nil || slot.quotaOwned || slot.resource.ResetReleased() {
+			t.Fatalf("released slot %d = in_use=%v stream=%p quota_owned=%v", i, slot.inUse, slot.stream, slot.quotaOwned)
+		}
+	}
+
+	if err := firstClient.Close(); err != nil {
+		t.Fatal(err)
+	}
+	replacementValue, progress, err := server.TryListen(endpoint)
+	if err != nil || progress != nscore.ProgressDone {
+		t.Fatalf("replacement listen = %T, %v, %v", replacementValue, progress, err)
+	}
+	replacement := replacementValue.(*tcpListener)
+	if replacement == listener || len(server.freeListenerPools) != 0 {
+		t.Fatalf("replacement wrapper/pool reuse = same_wrapper=%v free_pools=%d", replacement == listener, len(server.freeListenerPools))
+	}
+	connect(clientCore1, client1, clientMAC1)
+	thirdServerValue, progress, err := replacement.TryAccept()
+	if err != nil || progress != nscore.ProgressDone {
+		t.Fatalf("replacement accept = %T, %v, %v", thirdServerValue, progress, err)
+	}
+	thirdServer := thirdServerValue.(*tcpStream)
+	if thirdServer == accepted || accepted.conn != nil || accepted.slot != nil || !accepted.terminal {
+		t.Fatalf("stale accepted stream reused: old=%p new=%p conn=%p slot=%p terminal=%v", accepted, thirdServer, accepted.conn, accepted.slot, accepted.terminal)
+	}
+	if usage, _ := server.quotas.Snapshot(); usage != (quota.Usage{Resources: 2, TCPResources: 2, QueuedBytes: 1024}) {
+		t.Fatalf("replacement quota = %+v", usage)
+	}
+}
+
 func TestListenerCloseDetachesAcceptedStreamBeforePoolReuse(t *testing.T) {
 	clientCore, listener, client, serverCore, server := newEstablishedPair(t)
 	serverAdapter := listener.owner
@@ -517,6 +629,15 @@ func newIPv6TestAdapter(t testing.TB, id byte, address netip.Addr, listeners, ou
 
 func newTestAdapter(t testing.TB, id byte, listeners, outbound uint16) (*lnetocore.Namespace, *Adapter) {
 	t.Helper()
+	backlog := uint16(0)
+	if listeners > 0 {
+		backlog = 1
+	}
+	return newTestAdapterWithBacklog(t, id, listeners, outbound, backlog)
+}
+
+func newTestAdapterWithBacklog(t testing.TB, id byte, listeners, outbound, backlog uint16) (*lnetocore.Namespace, *Adapter) {
+	t.Helper()
 	compiled, err := policy.Compile(policy.Config{Rules: []policy.Rule{{
 		Action: policy.ActionAllow, Transports: []policy.Transport{policy.TransportTCP},
 		Directions: []policy.Direction{policy.DirectionInbound, policy.DirectionOutbound},
@@ -540,13 +661,7 @@ func newTestAdapter(t testing.TB, id byte, listeners, outbound uint16) (*lnetoco
 		t.Fatal(err)
 	}
 	adapter, err := New(common, Config{
-		MaxListeners: listeners, MaxOutboundStreams: outbound,
-		AcceptBacklog: func() uint16 {
-			if listeners > 0 {
-				return 1
-			}
-			return 0
-		}(),
+		MaxListeners: listeners, MaxOutboundStreams: outbound, AcceptBacklog: backlog,
 		ReceiveBytes: 256, TransmitBytes: 256, TransmitPackets: 4,
 	})
 	if err != nil {
