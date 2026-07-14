@@ -1,6 +1,8 @@
 package dhcpv4
 
 import (
+	"bytes"
+	"errors"
 	"net/netip"
 	"testing"
 
@@ -248,6 +250,87 @@ func TestServerRejectedDiscoverDoesNotConsumeFiniteClientCapacity(t *testing.T) 
 	if len(server.serverClients) != 1 || server.serverPending != 1 {
 		t.Fatalf("valid discover after rejected peer = clients=%d pending=%d", len(server.serverClients), server.serverPending)
 	}
+}
+
+func TestServerPendingResponseLifecyclePreservesRetryReleasePolicyAndClose(t *testing.T) {
+	t.Run("short egress retries and release reuses capacity", func(t *testing.T) {
+		firstCore, first := newClient(t, false)
+		secondCore, second := newAdapter(t, netip.IPv4Unspecified(), [6]byte{2, 0, 0, 0, 0, 3}, defaultConfig(), clientPolicy())
+		serverCore, server := newServer(t, 1)
+		if _, _, err := first.TryAcquire(dhcpns.Request{}); err != nil {
+			t.Fatal(err)
+		}
+		if _, _, err := second.TryAcquire(dhcpns.Request{}); err != nil {
+			t.Fatal(err)
+		}
+		discover := serviceEgress(t, firstCore)
+		serviceIngress(t, serverCore, discover)
+		if len(server.serverClients) != 1 || server.serverPending != 1 || !server.hasWorkLocked() {
+			t.Fatalf("accepted discover state: clients=%d pending=%d work=%v", len(server.serverClients), server.serverPending, server.hasWorkLocked())
+		}
+
+		required := 14 + 20 + 8 + server.config.MaxPacketBytes
+		short := bytes.Repeat([]byte{0xa5}, required-1)
+		if n, worked, err := server.egressLocked(short); !errors.Is(err, lneto.ErrShortBuffer) || !worked || n != 0 {
+			t.Fatalf("short server egress = %d, %v, %v", n, worked, err)
+		}
+		if !bytes.Equal(short, bytes.Repeat([]byte{0xa5}, len(short))) || len(server.serverClients) != 1 || server.serverPending != 1 || !server.hasWorkLocked() {
+			t.Fatalf("short egress mutated state: clients=%d pending=%d work=%v", len(server.serverClients), server.serverPending, server.hasWorkLocked())
+		}
+		var storage [1514]byte
+		if n, worked, err := server.egressLocked(storage[:]); err != nil || !worked || n == 0 {
+			t.Fatalf("server response retry = %d, %v, %v", n, worked, err)
+		}
+		if len(server.serverClients) != 1 || server.serverPending != 0 || server.hasWorkLocked() {
+			t.Fatalf("drained response state: clients=%d pending=%d work=%v", len(server.serverClients), server.serverPending, server.hasWorkLocked())
+		}
+
+		release := rewriteDHCPMessageType(t, discover, lnetodhcp.MsgRelease)
+		serviceIngress(t, serverCore, release)
+		if len(server.serverClients) != 0 || server.serverPending != 0 {
+			t.Fatalf("release retained server state: clients=%d pending=%d", len(server.serverClients), server.serverPending)
+		}
+		serviceIngress(t, serverCore, serviceEgress(t, secondCore))
+		if len(server.serverClients) != 1 || server.serverPending != 1 {
+			t.Fatalf("fresh client after release: clients=%d pending=%d", len(server.serverClients), server.serverPending)
+		}
+		if err := serverCore.Close(); err != nil {
+			t.Fatal(err)
+		}
+		serverCore.Lock()
+		ports := serverCore.UDPPortLeaseCountLocked()
+		serverCore.Unlock()
+		if server.serverClients != nil || server.serverPending != 0 || ports != 0 || server.hasWorkLocked() {
+			t.Fatalf("server close state: clients=%#v pending=%d ports=%d work=%v", server.serverClients, server.serverPending, ports, server.hasWorkLocked())
+		}
+	})
+
+	t.Run("policy denied response is consumed atomically", func(t *testing.T) {
+		clientCore, client := newClient(t, false)
+		config := defaultConfig()
+		config.MaxLeases = 0
+		config.Server = ServerConfig{ServerAddr: netip.MustParseAddr("192.0.2.1"), Gateway: netip.MustParseAddr("192.0.2.1"), DNS: netip.MustParseAddr("192.0.2.53"), Subnet: netip.MustParsePrefix("192.0.2.0/24"), LeaseSeconds: 3600, MaxClients: 1}
+		serverCore, server := newAdapter(t, config.Server.ServerAddr, [6]byte{2, 0, 0, 0, 0, 1}, config, policy.Config{Rules: []policy.Rule{{Action: policy.ActionAllow, Transports: []policy.Transport{policy.TransportDHCPv4}, Directions: []policy.Direction{policy.DirectionInbound}, Prefixes: []netip.Prefix{netip.MustParsePrefix("192.0.2.1/32")}, Ports: []policy.PortRange{{First: 67, Last: 67}}}}, PrivilegedBindTransports: []policy.Transport{policy.TransportDHCPv4}})
+		if _, _, err := client.TryAcquire(dhcpns.Request{}); err != nil {
+			t.Fatal(err)
+		}
+		serviceIngress(t, serverCore, serviceEgress(t, clientCore))
+		if server.serverPending != 1 {
+			t.Fatalf("pending denied response = %d", server.serverPending)
+		}
+		dst := bytes.Repeat([]byte{0xa5}, 1514)
+		n, worked, err := server.egressLocked(dst)
+		if err != nil || !worked || n != 0 {
+			t.Fatalf("policy denied egress = %d, %v, %v", n, worked, err)
+		}
+		required := 14 + 20 + 8 + server.config.MaxPacketBytes
+		if !bytes.Equal(dst[:required], make([]byte, required)) || !bytes.Equal(dst[required:], bytes.Repeat([]byte{0xa5}, len(dst)-required)) {
+			t.Fatal("policy denied response did not preserve atomic no-frame output")
+		}
+		if len(server.serverClients) != 1 || server.serverPending != 0 || server.hasWorkLocked() {
+			t.Fatalf("policy denied response retained work: clients=%d pending=%d work=%v", len(server.serverClients), server.serverPending, server.hasWorkLocked())
+		}
+	})
 }
 
 func TestServerClientBoundAndPoolAreFinite(t *testing.T) {
