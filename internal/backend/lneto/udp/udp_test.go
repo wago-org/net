@@ -1,7 +1,9 @@
 package udp
 
 import (
+	"errors"
 	"net/netip"
+	"sync"
 	"testing"
 
 	"github.com/soypat/lneto/ethernet"
@@ -146,6 +148,167 @@ func TestUDPIngressRequiresLocalEthernetDestinationAndValidSource(t *testing.T) 
 	}
 }
 
+func TestSocketCloseDropsQueuedDatagramsAndReusesBackingWithoutStaleRevival(t *testing.T) {
+	_, adapter, account := newTestAdapter(t, 89)
+	local := nscore.Endpoint{Address: netip.MustParseAddr("192.0.2.89"), Port: 4089}
+	remote := nscore.Endpoint{Address: netip.MustParseAddr("192.0.2.90"), Port: 4090}
+	socket := bindTestSocket(t, adapter, local).(*udpSocket)
+	if progress, err := socket.TrySend([]byte("queued transmit"), remote); err != nil || progress != nscore.ProgressDone {
+		t.Fatalf("queue transmit = %v, %v", progress, err)
+	}
+	adapter.core.Lock()
+	if !socket.rx.push([]byte("queued receive"), remote) {
+		adapter.core.Unlock()
+		t.Fatal("queue receive failed")
+	}
+	rxStart, txStart := &socket.rx.storage[0], &socket.tx.storage[0]
+	adapter.core.Unlock()
+	if ready := socket.Readiness(); ready != nscore.ReadyReadable|nscore.ReadyWritable {
+		t.Fatalf("queued readiness = %v", ready)
+	}
+
+	if err := socket.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if endpoint := socket.LocalEndpoint(); endpoint != (nscore.Endpoint{}) {
+		t.Fatalf("stale local endpoint = %+v", endpoint)
+	}
+	if ready := socket.Readiness(); ready != nscore.ReadyClosed {
+		t.Fatalf("stale readiness = %v", ready)
+	}
+	dst := []byte{0xa5, 0xa5}
+	if result, err := socket.TryReceive(dst); result != (udpns.DatagramResult{}) || udpFailureOf(t, err) != nscore.FailureClosed || dst[0] != 0xa5 || dst[1] != 0xa5 {
+		t.Fatalf("stale receive = %+v, %v, dst=%x", result, err, dst)
+	}
+	if progress, err := socket.TrySend([]byte("stale"), remote); progress != 0 || udpFailureOf(t, err) != nscore.FailureClosed {
+		t.Fatalf("stale send = %v, %v", progress, err)
+	}
+	if usage, _ := account.Snapshot(); usage != (quota.Usage{}) {
+		t.Fatalf("closed socket retained quota = %+v", usage)
+	}
+	if len(adapter.freeBackings) != 1 || !allZeroBytes(adapter.freeBackings[0].rxStorage) || !allZeroBytes(adapter.freeBackings[0].txStorage) {
+		t.Fatalf("recycled backing retained payloads: %+v", adapter.freeBackings)
+	}
+
+	fresh := bindTestSocket(t, adapter, local).(*udpSocket)
+	if fresh == socket || &fresh.rx.storage[0] != rxStart || &fresh.tx.storage[0] != txStart {
+		t.Fatalf("backing reuse = stale:%p fresh:%p rx:%p/%p tx:%p/%p", socket, fresh, rxStart, &fresh.rx.storage[0], txStart, &fresh.tx.storage[0])
+	}
+	if ready := fresh.Readiness(); ready != nscore.ReadyWritable || fresh.rx.count != 0 || fresh.tx.count != 0 {
+		t.Fatalf("fresh socket inherited queue state: readiness=%v rx=%d tx=%d", ready, fresh.rx.count, fresh.tx.count)
+	}
+	if err := socket.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if usage, _ := account.Snapshot(); usage.Resources != 1 || usage.UDPResources != 1 {
+		t.Fatalf("stale close released fresh quota = %+v", usage)
+	}
+	if progress, err := fresh.TrySend([]byte("fresh"), remote); err != nil || progress != nscore.ProgressDone {
+		t.Fatalf("fresh send after stale close = %v, %v", progress, err)
+	}
+}
+
+func TestSocketNamespaceCloseRacesQueuedIOAndEndpointSnapshots(t *testing.T) {
+	common, adapter, account := newTestAdapter(t, 88)
+	local := nscore.Endpoint{Address: netip.MustParseAddr("192.0.2.88"), Port: 4088}
+	remote := nscore.Endpoint{Address: netip.MustParseAddr("192.0.2.87"), Port: 4087}
+	socket := bindTestSocket(t, adapter, local).(*udpSocket)
+	if progress, err := socket.TrySend([]byte("queued transmit"), remote); err != nil || progress != nscore.ProgressDone {
+		t.Fatalf("queue transmit = %v, %v", progress, err)
+	}
+	common.Lock()
+	if !socket.rx.push([]byte("queued receive"), remote) {
+		common.Unlock()
+		t.Fatal("queue receive failed")
+	}
+	common.Unlock()
+
+	start := make(chan struct{})
+	unexpected := make(chan error, 1)
+	record := func(err error) {
+		select {
+		case unexpected <- err:
+		default:
+		}
+	}
+	var workers sync.WaitGroup
+	workers.Add(4)
+	go func() {
+		defer workers.Done()
+		<-start
+		for range 1000 {
+			_ = socket.LocalEndpoint()
+			if ready := socket.Readiness(); !ready.Valid() {
+				record(errors.New("invalid UDP readiness"))
+				return
+			}
+		}
+	}()
+	go func() {
+		defer workers.Done()
+		<-start
+		dst := make([]byte, 32)
+		for range 1000 {
+			result, err := socket.TryReceive(dst)
+			if err != nil {
+				if failure, ok := nscore.FailureOf(err); !ok || failure != nscore.FailureClosed {
+					record(err)
+				}
+				return
+			}
+			if !result.Valid(len(dst)) {
+				record(errors.New("invalid UDP receive result"))
+				return
+			}
+		}
+	}()
+	go func() {
+		defer workers.Done()
+		<-start
+		for range 1000 {
+			if _, err := socket.TrySend([]byte("pressure"), remote); err != nil {
+				if failure, ok := nscore.FailureOf(err); !ok || failure != nscore.FailureClosed {
+					record(err)
+				}
+				return
+			}
+		}
+	}()
+	go func() {
+		defer workers.Done()
+		<-start
+		if err := socket.Close(); err != nil {
+			record(err)
+			return
+		}
+		if err := common.Close(); err != nil {
+			record(err)
+		}
+	}()
+	close(start)
+	workers.Wait()
+	select {
+	case err := <-unexpected:
+		t.Fatal(err)
+	default:
+	}
+	if endpoint := socket.LocalEndpoint(); endpoint != (nscore.Endpoint{}) {
+		t.Fatalf("terminal endpoint = %+v", endpoint)
+	}
+	if ready := socket.Readiness(); ready != nscore.ReadyClosed {
+		t.Fatalf("terminal readiness = %v", ready)
+	}
+	if usage, _ := account.Snapshot(); usage != (quota.Usage{}) {
+		t.Fatalf("close race retained quota = %+v", usage)
+	}
+	common.Lock()
+	leases := common.UDPPortLeaseCountLocked()
+	common.Unlock()
+	if leases != 0 {
+		t.Fatalf("close race retained %d UDP port leases", leases)
+	}
+}
+
 func TestAdapterTryBindCloseReusesDatagramBacking(t *testing.T) {
 	_, adapter, _ := newTestAdapter(t, 90)
 	local := nscore.Endpoint{Address: netip.MustParseAddr("192.0.2.90"), Port: 4090}
@@ -277,6 +440,27 @@ func TestValidConfigRejectsCombinedQueueSizeOverflow(t *testing.T) {
 			}
 		})
 	}
+}
+
+func udpFailureOf(t testing.TB, err error) nscore.Failure {
+	t.Helper()
+	if err == nil {
+		t.Fatal("missing error")
+	}
+	failure, ok := nscore.FailureOf(err)
+	if !ok {
+		t.Fatalf("missing semantic failure: %v", err)
+	}
+	return failure
+}
+
+func allZeroBytes(data []byte) bool {
+	for _, value := range data {
+		if value != 0 {
+			return false
+		}
+	}
+	return true
 }
 
 func BenchmarkUDPDatagramQueueRoundTrip(b *testing.B) {

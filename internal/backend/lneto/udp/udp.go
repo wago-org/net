@@ -392,9 +392,11 @@ func (n *Adapter) TryBind(local nscore.Endpoint) (nscore.Resource, nscore.Progre
 }
 
 func (s *udpSocket) LocalEndpoint() nscore.Endpoint {
-	if s == nil {
+	if s == nil || s.owner == nil {
 		return nscore.Endpoint{}
 	}
+	s.owner.core.Lock()
+	defer s.owner.core.Unlock()
 	return s.local
 }
 
