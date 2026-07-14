@@ -227,6 +227,29 @@ func TestClientNACKRetiresWorkClearsOnCloseAndIsolatesFreshLease(t *testing.T) {
 	}
 }
 
+func TestServerRejectedDiscoverDoesNotConsumeFiniteClientCapacity(t *testing.T) {
+	firstCore, first := newClient(t, false)
+	secondCore, second := newAdapter(t, netip.IPv4Unspecified(), [6]byte{2, 0, 0, 0, 0, 3}, defaultConfig(), clientPolicy())
+	serverCore, server := newServer(t, 1)
+	if _, _, err := first.TryAcquire(dhcpns.Request{}); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := second.TryAcquire(dhcpns.Request{}); err != nil {
+		t.Fatal(err)
+	}
+
+	malformed := appendDHCPOption(t, serviceEgress(t, firstCore), lnetodhcp.OptParameterRequestList, make([]byte, 37))
+	serviceIngress(t, serverCore, malformed)
+	if len(server.serverClients) != 0 || server.serverPending != 0 {
+		t.Fatalf("rejected discover consumed capacity: clients=%d pending=%d", len(server.serverClients), server.serverPending)
+	}
+
+	serviceIngress(t, serverCore, serviceEgress(t, secondCore))
+	if len(server.serverClients) != 1 || server.serverPending != 1 {
+		t.Fatalf("valid discover after rejected peer = clients=%d pending=%d", len(server.serverClients), server.serverPending)
+	}
+}
+
 func TestServerClientBoundAndPoolAreFinite(t *testing.T) {
 	_, _ = newServer(t, 1)
 	config := defaultConfig()

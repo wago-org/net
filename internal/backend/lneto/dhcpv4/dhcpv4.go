@@ -661,17 +661,18 @@ func (a *Adapter) acceptServerLocked(payload []byte) {
 	}
 	key := clientKey(frame)
 	known := keyIndex(a.serverClients, key) >= 0
-	if message == lnetodhcp.MsgDiscover && !known {
-		if len(a.serverClients) == cap(a.serverClients) {
-			return
-		}
-		a.serverClients = append(a.serverClients, key)
+	newClient := message == lnetodhcp.MsgDiscover && !known
+	if newClient && len(a.serverClients) == cap(a.serverClients) {
+		return
 	}
 	if !known && message != lnetodhcp.MsgDiscover {
 		return
 	}
 	if err := a.server.Demux(payload, 0); err != nil {
 		return
+	}
+	if newClient {
+		a.serverClients = append(a.serverClients, key)
 	}
 	switch message {
 	case lnetodhcp.MsgDiscover, lnetodhcp.MsgRequest:
