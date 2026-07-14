@@ -154,22 +154,39 @@ func TestOperationalRetriesMalformedTransportAndNamespaceClosePreserveLifecycle(
 	badChecksum[len(badChecksum)-1] ^= 1
 	wrongDUID := append([]byte(nil), serverDUID...)
 	wrongDUID[len(wrongDUID)-1] ^= 1
+	duplicateClientID := appendOption(append([]byte(nil), reply...), lnetodhcp.OptClientID, lease.clientDUID[:])
+	duplicateServerID := appendOption(append([]byte(nil), reply...), lnetodhcp.OptServerID, serverDUID)
+	iana := optionData(t, reply, lnetodhcp.OptIANA)
+	duplicateIANA := appendOption(append([]byte(nil), reply...), lnetodhcp.OptIANA, iana)
+	code, iaAddress, _, ok := nextOption(iana, 12)
+	if !ok || code != lnetodhcp.OptIAAddr {
+		t.Fatal("missing IA Address fixture")
+	}
+	duplicateIAAddress := buildServerPayload(t, lnetodhcp.MsgReply, lease.xid, lease.clientDUID[:], serverDUID, lease.iaid, assigned, false)
+	duplicateIAAddress = appendToLastOption(t, duplicateIAAddress, lnetodhcp.OptIANA, appendOption(nil, lnetodhcp.OptIAAddr, iaAddress))
 	malformedNested := buildServerPayload(t, lnetodhcp.MsgReply, lease.xid, lease.clientDUID[:], serverDUID, lease.iaid, assigned, false)
 	malformedNested = appendToLastOption(t, malformedNested, lnetodhcp.OptIANA, []byte{0, byte(lnetodhcp.OptStatusCode), 0, 2, 0})
+	clientState := lease.client.State()
 	for name, frame := range map[string][]byte{
-		"bad checksum":        badChecksum,
-		"wrong source":        wrapServerFrame(t, adapter, netip.MustParseAddr("fe80::3"), serverMAC, reply),
-		"wrong source MAC":    wrapServerFrame(t, adapter, serverAddr, [6]byte{0x02, 0, 0, 0, 0, 3}, reply),
-		"wrong server DUID":   wrapServerFrame(t, adapter, serverAddr, serverMAC, buildServerPayload(t, lnetodhcp.MsgReply, lease.xid, lease.clientDUID[:], wrongDUID, lease.iaid, assigned, true)),
-		"malformed IA option": wrapServerFrame(t, adapter, serverAddr, serverMAC, malformedNested),
+		"bad checksum":         badChecksum,
+		"wrong source":         wrapServerFrame(t, adapter, netip.MustParseAddr("fe80::3"), serverMAC, reply),
+		"wrong source MAC":     wrapServerFrame(t, adapter, serverAddr, [6]byte{0x02, 0, 0, 0, 0, 3}, reply),
+		"wrong server DUID":    wrapServerFrame(t, adapter, serverAddr, serverMAC, buildServerPayload(t, lnetodhcp.MsgReply, lease.xid, lease.clientDUID[:], wrongDUID, lease.iaid, assigned, true)),
+		"duplicate client ID":  wrapServerFrame(t, adapter, serverAddr, serverMAC, duplicateClientID),
+		"duplicate server ID":  wrapServerFrame(t, adapter, serverAddr, serverMAC, duplicateServerID),
+		"duplicate IA":         wrapServerFrame(t, adapter, serverAddr, serverMAC, duplicateIANA),
+		"duplicate IA address": wrapServerFrame(t, adapter, serverAddr, serverMAC, duplicateIAAddress),
+		"malformed IA option":  wrapServerFrame(t, adapter, serverAddr, serverMAC, malformedNested),
 	} {
 		t.Run(name, func(t *testing.T) {
 			before, _ := account.Snapshot()
 			if handled, err := adapter.ingressLocked(frame); err != nil || !handled {
 				t.Fatalf("ingress = %v %v", handled, err)
 			}
-			if lease.state != leaseWaitReply || lease.attempts != 1 || lease.wait != adapter.config.ResponseServiceAttempts || !bytes.Equal(lease.packet, requestBefore) {
-				t.Fatalf("rejected Reply mutated lifecycle: state=%v attempts=%d wait=%d", lease.state, lease.attempts, lease.wait)
+			if lease.state != leaseWaitReply || lease.attempts != 1 || lease.wait != adapter.config.ResponseServiceAttempts || !bytes.Equal(lease.packet, requestBefore) ||
+				lease.serverAddr != serverAddr || lease.serverMAC != serverMAC || !bytes.Equal(lease.serverDUID[:lease.serverLen], serverDUID) ||
+				lease.client.State() != clientState || lease.result != (dhcpns.Configuration{}) || lease.failure != nil {
+				t.Fatalf("rejected Reply mutated lifecycle: state=%v attempts=%d wait=%d server=%v/%x client=%v result=%+v failure=%v", lease.state, lease.attempts, lease.wait, lease.serverAddr, lease.serverMAC, lease.client.State(), lease.result, lease.failure)
 			}
 			if usage, _ := account.Snapshot(); usage != before {
 				t.Fatalf("rejected Reply changed quota = %+v, want %+v", usage, before)
@@ -566,6 +583,22 @@ func appendOption(dst []byte, code lnetodhcp.OptCode, data []byte) []byte {
 	binary.BigEndian.PutUint16(dst[start:start+2], uint16(code))
 	binary.BigEndian.PutUint16(dst[start+2:start+4], uint16(len(data)))
 	return append(dst, data...)
+}
+
+func optionData(t testing.TB, payload []byte, want lnetodhcp.OptCode) []byte {
+	t.Helper()
+	for ptr := lnetodhcp.OptionsOffset; ptr < len(payload); {
+		code, data, next, ok := nextOption(payload, ptr)
+		if !ok {
+			t.Fatal("malformed test payload")
+		}
+		if code == want {
+			return append([]byte(nil), data...)
+		}
+		ptr = next
+	}
+	t.Fatalf("option %v missing", want)
+	return nil
 }
 
 func appendSuboption(dst []byte, code uint16, data []byte) []byte {
