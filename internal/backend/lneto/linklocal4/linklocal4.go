@@ -300,6 +300,10 @@ func (a *Adapter) authorizedLocked(operation policy.Operation, candidate [4]byte
 	return a.policy.CheckAddress(operation, netip.AddrFrom4(candidate))
 }
 
+func validUnicastMAC(mac [6]byte) bool {
+	return mac != ([6]byte{}) && mac != ethernet.BroadcastAddr() && mac[0]&1 == 0
+}
+
 func (a *Adapter) hasWorkLocked() bool {
 	r := a.claim
 	return r != nil && r.state == stateActive && (!r.handler.State().IsBound() || r.defensePending)
@@ -367,6 +371,10 @@ func (a *Adapter) ingressLocked(frame []byte) (bool, error) {
 	if destination != ethernet.BroadcastAddr() && destination != a.core.HardwareAddressLocked() {
 		return false, nil
 	}
+	source := *eth.SourceHardwareAddr()
+	if !validUnicastMAC(source) {
+		return true, nil
+	}
 	aframe, err := arp.NewFrame(eth.Payload())
 	if err != nil {
 		return true, nil
@@ -381,11 +389,14 @@ func (a *Adapter) ingressLocked(frame []byte) (bool, error) {
 	if hardwareType != 1 || hardwareLength != 6 || protocolType != ethernet.TypeIPv4 || protocolLength != 4 {
 		return false, nil
 	}
+	senderHW, senderProto := aframe.Sender4()
+	if *senderHW != source {
+		return true, nil
+	}
 	beforeState := r.handler.State()
 	beforeCandidate := r.handler.Candidate()
 	defenseConflict := false
 	if beforeState == lnetolinklocal.StateAnnouncing || beforeState == lnetolinklocal.StateBound {
-		senderHW, senderProto := aframe.Sender4()
 		defenseConflict = *senderProto == beforeCandidate && *senderHW != a.core.HardwareAddressLocked()
 	}
 	if err := r.handler.Demux(frame, 14); err != nil {

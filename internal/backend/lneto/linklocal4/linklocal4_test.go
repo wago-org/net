@@ -316,3 +316,56 @@ func failureOf(t testing.TB, err error) nscore.Failure {
 	}
 	return failure
 }
+
+func TestIngressDropsMalformedARPSenderIdentity(t *testing.T) {
+	for _, test := range []struct {
+		name     string
+		ethernet [6]byte
+		arp      [6]byte
+	}{
+		{name: "multicast source", ethernet: [6]byte{1, 0, 0, 0, 0, 2}, arp: [6]byte{1, 0, 0, 0, 0, 2}},
+		{name: "sender mismatch", ethernet: [6]byte{2, 0, 0, 0, 0, 3}, arp: [6]byte{2, 0, 0, 0, 0, 2}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			core, adapter, _, _ := newTestAdapter(t, Config{MaxClaims: 1, MaxConflicts: 4, MaxServiceAttempts: 16, Seed: 17})
+			resource, _, err := adapter.TryClaim(linklocalns.Request{FirstCandidate: netip.MustParseAddr("169.254.42.7")})
+			if err != nil {
+				t.Fatal(err)
+			}
+			claim := resource.(*claimResource)
+			frame := makeConflict(t, netip.MustParseAddr("169.254.42.7"), test.arp)
+			eth, err := ethernet.NewFrame(frame)
+			if err != nil {
+				t.Fatal(err)
+			}
+			*eth.SourceHardwareAddr() = test.ethernet
+
+			core.Lock()
+			beforeCandidate, beforeConflicts := claim.handler.Candidate(), claim.handler.Conflicts()
+			handled, ingressErr := adapter.ingressLocked(frame)
+			afterCandidate, afterConflicts := claim.handler.Candidate(), claim.handler.Conflicts()
+			core.Unlock()
+			if ingressErr != nil || !handled {
+				t.Fatalf("ingress = handled %v, err %v", handled, ingressErr)
+			}
+			if afterCandidate != beforeCandidate || afterConflicts != beforeConflicts || claim.state != stateActive {
+				t.Fatalf("malformed ARP mutated claim: candidate %v -> %v, conflicts %d -> %d, state %v", beforeCandidate, afterCandidate, beforeConflicts, afterConflicts, claim.state)
+			}
+		})
+	}
+}
+
+func BenchmarkIngressUnrelatedARP(b *testing.B) {
+	core, adapter, _, _ := newTestAdapter(b, Config{MaxClaims: 1, MaxConflicts: 4, MaxServiceAttempts: 16, Seed: 17})
+	if _, _, err := adapter.TryClaim(linklocalns.Request{FirstCandidate: netip.MustParseAddr("169.254.42.7")}); err != nil {
+		b.Fatal(err)
+	}
+	frame := makeConflict(b, netip.MustParseAddr("169.254.99.9"), [6]byte{2, 0, 0, 0, 0, 2})
+	core.Lock()
+	defer core.Unlock()
+	b.ReportAllocs()
+	b.ResetTimer()
+	for b.Loop() {
+		_, _ = adapter.ingressLocked(frame)
+	}
+}
