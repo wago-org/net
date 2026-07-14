@@ -243,6 +243,7 @@ func TestUDPIngressRequiresLocalEthernetDestinationAndValidSource(t *testing.T) 
 func TestUDPIngressConsumesInvalidIPv4SourcesWithoutQueueing(t *testing.T) {
 	for _, sourceAddress := range []netip.Addr{
 		netip.IPv4Unspecified(),
+		netip.MustParseAddr("127.0.0.1"),
 		netip.AddrFrom4([4]byte{255, 255, 255, 255}),
 		netip.MustParseAddr("224.0.0.1"),
 	} {
@@ -256,20 +257,21 @@ func TestUDPIngressConsumesInvalidIPv4SourcesWithoutQueueing(t *testing.T) {
 			if progress, err := source.TrySend([]byte("payload"), destinationEndpoint); err != nil || progress != nscore.ProgressDone {
 				t.Fatalf("send = %v, %v", progress, err)
 			}
-			frame := serviceUDPFrame(t, sourceCore)
-			ethernetFrame, err := ethernet.NewFrame(frame)
+			valid := serviceUDPFrame(t, sourceCore)
+			ethernetFrame, err := ethernet.NewFrame(valid)
 			if err != nil {
 				t.Fatal(err)
 			}
 			*ethernetFrame.DestinationHardwareAddr() = destinationAdapter.hardwareAddress
-			ipFrame, udpFrame := decodeUDPFrame(t, frame)
+			malformed := append([]byte(nil), valid...)
+			ipFrame, udpFrame := decodeUDPFrame(t, malformed)
 			*ipFrame.SourceAddr() = sourceAddress.As4()
 			ipFrame.SetCRC(0)
 			ipFrame.SetCRC(ipFrame.CalculateHeaderCRC())
 			rechecksumUDPFrame(ipFrame, udpFrame)
 
 			destinationAdapter.core.Lock()
-			handled, err := destinationAdapter.ingressLocked(frame)
+			handled, err := destinationAdapter.ingressLocked(malformed)
 			queued := destination.rx.count
 			destinationAdapter.core.Unlock()
 			if err != nil || !handled || queued != 0 {
@@ -277,6 +279,19 @@ func TestUDPIngressConsumesInvalidIPv4SourcesWithoutQueueing(t *testing.T) {
 			}
 			if ready := destination.Readiness(); ready&nscore.ReadyReadable != 0 {
 				t.Fatalf("invalid source became readable: %v", ready)
+			}
+
+			destinationAdapter.core.Lock()
+			handled, err = destinationAdapter.ingressLocked(valid)
+			queued = destination.rx.count
+			destinationAdapter.core.Unlock()
+			if err != nil || !handled || queued != 1 {
+				t.Fatalf("valid ingress after invalid source = handled %v, err %v, queued %d", handled, err, queued)
+			}
+			buffer := make([]byte, 16)
+			result, err := destination.TryReceive(buffer)
+			if err != nil || !result.Ready || result.Source != sourceEndpoint || string(buffer[:result.Copied]) != "payload" {
+				t.Fatalf("receive after invalid source = %+v, %q, %v", result, buffer[:result.Copied], err)
 			}
 		})
 	}
