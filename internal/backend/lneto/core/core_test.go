@@ -5,6 +5,8 @@ import (
 	"errors"
 	"net/netip"
 	"reflect"
+	"sync"
+	"sync/atomic"
 	"testing"
 
 	"github.com/soypat/lneto/ethernet"
@@ -466,6 +468,105 @@ func TestPacketServiceReadinessTracksCommittedQueues(t *testing.T) {
 	}
 	if report, progress, err := ns.TryService(budget); report != (nscore.ServiceReport{}) || progress != nscore.ProgressWouldBlock || !errors.Is(err, packetlink.ErrClosed) {
 		t.Fatalf("closed link service = %+v, %v, %v", report, progress, err)
+	}
+}
+
+func TestPacketServiceReadinessAndDirectLinkCloseRace(t *testing.T) {
+	ns := newTestNamespace(t, 31)
+	link := ns.Link()
+	var participantCloses atomic.Uint32
+	if err := ns.Install(Participant{
+		Ingress:   func([]byte) (bool, error) { return true, nil },
+		HasEgress: func() bool { return true },
+		Egress: func(dst []byte) (int, bool, error) {
+			clear(dst[:60])
+			return 60, true, nil
+		},
+		Close: func() { participantCloses.Add(1) },
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	start := make(chan struct{})
+	unexpected := make(chan error, 1)
+	record := func(err error) {
+		select {
+		case unexpected <- err:
+		default:
+		}
+	}
+	var workers sync.WaitGroup
+	workers.Add(4)
+	go func() {
+		defer workers.Done()
+		<-start
+		for range 1000 {
+			if ready := ns.Readiness(); !ready.Valid() {
+				record(errors.New("invalid readiness snapshot"))
+				return
+			}
+		}
+	}()
+	go func() {
+		defer workers.Done()
+		<-start
+		budget := nscore.ServiceBudget{Packets: 1, Bytes: uint32(link.MaxFrameBytes()), Operations: 2}
+		for range 1000 {
+			report, progress, err := ns.TryService(budget)
+			if err == nil {
+				if !report.ValidResult(budget, progress) {
+					record(errors.New("invalid service result"))
+					return
+				}
+				continue
+			}
+			if failure, ok := nscore.FailureOf(err); !ok || failure != nscore.FailureClosed {
+				record(err)
+				return
+			}
+		}
+	}()
+	go func() {
+		defer workers.Done()
+		<-start
+		frame := make([]byte, link.MaxFrameBytes())
+		for range 1000 {
+			if err := link.TryEnqueue(packetlink.Ingress, frame[:60]); err != nil && !errors.Is(err, packetlink.ErrQueueFull) && !errors.Is(err, packetlink.ErrClosed) {
+				record(err)
+				return
+			}
+			if _, err := link.TryDequeue(packetlink.Egress, frame); err != nil && !errors.Is(err, packetlink.ErrClosed) {
+				record(err)
+				return
+			}
+		}
+	}()
+	go func() {
+		defer workers.Done()
+		<-start
+		if err := link.Close(); err != nil {
+			record(err)
+			return
+		}
+		if err := ns.Close(); err != nil {
+			record(err)
+		}
+	}()
+	close(start)
+	workers.Wait()
+	select {
+	case err := <-unexpected:
+		t.Fatal(err)
+	default:
+	}
+	if got := participantCloses.Load(); got != 1 {
+		t.Fatalf("participant closes = %d, want 1", got)
+	}
+	if ready := ns.Readiness(); ready != nscore.ReadyClosed {
+		t.Fatalf("terminal readiness = %v", ready)
+	}
+	if snapshot := link.Snapshot(); !snapshot.Closed || snapshot.IngressFrames != 0 || snapshot.IngressBytes != 0 || snapshot.EgressFrames != 0 || snapshot.EgressBytes != 0 {
+		t.Fatalf("terminal link snapshot = %+v", snapshot)
 	}
 }
 
