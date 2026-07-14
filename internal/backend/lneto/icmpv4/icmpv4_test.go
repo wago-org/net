@@ -18,6 +18,25 @@ import (
 	"github.com/wago-org/net/internal/quota"
 )
 
+func TestAdapterRequiresUnicastGatewayHardwareAddressWhenEnabled(t *testing.T) {
+	config := Config{MaxEchoes: 1, MaxPayloadBytes: 32, MaxAttempts: 1, RetryServiceAttempts: 1}
+	for name, gateway := range map[string][6]byte{
+		"zero":      {},
+		"multicast": {0x01, 0, 0, 0, 0, 1},
+		"broadcast": {0xff, 0xff, 0xff, 0xff, 0xff, 0xff},
+	} {
+		t.Run(name, func(t *testing.T) {
+			common := newGatewayConfigTestCore(t, gateway)
+			if _, err := New(common, config); err == nil {
+				t.Fatalf("enabled ICMPv4 accepted gateway hardware address %v", gateway)
+			}
+			if _, err := New(common, Config{}); err != nil {
+				t.Fatalf("disabled ICMPv4 rejected irrelevant gateway hardware address %v: %v", gateway, err)
+			}
+		})
+	}
+}
+
 func TestICMPv4ExchangeCopiesPayloadValidatesReplyAndReleasesQuota(t *testing.T) {
 	core, adapter, account := newTestAdapter(t, Config{MaxEchoes: 2, MaxPayloadBytes: 64, MaxAttempts: 2, RetryServiceAttempts: 2})
 	guestPayload := []byte("bounded-echo")
@@ -251,6 +270,28 @@ func TestICMPv4ConfigIsFiniteAndZeroDisables(t *testing.T) {
 	if ValidConfig(tooLarge, tooLarge.MaxPayloadBytes+28, nil, nil, false) {
 		t.Fatal("unrepresentable ICMPv4 payload config accepted")
 	}
+}
+
+func newGatewayConfigTestCore(t testing.TB, gateway [6]byte) *lnetocore.Namespace {
+	t.Helper()
+	compiled, err := policy.Compile(policy.Config{Rules: []policy.Rule{{
+		Action: policy.ActionAllow, Transports: []policy.Transport{policy.TransportICMPv4},
+		Directions: []policy.Direction{policy.DirectionOutbound}, Prefixes: []netip.Prefix{netip.MustParsePrefix("192.0.2.0/24")},
+	}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	core, err := lnetocore.New(lnetocore.Config{
+		Hostname: "icmpv4-config", RandSeed: 10,
+		HardwareAddress: [6]byte{2, 0, 0, 0, 0, 10}, GatewayHardwareAddress: gateway,
+		IPv4Address: netip.MustParseAddr("192.0.2.10"), MTU: 1500,
+		Link: packetlink.Config{MaxFrameBytes: 1514, IngressFrames: 1, EgressFrames: 1}, Policy: compiled, Quotas: quota.NewAccount(quota.DefaultLimits()),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = core.Close() })
+	return core
 }
 
 func newTestAdapter(t testing.TB, adapterConfig Config) (*lnetocore.Namespace, *Adapter, *quota.Account) {
