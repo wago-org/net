@@ -704,8 +704,8 @@ func (a *Adapter) egressLocked(dst []byte) (int, bool, error) {
 		if e == nil || (e.state != statePending && e.state != stateWaiting) {
 			continue
 		}
-		a.cursor = (index + 1) % len(a.echoes)
 		if e.state == stateWaiting {
+			a.cursor = (index + 1) % len(a.echoes)
 			if e.retry > 1 {
 				e.retry--
 				return 0, true, nil
@@ -721,6 +721,7 @@ func (a *Adapter) egressLocked(dst []byte) (int, bool, error) {
 		if err != nil {
 			return 0, false, err
 		}
+		a.cursor = (index + 1) % len(a.echoes)
 		e.attempts++
 		e.retry = a.config.RetryServiceAttempts
 		e.state = stateWaiting

@@ -77,6 +77,89 @@ func TestEchoAndNDPExchange(t *testing.T) {
 	}
 }
 
+func TestEchoShortBufferPreservesRoundRobinStateAndPendingExchanges(t *testing.T) {
+	core, adapter := newTestAdapter(t, 31, "2001:db8::31")
+	defer core.Close()
+	firstRequest := icmpns.EchoRequest{Destination: netip.MustParseAddr("2001:db8::41"), Payload: []byte("first")}
+	secondRequest := icmpns.EchoRequest{Destination: netip.MustParseAddr("2001:db8::42"), Payload: []byte("second")}
+	firstResource, _, err := adapter.TryEcho(firstRequest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	secondResource, _, err := adapter.TryEcho(secondRequest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	first := firstResource.(*echo)
+	second := secondResource.(*echo)
+	firstPayload := append([]byte(nil), first.payload...)
+	secondPayload := append([]byte(nil), second.payload...)
+	firstReady, secondReady := first.Readiness(), second.Readiness()
+	usageBefore, _ := adapter.quotas.Snapshot()
+	short := bytes.Repeat([]byte{0xa5}, 14+40+icmpHeader+len(first.payload)-1)
+
+	core.Lock()
+	written, worked, err := adapter.egressLocked(short)
+	cursor := adapter.cursor
+	core.Unlock()
+	if written != 0 || worked || !errors.Is(err, lneto.ErrShortBuffer) {
+		t.Fatalf("short echo egress = %d, %v, %v", written, worked, err)
+	}
+	if !bytes.Equal(short, bytes.Repeat([]byte{0xa5}, len(short))) {
+		t.Fatalf("short echo egress mutated destination = %x", short)
+	}
+	if cursor != 0 || first.state != statePending || second.state != statePending || first.attempts != 0 || second.attempts != 0 || first.retry != 0 || second.retry != 0 || first.destination != firstRequest.Destination || second.destination != secondRequest.Destination || !bytes.Equal(first.payload, firstPayload) || !bytes.Equal(second.payload, secondPayload) {
+		t.Fatalf("short echo egress mutated scheduler or exchanges: cursor=%d first=%v/%d/%d second=%v/%d/%d", cursor, first.state, first.attempts, first.retry, second.state, second.attempts, second.retry)
+	}
+	if first.Readiness() != firstReady || second.Readiness() != secondReady {
+		t.Fatalf("short echo egress changed readiness: first=%v/%v second=%v/%v", first.Readiness(), firstReady, second.Readiness(), secondReady)
+	}
+	if usage, _ := adapter.quotas.Snapshot(); usage != usageBefore {
+		t.Fatalf("short echo egress changed quota = %+v, want %+v", usage, usageBefore)
+	}
+
+	frame := make([]byte, core.Link().MaxFrameBytes())
+	core.Lock()
+	firstBytes, firstWorked, err := adapter.egressLocked(frame)
+	cursorAfterFirst := adapter.cursor
+	core.Unlock()
+	if err != nil || !firstWorked || firstBytes == 0 || cursorAfterFirst != 1 {
+		t.Fatalf("first echo retry = %d, %v, %v, cursor=%d", firstBytes, firstWorked, err, cursorAfterFirst)
+	}
+	firstIP, err := lnetoipv6.NewFrame(frame[14:firstBytes])
+	if err != nil {
+		t.Fatal(err)
+	}
+	firstICMP, err := lnetoicmp.NewFrame(firstIP.Payload())
+	if err != nil {
+		t.Fatal(err)
+	}
+	firstEcho := lnetoicmp.FrameEcho{Frame: firstICMP}
+	if netip.AddrFrom16(*firstIP.DestinationAddr()) != first.destination || firstEcho.Identifier() != first.identifier || firstEcho.SequenceNumber() != first.sequence || !bytes.Equal(firstEcho.Data(), firstPayload) {
+		t.Fatalf("first echo retry frame = destination=%v identity=%d/%d payload=%q", netip.AddrFrom16(*firstIP.DestinationAddr()), firstEcho.Identifier(), firstEcho.SequenceNumber(), firstEcho.Data())
+	}
+
+	core.Lock()
+	secondBytes, secondWorked, err := adapter.egressLocked(frame)
+	cursorAfterSecond := adapter.cursor
+	core.Unlock()
+	if err != nil || !secondWorked || secondBytes == 0 || cursorAfterSecond != 0 {
+		t.Fatalf("second echo egress = %d, %v, %v, cursor=%d", secondBytes, secondWorked, err, cursorAfterSecond)
+	}
+	secondIP, err := lnetoipv6.NewFrame(frame[14:secondBytes])
+	if err != nil {
+		t.Fatal(err)
+	}
+	secondICMP, err := lnetoicmp.NewFrame(secondIP.Payload())
+	if err != nil {
+		t.Fatal(err)
+	}
+	secondEcho := lnetoicmp.FrameEcho{Frame: secondICMP}
+	if netip.AddrFrom16(*secondIP.DestinationAddr()) != second.destination || secondEcho.Identifier() != second.identifier || secondEcho.SequenceNumber() != second.sequence || !bytes.Equal(secondEcho.Data(), secondPayload) {
+		t.Fatalf("second echo frame = destination=%v identity=%d/%d payload=%q", netip.AddrFrom16(*secondIP.DestinationAddr()), secondEcho.Identifier(), secondEcho.SequenceNumber(), secondEcho.Data())
+	}
+}
+
 func TestNeighborResolutionAcceptsRouterFlaggedAdvertisement(t *testing.T) {
 	coreA, a := newTestAdapter(t, 19, "2001:db8::19")
 	coreB, b := newTestAdapter(t, 20, "2001:db8::20")
