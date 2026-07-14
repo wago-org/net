@@ -60,8 +60,8 @@ func NamespaceDefault(host plugin.Host, module wago.HostModule, params, results 
 		return
 	}
 	memory := guest.Memory(module)
-	out := uint32(params[0])
-	if !abicore.CheckRanges(memory, false, abicore.Range{Ptr: out, Length: abicore.HandleV1Size}) {
+	out, ok := abicore.NarrowUint32(params[0])
+	if !ok || !abicore.CheckRanges(memory, false, abicore.Range{Ptr: out, Length: abicore.HandleV1Size}) {
 		guest.SetStatus(results, guest.StatusInvalidArgument)
 		return
 	}
@@ -89,8 +89,9 @@ func Resolve(host plugin.Host, module wago.HostModule, params, results []uint64)
 		return
 	}
 	memory := guest.Memory(module)
-	queryPtr, out := uint32(params[1]), uint32(params[2])
-	if !dnsabi.CheckDNSResolveV1(memory, queryPtr, out) {
+	queryPtr, queryOK := abicore.NarrowUint32(params[1])
+	out, outOK := abicore.NarrowUint32(params[2])
+	if !queryOK || !outOK || !dnsabi.CheckDNSResolveV1(memory, queryPtr, out) {
 		guest.SetStatus(results, guest.StatusInvalidArgument)
 		return
 	}
@@ -132,8 +133,8 @@ func Next(host plugin.Host, module wago.HostModule, params, results []uint64) {
 		return
 	}
 	memory := guest.Memory(module)
-	out := uint32(params[1])
-	if !abicore.CheckRanges(memory, false, abicore.Range{Ptr: out, Length: dnsabi.DNSRecordV1Size}) {
+	out, ok := abicore.NarrowUint32(params[1])
+	if !ok || !abicore.CheckRanges(memory, false, abicore.Range{Ptr: out, Length: dnsabi.DNSRecordV1Size}) {
 		guest.SetStatus(results, guest.StatusInvalidArgument)
 		return
 	}

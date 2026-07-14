@@ -213,6 +213,39 @@ func TestBindingsResolveNextAtomicStatusesAndLifecycle(t *testing.T) {
 	}
 }
 
+func TestBindingsRejectHighBitI32AliasesBeforeBackendCalls(t *testing.T) {
+	backend := &fakeNamespace{failure: nscore.Fail(nscore.FailureTemporary, errors.New("backend called"))}
+	manager, instance := attachManager(t, backend)
+	defer manager.Detach(instance)
+	host := testHost{instance: instance, memory: bytes.Repeat([]byte{0xa5}, 1024)}
+	bindings := Bindings(plugin.NewHost(manager))
+	state, _ := manager.ForInstance(instance)
+	request := dnsns.Request{Name: "api.example.com", Types: dnsns.RecordsA}
+	if !dnsabi.EncodeDNSQueryV1(host.memory, 0, request) {
+		t.Fatal("encode query")
+	}
+	query := &fakeQuery{next: dnsns.NextWouldBlock}
+	handle, err := state.Resources().Add(resource.KindDNSQuery, query)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	const high = uint64(1) << 32
+	before := append([]byte(nil), host.memory...)
+	if status := callBinding(t, bindingByName(t, bindings, "namespace_default"), host, high+900); status != guest.StatusInvalidArgument || !bytes.Equal(host.memory, before) {
+		t.Fatalf("high namespace output = %v", status)
+	}
+	if status := callBinding(t, bindingByName(t, bindings, "resolve"), host, uint64(state.NamespaceHandle()), high, 320); status != guest.StatusInvalidArgument || backend.calls != 0 || !bytes.Equal(host.memory, before) {
+		t.Fatalf("high resolve request = %v, calls=%d", status, backend.calls)
+	}
+	if status := callBinding(t, bindingByName(t, bindings, "resolve"), host, uint64(state.NamespaceHandle()), 0, high+320); status != guest.StatusInvalidArgument || backend.calls != 0 || !bytes.Equal(host.memory, before) {
+		t.Fatalf("high resolve output = %v, calls=%d", status, backend.calls)
+	}
+	if status := callBinding(t, bindingByName(t, bindings, "next"), host, uint64(handle), high+400); status != guest.StatusInvalidArgument || query.nextCalls != 0 || !bytes.Equal(host.memory, before) {
+		t.Fatalf("high next output = %v, calls=%d", status, query.nextCalls)
+	}
+}
+
 func TestBindingsPrevalidateBeforeInstanceAndHandleLookup(t *testing.T) {
 	manager := instancecore.NewManager()
 	instance := new(wago.Instance)
