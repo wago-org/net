@@ -233,6 +233,109 @@ func TestMalformedEgressResultFailsClosedAsIO(t *testing.T) {
 	}
 }
 
+func TestPacketServiceBudgetEdgesPreserveQueuedWorkAndAlternate(t *testing.T) {
+	t.Run("queue full egress falls through to ingress", func(t *testing.T) {
+		ns := newTestNamespace(t, 31)
+		producerCalls := 0
+		ingressCalls := 0
+		if err := ns.Install(Participant{
+			Ingress: func(frame []byte) (bool, error) {
+				ingressCalls++
+				return len(frame) == 1 && frame[0] == 0x31, nil
+			},
+			HasEgress: func() bool { return true },
+			Egress: func([]byte) (int, bool, error) {
+				producerCalls++
+				return 0, true, nil
+			},
+		}); err != nil {
+			t.Fatal(err)
+		}
+		for i := 0; i < testConfig(31).Link.EgressFrames; i++ {
+			if err := ns.Link().TryEnqueue(packetlink.Egress, []byte{byte(i)}); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if err := ns.Link().TryEnqueue(packetlink.Ingress, []byte{0x31}); err != nil {
+			t.Fatal(err)
+		}
+		ns.Lock()
+		ns.SetNextIngressLocked(false)
+		ns.Unlock()
+		budget := nscore.ServiceBudget{Packets: 1, Bytes: uint32(ns.Link().MaxFrameBytes()), Operations: 2}
+		report, progress, err := ns.TryService(budget)
+		if err != nil || progress != nscore.ProgressDone || report != (nscore.ServiceReport{Packets: 1, Bytes: 1, Operations: 1}) {
+			t.Fatalf("service = %+v, %v, %v", report, progress, err)
+		}
+		if producerCalls != 0 || ingressCalls != 1 {
+			t.Fatalf("callback calls = producer %d, ingress %d", producerCalls, ingressCalls)
+		}
+		if snapshot := ns.Link().Snapshot(); snapshot.EgressFrames != snapshot.EgressCapacity || snapshot.IngressFrames != 0 {
+			t.Fatalf("queue snapshot = %+v", snapshot)
+		}
+	})
+
+	t.Run("remaining byte budget leaves next ingress frame queued", func(t *testing.T) {
+		ns := newTestNamespace(t, 32)
+		ingressCalls := 0
+		if err := ns.Install(Participant{Ingress: func([]byte) (bool, error) {
+			ingressCalls++
+			return true, nil
+		}}); err != nil {
+			t.Fatal(err)
+		}
+		for range 2 {
+			if err := ns.Link().TryEnqueue(packetlink.Ingress, make([]byte, 40)); err != nil {
+				t.Fatal(err)
+			}
+		}
+		ns.Lock()
+		ns.SetNextIngressLocked(true)
+		ns.Unlock()
+		budget := nscore.ServiceBudget{Packets: 2, Bytes: 79, Operations: 3}
+		report, progress, err := ns.TryService(budget)
+		if err != nil || progress != nscore.ProgressDone || report != (nscore.ServiceReport{Packets: 1, Bytes: 40, Operations: 1}) {
+			t.Fatalf("service = %+v, %v, %v", report, progress, err)
+		}
+		if ingressCalls != 1 {
+			t.Fatalf("ingress calls = %d, want 1", ingressCalls)
+		}
+		if snapshot := ns.Link().Snapshot(); snapshot.IngressFrames != 1 || snapshot.IngressBytes != 40 || snapshot.EgressFrames != 0 {
+			t.Fatalf("queue snapshot = %+v", snapshot)
+		}
+	})
+
+	t.Run("maintenance is charged without packet bytes", func(t *testing.T) {
+		ns := newTestNamespace(t, 33)
+		maintenance := 0
+		if err := ns.Install(Participant{
+			HasEgress: func() bool { return true },
+			Egress: func([]byte) (int, bool, error) {
+				maintenance++
+				ns.MarkMaintenanceLocked()
+				return 0, true, nil
+			},
+		}); err != nil {
+			t.Fatal(err)
+		}
+		ns.Lock()
+		ns.SetNextIngressLocked(false)
+		required := ns.RequiredFrameBytesLocked()
+		ns.Unlock()
+		budget := nscore.ServiceBudget{Packets: 1, Bytes: uint32(required), Operations: 3}
+		report, progress, err := ns.TryService(budget)
+		if err != nil || progress != nscore.ProgressDone || report != (nscore.ServiceReport{Operations: 2}) {
+			t.Fatalf("service = %+v, %v, %v", report, progress, err)
+		}
+		if maintenance != 2 {
+			t.Fatalf("maintenance calls = %d, want 2", maintenance)
+		}
+		if snapshot := ns.Link().Snapshot(); snapshot.EgressFrames != 0 || snapshot.EgressBytes != 0 {
+			t.Fatalf("maintenance committed output: %+v", snapshot)
+		}
+	})
+}
+
 func TestPacketServiceReadinessTracksCommittedQueues(t *testing.T) {
 	ns := newTestNamespace(t, 30)
 	if ready := ns.Readiness(); ready != nscore.ReadyWritable {
