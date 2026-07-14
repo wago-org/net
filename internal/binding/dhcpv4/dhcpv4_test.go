@@ -97,7 +97,12 @@ func TestBindingsPrevalidateAcquireAndPreserveResultOutputs(t *testing.T) {
 		t.Fatalf("reserved acquire = %v, calls=%d", status, backend.calls)
 	}
 	host.memory[104] = 0
-	if status := callBinding(t, bindingByName(t, bindings, "acquire"), host, namespaceHandle, 0, 256); status != guest.StatusInProgress || backend.calls != 1 {
+	backend.lease = nil
+	if status := callBinding(t, bindingByName(t, bindings, "acquire"), host, namespaceHandle, 0, 256); status != guest.StatusIO || backend.calls != 1 || !bytes.Equal(host.memory[256:264], outBefore) {
+		t.Fatalf("typed-nil acquire = %v, calls=%d", status, backend.calls)
+	}
+	backend.lease = lease
+	if status := callBinding(t, bindingByName(t, bindings, "acquire"), host, namespaceHandle, 0, 256); status != guest.StatusInProgress || backend.calls != 2 {
 		t.Fatalf("valid acquire = %v, calls=%d", status, backend.calls)
 	}
 	leaseHandle := binary.LittleEndian.Uint64(host.memory[256:264])
@@ -128,19 +133,47 @@ func TestBindingsPrevalidateAcquireAndPreserveResultOutputs(t *testing.T) {
 	if status := callBinding(t, bindingByName(t, bindings, "result"), host, leaseHandle, 400); status != guest.StatusBadHandle {
 		t.Fatalf("stale result = %v", status)
 	}
+
+	fresh := &fakeLease{result: dhcpns.ResultWouldBlock}
+	backend.lease = fresh
+	if status := callBinding(t, bindingByName(t, bindings, "acquire"), host, namespaceHandle, 0, 264); status != guest.StatusInProgress {
+		t.Fatalf("fresh acquire = %v", status)
+	}
+	freshHandle := binary.LittleEndian.Uint64(host.memory[264:272])
+	if freshHandle == leaseHandle || uint16(freshHandle) != uint16(leaseHandle) {
+		t.Fatalf("generation-safe slot reuse = old %v, fresh %v", leaseHandle, freshHandle)
+	}
+	if status := callBinding(t, bindingByName(t, bindings, "cancel"), host, leaseHandle); status != guest.StatusBadHandle || fresh.canceled {
+		t.Fatalf("stale cancel = %v, fresh canceled=%v", status, fresh.canceled)
+	}
+	if status := callBinding(t, bindingByName(t, bindings, "release"), host, leaseHandle); status != guest.StatusBadHandle || fresh.released {
+		t.Fatalf("stale release = %v, fresh released=%v", status, fresh.released)
+	}
+	if status := callBinding(t, bindingByName(t, bindings, "result"), host, freshHandle, 400); status != guest.StatusAgain {
+		t.Fatalf("fresh result = %v", status)
+	}
+	if status := callBinding(t, bindingByName(t, bindings, "close"), host, freshHandle); status != guest.StatusOK || !fresh.closed {
+		t.Fatalf("fresh close = %v, closed=%v", status, fresh.closed)
+	}
 }
 
-func TestResultRejectsOutOfBoundsBeforeHandleLookup(t *testing.T) {
+func TestBindingsPrevalidateOutputsBeforeInstanceAndHandleLookup(t *testing.T) {
 	manager := instancecore.NewManager()
 	instance := new(wago.Instance)
-	if err := manager.Attach(instance); err != nil {
-		t.Fatal(err)
-	}
-	defer manager.Detach(instance)
 	host := testHost{instance: instance, memory: bytes.Repeat([]byte{0xa5}, 64)}
+	bindings := Bindings(plugin.NewHost(manager))
 	before := append([]byte(nil), host.memory...)
-	if status := callBinding(t, bindingByName(t, Bindings(plugin.NewHost(manager)), "result"), host, 1, 1); status != guest.StatusInvalidArgument || !bytes.Equal(host.memory, before) {
+	if status := callBinding(t, bindingByName(t, bindings, "namespace_default"), host, 57); status != guest.StatusInvalidArgument || !bytes.Equal(host.memory, before) {
+		t.Fatalf("out-of-bounds namespace = %v", status)
+	}
+	if status := callBinding(t, bindingByName(t, bindings, "acquire"), host, 1, 0, 60); status != guest.StatusInvalidArgument || !bytes.Equal(host.memory, before) {
+		t.Fatalf("out-of-bounds acquire = %v", status)
+	}
+	if status := callBinding(t, bindingByName(t, bindings, "result"), host, 1, 1); status != guest.StatusInvalidArgument || !bytes.Equal(host.memory, before) {
 		t.Fatalf("out-of-bounds result = %v", status)
+	}
+	if status := callBinding(t, bindingByName(t, bindings, "namespace_default"), host, 0); status != guest.StatusInvalidState || !bytes.Equal(host.memory, before) {
+		t.Fatalf("unattached namespace = %v", status)
 	}
 }
 
