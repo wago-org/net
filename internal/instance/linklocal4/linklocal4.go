@@ -17,6 +17,9 @@ func Claim(state *core.State, namespaceHandle resource.Handle, request linklocal
 		value, backendProgress, backendErr := backend.TryClaim(request)
 		progress = backendProgress
 		if backendErr != nil {
+			if !resource.IsNil(value) {
+				_ = value.Close()
+			}
 			progress = 0
 			return backendErr
 		}
@@ -41,6 +44,9 @@ func Claim(state *core.State, namespaceHandle resource.Handle, request linklocal
 		}
 		return nil
 	})
+	if err != nil {
+		handle, progress = 0, 0
+	}
 	return
 }
 

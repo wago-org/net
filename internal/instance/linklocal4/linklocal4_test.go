@@ -141,10 +141,26 @@ func TestClaimRejectsInvalidBackendResourcesAndRollsBackRegistration(t *testing.
 }
 
 func TestBackendFailuresAndMalformedResultsClearOutputs(t *testing.T) {
-	backend := &fakeNamespace{progress: nscore.ProgressDone, failure: nscore.Fail(nscore.FailureTemporary, errors.New("claim"))}
+	failure := nscore.Fail(nscore.FailureTemporary, errors.New("claim"))
+	failedClaim := &fakeClaim{}
+	backend := &fakeNamespace{next: failedClaim, progress: nscore.ProgressDone, failure: failure}
 	state, manager, instance, _ := attachState(t, backend, 4)
-	if handle, progress, err := Claim(state, state.NamespaceHandle(), linklocalns.Request{}); handle != 0 || progress != 0 || failureOf(err) != nscore.FailureTemporary {
+	if handle, progress, err := Claim(state, state.NamespaceHandle(), linklocalns.Request{}); handle != 0 || progress != 0 || !errors.Is(err, failure) || failureOf(err) != nscore.FailureTemporary {
 		t.Fatalf("failed claim = %v, %v, %v", handle, progress, err)
+	}
+	if failedClaim.closeCalls != 1 || state.Resources().Len() != 1 || state.Readiness().Snapshot().Registrations != 1 {
+		t.Fatalf("failed claim retained resource: closes=%d resources=%d readiness=%+v", failedClaim.closeCalls, state.Resources().Len(), state.Readiness().Snapshot())
+	}
+	_ = manager.Detach(instance)
+
+	var typedNil *fakeClaim
+	backend = &fakeNamespace{next: typedNil, progress: 99, failure: failure}
+	state, manager, instance, _ = attachState(t, backend, 4)
+	if handle, progress, err := Claim(state, state.NamespaceHandle(), linklocalns.Request{}); handle != 0 || progress != 0 || !errors.Is(err, failure) || failureOf(err) != nscore.FailureTemporary {
+		t.Fatalf("typed-nil failed claim = %v, %v, %v", handle, progress, err)
+	}
+	if state.Resources().Len() != 1 || state.Readiness().Snapshot().Registrations != 1 {
+		t.Fatalf("typed-nil failed claim published: resources=%d readiness=%+v", state.Resources().Len(), state.Readiness().Snapshot())
 	}
 	_ = manager.Detach(instance)
 
