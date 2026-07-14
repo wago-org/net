@@ -14,6 +14,26 @@ import (
 	"github.com/wago-org/net/internal/packetlink"
 )
 
+func TestConfigurationRequiresUnicastHardwareIdentity(t *testing.T) {
+	base := testConfig(1)
+	if err := ValidateConfig(base); err != nil {
+		t.Fatalf("valid hardware identity: %v", err)
+	}
+	for name, hardware := range map[string][6]byte{
+		"zero":      {},
+		"broadcast": ethernet.BroadcastAddr(),
+		"multicast": {0x01, 0, 0, 0, 0, 1},
+	} {
+		t.Run(name, func(t *testing.T) {
+			invalid := base
+			invalid.HardwareAddress = hardware
+			if err := ValidateConfig(invalid); err == nil {
+				t.Fatalf("accepted invalid hardware identity %v", hardware)
+			}
+		})
+	}
+}
+
 func TestIPv6ConfigurationRequiresUsableStaticIdentityAndMTU(t *testing.T) {
 	base := Config{
 		Hostname: "core6", RandSeed: 6, HardwareAddress: [6]byte{2, 0, 0, 0, 0, 6},
