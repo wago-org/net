@@ -249,6 +249,87 @@ func TestUnregisterPreservesScanCursorAcrossTailReplacement(t *testing.T) {
 	}
 }
 
+func TestStaleSwapDeletePreservesScanAndServiceFairness(t *testing.T) {
+	for staleIndex := 0; staleIndex < 3; staleIndex++ {
+		t.Run([]string{"head", "middle", "tail"}[staleIndex], func(t *testing.T) {
+			table := newTable(t)
+			coordinator := newCoordinator(t, table, Config{MaxRegistrations: 3})
+			services := []*testService{{work: true}, {work: true}, {work: true}}
+			handles := make([]resource.Handle, len(services))
+			for i, service := range services {
+				handles[i] = addAndRegister(t, table, coordinator, resource.KindNamespace, service)
+			}
+
+			coordinator.mu.Lock()
+			coordinator.cursor = staleIndex
+			coordinator.serviceCursor = staleIndex
+			coordinator.mu.Unlock()
+			if err := table.CloseHandle(handles[staleIndex], resource.KindNamespace); err != nil {
+				t.Fatal(err)
+			}
+
+			budget := Budget{
+				Scans: 3, Events: 2, ServiceAttempts: 1,
+				Service: namespace.ServiceBudget{Packets: 1, Bytes: 64, Operations: 1},
+			}
+			events := make([]Event, 2)
+			report, progress, err := coordinator.TryPoll(events, budget)
+			if err != nil || progress != namespace.ProgressDone || report != (Report{Scanned: 3, Events: 1, ServiceAttempts: 1, ServiceCompleted: 1, StaleRegistrations: 1}) {
+				t.Fatalf("stale poll = %+v, %v, %v, events=%+v", report, progress, err, events)
+			}
+			firstServiced := 2
+			if staleIndex == 2 {
+				firstServiced = 0
+			}
+			if events[0] != (Event{Handle: handles[firstServiced], Readiness: namespace.ReadyReadable}) {
+				t.Fatalf("first serviced event = %+v, want handle %v", events[0], handles[firstServiced])
+			}
+			for i, service := range services {
+				want := int32(0)
+				if i == firstServiced {
+					want = 1
+				}
+				if got := service.attempts.Load(); got != want {
+					t.Fatalf("service %d attempts = %d, want %d", i, got, want)
+				}
+			}
+
+			clear(events)
+			report, progress, err = coordinator.TryPoll(events, budget)
+			if err != nil || progress != namespace.ProgressDone || report != (Report{Scanned: 2, Events: 2, ServiceAttempts: 1, ServiceCompleted: 1}) {
+				t.Fatalf("rotated poll = %+v, %v, %v, events=%+v", report, progress, err, events)
+			}
+			secondServiced := 1
+			if staleIndex == 1 {
+				secondServiced = 0
+			}
+			if services[secondServiced].attempts.Load() != 1 {
+				t.Fatalf("second serviced attempts = %d", services[secondServiced].attempts.Load())
+			}
+			if snapshot := coordinator.Snapshot(); snapshot.Registrations != 2 {
+				t.Fatalf("stale registration retained: %+v", snapshot)
+			}
+		})
+	}
+}
+
+func TestEventBudgetEarlyStopRotatesScanCursor(t *testing.T) {
+	table := newTable(t)
+	coordinator := newCoordinator(t, table, Config{MaxRegistrations: 3})
+	want := make([]resource.Handle, 3)
+	for i := range want {
+		want[i] = addAndRegister(t, table, coordinator, resource.KindPollable, &testPollable{ready: namespace.ReadyReadable})
+	}
+	budget := Budget{Scans: 3, Events: 1}
+	events := make([]Event, 1)
+	for i, handle := range append(want, want[0]) {
+		report, progress, err := coordinator.TryPoll(events, budget)
+		if err != nil || progress != namespace.ProgressDone || report != (Report{Scanned: 1, Events: 1}) || events[0] != (Event{Handle: handle, Readiness: namespace.ReadyReadable}) {
+			t.Fatalf("poll %d = %+v, %v, %v, events=%+v", i, report, progress, err, events)
+		}
+	}
+}
+
 func TestServiceErrorCursorRecoversAfterOffenderRemoval(t *testing.T) {
 	table := newTable(t)
 	coordinator := newCoordinator(t, table, Config{MaxRegistrations: 2})
