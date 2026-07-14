@@ -192,6 +192,92 @@ func TestNTPRejectsMalformedServerResponseAndIgnoresOriginMismatch(t *testing.T)
 	}
 }
 
+func TestNTPMalformedTransportCannotRetireCorrelatedSynchronization(t *testing.T) {
+	for _, test := range []struct {
+		name   string
+		mutate func(testing.TB, []byte) []byte
+	}{
+		{name: "declared IPv4 oversize", mutate: func(t testing.TB, frame []byte) []byte {
+			ipFrame := ipv4Payload(t, frame)
+			ipFrame.SetTotalLength(ipFrame.TotalLength() + 1)
+			ipFrame.SetCRC(0)
+			ipFrame.SetCRC(ipFrame.CalculateHeaderCRC())
+			return frame
+		}},
+		{name: "declared IPv4 undersize", mutate: func(t testing.TB, frame []byte) []byte {
+			ipFrame := ipv4Payload(t, frame)
+			ipFrame.SetTotalLength(uint16(ipFrame.HeaderLength() + 7))
+			ipFrame.SetCRC(0)
+			ipFrame.SetCRC(ipFrame.CalculateHeaderCRC())
+			return frame
+		}},
+		{name: "bad IPv4 checksum", mutate: func(t testing.TB, frame []byte) []byte {
+			ipFrame := ipv4Payload(t, frame)
+			ipFrame.SetCRC(ipFrame.CRC() ^ 1)
+			return frame
+		}},
+		{name: "UDP and IPv4 length mismatch", mutate: func(t testing.TB, frame []byte) []byte {
+			frame = append(frame, 0xa5)
+			ipFrame := ipv4Payload(t, frame)
+			ipFrame.SetTotalLength(ipFrame.TotalLength() + 1)
+			ipFrame.SetCRC(0)
+			ipFrame.SetCRC(ipFrame.CalculateHeaderCRC())
+			return frame
+		}},
+		{name: "bad UDP checksum", mutate: func(t testing.TB, frame []byte) []byte {
+			udpFrame := udpPayload(t, frame)
+			udpFrame.SetCRC(udpFrame.CRC() ^ 1)
+			return frame
+		}},
+		{name: "short NTP payload", mutate: func(t testing.TB, frame []byte) []byte {
+			frame = frame[:len(frame)-1]
+			ipFrame := ipv4Payload(t, frame)
+			ipFrame.SetTotalLength(ipFrame.TotalLength() - 1)
+			ipFrame.SetCRC(0)
+			ipFrame.SetCRC(ipFrame.CalculateHeaderCRC())
+			udpFrame := udpPayload(t, frame)
+			udpFrame.SetLength(udpFrame.Length() - 1)
+			rechecksumUDP(t, frame)
+			return frame
+		}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			clock := &manualClock{now: time.Date(2026, 7, 14, 12, 0, 0, 0, time.UTC)}
+			core, adapter, account := newTestAdapter(t, clock, Config{
+				Server: netip.MustParseAddr("192.0.2.123"), Clock: clock, MaxSyncs: 1,
+				MaxAttempts: 1, RetryServiceAttempts: 2, Precision: -20,
+			})
+			resource, _, err := adapter.TrySync()
+			if err != nil {
+				t.Fatal(err)
+			}
+			sync := resource.(*syncResource)
+			request := serviceEgress(t, core)
+			response, arrival := makeNTPResponse(t, request, 100*time.Millisecond, 20*time.Millisecond)
+			malformed := test.mutate(t, append([]byte(nil), response...))
+			clock.now = arrival
+
+			core.Lock()
+			handled, ingressErr := adapter.ingressLocked(malformed)
+			core.Unlock()
+			if ingressErr != nil || !handled {
+				t.Fatalf("malformed ingress = handled %v, err %v", handled, ingressErr)
+			}
+			if sync.state != syncWaiting || sync.Readiness() != 0 || adapter.byPort[sync.portLease.UDPPort()] != sync {
+				t.Fatalf("malformed transport retired synchronization: state=%v readiness=%v mapped=%v", sync.state, sync.Readiness(), adapter.byPort[sync.portLease.UDPPort()] == sync)
+			}
+			if usage, closed := account.Snapshot(); closed || usage != (quota.Usage{Resources: 1, NTPResources: 1, NTPWork: 1}) {
+				t.Fatalf("malformed transport quota = %+v, closed=%v", usage, closed)
+			}
+
+			serviceIngress(t, core, response)
+			if sync.state != syncPrepare || sync.Readiness() != 0 {
+				t.Fatalf("valid response after malformed transport = state %v readiness %v", sync.state, sync.Readiness())
+			}
+		})
+	}
+}
+
 func TestNTPMalformedTerminalRetiresTransportBeforeCloseAndStaleCloseCannotAffectFreshSync(t *testing.T) {
 	clock := &manualClock{now: time.Date(2026, 7, 14, 12, 0, 0, 0, time.UTC)}
 	core, adapter, account := newTestAdapter(t, clock, Config{
@@ -485,7 +571,7 @@ func makeNTPResponse(t testing.TB, request []byte, serverOffset, roundTrip time.
 	return frame, clientSend.Add(roundTrip)
 }
 
-func ntpPayload(t testing.TB, frame []byte) lnetontp.Frame {
+func ipv4Payload(t testing.TB, frame []byte) ipv4.Frame {
 	t.Helper()
 	ethernetFrame, err := ethernet.NewFrame(frame)
 	if err != nil {
@@ -495,10 +581,22 @@ func ntpPayload(t testing.TB, frame []byte) lnetontp.Frame {
 	if err != nil {
 		t.Fatal(err)
 	}
+	return ipFrame
+}
+
+func udpPayload(t testing.TB, frame []byte) lnetoudp.Frame {
+	t.Helper()
+	ipFrame := ipv4Payload(t, frame)
 	udpFrame, err := lnetoudp.NewFrame(ipFrame.Payload())
 	if err != nil {
 		t.Fatal(err)
 	}
+	return udpFrame
+}
+
+func ntpPayload(t testing.TB, frame []byte) lnetontp.Frame {
+	t.Helper()
+	udpFrame := udpPayload(t, frame)
 	ntpFrame, err := lnetontp.NewFrame(udpFrame.Payload())
 	if err != nil {
 		t.Fatal(err)

@@ -436,15 +436,17 @@ func (a *Adapter) ingressLocked(frame []byte) (bool, error) {
 		return false, err
 	}
 	version, headerWords := ipFrame.VersionAndIHL()
-	if version != 4 || headerWords < 5 || ipFrame.Protocol() != lneto.IPProtoUDP || netip.AddrFrom4(*ipFrame.DestinationAddr()) != a.core.IPv4AddressLocked() {
+	if version != 4 || headerWords < 5 || ipFrame.Protocol() != lneto.IPProtoUDP || netip.AddrFrom4(*ipFrame.DestinationAddr()) != a.core.IPv4AddressLocked() || netip.AddrFrom4(*ipFrame.SourceAddr()) != a.config.Server {
 		return false, nil
 	}
-	udpFrame, err := lnetoudp.NewFrame(ipFrame.Payload())
-	if err != nil {
+	headerBytes := int(headerWords) * 4
+	ipRaw := ipFrame.RawData()
+	if headerBytes > len(ipRaw) || len(ipRaw)-headerBytes < 8 {
 		return false, nil
 	}
+	udpFrame, _ := lnetoudp.NewFrame(ipRaw[headerBytes:])
 	sync := a.byPort[udpFrame.DestinationPort()]
-	if sync == nil || sync.state != syncWaiting || netip.AddrFrom4(*ipFrame.SourceAddr()) != a.config.Server || udpFrame.SourcePort() != lnetontp.ServerPort {
+	if sync == nil || sync.state != syncWaiting || udpFrame.SourcePort() != lnetontp.ServerPort {
 		return false, nil
 	}
 	if !validUnicastMAC(*ethernetFrame.SourceHardwareAddr()) {
@@ -452,40 +454,48 @@ func (a *Adapter) ingressLocked(frame []byte) (bool, error) {
 	}
 	var validator lneto.Validator
 	ipFrame.ValidateExceptCRC(&validator)
-	if err := validator.ErrPop(); err != nil {
-		sync.failLocked(nscore.FailureIO, err)
+	if validator.ErrPop() != nil || ipFrame.Flags().MoreFragments() || ipFrame.Flags().FragmentOffset() != 0 {
 		return true, nil
 	}
-	if ipFrame.CalculateHeaderCRC() != 0 || ipFrame.Flags().MoreFragments() || ipFrame.Flags().FragmentOffset() != 0 {
-		sync.failLocked(nscore.FailureIO, lneto.ErrBadCRC)
+	var ipChecksum lneto.CRC791
+	ipChecksum.WriteEven(ipRaw[:headerBytes])
+	if ipChecksum.Sum16() != 0 {
 		return true, nil
 	}
+	ipPayload := ipRaw[headerBytes:int(ipFrame.TotalLength())]
+	if len(ipPayload) < 8 {
+		return true, nil
+	}
+	udpFrame, _ = lnetoudp.NewFrame(ipPayload)
 	udpFrame.ValidateSize(&validator)
-	if err := validator.ErrPop(); err != nil {
-		sync.failLocked(nscore.FailureIO, err)
+	if validator.ErrPop() != nil {
 		return true, nil
 	}
 	udpLength := udpFrame.Length()
+	if int(udpLength) != len(ipPayload) {
+		return true, nil
+	}
 	if udpFrame.CRC() != 0 {
 		var checksum lneto.CRC791
 		ipFrame.CRCWriteUDPPseudo(&checksum, udpLength)
 		if checksum.PayloadSum16(udpFrame.RawData()[:udpLength]) != 0 {
-			sync.failLocked(nscore.FailureIO, lneto.ErrBadCRC)
 			return true, nil
 		}
 	}
 	payload := udpFrame.RawData()[8:udpLength]
-	if len(payload) != lnetontp.SizeHeader {
-		sync.failLocked(nscore.FailureMessageTooLarge, lneto.ErrMismatchLen)
+	if len(payload) < lnetontp.SizeHeader {
 		return true, nil
 	}
 	ntpFrame, err := lnetontp.NewFrame(payload)
 	if err != nil {
-		sync.failLocked(nscore.FailureIO, err)
 		return true, nil
 	}
 	requestFrame, _ := lnetontp.NewFrame(sync.request[:])
 	if ntpFrame.OriginTime() != requestFrame.TransmitTime() {
+		return true, nil
+	}
+	if len(payload) != lnetontp.SizeHeader {
+		sync.failLocked(nscore.FailureMessageTooLarge, lneto.ErrMismatchLen)
 		return true, nil
 	}
 	mode, ntpVersion, leap := ntpFrame.Flags()
