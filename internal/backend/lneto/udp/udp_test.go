@@ -42,6 +42,11 @@ func TestAdapterExchangeTruncationPortLeaseAndClose(t *testing.T) {
 	if err != nil || !result.Ready {
 		t.Fatalf("dequeue = %+v, %v", result, err)
 	}
+	ingressFrame, err := ethernet.NewFrame(frame[:result.FrameBytes])
+	if err != nil {
+		t.Fatal(err)
+	}
+	*ingressFrame.DestinationHardwareAddr() = bAdapter.hardwareAddress
 	if err := bCore.Link().TryEnqueue(packetlink.Ingress, frame[:result.FrameBytes]); err != nil {
 		t.Fatal(err)
 	}
@@ -72,6 +77,72 @@ func TestAdapterExchangeTruncationPortLeaseAndClose(t *testing.T) {
 	retainedReset := a.retained.ResetReleased()
 	if retainedReset || a.rx.storage != nil || a.tx.storage != nil {
 		t.Fatalf("closed socket retained graph state: retained_reset=%v rx=%v tx=%v", retainedReset, a.rx.storage != nil, a.tx.storage != nil)
+	}
+}
+
+func TestUDPIngressRequiresLocalEthernetDestinationAndValidSource(t *testing.T) {
+	for _, test := range []struct {
+		name        string
+		mutate      func(*ethernet.Frame)
+		wantHandled bool
+	}{
+		{
+			name: "foreign destination",
+			mutate: func(frame *ethernet.Frame) {
+				*frame.DestinationHardwareAddr() = [6]byte{0x02, 0, 0, 0, 0, 99}
+			},
+		},
+		{
+			name: "zero source",
+			mutate: func(frame *ethernet.Frame) {
+				*frame.SourceHardwareAddr() = [6]byte{}
+			},
+			wantHandled: true,
+		},
+		{
+			name: "broadcast source",
+			mutate: func(frame *ethernet.Frame) {
+				*frame.SourceHardwareAddr() = ethernet.BroadcastAddr()
+			},
+			wantHandled: true,
+		},
+		{
+			name: "multicast source",
+			mutate: func(frame *ethernet.Frame) {
+				*frame.SourceHardwareAddr() = [6]byte{0x01, 0, 0, 0, 0, 1}
+			},
+			wantHandled: true,
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			sourceCore, sourceAdapter, _ := newTestAdapter(t, 51)
+			_, destinationAdapter, _ := newTestAdapter(t, 52)
+			sourceEndpoint := nscore.Endpoint{Address: netip.MustParseAddr("192.0.2.51"), Port: 4051}
+			destinationEndpoint := nscore.Endpoint{Address: netip.MustParseAddr("192.0.2.52"), Port: 4052}
+			source := bindTestSocket(t, sourceAdapter, sourceEndpoint)
+			destination := bindTestSocket(t, destinationAdapter, destinationEndpoint).(*udpSocket)
+			if progress, err := source.TrySend([]byte("payload"), destinationEndpoint); err != nil || progress != nscore.ProgressDone {
+				t.Fatalf("send = %v, %v", progress, err)
+			}
+			frame := serviceUDPFrame(t, sourceCore)
+			ethernetFrame, err := ethernet.NewFrame(frame)
+			if err != nil {
+				t.Fatal(err)
+			}
+			*ethernetFrame.DestinationHardwareAddr() = destinationAdapter.hardwareAddress
+			test.mutate(&ethernetFrame)
+
+			destinationAdapter.core.Lock()
+			handled, err := destinationAdapter.ingressLocked(frame)
+			queued := destination.rx.count
+			destinationAdapter.core.Unlock()
+			if err != nil || handled != test.wantHandled {
+				t.Fatalf("ingress = handled %v, err %v; want handled %v", handled, err, test.wantHandled)
+			}
+			if queued != 0 || destination.Readiness()&nscore.ReadyReadable != 0 {
+				t.Fatalf("foreign L2 frame queued datagram: queued=%d readiness=%v", queued, destination.Readiness())
+			}
+		})
 	}
 }
 
@@ -223,6 +294,24 @@ func BenchmarkUDPDatagramQueueRoundTrip(b *testing.B) {
 			b.Fatalf("queue pop = %+v, %v", result, ok)
 		}
 	}
+}
+
+func serviceUDPFrame(t testing.TB, common *lnetocore.Namespace) []byte {
+	t.Helper()
+	common.Lock()
+	common.SetNextIngressLocked(false)
+	common.Unlock()
+	budget := nscore.ServiceBudget{Packets: 1, Bytes: uint32(common.Link().MaxFrameBytes()), Operations: 1}
+	report, progress, err := common.TryService(budget)
+	if err != nil || progress != nscore.ProgressDone || report.Packets != 1 || report.Operations != 1 {
+		t.Fatalf("egress = %+v, %v, %v", report, progress, err)
+	}
+	frame := make([]byte, common.Link().MaxFrameBytes())
+	result, err := common.Link().TryDequeue(packetlink.Egress, frame)
+	if err != nil || !result.Ready || result.Truncated {
+		t.Fatalf("dequeue = %+v, %v", result, err)
+	}
+	return frame[:result.FrameBytes]
 }
 
 func bindTestSocket(t testing.TB, adapter *Adapter, local nscore.Endpoint) udpns.Socket {

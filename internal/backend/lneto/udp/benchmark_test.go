@@ -5,6 +5,7 @@ import (
 	"net/netip"
 	"testing"
 
+	"github.com/soypat/lneto/ethernet"
 	nscore "github.com/wago-org/net/internal/namespace/core"
 	udpns "github.com/wago-org/net/internal/namespace/udp"
 	"github.com/wago-org/net/internal/packetlink"
@@ -18,6 +19,7 @@ var (
 	benchmarkRXQueue  datagramQueue
 	benchmarkTXQueue  datagramQueue
 	benchmarkBool     bool
+	benchmarkHandled  bool
 )
 
 func BenchmarkNewSocketDatagramQueues(b *testing.B) {
@@ -67,6 +69,39 @@ func BenchmarkAdapterHasEgressScaling(b *testing.B) {
 				benchmarkBool = adapter.hasEgressLocked()
 			}
 		})
+	}
+}
+
+func BenchmarkIngressUDPDatagram(b *testing.B) {
+	sourceCore, sourceAdapter, _ := newTestAdapter(b, 96)
+	_, destinationAdapter, _ := newTestAdapter(b, 97)
+	sourceEndpoint := nscore.Endpoint{Address: netip.MustParseAddr("192.0.2.96"), Port: 4096}
+	destinationEndpoint := nscore.Endpoint{Address: netip.MustParseAddr("192.0.2.97"), Port: 4097}
+	source := bindTestSocket(b, sourceAdapter, sourceEndpoint)
+	destination := bindTestSocket(b, destinationAdapter, destinationEndpoint).(*udpSocket)
+	payload := make([]byte, 32)
+	if progress, err := source.TrySend(payload, destinationEndpoint); err != nil || progress != nscore.ProgressDone {
+		b.Fatalf("send = %v, %v", progress, err)
+	}
+	frame := serviceUDPFrame(b, sourceCore)
+	ethernetFrame, err := ethernet.NewFrame(frame)
+	if err != nil {
+		b.Fatal(err)
+	}
+	*ethernetFrame.DestinationHardwareAddr() = destinationAdapter.hardwareAddress
+	b.SetBytes(int64(len(payload)))
+	b.ReportAllocs()
+	b.ResetTimer()
+	for b.Loop() {
+		destinationAdapter.core.Lock()
+		benchmarkHandled, benchmarkErr = destinationAdapter.ingressLocked(frame)
+		if benchmarkErr == nil && benchmarkHandled && destination.rx.count == 1 {
+			destination.rx.discardHead()
+		}
+		destinationAdapter.core.Unlock()
+		if benchmarkErr != nil || !benchmarkHandled {
+			b.Fatalf("ingress = %v, %v", benchmarkHandled, benchmarkErr)
+		}
 	}
 }
 
