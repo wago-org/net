@@ -498,6 +498,70 @@ func TestConnectRejectsNonWireUnicastDestinationsBeforeOwnership(t *testing.T) {
 	}
 }
 
+func TestFragmentedIPv4SYNIsHandledDropAndListenerRemainsRetryable(t *testing.T) {
+	clientCore, client := newTestAdapter(t, 47, 0, 1)
+	serverCore, server := newTestAdapter(t, 48, 1, 0)
+	setGateways(clientCore, [6]byte{0x02, 0, 0, 0, 0, 48})
+	setGateways(serverCore, [6]byte{0x02, 0, 0, 0, 0, 47})
+	endpoint := nscore.Endpoint{Address: netip.MustParseAddr("192.0.2.48"), Port: 4248}
+	listenerValue, progress, err := server.TryListen(endpoint)
+	if err != nil || progress != nscore.ProgressDone {
+		t.Fatalf("listen = %T, %v, %v", listenerValue, progress, err)
+	}
+	listener := listenerValue.(*tcpListener)
+	clientValue, progress, err := client.TryConnect(endpoint)
+	if err != nil || progress != nscore.ProgressInProgress {
+		t.Fatalf("connect = %T, %v, %v", clientValue, progress, err)
+	}
+	clientStream := clientValue.(*tcpStream)
+	validSYN := nextTCPFrame(t, clientCore)
+	for name, flags := range map[string]ipv4.Flags{
+		"first fragment":      ipv4.NewFlags(0, false, true),
+		"noninitial fragment": ipv4.NewFlags(1, false, false),
+	} {
+		t.Run(name, func(t *testing.T) {
+			fragmentedSYN := append([]byte(nil), validSYN...)
+			ethernetFrame, err := ethernet.NewFrame(fragmentedSYN)
+			if err != nil {
+				t.Fatal(err)
+			}
+			ipFrame, err := ipv4.NewFrame(ethernetFrame.Payload())
+			if err != nil {
+				t.Fatal(err)
+			}
+			ipFrame.SetFlags(flags)
+			ipFrame.SetCRC(0)
+			ipFrame.SetCRC(ipFrame.CalculateHeaderCRC())
+
+			serviceTCPIngressFrame(t, serverCore, fragmentedSYN)
+			serverCore.Lock()
+			serverCore.SetNextIngressLocked(false)
+			required := serverCore.RequiredFrameBytesLocked()
+			serverCore.Unlock()
+			if report, progress, err := serverCore.TryService(nscore.ServiceBudget{Packets: 1, Bytes: uint32(required), Operations: 1}); err != nil || progress != nscore.ProgressWouldBlock || report != (nscore.ServiceReport{}) {
+				t.Fatalf("fragmented SYN scheduled response = %+v, %v, %v", report, progress, err)
+			}
+			if ready := listener.Readiness(); ready != 0 {
+				t.Fatalf("fragmented SYN listener readiness = %v", ready)
+			}
+		})
+	}
+
+	serviceTCPIngressFrame(t, serverCore, validSYN)
+	serviceTCPIngressFrame(t, clientCore, nextTCPFrame(t, serverCore))
+	serviceTCPIngressFrame(t, serverCore, nextTCPFrame(t, clientCore))
+	if progress, err := clientStream.TryFinishConnect(); err != nil || progress != nscore.ProgressDone {
+		t.Fatalf("finish after valid retry = %v, %v", progress, err)
+	}
+	if ready := listener.Readiness(); ready != nscore.ReadyAccept {
+		t.Fatalf("valid retry listener readiness = %v", ready)
+	}
+	accepted, progress, err := listener.TryAccept()
+	if err != nil || progress != nscore.ProgressDone || accepted == nil {
+		t.Fatalf("accept after valid retry = %T, %v, %v", accepted, progress, err)
+	}
+}
+
 func TestConnectResetBeforeEstablishment(t *testing.T) {
 	common, adapter := newTestAdapter(t, 3, 0, 1)
 	remote := nscore.Endpoint{Address: netip.MustParseAddr("192.0.2.4"), Port: 4299}
@@ -1177,6 +1241,21 @@ func setGateways(common *lnetocore.Namespace, gateway [6]byte) {
 	common.Lock()
 	common.StackLocked().SetGatewayHardwareAddr(gateway)
 	common.Unlock()
+}
+
+func serviceTCPIngressFrame(t testing.TB, core *lnetocore.Namespace, frame []byte) {
+	t.Helper()
+	if err := core.Link().TryEnqueue(packetlink.Ingress, frame); err != nil {
+		t.Fatal(err)
+	}
+	core.Lock()
+	core.SetNextIngressLocked(true)
+	required := core.RequiredFrameBytesLocked()
+	core.Unlock()
+	report, progress, err := core.TryService(nscore.ServiceBudget{Packets: 1, Bytes: uint32(required), Operations: 1})
+	if err != nil || progress != nscore.ProgressDone || report.Packets != 1 {
+		t.Fatalf("ingress = %+v, %v, %v", report, progress, err)
+	}
 }
 
 func transferTCP(t testing.TB, from, to *lnetocore.Namespace) {

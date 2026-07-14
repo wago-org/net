@@ -8,6 +8,8 @@ import (
 	"time"
 
 	lneto "github.com/soypat/lneto"
+	"github.com/soypat/lneto/ethernet"
+	"github.com/soypat/lneto/ipv4"
 	lnetotcp "github.com/soypat/lneto/tcp"
 	lnetocore "github.com/wago-org/net/internal/backend/lneto/core"
 	nscore "github.com/wago-org/net/internal/namespace/core"
@@ -17,6 +19,7 @@ import (
 
 const (
 	firstEphemeralTCPPort           uint16 = 49152
+	ingressOrder                           = 15
 	closeOrder                             = 20
 	maxEagerTCPListenerStorageBytes        = 256 << 20
 	maxTCPStreamCapacityHint               = 16
@@ -90,7 +93,7 @@ func New(common *lnetocore.Namespace, config Config) (*Adapter, error) {
 	n.ports = make(map[uint16]struct{}, tcpPortCapacity(config))
 	n.prepareReusePools()
 	common.Unlock()
-	if err := common.Install(lnetocore.Participant{CloseOrder: closeOrder, Close: n.CloseLocked}); err != nil {
+	if err := common.Install(lnetocore.Participant{IngressOrder: ingressOrder, Ingress: n.ingressLocked, CloseOrder: closeOrder, Close: n.CloseLocked}); err != nil {
 		return nil, err
 	}
 	return n, nil
@@ -439,6 +442,29 @@ func (p *tcpPool) destroyLocked() {
 	p.releaseLocked()
 	p.slots = nil
 	p.owner = nil
+}
+
+func (n *Adapter) ingressLocked(frame []byte) (bool, error) {
+	ethernetFrame, err := ethernet.NewFrame(frame)
+	if err != nil || ethernetFrame.EtherTypeOrSize() != ethernet.TypeIPv4 || *ethernetFrame.DestinationHardwareAddr() != n.core.HardwareAddressLocked() {
+		return false, nil
+	}
+	ipFrame, err := ipv4.NewFrame(ethernetFrame.Payload())
+	if err != nil {
+		return false, nil
+	}
+	version, ihl := ipFrame.VersionAndIHL()
+	totalLength := int(ipFrame.TotalLength())
+	headerLength := int(ihl) * 4
+	if version != 4 || ihl < 5 || totalLength < 20 || headerLength > totalLength || totalLength > len(ipFrame.RawData()) || ipFrame.CalculateHeaderCRC() != 0 || ipFrame.Protocol() != lneto.IPProtoTCP {
+		return false, nil
+	}
+	local := n.core.IPv4AddressLocked()
+	if !local.IsUnspecified() && netip.AddrFrom4(*ipFrame.DestinationAddr()) != local {
+		return false, nil
+	}
+	flags := ipFrame.Flags()
+	return flags.MoreFragments() || flags.FragmentOffset() != 0, nil
 }
 
 // TryListenTCP implements the narrow TCP namespace facet.
