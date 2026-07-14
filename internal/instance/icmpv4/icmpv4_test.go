@@ -1,6 +1,7 @@
 package icmpv4
 
 import (
+	"bytes"
 	"errors"
 	"net/netip"
 	"testing"
@@ -39,6 +40,22 @@ type fakeEcho struct {
 	closed   bool
 }
 
+type mutatingEcho struct {
+	payload []byte
+	result  icmpns.Result
+	next    icmpns.Next
+	failure error
+}
+
+func (*mutatingEcho) Close() error                { return nil }
+func (*mutatingEcho) Cancel() error               { return nil }
+func (*mutatingEcho) Readiness() nscore.Readiness { return nscore.ReadyICMPv4Reply }
+func (e *mutatingEcho) TryResult(dst []byte) (icmpns.Result, icmpns.Next, error) {
+	result := e.result
+	result.Copied = copy(dst, e.payload)
+	return result, e.next, e.failure
+}
+
 func (e *fakeEcho) Close() error { e.closed = true; return nil }
 func (e *fakeEcho) Cancel() error {
 	e.canceled = true
@@ -53,6 +70,39 @@ func (e *fakeEcho) Readiness() nscore.Readiness {
 func (e *fakeEcho) TryResult(dst []byte) (icmpns.Result, icmpns.Next, error) {
 	copied := copy(dst, e.payload)
 	return icmpns.Result{Source: netip.MustParseAddr("192.0.2.1"), Identifier: 1, Sequence: 2, Copied: copied, PayloadBytes: len(e.payload)}, icmpns.NextReady, nil
+}
+
+func TestResultLeavesDestinationUnchangedOnBackendFailure(t *testing.T) {
+	manager := instancecore.NewManager()
+	instance := new(wago.Instance)
+	if err := manager.Attach(instance); err != nil {
+		t.Fatal(err)
+	}
+	defer manager.Detach(instance)
+	state, _ := manager.ForInstance(instance)
+	exchange := &mutatingEcho{
+		payload: []byte("mutated"), next: icmpns.NextReady, failure: errors.New("backend failed"),
+		result: icmpns.Result{Source: netip.MustParseAddr("192.0.2.1"), PayloadBytes: len("mutated")},
+	}
+	handle, err := state.Resources().Add(resource.KindICMPv4Echo, exchange)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dst := bytes.Repeat([]byte{0xa5}, 16)
+	before := append([]byte(nil), dst...)
+	if result, next, err := Result(state, handle, dst); err == nil || result != (icmpns.Result{}) || next != 0 || !bytes.Equal(dst, before) {
+		t.Fatalf("backend failure = %+v, %v, %v, payload=%x", result, next, err, dst)
+	}
+	exchange.failure = nil
+	exchange.result.PayloadBytes = icmpns.MaxEchoPayloadBytes + 1
+	if result, next, err := Result(state, handle, dst); failureOf(err) != nscore.FailureIO || result != (icmpns.Result{}) || next != 0 || !bytes.Equal(dst, before) {
+		t.Fatalf("unrepresentable result = %+v, %v, %v, payload=%x", result, next, err, dst)
+	}
+}
+
+func failureOf(err error) nscore.Failure {
+	failure, _ := nscore.FailureOf(err)
+	return failure
 }
 
 func TestInstanceICMPv4ExactKindLifecycle(t *testing.T) {

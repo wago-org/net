@@ -147,6 +147,14 @@ func TestSeedLookupRemoveAndQuotaCleanup(t *testing.T) {
 	}
 }
 
+func TestConfigRejectsUnrepresentableEchoPayload(t *testing.T) {
+	config := testConfig()
+	config.MaxPayloadBytes = icmpns.MaxEchoPayloadBytes + 1
+	if ValidConfig(config, config.MaxPayloadBytes+40+icmpHeader, nil, nil, false) {
+		t.Fatal("unrepresentable ICMPv6 payload config accepted")
+	}
+}
+
 func TestUnconfiguredIPv6IsTruthfullyUnsupported(t *testing.T) {
 	compiled, err := policy.Compile(policy.Config{Rules: []policy.Rule{{Action: policy.ActionAllow, Transports: []policy.Transport{policy.TransportICMPv6}, Directions: []policy.Direction{policy.DirectionInbound, policy.DirectionOutbound}}}})
 	if err != nil {

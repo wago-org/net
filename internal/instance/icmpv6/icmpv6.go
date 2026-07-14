@@ -66,14 +66,23 @@ func EchoResult(state *core.State, handle resource.Handle, dst []byte) (result i
 		if lookupErr != nil {
 			return lookupErr
 		}
-		result, next, err = echo.TryResult(dst)
-		if err == nil && next == icmpns.NextReady && !result.Valid(len(dst)) {
+		scratchSize := min(len(dst), icmpns.MaxEchoPayloadBytes)
+		scratch := locked.OutputScratch(scratchSize)
+		result, next, err = echo.TryResult(scratch)
+		if err != nil {
+			result, next = icmpns.EchoResult{}, 0
+			return err
+		}
+		if next == icmpns.NextWouldBlock {
+			result = icmpns.EchoResult{}
+			return nil
+		}
+		if next != icmpns.NextReady || !result.Valid(scratchSize) {
+			result, next = icmpns.EchoResult{}, 0
 			return nscore.Fail(nscore.FailureIO, core.ErrInvalidBackendResult)
 		}
-		if err == nil && next != icmpns.NextReady && next != icmpns.NextWouldBlock {
-			return nscore.Fail(nscore.FailureIO, core.ErrInvalidBackendResult)
-		}
-		return err
+		copy(dst, scratch[:result.Copied])
+		return nil
 	})
 	return
 }

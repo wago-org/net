@@ -145,7 +145,8 @@ func ValidConfig(config Config, mtu int, compiled *policy.Policy, account *quota
 	if requireAuthority && (compiled == nil || account == nil) {
 		return false
 	}
-	return config.MaxEchoes > 0 && config.MaxPayloadBytes > 0 && config.MaxPayloadBytes <= mtu-40-icmpHeader &&
+	return config.MaxEchoes > 0 && config.MaxPayloadBytes > 0 && config.MaxPayloadBytes <= icmpns.MaxEchoPayloadBytes &&
+		config.MaxPayloadBytes <= mtu-40-icmpHeader &&
 		config.MaxNeighbors > 0 && config.MaxResolutions > 0 && config.MaxResolutions <= config.MaxNeighbors &&
 		config.MaxQueuedResponses > 0 && config.MaxAttempts > 0 && config.RetryServiceAttempts > 0
 }

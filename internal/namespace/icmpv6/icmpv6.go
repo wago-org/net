@@ -10,7 +10,14 @@ import (
 )
 
 // ServiceKey identifies the independently selected ICMPv6/NDP service.
-const ServiceKey nscore.ServiceKey = "icmpv6"
+const (
+	ServiceKey nscore.ServiceKey = "icmpv6"
+
+	// MaxEchoPayloadBytes is the largest payload representable within the
+	// uint16-sized IPv6 MTU used by this non-jumbogram ABI after IPv6 and ICMP
+	// echo headers.
+	MaxEchoPayloadBytes = 1<<16 - 1 - 40 - 8
+)
 
 // Operation identifies an API operation implemented by the pinned immediate
 // ICMPv6 client. Values beyond NeighborRemove are named unsupported operations
@@ -100,7 +107,7 @@ type EchoResult struct {
 // Valid reports whether result is representable for a destination buffer.
 func (result EchoResult) Valid(size int) bool {
 	return size >= 0 && validUnicast(result.Source, result.ScopeID) && result.Copied >= 0 &&
-		result.Copied <= size && result.PayloadBytes >= result.Copied
+		result.Copied <= size && result.PayloadBytes >= result.Copied && result.PayloadBytes <= MaxEchoPayloadBytes
 }
 
 // Next is one nonblocking result state shared by echo and resolution resources.
@@ -111,7 +118,8 @@ const (
 	NextWouldBlock
 )
 
-// Echo owns one bounded copied exchange.
+// Echo owns one bounded copied exchange. TryResult must not retain its
+// call-scoped destination slice.
 type Echo interface {
 	nscore.Resource
 	TryResult([]byte) (EchoResult, Next, error)

@@ -50,13 +50,14 @@ type State struct {
 	// operation finishes before teardown proceeds.
 	mu sync.Mutex
 
-	resources  *resource.Table
-	readiness  *readiness.Coordinator
-	quotas     *quota.Account
-	policy     *policy.Policy
-	pollEvents []readiness.Event
-	namespace  resource.Handle
-	closed     bool
+	resources     *resource.Table
+	readiness     *readiness.Coordinator
+	quotas        *quota.Account
+	policy        *policy.Policy
+	pollEvents    []readiness.Event
+	outputScratch []byte
+	namespace     resource.Handle
+	closed        bool
 }
 
 // Resources returns the instance's generation-safe resource table.
@@ -134,6 +135,8 @@ func (s *State) Close() error {
 	}
 	clear(s.pollEvents)
 	s.pollEvents = nil
+	clear(s.outputScratch)
+	s.outputScratch = nil
 	s.namespace = 0
 	switch errCount {
 	case 0:
@@ -322,8 +325,26 @@ func (s *State) LookupNamespace(namespaceHandle resource.Handle) (nscore.Namespa
 // LockedState exposes shared ownership primitives only while State holds its
 // lifecycle mutex. Protocol operation packages must not retain these pointers.
 type LockedState struct {
-	Resources *resource.Table
-	Readiness *readiness.Coordinator
+	Resources     *resource.Table
+	Readiness     *readiness.Coordinator
+	outputScratch *[]byte
+}
+
+// OutputScratch returns zeroed instance-owned temporary output storage while
+// the State lifecycle lock is held. Protocol operations must not retain the
+// returned slice. Capacity grows lazily and is reused across checked calls so
+// successful steady-state output paths do not add per-call garbage.
+func (s LockedState) OutputScratch(size int) []byte {
+	if s.outputScratch == nil || size < 0 {
+		return nil
+	}
+	if cap(*s.outputScratch) < size {
+		*s.outputScratch = make([]byte, size)
+	} else {
+		*s.outputScratch = (*s.outputScratch)[:size]
+	}
+	clear(*s.outputScratch)
+	return *s.outputScratch
 }
 
 // WithLock serializes one protocol operation against polling and teardown.
@@ -336,7 +357,7 @@ func (s *State) WithLock(operation func(LockedState) error) error {
 	if s.closed || s.resources == nil || s.readiness == nil {
 		return nscore.Fail(nscore.FailureClosed, resource.ErrClosed)
 	}
-	return operation(LockedState{Resources: s.resources, Readiness: s.readiness})
+	return operation(LockedState{Resources: s.resources, Readiness: s.readiness, outputScratch: &s.outputScratch})
 }
 
 // PollVisitor receives one bounded readiness result while State still owns its

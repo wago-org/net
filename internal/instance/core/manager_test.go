@@ -393,6 +393,46 @@ func TestConfiguredNamespacesAreQuotaOwnedIsolatedAndGenerationSafe(t *testing.T
 	}
 }
 
+func TestOutputScratchIsZeroedReusedAndReleased(t *testing.T) {
+	manager := NewManager()
+	instance := new(wago.Instance)
+	if err := manager.Attach(instance); err != nil {
+		t.Fatal(err)
+	}
+	state, _ := manager.ForInstance(instance)
+	var first *byte
+	if err := state.WithLock(func(locked LockedState) error {
+		scratch := locked.OutputScratch(8)
+		first = &scratch[0]
+		for i := range scratch {
+			scratch[i] = byte(i + 1)
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := state.WithLock(func(locked LockedState) error {
+		scratch := locked.OutputScratch(4)
+		if &scratch[0] != first {
+			t.Fatal("scratch backing was not reused")
+		}
+		for i, value := range scratch {
+			if value != 0 {
+				t.Fatalf("scratch[%d] = %d", i, value)
+			}
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := manager.Detach(instance); err != nil {
+		t.Fatal(err)
+	}
+	if state.outputScratch != nil {
+		t.Fatal("detach retained output scratch")
+	}
+}
+
 func TestNamespaceCreationRollsBackEveryOwnedStage(t *testing.T) {
 	t.Run("quota denial skips backend", func(t *testing.T) {
 		config := DefaultConfig()

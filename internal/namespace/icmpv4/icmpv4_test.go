@@ -61,4 +61,7 @@ func TestNarrowICMPv4FacetAndCopiedResultValidation(t *testing.T) {
 	if (Result{Source: netip.MustParseAddr("192.0.2.1"), Copied: 2, PayloadBytes: 1}).Valid(2) {
 		t.Fatal("result with copied bytes beyond payload accepted")
 	}
+	if (Result{Source: netip.MustParseAddr("192.0.2.1"), PayloadBytes: MaxEchoPayloadBytes + 1}).Valid(0) {
+		t.Fatal("unrepresentable IPv4 echo payload accepted")
+	}
 }

@@ -10,7 +10,13 @@ import (
 
 // ServiceKey is the protocol-local key used to attach an ICMPv4 adapter to one
 // shared composed namespace.
-const ServiceKey nscore.ServiceKey = "icmpv4"
+const (
+	ServiceKey nscore.ServiceKey = "icmpv4"
+
+	// MaxEchoPayloadBytes is the largest payload representable in one IPv4
+	// packet with the minimum 20-byte IPv4 and 8-byte ICMP echo headers.
+	MaxEchoPayloadBytes = 1<<16 - 1 - 20 - 8
+)
 
 // Namespace starts bounded asynchronous ICMPv4 echo exchanges. The returned
 // shared resource must satisfy Echo before publication.
@@ -46,7 +52,7 @@ type Result struct {
 // buffer of size bytes.
 func (r Result) Valid(size int) bool {
 	return size >= 0 && r.Source.Is4() && !r.Source.Is4In6() && !r.Source.IsUnspecified() && r.Source.Zone() == "" &&
-		r.Copied >= 0 && r.Copied <= size && r.PayloadBytes >= r.Copied
+		r.Copied >= 0 && r.Copied <= size && r.PayloadBytes >= r.Copied && r.PayloadBytes <= MaxEchoPayloadBytes
 }
 
 // Next is the result of one nonblocking TryResult call.
@@ -57,9 +63,10 @@ const (
 	NextWouldBlock
 )
 
-// Echo owns one bounded exchange. TryResult copies reply bytes into dst and
-// never returns backend-owned storage. Cancel immediately makes unfinished work
-// terminal; Close discards all retained state and quota synchronously.
+// Echo owns one bounded exchange. TryResult copies reply bytes into call-scoped
+// dst, must not retain dst, and never returns backend-owned storage. Cancel
+// immediately makes unfinished work terminal; Close discards all retained state
+// and quota synchronously.
 type Echo interface {
 	nscore.Resource
 	TryResult(dst []byte) (Result, Next, error)

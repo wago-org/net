@@ -149,6 +149,10 @@ func TestICMPv4ConfigIsFiniteAndZeroDisables(t *testing.T) {
 			t.Fatalf("invalid config accepted: %+v", invalid)
 		}
 	}
+	tooLarge := Config{MaxEchoes: 1, MaxPayloadBytes: icmpns.MaxEchoPayloadBytes + 1, MaxAttempts: 1, RetryServiceAttempts: 1}
+	if ValidConfig(tooLarge, tooLarge.MaxPayloadBytes+28, nil, nil, false) {
+		t.Fatal("unrepresentable ICMPv4 payload config accepted")
+	}
 }
 
 func newTestAdapter(t testing.TB, adapterConfig Config) (*lnetocore.Namespace, *Adapter, *quota.Account) {

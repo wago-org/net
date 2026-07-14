@@ -56,6 +56,9 @@ func TestEchoAndNeighborValidation(t *testing.T) {
 	if !result.Valid(2) || (EchoResult{Source: global, Copied: 3, PayloadBytes: 2}).Valid(3) {
 		t.Fatal("echo result bounds validation failed")
 	}
+	if (EchoResult{Source: global, PayloadBytes: MaxEchoPayloadBytes + 1}).Valid(0) {
+		t.Fatal("unrepresentable IPv6 echo payload accepted")
+	}
 }
 
 func TestResourceContractsCompile(t *testing.T) {

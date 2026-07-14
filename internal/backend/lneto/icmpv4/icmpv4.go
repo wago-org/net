@@ -125,7 +125,8 @@ func ValidConfig(config Config, mtu int, compiled *policy.Policy, account *quota
 	if requireAuthority && (compiled == nil || account == nil) {
 		return false
 	}
-	return config.MaxPayloadBytes >= 0 && config.MaxPayloadBytes <= mtu-28 && config.MaxAttempts > 0 && config.RetryServiceAttempts > 0
+	return config.MaxPayloadBytes >= 0 && config.MaxPayloadBytes <= icmpns.MaxEchoPayloadBytes &&
+		config.MaxPayloadBytes <= mtu-28 && config.MaxAttempts > 0 && config.RetryServiceAttempts > 0
 }
 
 // TryEcho immediately validates authority and copies request payload into one
