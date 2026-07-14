@@ -10,6 +10,32 @@ import (
 	"github.com/wago-org/net/internal/packetlink"
 )
 
+func TestIPv6ConfigurationRequiresUsableStaticIdentityAndMTU(t *testing.T) {
+	base := Config{
+		Hostname: "core6", RandSeed: 6, HardwareAddress: [6]byte{2, 0, 0, 0, 0, 6},
+		IPv4Address: netip.MustParseAddr("192.0.2.6"), IPv6Address: netip.MustParseAddr("2001:db8::6"), IPv6PrefixBits: 64,
+		MTU: 1500, Link: packetlink.Config{MaxFrameBytes: 1514, IngressFrames: 1, EgressFrames: 1},
+	}
+	if err := ValidateConfig(base); err != nil {
+		t.Fatalf("valid IPv6 core config: %v", err)
+	}
+	for name, mutate := range map[string]func(*Config){
+		"small mtu":          func(c *Config) { c.MTU = 1279; c.Link.MaxFrameBytes = 1293 },
+		"mapped":             func(c *Config) { c.IPv6Address = netip.MustParseAddr("::ffff:192.0.2.6") },
+		"global scope":       func(c *Config) { c.IPv6ScopeID = 1 },
+		"link scope missing": func(c *Config) { c.IPv6Address = netip.MustParseAddr("fe80::6") },
+		"partial":            func(c *Config) { c.IPv6Address = netip.Addr{} },
+	} {
+		t.Run(name, func(t *testing.T) {
+			invalid := base
+			mutate(&invalid)
+			if err := ValidateConfig(invalid); err == nil {
+				t.Fatalf("accepted invalid IPv6 core config: %+v", invalid)
+			}
+		})
+	}
+}
+
 func TestParticipantOrderingAndDeterministicClose(t *testing.T) {
 	ns := newTestNamespace(t, 1)
 	var ingress []string

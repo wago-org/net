@@ -31,6 +31,9 @@ type Config struct {
 	HardwareAddress        [6]byte
 	GatewayHardwareAddress [6]byte
 	IPv4Address            netip.Addr
+	IPv6Address            netip.Addr
+	IPv6PrefixBits         uint8
+	IPv6ScopeID            uint32
 	MTU                    uint16
 	Link                   packetlink.Config
 	MaxActiveTCPPorts      uint16
@@ -86,6 +89,9 @@ type Namespace struct {
 	ipv4Address            netip.Addr
 	staticIPv4Address      netip.Addr
 	ipv4IdentityLease      *IPv4IdentityLease
+	ipv6Address            netip.Addr
+	ipv6PrefixBits         uint8
+	ipv6ScopeID            uint32
 	hardwareAddress        [6]byte
 	gatewayHardwareAddress [6]byte
 	policy                 *policy.Policy
@@ -120,14 +126,19 @@ func New(config Config) (*Namespace, error) {
 		return nil, nscore.Fail(nscore.FailureInvalidArgument, err)
 	}
 	stack := new(xnet.StackAsync)
-	if err := stack.Reset(xnet.StackConfig{
+	stackConfig := xnet.StackConfig{
 		HardwareAddress:   config.HardwareAddress,
 		StaticAddress4:    config.IPv4Address.As4(),
 		RandSeed:          config.RandSeed,
 		Hostname:          config.Hostname,
 		MTU:               config.MTU,
 		MaxActiveTCPPorts: config.MaxActiveTCPPorts,
-	}); err != nil {
+	}
+	if config.IPv6Address.IsValid() {
+		stackConfig.StaticAddress6 = config.IPv6Address.As16()
+		stackConfig.IPv6Stack = xnet.DefaultStack6()
+	}
+	if err := stack.Reset(stackConfig); err != nil {
 		_ = link.Close()
 		return nil, MapError(err)
 	}
@@ -142,6 +153,9 @@ func New(config Config) (*Namespace, error) {
 		nextIPv4ID:             uint16(config.RandSeed),
 		ipv4Address:            config.IPv4Address,
 		staticIPv4Address:      config.IPv4Address,
+		ipv6Address:            config.IPv6Address,
+		ipv6PrefixBits:         config.IPv6PrefixBits,
+		ipv6ScopeID:            config.IPv6ScopeID,
 		hardwareAddress:        config.HardwareAddress,
 		gatewayHardwareAddress: config.GatewayHardwareAddress,
 		policy:                 config.Policy,
@@ -209,6 +223,10 @@ func (n *Namespace) StackLocked() *xnet.StackAsync         { return n.stack }
 func (n *Namespace) PolicyLocked() *policy.Policy          { return n.policy }
 func (n *Namespace) QuotasLocked() *quota.Account          { return n.quotas }
 func (n *Namespace) IPv4AddressLocked() netip.Addr         { return n.ipv4Address }
+func (n *Namespace) IPv6AddressLocked() netip.Addr         { return n.ipv6Address }
+func (n *Namespace) IPv6PrefixBitsLocked() uint8           { return n.ipv6PrefixBits }
+func (n *Namespace) IPv6ScopeIDLocked() uint32             { return n.ipv6ScopeID }
+func (n *Namespace) IPv6EnabledLocked() bool               { return n.ipv6Address.IsValid() }
 func (n *Namespace) RandSeedLocked() int64                 { return n.randSeed }
 func (n *Namespace) HardwareAddressLocked() [6]byte        { return n.hardwareAddress }
 func (n *Namespace) GatewayHardwareAddressLocked() [6]byte { return n.gatewayHardwareAddress }
@@ -452,11 +470,25 @@ func validConfig(config Config) bool {
 	if config.Hostname == "" || config.RandSeed == 0 || !config.IPv4Address.Is4() || config.IPv4Address.Is4In6() || config.IPv4Address.Zone() != "" {
 		return false
 	}
-	if config.MTU < ethernet.MinimumMTU || config.MTU > ethernet.MaxMTU {
+	ipv6Configured := config.IPv6Address.IsValid() || config.IPv6PrefixBits != 0 || config.IPv6ScopeID != 0
+	if ipv6Configured && !validIPv6Config(config.IPv6Address, config.IPv6PrefixBits, config.IPv6ScopeID) {
+		return false
+	}
+	if config.MTU < ethernet.MinimumMTU || config.MTU > ethernet.MaxMTU || (ipv6Configured && config.MTU < 1280) {
 		return false
 	}
 	requiredFrameBytes := int(config.MTU) + 14
 	return config.Link.MaxFrameBytes >= requiredFrameBytes && config.Link.IngressFrames > 0 && config.Link.EgressFrames > 0
+}
+
+func validIPv6Config(address netip.Addr, prefixBits uint8, scopeID uint32) bool {
+	if !address.IsValid() || !address.Is6() || address.Is4In6() || address.Zone() != "" || address.IsUnspecified() || address.IsLoopback() || address.IsMulticast() || prefixBits == 0 || prefixBits > 128 {
+		return false
+	}
+	if address.IsLinkLocalUnicast() {
+		return scopeID != 0
+	}
+	return scopeID == 0
 }
 
 // MapError maps lneto, packet-link, quota, and standard errors to the stable

@@ -44,7 +44,18 @@ type Adapter struct {
 
 type interfaceStack interface {
 	RegisterListenerTCP(*lnetotcp.Listener) error
+	RegisterListenerTCP6(*lnetotcp.Listener) error
 	DialTCP(*lnetotcp.Conn, uint16, netip.AddrPort) error
+}
+
+func (n *Adapter) ipv6ScopeMatchesLocked(endpoint nscore.Endpoint) bool {
+	if n == nil || !endpoint.Address.Is6() || !n.core.IPv6EnabledLocked() {
+		return false
+	}
+	if endpoint.Address.IsLinkLocalUnicast() {
+		return endpoint.ScopeID == n.core.IPv6ScopeIDLocked()
+	}
+	return endpoint.ScopeID == 0
 }
 
 // New attaches TCP-local state to one shared core without creating another
@@ -437,13 +448,20 @@ func (n *Adapter) TryListen(local nscore.Endpoint) (nscore.Resource, nscore.Prog
 	if n.core.ClosedLocked() || n.stack == nil {
 		return nil, 0, nscore.Fail(nscore.FailureClosed, net.ErrClosed)
 	}
-	if !local.Valid() || !local.Address.Is4() || local.Port == 0 {
+	if !local.Valid() || local.Port == 0 || (!local.Address.Is4() && !local.Address.Is6()) {
 		return nil, 0, nscore.Fail(nscore.FailureInvalidArgument, lneto.ErrInvalidAddr)
+	}
+	if local.Address.Is6() && !n.core.IPv6EnabledLocked() {
+		return nil, 0, nscore.Fail(nscore.FailureNotSupported, lneto.ErrUnsupported)
 	}
 	if n.config.MaxListeners == 0 {
 		return nil, 0, nscore.Fail(nscore.FailureNotSupported, lneto.ErrUnsupported)
 	}
-	if !local.Address.IsUnspecified() && local.Address != n.core.IPv4AddressLocked() {
+	if local.Address.Is4() {
+		if !local.Address.IsUnspecified() && local.Address != n.core.IPv4AddressLocked() {
+			return nil, 0, nscore.Fail(nscore.FailureAddressUnavailable, lneto.ErrInvalidAddr)
+		}
+	} else if local.FlowInfo != 0 || (!local.Address.IsUnspecified() && (local.Address != n.core.IPv6AddressLocked() || !n.ipv6ScopeMatchesLocked(local))) {
 		return nil, 0, nscore.Fail(nscore.FailureAddressUnavailable, lneto.ErrInvalidAddr)
 	}
 	if !n.policy.CheckEndpoint(policy.OperationTCPListen, local.Address, local.Port) {
@@ -471,12 +489,18 @@ func (n *Adapter) TryListen(local nscore.Endpoint) (nscore.Resource, nscore.Prog
 		n.recycleListenerLocked(listener)
 		return nil, 0, lnetocore.MapError(err)
 	}
-	if err := n.stack.RegisterListenerTCP(&listener.listener); err != nil {
+	var registerErr error
+	if local.Address.Is6() {
+		registerErr = n.stack.RegisterListenerTCP6(&listener.listener)
+	} else {
+		registerErr = n.stack.RegisterListenerTCP(&listener.listener)
+	}
+	if registerErr != nil {
 		_ = listener.listener.Close()
 		listener.retained.Release()
 		listener.retained.ResetReleased()
 		n.recycleListenerLocked(listener)
-		return nil, 0, lnetocore.MapError(err)
+		return nil, 0, lnetocore.MapError(registerErr)
 	}
 	n.ports[local.Port] = struct{}{}
 	n.listeners = append(n.listeners, listener)
@@ -497,7 +521,13 @@ func (n *Adapter) TryConnect(remote nscore.Endpoint) (nscore.Resource, nscore.Pr
 	if n.core.ClosedLocked() || n.stack == nil {
 		return nil, 0, nscore.Fail(nscore.FailureClosed, net.ErrClosed)
 	}
-	if !remote.Valid() || !remote.Address.Is4() || remote.Address.IsUnspecified() || remote.Port == 0 {
+	if !remote.Valid() || remote.Address.IsUnspecified() || remote.Address.IsMulticast() || remote.Port == 0 || (!remote.Address.Is4() && !remote.Address.Is6()) {
+		return nil, 0, nscore.Fail(nscore.FailureInvalidArgument, lneto.ErrInvalidAddr)
+	}
+	if remote.Address.Is6() && !n.core.IPv6EnabledLocked() {
+		return nil, 0, nscore.Fail(nscore.FailureNotSupported, lneto.ErrUnsupported)
+	}
+	if remote.Address.Is6() && (remote.FlowInfo != 0 || !n.ipv6ScopeMatchesLocked(remote)) {
 		return nil, 0, nscore.Fail(nscore.FailureInvalidArgument, lneto.ErrInvalidAddr)
 	}
 	if n.config.MaxOutboundStreams == 0 {
@@ -514,7 +544,14 @@ func (n *Adapter) TryConnect(remote nscore.Endpoint) (nscore.Resource, nscore.Pr
 		return nil, 0, nscore.Fail(nscore.FailureResourceLimit, lneto.ErrExhausted)
 	}
 	retained, _ := tcpStreamStorageBytes(n.config)
-	stream := n.acquireOutboundStreamLocked(nscore.Endpoint{Address: n.core.IPv4AddressLocked(), Port: localPort}, remote)
+	local := nscore.Endpoint{Address: n.core.IPv4AddressLocked(), Port: localPort}
+	if remote.Address.Is6() {
+		local.Address = n.core.IPv6AddressLocked()
+		if local.Address.IsLinkLocalUnicast() {
+			local.ScopeID = n.core.IPv6ScopeIDLocked()
+		}
+	}
+	stream := n.acquireOutboundStreamLocked(local, remote)
 	if stream == nil {
 		return nil, 0, nscore.Fail(nscore.FailureResourceLimit, lneto.ErrExhausted)
 	}
@@ -594,14 +631,28 @@ func (l *tcpListener) TryAccept() (nscore.Resource, nscore.Progress, error) {
 		return nil, 0, nscore.Fail(nscore.FailureIO, lneto.ErrBadState)
 	}
 	remoteAddress := conn.RemoteAddr()
-	if len(remoteAddress) != 4 || conn.RemotePort() == 0 {
+	var remoteIP netip.Addr
+	switch len(remoteAddress) {
+	case 4:
+		remoteIP = netip.AddrFrom4([4]byte(remoteAddress))
+	case 16:
+		remoteIP = netip.AddrFrom16([16]byte(remoteAddress))
+	default:
 		conn.Abort()
 		return nil, 0, nscore.Fail(nscore.FailureIO, lneto.ErrInvalidAddr)
+	}
+	if conn.RemotePort() == 0 {
+		conn.Abort()
+		return nil, 0, nscore.Fail(nscore.FailureIO, lneto.ErrInvalidAddr)
+	}
+	remoteEndpoint := nscore.Endpoint{Address: remoteIP, Port: conn.RemotePort()}
+	if remoteIP.IsLinkLocalUnicast() {
+		remoteEndpoint.ScopeID = l.owner.core.IPv6ScopeIDLocked()
 	}
 	stream := &tcpStream{
 		owner: l.owner, conn: conn, slot: slot,
 		local:      l.local,
-		remote:     nscore.Endpoint{Address: netip.AddrFrom4([4]byte(remoteAddress)), Port: conn.RemotePort()},
+		remote:     remoteEndpoint,
 		allocation: &slot.resource,
 		connected:  true,
 	}
