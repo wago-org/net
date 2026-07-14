@@ -36,6 +36,9 @@ func Echo(state *core.State, namespace resource.Handle, request icmpns.EchoReque
 		value, backendProgress, backendErr := backend.TryEcho(request)
 		progress = backendProgress
 		if backendErr != nil {
+			if !resource.IsNil(value) {
+				_ = value.Close()
+			}
 			return backendErr
 		}
 		typed, ok := value.(icmpns.Echo)
@@ -57,6 +60,9 @@ func Echo(state *core.State, namespace resource.Handle, request icmpns.EchoReque
 		}
 		return nil
 	})
+	if err != nil {
+		handle, progress = 0, 0
+	}
 	return
 }
 
@@ -106,6 +112,9 @@ func Resolve(state *core.State, namespace resource.Handle, request icmpns.Neighb
 		value, backendProgress, backendErr := backend.TryResolve(request)
 		progress = backendProgress
 		if backendErr != nil {
+			if !resource.IsNil(value) {
+				_ = value.Close()
+			}
 			return backendErr
 		}
 		typed, ok := value.(icmpns.Resolution)
@@ -127,6 +136,9 @@ func Resolve(state *core.State, namespace resource.Handle, request icmpns.Neighb
 		}
 		return nil
 	})
+	if err != nil {
+		handle, progress = 0, 0
+	}
 	return
 }
 

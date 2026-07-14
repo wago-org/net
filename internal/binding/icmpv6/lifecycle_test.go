@@ -163,11 +163,13 @@ func TestBindingsEchoAtomicStatusesAndLifecycle(t *testing.T) {
 		t.Fatalf("reserved echo = %v, calls=%d", status, backend.echoCalls)
 	}
 	host.memory[40] = 0
+	failedEcho := &lifecycleEcho{next: icmpns.NextWouldBlock}
+	backend.echo = failedEcho
 	backend.echoFailure = nscore.Fail(nscore.FailureRemoteUnreachable, errors.New("unreachable"))
-	if status := callLifecycleBinding(t, bindingByName(t, bindings, "echo"), host, uint64(namespaceHandle), 0, 128); status != guest.StatusRemoteUnreachable || backend.echoCalls != 1 || !bytes.Equal(host.memory[128:136], handleBefore) {
-		t.Fatalf("failed echo = %v, calls=%d", status, backend.echoCalls)
+	if status := callLifecycleBinding(t, bindingByName(t, bindings, "echo"), host, uint64(namespaceHandle), 0, 128); status != guest.StatusRemoteUnreachable || backend.echoCalls != 1 || failedEcho.closeCalls != 1 || !bytes.Equal(host.memory[128:136], handleBefore) {
+		t.Fatalf("failed echo = %v, calls=%d closes=%d", status, backend.echoCalls, failedEcho.closeCalls)
 	}
-	backend.echoFailure = nil
+	backend.echo, backend.echoFailure = echo, nil
 	if status := callLifecycleBinding(t, bindingByName(t, bindings, "echo"), host, uint64(namespaceHandle), 0, 128); status != guest.StatusInProgress || backend.echoCalls != 2 || backend.echoRequest.Destination != destination || backend.echoRequest.ScopeID != 0 || !bytes.Equal(backend.echoPayload, payload) {
 		t.Fatalf("echo = %v calls=%d request=%+v payload=%q", status, backend.echoCalls, backend.echoRequest, backend.echoPayload)
 	}
@@ -265,11 +267,13 @@ func TestBindingsNeighborAtomicStatusesCacheAndLifecycle(t *testing.T) {
 		t.Fatalf("reserved resolve = %v calls=%d", status, backend.resolveCalls)
 	}
 	host.memory[28] = 0
+	failedResolution := &lifecycleResolution{next: icmpns.NextWouldBlock}
+	backend.resolution = failedResolution
 	backend.resolveFailure = nscore.Fail(nscore.FailureAccessDenied, errors.New("denied"))
-	if status := callLifecycleBinding(t, bindingByName(t, bindings, "resolve"), host, uint64(namespaceHandle), 0, 64); status != guest.StatusAccessDenied || backend.resolveCalls != 1 || !bytes.Equal(host.memory[64:72], handleBefore) {
-		t.Fatalf("failed resolve = %v calls=%d", status, backend.resolveCalls)
+	if status := callLifecycleBinding(t, bindingByName(t, bindings, "resolve"), host, uint64(namespaceHandle), 0, 64); status != guest.StatusAccessDenied || backend.resolveCalls != 1 || failedResolution.closeCalls != 1 || !bytes.Equal(host.memory[64:72], handleBefore) {
+		t.Fatalf("failed resolve = %v calls=%d closes=%d", status, backend.resolveCalls, failedResolution.closeCalls)
 	}
-	backend.resolveFailure = nil
+	backend.resolution, backend.resolveFailure = resolution, nil
 	if status := callLifecycleBinding(t, bindingByName(t, bindings, "resolve"), host, uint64(namespaceHandle), 0, 64); status != guest.StatusInProgress || backend.resolveCalls != 2 || backend.resolveRequest != request {
 		t.Fatalf("resolve = %v calls=%d request=%+v", status, backend.resolveCalls, backend.resolveRequest)
 	}

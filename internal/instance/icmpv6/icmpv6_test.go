@@ -28,8 +28,10 @@ type fakeNamespace struct {
 	operations      icmpns.Operations
 	echo            nscore.Resource
 	echoProgress    nscore.Progress
+	echoFailure     error
 	resolution      nscore.Resource
 	resolveProgress nscore.Progress
+	resolveFailure  error
 	lookup          icmpns.Neighbor
 	found           bool
 	lookupFailure   error
@@ -39,10 +41,10 @@ type fakeNamespace struct {
 
 func (n *fakeNamespace) Operations() icmpns.Operations { return n.operations }
 func (n *fakeNamespace) TryEcho(icmpns.EchoRequest) (nscore.Resource, nscore.Progress, error) {
-	return n.echo, n.echoProgress, nil
+	return n.echo, n.echoProgress, n.echoFailure
 }
 func (n *fakeNamespace) TryResolve(icmpns.NeighborRequest) (nscore.Resource, nscore.Progress, error) {
-	return n.resolution, n.resolveProgress, nil
+	return n.resolution, n.resolveProgress, n.resolveFailure
 }
 func (n *fakeNamespace) LookupNeighbor(icmpns.NeighborRequest) (icmpns.Neighbor, bool, error) {
 	return n.lookup, n.found, n.lookupFailure
@@ -57,15 +59,20 @@ func (n *fakeNamespace) RemoveNeighbor(request icmpns.NeighborRequest) error {
 }
 
 type fakeEcho struct {
-	payload  []byte
-	result   icmpns.EchoResult
-	next     icmpns.Next
-	failure  error
-	canceled bool
-	closed   bool
+	payload    []byte
+	result     icmpns.EchoResult
+	next       icmpns.Next
+	failure    error
+	canceled   bool
+	closed     bool
+	closeCalls int
 }
 
-func (e *fakeEcho) Close() error { e.closed = true; return nil }
+func (e *fakeEcho) Close() error {
+	e.closed = true
+	e.closeCalls++
+	return nil
+}
 func (e *fakeEcho) Cancel() error {
 	e.canceled = true
 	return nil
@@ -81,14 +88,19 @@ func (e *fakeEcho) TryResult(dst []byte) (icmpns.EchoResult, icmpns.Next, error)
 }
 
 type fakeResolution struct {
-	neighbor icmpns.Neighbor
-	next     icmpns.Next
-	failure  error
-	canceled bool
-	closed   bool
+	neighbor   icmpns.Neighbor
+	next       icmpns.Next
+	failure    error
+	canceled   bool
+	closed     bool
+	closeCalls int
 }
 
-func (r *fakeResolution) Close() error { r.closed = true; return nil }
+func (r *fakeResolution) Close() error {
+	r.closed = true
+	r.closeCalls++
+	return nil
+}
 func (r *fakeResolution) Cancel() error {
 	r.canceled = true
 	return nil
@@ -243,12 +255,54 @@ func TestNeighborResultsClearInvalidBackendOutputs(t *testing.T) {
 	}
 }
 
+func TestCreationErrorsCloseResourcesAndCanonicalizeOutputs(t *testing.T) {
+	destination := netip.MustParseAddr("2001:db8::6")
+	backend := &fakeNamespace{operations: icmpns.SupportedOperations}
+	state, manager, instance := attachState(t, backend, 8)
+	defer manager.Detach(instance)
+	resourcesBefore := state.Resources().Len()
+	readinessBefore := state.Readiness().Snapshot()
+
+	echoFailure := nscore.Fail(nscore.FailureTemporary, errors.New("echo failed"))
+	echo := new(fakeEcho)
+	backend.echo, backend.echoProgress, backend.echoFailure = echo, nscore.ProgressDone, echoFailure
+	if handle, progress, err := Echo(state, state.NamespaceHandle(), icmpns.EchoRequest{Destination: destination}); handle != 0 || progress != 0 || failureOf(err) != nscore.FailureTemporary {
+		t.Fatalf("failed echo = %v, %v, %v", handle, progress, err)
+	}
+	if echo.closeCalls != 1 || state.Resources().Len() != resourcesBefore || state.Readiness().Snapshot() != readinessBefore {
+		t.Fatalf("failed echo published state: closes=%d resources=%d readiness=%+v", echo.closeCalls, state.Resources().Len(), state.Readiness().Snapshot())
+	}
+	var nilEcho *fakeEcho
+	backend.echo = nilEcho
+	if handle, progress, err := Echo(state, state.NamespaceHandle(), icmpns.EchoRequest{Destination: destination}); handle != 0 || progress != 0 || failureOf(err) != nscore.FailureTemporary {
+		t.Fatalf("typed-nil failed echo = %v, %v, %v", handle, progress, err)
+	}
+
+	resolveFailure := nscore.Fail(nscore.FailureAccessDenied, errors.New("resolve failed"))
+	resolution := new(fakeResolution)
+	backend.resolution, backend.resolveProgress, backend.resolveFailure = resolution, nscore.ProgressInProgress, resolveFailure
+	if handle, progress, err := Resolve(state, state.NamespaceHandle(), icmpns.NeighborRequest{Address: destination}); handle != 0 || progress != 0 || failureOf(err) != nscore.FailureAccessDenied {
+		t.Fatalf("failed resolve = %v, %v, %v", handle, progress, err)
+	}
+	if resolution.closeCalls != 1 || state.Resources().Len() != resourcesBefore || state.Readiness().Snapshot() != readinessBefore {
+		t.Fatalf("failed resolve published state: closes=%d resources=%d readiness=%+v", resolution.closeCalls, state.Resources().Len(), state.Readiness().Snapshot())
+	}
+	var nilResolution *fakeResolution
+	backend.resolution = nilResolution
+	if handle, progress, err := Resolve(state, state.NamespaceHandle(), icmpns.NeighborRequest{Address: destination}); handle != 0 || progress != 0 || failureOf(err) != nscore.FailureAccessDenied {
+		t.Fatalf("typed-nil failed resolve = %v, %v, %v", handle, progress, err)
+	}
+	if state.Resources().Len() != resourcesBefore || state.Readiness().Snapshot() != readinessBefore {
+		t.Fatalf("typed-nil failures published state: resources=%d readiness=%+v", state.Resources().Len(), state.Readiness().Snapshot())
+	}
+}
+
 func TestCreationValidationAndRegistrationRollbackCloseResources(t *testing.T) {
 	destination := netip.MustParseAddr("2001:db8::4")
 	echo := &fakeEcho{next: icmpns.NextReady, result: icmpns.EchoResult{Source: destination}}
 	backend := &fakeNamespace{operations: icmpns.SupportedOperations, echo: echo, echoProgress: 99}
 	state, manager, instance := attachState(t, backend, 4)
-	if handle, progress, err := Echo(state, state.NamespaceHandle(), icmpns.EchoRequest{Destination: destination, Payload: []byte("x")}); handle != 0 || progress != 99 || failureOf(err) != nscore.FailureIO || !echo.closed {
+	if handle, progress, err := Echo(state, state.NamespaceHandle(), icmpns.EchoRequest{Destination: destination, Payload: []byte("x")}); handle != 0 || progress != 0 || failureOf(err) != nscore.FailureIO || !echo.closed {
 		t.Fatalf("invalid creation = %v, %v, %v, closed=%v", handle, progress, err, echo.closed)
 	}
 	_ = manager.Detach(instance)
@@ -257,7 +311,7 @@ func TestCreationValidationAndRegistrationRollbackCloseResources(t *testing.T) {
 	backend = &fakeNamespace{operations: icmpns.SupportedOperations, echo: echo, echoProgress: nscore.ProgressDone}
 	state, manager, instance = attachState(t, backend, 1)
 	defer manager.Detach(instance)
-	if handle, progress, err := Echo(state, state.NamespaceHandle(), icmpns.EchoRequest{Destination: destination, Payload: []byte("x")}); handle != 0 || progress != nscore.ProgressDone || !errors.Is(err, readiness.ErrLimit) || !echo.closed {
+	if handle, progress, err := Echo(state, state.NamespaceHandle(), icmpns.EchoRequest{Destination: destination, Payload: []byte("x")}); handle != 0 || progress != 0 || !errors.Is(err, readiness.ErrLimit) || !echo.closed {
 		t.Fatalf("registration rollback = %v, %v, %v, closed=%v", handle, progress, err, echo.closed)
 	}
 	if state.Resources().Len() != 1 || state.Readiness().Snapshot().Registrations != 1 {
