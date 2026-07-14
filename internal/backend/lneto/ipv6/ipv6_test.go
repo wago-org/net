@@ -108,6 +108,35 @@ func TestValidateIngressFrameRejectsExtensionsAndMalformedAddresses(t *testing.T
 	}
 }
 
+func TestValidateIngressFrameRejectsLoopbackAddresses(t *testing.T) {
+	frame := make([]byte, 14+40+8)
+	ethernetFrame, _ := ethernet.NewFrame(frame)
+	ethernetFrame.SetEtherType(ethernet.TypeIPv6)
+	ipFrame, _ := lnetoipv6.NewFrame(ethernetFrame.Payload())
+	ipFrame.SetVersionTrafficAndFlow(6, 0, 0)
+	ipFrame.SetPayloadLength(8)
+	ipFrame.SetNextHeader(17)
+	validSource := netip.MustParseAddr("2001:db8::1").As16()
+	validDestination := netip.MustParseAddr("2001:db8::2").As16()
+
+	for _, test := range []struct {
+		name        string
+		source      [16]byte
+		destination [16]byte
+	}{
+		{name: "source", source: netip.IPv6Loopback().As16(), destination: validDestination},
+		{name: "destination", source: validSource, destination: netip.IPv6Loopback().As16()},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			*ipFrame.SourceAddr() = test.source
+			*ipFrame.DestinationAddr() = test.destination
+			if relevant, valid := ValidateIngressFrame(frame); !relevant || valid {
+				t.Fatalf("loopback frame = relevant %v valid %v", relevant, valid)
+			}
+		})
+	}
+}
+
 func TestValidateIngressFrameAcceptsTrafficClassAndFlowLabel(t *testing.T) {
 	frame := make([]byte, 14+40+8)
 	ethernetFrame, _ := ethernet.NewFrame(frame)

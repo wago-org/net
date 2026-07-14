@@ -135,7 +135,7 @@ func ValidateIngressFrame(frame []byte) (relevant, valid bool) {
 		return true, false
 	}
 	source, destination := netip.AddrFrom16(*ipFrame.SourceAddr()), netip.AddrFrom16(*ipFrame.DestinationAddr())
-	if source.Is4In6() || destination.Is4In6() || source.IsUnspecified() || source.IsMulticast() || destination.IsUnspecified() {
+	if source.Is4In6() || destination.Is4In6() || source.IsUnspecified() || source.IsLoopback() || source.IsMulticast() || destination.IsUnspecified() || destination.IsLoopback() {
 		return true, false
 	}
 	return true, true
