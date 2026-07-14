@@ -168,6 +168,10 @@ func TestNTPOptionsRequireExplicitClockAndFiniteConfiguration(t *testing.T) {
 	if err := Register(wagonet.New(), WithClock(clock)); err != ErrIncompleteConfig {
 		t.Fatalf("clock-only error = %v", err)
 	}
+	var nilClock *fixedClock
+	if err := Register(wagonet.New(), WithClock(nilClock)); err != ErrInvalidOption {
+		t.Fatalf("typed-nil clock error = %v", err)
+	}
 	if err := Register(wagonet.New(), Server("224.0.0.1"), WithClock(clock)); err != ErrInvalidServer {
 		t.Fatalf("multicast server error = %v", err)
 	}

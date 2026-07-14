@@ -5,6 +5,7 @@ package ntp
 import (
 	"errors"
 	"net/netip"
+	"reflect"
 	"time"
 
 	wagonet "github.com/wago-org/net"
@@ -95,10 +96,11 @@ func Server(server string) Option {
 	})
 }
 
-// WithClock injects the only wall-clock authority used by the NTP adapter.
+// WithClock injects the only non-nil wall-clock authority used by the NTP
+// adapter.
 func WithClock(clock Clock) Option {
 	return optionFunc(func(target *registration) error {
-		if clock == nil {
+		if !usableClock(clock) {
 			return ErrInvalidOption
 		}
 		target.clock = clock
@@ -250,4 +252,17 @@ func Register(network *wagonet.Network, options ...Option) error {
 func validServer(address netip.Addr) bool {
 	return address.Is4() && !address.Is4In6() && !address.IsUnspecified() && !address.IsLoopback() && address.Zone() == "" &&
 		!address.IsMulticast() && address != netip.AddrFrom4([4]byte{255, 255, 255, 255})
+}
+
+func usableClock(clock Clock) bool {
+	if clock == nil {
+		return false
+	}
+	value := reflect.ValueOf(clock)
+	switch value.Kind() {
+	case reflect.Chan, reflect.Func, reflect.Interface, reflect.Map, reflect.Pointer, reflect.Slice:
+		return !value.IsNil()
+	default:
+		return true
+	}
 }
