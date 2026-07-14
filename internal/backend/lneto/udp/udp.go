@@ -614,25 +614,25 @@ func (n *Adapter) ingressLocked(frame []byte) (bool, error) {
 	var validator lneto.Validator
 	ipFrame.ValidateExceptCRC(&validator)
 	if err := validator.ErrPop(); err != nil {
-		return true, err
+		return true, nil
 	}
 	if ipFrame.CalculateHeaderCRC() != 0 || ipFrame.Flags().MoreFragments() || ipFrame.Flags().FragmentOffset() != 0 {
-		return true, lneto.ErrBadCRC
+		return true, nil
 	}
 	udpFrame, err := lnetoudp.NewFrame(ipFrame.Payload())
 	if err != nil {
-		return true, err
+		return true, nil
 	}
 	udpFrame.ValidateSize(&validator)
 	if err := validator.ErrPop(); err != nil {
-		return true, err
+		return true, nil
 	}
 	udpLength := udpFrame.Length()
 	if udpFrame.CRC() != 0 {
 		var checksum lneto.CRC791
 		ipFrame.CRCWriteUDPPseudo(&checksum, udpLength)
 		if checksum.PayloadSum16(udpFrame.RawData()[:udpLength]) != 0 {
-			return true, lneto.ErrBadCRC
+			return true, nil
 		}
 	}
 	selected := n.byPort[udpFrame.DestinationPort()]
@@ -641,7 +641,7 @@ func (n *Adapter) ingressLocked(frame []byte) (bool, error) {
 	}
 	source := nscore.Endpoint{Address: netip.AddrFrom4(*ipFrame.SourceAddr()), Port: udpFrame.SourcePort()}
 	if !source.Valid() || source.Port == 0 {
-		return true, lneto.ErrInvalidAddr
+		return true, nil
 	}
 	payload := udpFrame.RawData()[8:udpLength]
 	_ = selected.rx.push(payload, source) // A full receive queue drops this datagram.

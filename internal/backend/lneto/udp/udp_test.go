@@ -6,7 +6,10 @@ import (
 	"sync"
 	"testing"
 
+	lneto "github.com/soypat/lneto"
 	"github.com/soypat/lneto/ethernet"
+	"github.com/soypat/lneto/ipv4"
+	lnetoudp "github.com/soypat/lneto/udp"
 	lnetocore "github.com/wago-org/net/internal/backend/lneto/core"
 	nscore "github.com/wago-org/net/internal/namespace/core"
 	udpns "github.com/wago-org/net/internal/namespace/udp"
@@ -143,6 +146,83 @@ func TestUDPIngressRequiresLocalEthernetDestinationAndValidSource(t *testing.T) 
 			}
 			if queued != 0 || destination.Readiness()&nscore.ReadyReadable != 0 {
 				t.Fatalf("foreign L2 frame queued datagram: queued=%d readiness=%v", queued, destination.Readiness())
+			}
+		})
+	}
+}
+
+func TestUDPIngressDropsMalformedLocalDatagramsAndAcceptsFollowingValidFrame(t *testing.T) {
+	for _, test := range []struct {
+		name   string
+		mutate func(*testing.T, []byte)
+	}{
+		{
+			name: "bad IPv4 checksum",
+			mutate: func(_ *testing.T, frame []byte) {
+				frame[14+8] ^= 1
+			},
+		},
+		{
+			name: "invalid UDP length",
+			mutate: func(t *testing.T, frame []byte) {
+				_, udpFrame := decodeUDPFrame(t, frame)
+				udpFrame.SetLength(udpFrame.Length() + 1)
+			},
+		},
+		{
+			name: "bad UDP checksum",
+			mutate: func(t *testing.T, frame []byte) {
+				_, udpFrame := decodeUDPFrame(t, frame)
+				udpFrame.Payload()[0] ^= 1
+			},
+		},
+		{
+			name: "zero source port",
+			mutate: func(t *testing.T, frame []byte) {
+				ipFrame, udpFrame := decodeUDPFrame(t, frame)
+				udpFrame.SetSourcePort(0)
+				rechecksumUDPFrame(ipFrame, udpFrame)
+			},
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			sourceCore, sourceAdapter, _ := newTestAdapter(t, 61)
+			_, destinationAdapter, _ := newTestAdapter(t, 62)
+			sourceEndpoint := nscore.Endpoint{Address: netip.MustParseAddr("192.0.2.61"), Port: 4061}
+			destinationEndpoint := nscore.Endpoint{Address: netip.MustParseAddr("192.0.2.62"), Port: 4062}
+			source := bindTestSocket(t, sourceAdapter, sourceEndpoint)
+			destination := bindTestSocket(t, destinationAdapter, destinationEndpoint).(*udpSocket)
+			if progress, err := source.TrySend([]byte("payload"), destinationEndpoint); err != nil || progress != nscore.ProgressDone {
+				t.Fatalf("send = %v, %v", progress, err)
+			}
+			valid := serviceUDPFrame(t, sourceCore)
+			ethernetFrame, err := ethernet.NewFrame(valid)
+			if err != nil {
+				t.Fatal(err)
+			}
+			*ethernetFrame.DestinationHardwareAddr() = destinationAdapter.hardwareAddress
+			malformed := append([]byte(nil), valid...)
+			test.mutate(t, malformed)
+
+			destinationAdapter.core.Lock()
+			handled, err := destinationAdapter.ingressLocked(malformed)
+			queued := destination.rx.count
+			destinationAdapter.core.Unlock()
+			if err != nil || !handled || queued != 0 {
+				t.Fatalf("malformed ingress = handled %v, err %v, queued %d", handled, err, queued)
+			}
+
+			destinationAdapter.core.Lock()
+			handled, err = destinationAdapter.ingressLocked(valid)
+			queued = destination.rx.count
+			destinationAdapter.core.Unlock()
+			if err != nil || !handled || queued != 1 {
+				t.Fatalf("valid ingress after malformed = handled %v, err %v, queued %d", handled, err, queued)
+			}
+			buffer := make([]byte, 16)
+			result, err := destination.TryReceive(buffer)
+			if err != nil || !result.Ready || result.Source != sourceEndpoint || string(buffer[:result.Copied]) != "payload" {
+				t.Fatalf("receive after malformed = %+v, %q, %v", result, buffer[:result.Copied], err)
 			}
 		})
 	}
@@ -478,6 +558,26 @@ func BenchmarkUDPDatagramQueueRoundTrip(b *testing.B) {
 			b.Fatalf("queue pop = %+v, %v", result, ok)
 		}
 	}
+}
+
+func decodeUDPFrame(t testing.TB, frame []byte) (ipv4.Frame, lnetoudp.Frame) {
+	t.Helper()
+	ipFrame, err := ipv4.NewFrame(frame[14:])
+	if err != nil {
+		t.Fatal(err)
+	}
+	udpFrame, err := lnetoudp.NewFrame(ipFrame.Payload())
+	if err != nil {
+		t.Fatal(err)
+	}
+	return ipFrame, udpFrame
+}
+
+func rechecksumUDPFrame(ipFrame ipv4.Frame, udpFrame lnetoudp.Frame) {
+	udpFrame.SetCRC(0)
+	var checksum lneto.CRC791
+	ipFrame.CRCWriteUDPPseudo(&checksum, udpFrame.Length())
+	udpFrame.SetCRC(lneto.NeverZeroSum(checksum.PayloadSum16(udpFrame.RawData()[:udpFrame.Length()])))
 }
 
 func serviceUDPFrame(t testing.TB, common *lnetocore.Namespace) []byte {
