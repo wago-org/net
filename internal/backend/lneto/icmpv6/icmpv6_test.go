@@ -160,6 +160,49 @@ func TestEchoShortBufferPreservesRoundRobinStateAndPendingExchanges(t *testing.T
 	}
 }
 
+func TestResolutionAndEchoEgressRoundRobinBoundsPendingWorkDelay(t *testing.T) {
+	core, adapter := newTestAdapter(t, 32, "2001:db8::32")
+	defer core.Close()
+	firstTarget := netip.MustParseAddr("2001:db8::51")
+	secondTarget := netip.MustParseAddr("2001:db8::52")
+	firstResource, _, err := adapter.TryResolve(icmpns.NeighborRequest{Address: firstTarget})
+	if err != nil {
+		t.Fatal(err)
+	}
+	secondResource, _, err := adapter.TryResolve(icmpns.NeighborRequest{Address: secondTarget})
+	if err != nil {
+		t.Fatal(err)
+	}
+	echoResource, _, err := adapter.TryEcho(icmpns.EchoRequest{Destination: netip.MustParseAddr("2001:db8::53"), Payload: []byte("fair")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	first := firstResource.(*resolution)
+	second := secondResource.(*resolution)
+	echo := echoResource.(*echo)
+	frame := make([]byte, core.Link().MaxFrameBytes())
+	wantDestinations := []netip.Addr{solicitedNode(firstTarget), solicitedNode(secondTarget), echo.destination}
+	for i, want := range wantDestinations {
+		core.Lock()
+		written, worked, err := adapter.egressLocked(frame)
+		cursor := adapter.cursor
+		core.Unlock()
+		if err != nil || !worked || written == 0 {
+			t.Fatalf("egress %d = %d, %v, %v", i, written, worked, err)
+		}
+		ipFrame, err := lnetoipv6.NewFrame(frame[14:written])
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := netip.AddrFrom16(*ipFrame.DestinationAddr()); got != want {
+			t.Fatalf("egress %d destination = %v, want %v (cursor=%d)", i, got, want, cursor)
+		}
+	}
+	if first.state != stateWaiting || second.state != stateWaiting || echo.state != stateWaiting || first.attempts != 1 || second.attempts != 1 || echo.attempts != 1 || adapter.cursor != 0 {
+		t.Fatalf("round robin state = first %v/%d second %v/%d echo %v/%d cursor=%d", first.state, first.attempts, second.state, second.attempts, echo.state, echo.attempts, adapter.cursor)
+	}
+}
+
 func TestNeighborResolutionAcceptsRouterFlaggedAdvertisement(t *testing.T) {
 	coreA, a := newTestAdapter(t, 19, "2001:db8::19")
 	coreB, b := newTestAdapter(t, 20, "2001:db8::20")

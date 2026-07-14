@@ -670,42 +670,49 @@ func (a *Adapter) egressLocked(dst []byte) (int, bool, error) {
 		a.releaseResponseLocked(response)
 		return written, true, nil
 	}
-	for _, r := range a.resolutions {
-		if r == nil || (r.state != statePending && r.state != stateWaiting) {
-			continue
-		}
-		if r.state == stateWaiting {
-			if r.retry > 1 {
-				r.retry--
-				return 0, true, nil
-			}
-			if r.attempts >= a.config.MaxAttempts {
-				r.failLocked(nscore.FailureTimedOut, errNeighborLimit, true)
-				return 0, true, nil
-			}
-			r.state = statePending
-			return 0, true, nil
-		}
-		written, err := a.writeSolicitationLocked(dst, r.entry)
-		if err != nil {
-			return 0, false, err
-		}
-		r.attempts++
-		r.retry = a.config.RetryServiceAttempts
-		r.state = stateWaiting
-		return written, true, nil
-	}
-	if len(a.echoes) == 0 {
+	total := len(a.resolutions) + len(a.echoes)
+	if total == 0 {
 		return 0, false, nil
 	}
-	for offset := 0; offset < len(a.echoes); offset++ {
-		index := (a.cursor + offset) % len(a.echoes)
-		e := a.echoes[index]
+	if a.cursor >= total {
+		a.cursor = 0
+	}
+	for offset := 0; offset < total; offset++ {
+		index := (a.cursor + offset) % total
+		if index < len(a.resolutions) {
+			r := a.resolutions[index]
+			if r == nil || (r.state != statePending && r.state != stateWaiting) {
+				continue
+			}
+			if r.state == stateWaiting {
+				a.cursor = (index + 1) % total
+				if r.retry > 1 {
+					r.retry--
+					return 0, true, nil
+				}
+				if r.attempts >= a.config.MaxAttempts {
+					r.failLocked(nscore.FailureTimedOut, errNeighborLimit, true)
+					return 0, true, nil
+				}
+				r.state = statePending
+				return 0, true, nil
+			}
+			written, err := a.writeSolicitationLocked(dst, r.entry)
+			if err != nil {
+				return 0, false, err
+			}
+			a.cursor = (index + 1) % total
+			r.attempts++
+			r.retry = a.config.RetryServiceAttempts
+			r.state = stateWaiting
+			return written, true, nil
+		}
+		e := a.echoes[index-len(a.resolutions)]
 		if e == nil || (e.state != statePending && e.state != stateWaiting) {
 			continue
 		}
 		if e.state == stateWaiting {
-			a.cursor = (index + 1) % len(a.echoes)
+			a.cursor = (index + 1) % total
 			if e.retry > 1 {
 				e.retry--
 				return 0, true, nil
@@ -721,7 +728,7 @@ func (a *Adapter) egressLocked(dst []byte) (int, bool, error) {
 		if err != nil {
 			return 0, false, err
 		}
-		a.cursor = (index + 1) % len(a.echoes)
+		a.cursor = (index + 1) % total
 		e.attempts++
 		e.retry = a.config.RetryServiceAttempts
 		e.state = stateWaiting
@@ -1061,16 +1068,12 @@ func removeEcho(owner *Adapter, target *echo) {
 		if value != target {
 			continue
 		}
+		oldTotal := len(owner.resolutions) + len(owner.echoes)
+		removedIndex := len(owner.resolutions) + i
 		copy(owner.echoes[i:], owner.echoes[i+1:])
 		owner.echoes[len(owner.echoes)-1] = nil
 		owner.echoes = owner.echoes[:len(owner.echoes)-1]
-		if len(owner.echoes) == 0 {
-			owner.cursor = 0
-		} else if owner.cursor > i {
-			owner.cursor--
-		} else if owner.cursor >= len(owner.echoes) {
-			owner.cursor = 0
-		}
+		adjustCursorAfterRemoval(owner, removedIndex, oldTotal)
 		return
 	}
 }
@@ -1080,10 +1083,28 @@ func removeResolution(owner *Adapter, target *resolution) {
 		if value != target {
 			continue
 		}
+		oldTotal := len(owner.resolutions) + len(owner.echoes)
 		copy(owner.resolutions[i:], owner.resolutions[i+1:])
 		owner.resolutions[len(owner.resolutions)-1] = nil
 		owner.resolutions = owner.resolutions[:len(owner.resolutions)-1]
+		adjustCursorAfterRemoval(owner, i, oldTotal)
 		return
+	}
+}
+
+func adjustCursorAfterRemoval(owner *Adapter, removedIndex, oldTotal int) {
+	if owner == nil || oldTotal <= 1 {
+		if owner != nil {
+			owner.cursor = 0
+		}
+		return
+	}
+	owner.cursor %= oldTotal
+	if owner.cursor > removedIndex {
+		owner.cursor--
+	}
+	if owner.cursor >= oldTotal-1 {
+		owner.cursor = 0
 	}
 }
 
