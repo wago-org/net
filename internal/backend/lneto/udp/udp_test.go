@@ -19,6 +19,26 @@ import (
 	"github.com/wago-org/net/internal/quota"
 )
 
+func TestAdapterRequiresUnicastGatewayHardwareAddressWhenEnabled(t *testing.T) {
+	config := Config{MaxSockets: 1, ReceiveBytes: 32, TransmitBytes: 32, ReceiveDatagrams: 1, TransmitDatagrams: 1, MaxPayloadBytes: 32}
+	for name, gateway := range map[string][6]byte{
+		"zero":      {},
+		"multicast": {0x01, 0, 0, 0, 0, 1},
+		"broadcast": {0xff, 0xff, 0xff, 0xff, 0xff, 0xff},
+	} {
+		t.Run(name, func(t *testing.T) {
+			common := newGatewayConfigTestCore(t, gateway)
+			defer common.Close()
+			if _, err := New(common, config); err == nil {
+				t.Fatalf("enabled UDP accepted gateway hardware address %v", gateway)
+			}
+			if _, err := New(common, Config{}); err != nil {
+				t.Fatalf("disabled UDP rejected irrelevant gateway hardware address %v: %v", gateway, err)
+			}
+		})
+	}
+}
+
 func TestAdapterExchangeTruncationPortLeaseAndClose(t *testing.T) {
 	aCore, aAdapter, aAccount := newTestAdapter(t, 31)
 	bCore, bAdapter, _ := newTestAdapter(t, 32)
@@ -716,6 +736,30 @@ func bindTestSocket(t testing.TB, adapter *Adapter, local nscore.Endpoint) udpns
 		t.Fatalf("bind = %T, %v, %v", resource, progress, err)
 	}
 	return resource.(udpns.Socket)
+}
+
+func newGatewayConfigTestCore(t testing.TB, gateway [6]byte) *lnetocore.Namespace {
+	t.Helper()
+	compiled, err := policy.Compile(policy.Config{Rules: []policy.Rule{{
+		Action: policy.ActionAllow, Transports: []policy.Transport{policy.TransportUDP},
+		Directions: []policy.Direction{policy.DirectionInbound, policy.DirectionOutbound},
+		Prefixes:   []netip.Prefix{netip.MustParsePrefix("192.0.2.0/24")},
+	}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	mtu := uint16(ethernet.MaxMTU)
+	common, err := lnetocore.New(lnetocore.Config{
+		Hostname: "udp-config", RandSeed: 101,
+		HardwareAddress: [6]byte{0x02, 0, 0, 0, 0, 101}, GatewayHardwareAddress: gateway,
+		IPv4Address: netip.MustParseAddr("192.0.2.101"), MTU: mtu,
+		Link:   packetlink.Config{MaxFrameBytes: int(mtu) + 14, IngressFrames: 1, EgressFrames: 1},
+		Policy: compiled, Quotas: quota.NewAccount(quota.DefaultLimits()),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return common
 }
 
 func newTestAdapter(t testing.TB, id byte) (*lnetocore.Namespace, *Adapter, *quota.Account) {
