@@ -1,6 +1,7 @@
 package dhcpv6
 
 import (
+	"bytes"
 	"encoding/binary"
 	"errors"
 	"net/netip"
@@ -84,6 +85,125 @@ func TestBoundedSolicitRequestReplyAndCopiedConfiguration(t *testing.T) {
 	core.Lock()
 	if got := core.UDPPortLeaseCountLocked(); got != 1 {
 		t.Fatalf("module port lease count after resource close = %d", got)
+	}
+	core.Unlock()
+}
+
+func TestOperationalRetriesMalformedTransportAndNamespaceClosePreserveLifecycle(t *testing.T) {
+	core, adapter, account := newTestAdapter(t, defaultConfig())
+	resource, progress, err := adapter.TryAcquire()
+	if err != nil || progress != nscore.ProgressInProgress {
+		t.Fatalf("TryAcquire = %T %v %v", resource, progress, err)
+	}
+	lease := resource.(*leaseResource)
+	inFlight, _ := account.Snapshot()
+	if inFlight.Resources != 1 || inFlight.DHCPv6Resources != 1 || inFlight.DHCPv6Work != 1 || inFlight.QueuedBytes != retainedBytes(defaultConfig()) {
+		t.Fatalf("initial quota = %+v", inFlight)
+	}
+
+	frameBytes := 14 + 40 + 8 + len(lease.packet)
+	short := bytes.Repeat([]byte{0xa5}, frameBytes-1)
+	packetBefore := append([]byte(nil), lease.packet...)
+	if n, worked, err := adapter.egressLocked(short); n != 0 || worked || !errors.Is(err, lneto.ErrShortBuffer) {
+		t.Fatalf("short Solicit = %d %v %v", n, worked, err)
+	}
+	if lease.state != leaseSolicitPending || lease.attempts != 0 || lease.wait != 0 || !bytes.Equal(lease.packet, packetBefore) || !bytes.Equal(short, bytes.Repeat([]byte{0xa5}, len(short))) {
+		t.Fatalf("short Solicit mutated lifecycle: state=%v attempts=%d wait=%d", lease.state, lease.attempts, lease.wait)
+	}
+	if usage, _ := account.Snapshot(); usage != inFlight {
+		t.Fatalf("short Solicit changed quota = %+v, want %+v", usage, inFlight)
+	}
+
+	wire := make([]byte, 1514)
+	n, worked, err := adapter.egressLocked(wire)
+	if err != nil || !worked || n != frameBytes || lease.state != leaseWaitAdvertise || lease.attempts != 1 || lease.wait != adapter.config.ResponseServiceAttempts {
+		t.Fatalf("Solicit = %d %v %v state=%v attempts=%d wait=%d", n, worked, err, lease.state, lease.attempts, lease.wait)
+	}
+	assertClientFrame(t, wire[:n], lnetodhcp.MsgSolicit, lease.xid)
+
+	serverAddr := netip.MustParseAddr("fe80::2")
+	serverMAC := [6]byte{0x02, 0, 0, 0, 0, 2}
+	serverDUID := []byte{0, 3, 0, 1, 2, 0, 0, 0, 0, 2}
+	assigned := netip.MustParseAddr("2001:db8::10")
+	advertise := buildServerPayload(t, lnetodhcp.MsgAdvertise, lease.xid, lease.clientDUID[:], serverDUID, lease.iaid, assigned, false)
+	if handled, err := adapter.ingressLocked(wrapServerFrame(t, adapter, serverAddr, serverMAC, advertise)); err != nil || !handled || lease.state != leaseRequestPending {
+		t.Fatalf("Advertise = %v %v state=%v", handled, err, lease.state)
+	}
+	if lease.attempts != 0 || lease.wait != 0 || lease.serverAddr != serverAddr || lease.serverMAC != serverMAC || !bytes.Equal(lease.serverDUID[:lease.serverLen], serverDUID) {
+		t.Fatalf("selected server state = attempts=%d wait=%d addr=%v mac=%v duid=%x", lease.attempts, lease.wait, lease.serverAddr, lease.serverMAC, lease.serverDUID[:lease.serverLen])
+	}
+
+	requestBefore := append([]byte(nil), lease.packet...)
+	requestBytes := 14 + 40 + 8 + len(lease.packet)
+	short = bytes.Repeat([]byte{0x5a}, requestBytes-1)
+	if n, worked, err := adapter.egressLocked(short); n != 0 || worked || !errors.Is(err, lneto.ErrShortBuffer) {
+		t.Fatalf("short Request = %d %v %v", n, worked, err)
+	}
+	if lease.state != leaseRequestPending || lease.attempts != 0 || lease.wait != 0 || !bytes.Equal(lease.packet, requestBefore) || !bytes.Equal(short, bytes.Repeat([]byte{0x5a}, len(short))) {
+		t.Fatalf("short Request mutated lifecycle: state=%v attempts=%d wait=%d", lease.state, lease.attempts, lease.wait)
+	}
+
+	n, worked, err = adapter.egressLocked(wire)
+	if err != nil || !worked || n != requestBytes || lease.state != leaseWaitReply || lease.attempts != 1 || lease.wait != adapter.config.ResponseServiceAttempts {
+		t.Fatalf("Request = %d %v %v state=%v attempts=%d wait=%d", n, worked, err, lease.state, lease.attempts, lease.wait)
+	}
+	assertClientFrame(t, wire[:n], lnetodhcp.MsgRequest, lease.xid)
+
+	reply := buildServerPayload(t, lnetodhcp.MsgReply, lease.xid, lease.clientDUID[:], serverDUID, lease.iaid, assigned, true)
+	badChecksum := wrapServerFrame(t, adapter, serverAddr, serverMAC, reply)
+	badChecksum[len(badChecksum)-1] ^= 1
+	wrongDUID := append([]byte(nil), serverDUID...)
+	wrongDUID[len(wrongDUID)-1] ^= 1
+	malformedNested := buildServerPayload(t, lnetodhcp.MsgReply, lease.xid, lease.clientDUID[:], serverDUID, lease.iaid, assigned, false)
+	malformedNested = appendToLastOption(t, malformedNested, lnetodhcp.OptIANA, []byte{0, byte(lnetodhcp.OptStatusCode), 0, 2, 0})
+	for name, frame := range map[string][]byte{
+		"bad checksum":        badChecksum,
+		"wrong source":        wrapServerFrame(t, adapter, netip.MustParseAddr("fe80::3"), serverMAC, reply),
+		"wrong source MAC":    wrapServerFrame(t, adapter, serverAddr, [6]byte{0x02, 0, 0, 0, 0, 3}, reply),
+		"wrong server DUID":   wrapServerFrame(t, adapter, serverAddr, serverMAC, buildServerPayload(t, lnetodhcp.MsgReply, lease.xid, lease.clientDUID[:], wrongDUID, lease.iaid, assigned, true)),
+		"malformed IA option": wrapServerFrame(t, adapter, serverAddr, serverMAC, malformedNested),
+	} {
+		t.Run(name, func(t *testing.T) {
+			before, _ := account.Snapshot()
+			if handled, err := adapter.ingressLocked(frame); err != nil || !handled {
+				t.Fatalf("ingress = %v %v", handled, err)
+			}
+			if lease.state != leaseWaitReply || lease.attempts != 1 || lease.wait != adapter.config.ResponseServiceAttempts || !bytes.Equal(lease.packet, requestBefore) {
+				t.Fatalf("rejected Reply mutated lifecycle: state=%v attempts=%d wait=%d", lease.state, lease.attempts, lease.wait)
+			}
+			if usage, _ := account.Snapshot(); usage != before {
+				t.Fatalf("rejected Reply changed quota = %+v, want %+v", usage, before)
+			}
+		})
+	}
+
+	if handled, err := adapter.ingressLocked(wrapServerFrame(t, adapter, serverAddr, serverMAC, reply)); err != nil || !handled || lease.state != leaseBound {
+		t.Fatalf("Reply = %v %v state=%v", handled, err, lease.state)
+	}
+	if lease.attempts != 1 || lease.wait != 0 || len(lease.packet) != 0 {
+		t.Fatalf("bound lifecycle = attempts=%d wait=%d packet=%d", lease.attempts, lease.wait, len(lease.packet))
+	}
+	completed, _ := account.Snapshot()
+	if completed.Resources != 1 || completed.DHCPv6Resources != 1 || completed.DHCPv6Work != 0 || completed.QueuedBytes != retainedBytes(defaultConfig()) {
+		t.Fatalf("completed quota = %+v", completed)
+	}
+	configuration, state, err := lease.TryResult()
+	if err != nil || state != dhcpns.ResultReady || !configuration.Valid() || configuration.AssignedAddr != assigned {
+		t.Fatalf("result = %+v %v %v", configuration, state, err)
+	}
+
+	if err := core.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if lease.state != leaseClosed || lease.owner != nil || lease.packet != nil || lease.result != (dhcpns.Configuration{}) {
+		t.Fatalf("namespace close retained lease state: state=%v owner=%p packet=%v result=%+v", lease.state, lease.owner, lease.packet, lease.result)
+	}
+	if usage, closed := account.Snapshot(); usage != (quota.Usage{}) || closed {
+		t.Fatalf("namespace close quota = %+v closed=%v", usage, closed)
+	}
+	core.Lock()
+	if got := core.UDPPortLeaseCountLocked(); got != 0 {
+		t.Fatalf("namespace close retained UDP port 546: %d", got)
 	}
 	core.Unlock()
 }
