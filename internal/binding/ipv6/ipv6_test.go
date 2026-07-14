@@ -61,8 +61,10 @@ func TestBindingsConfigurationAtomicStatusesAndLifecycle(t *testing.T) {
 	}
 
 	before := append([]byte(nil), host.memory...)
-	if status := callBinding(t, bindingByName(t, bindings, "configuration"), host, uint64(namespaceHandle), 193); status != guest.StatusInvalidArgument || backend.calls != 0 || !bytes.Equal(host.memory, before) {
-		t.Fatalf("out-of-range configuration = %v, calls=%d", status, backend.calls)
+	for _, ptr := range []uint64{193, uint64(^uint32(0)), uint64(^uint32(0) - ipv6abi.ConfigurationV1Size + 1)} {
+		if status := callBinding(t, bindingByName(t, bindings, "configuration"), host, uint64(namespaceHandle), ptr); status != guest.StatusInvalidArgument || backend.calls != 0 || !bytes.Equal(host.memory, before) {
+			t.Fatalf("out-of-range configuration pointer %d = %v, calls=%d", ptr, status, backend.calls)
+		}
 	}
 
 	if status := callBinding(t, bindingByName(t, bindings, "configuration"), host, uint64(namespaceHandle), 64); status != guest.StatusOK || backend.calls != 1 {
@@ -85,7 +87,10 @@ func TestBindingsConfigurationAtomicStatusesAndLifecycle(t *testing.T) {
 	if mtu := binary.LittleEndian.Uint32(encoded[44:48]); mtu != uint32(backend.configuration.MTU) {
 		t.Fatalf("MTU = %d", mtu)
 	}
-	for offset, value := range encoded[48:] {
+	if maximum := binary.LittleEndian.Uint32(encoded[48:52]); maximum != uint32(backend.configuration.MaxExtensionHeaders) {
+		t.Fatalf("max extension headers = %d", maximum)
+	}
+	for offset, value := range encoded[52:] {
 		if value != 0 {
 			t.Fatalf("reserved byte %d = %d", offset, value)
 		}
@@ -138,11 +143,15 @@ func TestBindingsPrevalidateBeforeInstanceLookup(t *testing.T) {
 	host := testHost{instance: instance, memory: bytes.Repeat([]byte{0xa5}, 32)}
 	bindings := Bindings(plugin.NewHost(manager))
 	before := append([]byte(nil), host.memory...)
-	if status := callBinding(t, bindingByName(t, bindings, "namespace_default"), host, 25); status != guest.StatusInvalidArgument || !bytes.Equal(host.memory, before) {
-		t.Fatalf("namespace range = %v", status)
+	for _, ptr := range []uint64{25, uint64(^uint32(0)), uint64(^uint32(0) - abicore.HandleV1Size + 1)} {
+		if status := callBinding(t, bindingByName(t, bindings, "namespace_default"), host, ptr); status != guest.StatusInvalidArgument || !bytes.Equal(host.memory, before) {
+			t.Fatalf("namespace range %d = %v", ptr, status)
+		}
 	}
-	if status := callBinding(t, bindingByName(t, bindings, "configuration"), host, 1, 1); status != guest.StatusInvalidArgument || !bytes.Equal(host.memory, before) {
-		t.Fatalf("configuration range = %v", status)
+	for _, ptr := range []uint64{1, uint64(^uint32(0)), uint64(^uint32(0) - ipv6abi.ConfigurationV1Size + 1)} {
+		if status := callBinding(t, bindingByName(t, bindings, "configuration"), host, 1, ptr); status != guest.StatusInvalidArgument || !bytes.Equal(host.memory, before) {
+			t.Fatalf("configuration range %d = %v", ptr, status)
+		}
 	}
 	if status := callBinding(t, bindingByName(t, bindings, "namespace_default"), host, 0); status != guest.StatusInvalidState || !bytes.Equal(host.memory, before) {
 		t.Fatalf("unattached namespace = %v", status)
