@@ -137,6 +137,43 @@ func TestConfigurationPreservesOutputForMissingAndMalformedServices(t *testing.T
 	}
 }
 
+func TestBindingsRejectHighBitI32AliasesBeforeStateAndBackendWork(t *testing.T) {
+	backend := &fakeNamespace{configuration: validConfiguration()}
+	manager, instance := attachManager(t, backend)
+	defer manager.Detach(instance)
+	host := testHost{instance: instance, memory: bytes.Repeat([]byte{0x6d}, 256)}
+	bindings := Bindings(plugin.NewHost(manager))
+	state, ok := manager.ForInstance(instance)
+	if !ok {
+		t.Fatal("attached state missing")
+	}
+
+	high := uint64(1) << 32
+	tests := []struct {
+		name    string
+		binding string
+		params  []uint64
+	}{
+		{name: "namespace output", binding: "namespace_default", params: []uint64{high | 240}},
+		{name: "configuration output", binding: "configuration", params: []uint64{uint64(state.NamespaceHandle()), high | 64}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			before := append([]byte(nil), host.memory...)
+			calls := backend.calls
+			if status := callBinding(t, bindingByName(t, bindings, test.binding), host, test.params...); status != guest.StatusInvalidArgument {
+				t.Fatalf("status = %v", status)
+			}
+			if backend.calls != calls {
+				t.Fatalf("backend calls = %d, want %d", backend.calls, calls)
+			}
+			if !bytes.Equal(host.memory, before) {
+				t.Fatal("invalid alias mutated guest memory")
+			}
+		})
+	}
+}
+
 func TestBindingsPrevalidateBeforeInstanceLookup(t *testing.T) {
 	manager := instancecore.NewManager()
 	instance := new(wago.Instance)

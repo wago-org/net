@@ -37,8 +37,9 @@ func NamespaceDefault(host plugin.Host, module wago.HostModule, params, results 
 		guest.SetStatus(results, guest.StatusInvalidArgument)
 		return
 	}
-	memory, out := guest.Memory(module), uint32(params[0])
-	if !abicore.CheckRanges(memory, false, abicore.Range{Ptr: out, Length: abicore.HandleV1Size}) {
+	memory := guest.Memory(module)
+	out, ok := abicore.NarrowUint32(params[0])
+	if !ok || !abicore.CheckRanges(memory, false, abicore.Range{Ptr: out, Length: abicore.HandleV1Size}) {
 		guest.SetStatus(results, guest.StatusInvalidArgument)
 		return
 	}
@@ -64,8 +65,9 @@ func Configuration(host plugin.Host, module wago.HostModule, params, results []u
 		guest.SetStatus(results, guest.StatusInvalidArgument)
 		return
 	}
-	memory, out := guest.Memory(module), uint32(params[1])
-	if !abicore.CheckRanges(memory, false, abicore.Range{Ptr: out, Length: ipv6abi.ConfigurationV1Size}) {
+	memory := guest.Memory(module)
+	out, ok := abicore.NarrowUint32(params[1])
+	if !ok || !abicore.CheckRanges(memory, false, abicore.Range{Ptr: out, Length: ipv6abi.ConfigurationV1Size}) {
 		guest.SetStatus(results, guest.StatusInvalidArgument)
 		return
 	}
