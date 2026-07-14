@@ -130,8 +130,8 @@ func ValidateIngressFrame(frame []byte) (relevant, valid bool) {
 	if err != nil {
 		return true, false
 	}
-	version, _, _ := ipFrame.VersionTrafficAndFlow()
-	if version != 6 || int(ipFrame.PayloadLength())+40 > len(ethernetFrame.Payload()) || isExtensionHeader(ipFrame.NextHeader()) {
+	version, _, flow := ipFrame.VersionTrafficAndFlow()
+	if version != 6 || flow != 0 || int(ipFrame.PayloadLength())+40 > len(ethernetFrame.Payload()) || isExtensionHeader(ipFrame.NextHeader()) {
 		return true, false
 	}
 	source, destination := netip.AddrFrom16(*ipFrame.SourceAddr()), netip.AddrFrom16(*ipFrame.DestinationAddr())

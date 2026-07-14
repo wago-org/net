@@ -1,7 +1,7 @@
 # lneto protocol expansion plan
 
 Status: active implementation plan. ICMPv4, NTP, mDNS, DHCPv4, and IPv4
-link-local/APIPA are complete; IPv6 namespace/transport work is in progress and
+link-local/APIPA and IPv6 namespace/transport enablement are complete;
 ICMPv6/NDP plus DHCPv6 remain planned.
 
 ## Goal
@@ -241,7 +241,29 @@ mutation. Repeated defense conflict releases only the exact link-local owner
 before bounded reconfiguration, and guest release/close restores the configured
 placeholder synchronously. The adapter uses no lneto blocking wrapper, deadline,
 sleep, retry/backoff helper, goroutine, ambient clock, or retained guest slice.
-Selective dependency fixtures reject every omitted link-local layer, runtime
-composition covers all 256 combinations of the eight completed protocols, and
-granular plus aggregate registration are tested. Ethernet II, ARP, IPv4,
-PHY/MDIO, and packet capture remain internal rather than guest APIs.
+Selective dependency fixtures reject every omitted link-local layer. Ethernet
+II, ARP, IPv4, PHY/MDIO, and packet capture remain internal rather than guest
+APIs.
+
+IPv6 namespace/transport enablement is exposed as independently selectable
+`ipv6.Register`, capability `net.ipv6`, and three-function import module
+`wago_net_ipv6`. Its fixed checked 64-byte configuration result reports one
+static global or link-local address, prefix bits, exact numeric single-interface
+scope, MTU, zero extension-header bound, and only the pinned transport paths
+actually integrated: TCP connect and address-specific TCP listen. TCP remains a
+separate capability and adapter; selecting IPv6 alone does not expose sockets.
+The shared lneto core constructs `x/xnet.Stack6` only when the contribution is
+configured, while the IPv6 adapter owns one finite protocol resource charge,
+strict Ethernet/IPv6 base-header validation, deny-wins exact configured-address
+authority, deterministic close, and shared bounded poll/service. IPv4-mapped
+addresses, unspecified/loopback/multicast identities, wrong link-local scopes,
+nonzero transport flow labels, extension headers, fragmentation/reassembly,
+jumbograms, IPv6 UDP, DNS-over-IPv6, router discovery, DAD, SLAAC, ICMPv6/NDP,
+and DHCPv6 are not claimed. Without ICMPv6/NDP, outbound transport uses the
+explicit configured gateway MAC. No raw IPv6 frame, route table, neighbor cache,
+blocking/backoff/deadline/sleep/goroutine API, or retained guest slice is
+exposed. Selective dependency fixtures reject every omitted IPv6 layer, runtime
+composition covers all 512 combinations of the nine completed protocols, and
+granular plus aggregate registration are tested. Ethernet II, ARP, IPv4, IPv6,
+PHY/MDIO, and packet capture remain internal infrastructure rather than raw
+guest APIs.

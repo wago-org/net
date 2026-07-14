@@ -2,6 +2,7 @@ package net_test
 
 import (
 	"context"
+	"net/netip"
 	"reflect"
 	"slices"
 	"strings"
@@ -11,6 +12,7 @@ import (
 	"github.com/wago-org/net/dhcpv4"
 	"github.com/wago-org/net/dns"
 	"github.com/wago-org/net/icmpv4"
+	"github.com/wago-org/net/ipv6"
 	"github.com/wago-org/net/linklocal4"
 	"github.com/wago-org/net/mdns"
 	"github.com/wago-org/net/ntp"
@@ -38,6 +40,9 @@ var publicProtocols = []protocolSelection{
 	{name: "mdns", module: wagonet.MDNSModule, capability: wagonet.CapMDNS, imports: 10, register: func(network *wagonet.Network) error { return mdns.Register(network) }},
 	{name: "dhcpv4", module: wagonet.DHCPv4Module, capability: wagonet.CapDHCPv4, imports: 7, register: func(network *wagonet.Network) error { return dhcpv4.Register(network) }},
 	{name: "linklocal4", module: wagonet.LinkLocal4Module, capability: wagonet.CapLinkLocal4, imports: 7, register: func(network *wagonet.Network) error { return linklocal4.Register(network) }},
+	{name: "ipv6", module: wagonet.IPv6Module, capability: wagonet.CapIPv6, imports: 3, register: func(network *wagonet.Network) error {
+		return ipv6.Register(network, ipv6.WithConfig(ipv6.DefaultConfig(netip.MustParseAddr("2001:db8::1"), 64, 0)))
+	}},
 }
 
 func TestPublicSelectiveCompositionMatrix(t *testing.T) {

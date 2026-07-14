@@ -12,8 +12,9 @@ and minor version 0.
 Except for `abi_version`, networking imports return one `i32` status and write
 additional values through checked guest-memory output pointers. `InfoImports()`
 and the historical zero-config `Imports(Config{})` helper intentionally expose
-only `wago_net.abi_version`; every resource-owning UDP/TCP/DNS/ICMPv4/NTP/mDNS/DHCPv4/link-local import requires
-exact Runtime lifecycle identity and is therefore available only through
+only `wago_net.abi_version`; every resource-owning UDP/TCP/DNS/ICMPv4/NTP/mDNS/
+DHCPv4/link-local import and the configured IPv6 namespace import require exact
+Runtime lifecycle identity and are therefore available only through
 extension registration. The completed `internal/backend/lneto/core` plus `/tcp`,
 `/udp`, and `/dns` adapter extraction and selective opaque contribution assembly
 change only Go implementation ownership. Unregistered adapters/facets are now
@@ -70,7 +71,7 @@ poll codecs in `internal/abi/core`. TCP stream/I/O, UDP receive-result, DNS name
 request/lease and link-local request/result layouts are separate compilation
 units in `internal/abi/tcp`, `internal/abi/udp`, `internal/abi/dns`,
 `internal/abi/icmpv4`, `internal/abi/ntp`, `internal/abi/mdns`,
-`internal/abi/dhcpv4`, and `internal/abi/linklocal4`. This package
+`internal/abi/dhcpv4`, `internal/abi/linklocal4`, and `internal/abi/ipv6`. This package
 split changes no guest-visible size, offset, validation rule, or numeric value.
 
 ## UDP module and signatures
@@ -488,6 +489,59 @@ owner causes `INVALID_STATE` without replacement or mutation. `release` and
 ICMPv4, or raw-packet authority cannot widen link-local authority, caller denies
 win, and no raw ARP guest API exists.
 
+## IPv6 namespace module, signatures, and layout
+
+The checked configured IPv6 namespace ABI is independently gated in
+`wago_net_ipv6` by `net.ipv6`:
+
+```text
+namespace_default(out_handle_ptr: i32) -> i32
+configuration(namespace: i64, out_configuration_ptr: i32) -> i32
+poll(events_ptr: i32, event_capacity: i32, budget_ptr: i32, out_result_ptr: i32) -> i32
+```
+
+The module exposes no raw IPv6 packet, route-table, neighbor-cache, or socket
+operation. TCP remains separately selected through `wago_net_tcp` and its own
+capability. `configuration` accepts only the exact shared namespace handle and
+atomically writes `wago_net_ipv6_configuration_v1`, a fixed 64-byte structure:
+
+```c
+struct wago_net_ipv6_configuration_v1 {
+    struct wago_net_addr_v1 address; // offset 0, IPv6, port/flow zero
+    uint32_t prefix_bits;            // offset 32, 1..128
+    uint32_t flags;                  // offset 36
+    uint32_t transports;             // offset 40
+    uint32_t mtu;                    // offset 44, 1280..1500
+    uint32_t max_extension_headers;  // offset 48, exactly zero
+    uint32_t reserved0;              // offset 52, zero
+    uint64_t reserved1;              // offset 56, zero
+};
+```
+
+Configuration flag bit `1` means enabled and bit `2` means the configured
+address is link-local unicast. Transport bit `1` reports bounded TCP connect and
+bit `2` reports address-specific TCP listen. These bits describe backend family
+availability only: use still requires the independently registered `net.tcp`
+capability and its finite resources/policy. IPv6 UDP and DNS-over-IPv6 transport
+are not claimed. The existing DNS module may still return copied AAAA records
+over its configured IPv4 resolver transport.
+
+The configured address is one non-mapped static global or link-local unicast
+identity. Link-local requires the exact nonzero numeric `scope_id` configured by
+the host; global addresses require scope zero. The pinned immediate transport
+path does not implement flow labels, so TCP operations reject nonzero
+`flow_info`. It also does not scan extension headers, fragment/reassemble IPv6,
+or process jumbograms. The finite extension-header bound is therefore zero and
+such ingress is dropped before transport demultiplexing. ICMPv6, NDP, router
+discovery, DAD, SLAAC, and DHCPv6 are not implied by this module.
+
+The zero module configuration remains truthfully disabled: imports may be
+registered for inspection, but `configuration` returns `NOT_SUPPORTED` and does
+not mutate output. Configured installation consumes one finite IPv6 namespace
+resource quota; shared `poll` remains scan/event/service bounded and quota
+accounted. Caller denies on the exact configured IPv6 identity win over the
+module's default exact-address grant and prevent namespace publication.
+
 ## Bounded poll layouts
 
 `wago_net_poll_budget_v1` is 24 bytes, containing six consecutive `uint32_t`
@@ -559,8 +613,8 @@ bits.
 Endpoint-changing imports enforce immutable instance policy on every bind,
 listen, connect, datagram destination, DNS request, ICMPv4 echo destination,
 NTP server synchronization, mDNS query/announcement/response authority, and
-DHCPv4 client/server endpoint authority, and IPv4 link-local candidate and
-defense authority.
+DHCPv4 client/server endpoint authority, IPv4 link-local candidate and defense
+authority, and the configured IPv6 namespace identity.
 Unmatched or malformed requests are denied. Wildcard binds, loopback, multicast,
 limited IPv4 broadcast, and local bind/listen ports below 1024 require separate
 explicit grants so a broad prefix rule cannot grant them accidentally.
@@ -569,8 +623,8 @@ families.
 
 Resource creation, retained packet bytes, DNS work, active ICMPv4 work, active
 NTP work, active mDNS query/announcement work, active DHCPv4 DORA work, active
-IPv4 link-local claim/defense work, and manual service work are also
-subject to finite per-instance quotas. A failed operation must roll back its
+IPv4 link-local claim/defense work, configured IPv6 namespace ownership, and
+manual service work are also subject to finite per-instance quotas. A failed operation must roll back its
 tentative reservation, and instance teardown clears both committed allocations
 and abandoned reservations. Exact default limits remain implementation policy,
 not ABI constants.

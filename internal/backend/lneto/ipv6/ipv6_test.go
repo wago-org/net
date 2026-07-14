@@ -98,6 +98,11 @@ func TestValidateIngressFrameRejectsExtensionsAndMalformedAddresses(t *testing.T
 		t.Fatal("fragment extension header accepted")
 	}
 	ipFrame.SetNextHeader(17)
+	ipFrame.SetVersionTrafficAndFlow(6, 0, 1)
+	if _, valid := ValidateIngressFrame(frame); valid {
+		t.Fatal("nonzero flow label accepted")
+	}
+	ipFrame.SetVersionTrafficAndFlow(6, 0, 0)
 	*ipFrame.SourceAddr() = [16]byte{}
 	if _, valid := ValidateIngressFrame(frame); valid {
 		t.Fatal("unspecified source accepted")

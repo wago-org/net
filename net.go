@@ -1,7 +1,8 @@
 // Package net provides the core of Wago's capability-gated networking plugin
 // suite. The guest ABI is backend-neutral; lneto is the first backend and is
 // not part of the public contract. Complete UDP, TCP, bounded DNS, ICMPv4 echo,
-// explicit-clock NTP, bounded mDNS, DHCPv4, and IPv4 link-local modules are independently capability-gated. Runtime registration requires physical
+// explicit-clock NTP, bounded mDNS, DHCPv4, IPv4 link-local, and configured IPv6
+// namespace modules are independently capability-gated. Runtime registration requires physical
 // reinstantiation between class leases so instance-owned network state cannot
 // survive an in-place Wasm memory reset.
 package net
@@ -42,6 +43,8 @@ const (
 	DHCPv4Module = "wago_net_dhcpv4"
 	// LinkLocal4Module owns bounded RFC 3927 claim-and-defend operations.
 	LinkLocal4Module = "wago_net_linklocal4"
+	// IPv6Module owns configured IPv6 namespace introspection and bounded service.
+	IPv6Module = "wago_net_ipv6"
 
 	// ABIVersion1 encodes ABI version 1.0 as major in the upper 16 bits and minor
 	// in the lower 16 bits.
@@ -65,6 +68,8 @@ const (
 	CapDHCPv4 wago.Capability = "net.dhcpv4"
 	// CapLinkLocal4 permits checked bounded IPv4 link-local claim operations and poll access.
 	CapLinkLocal4 wago.Capability = "net.linklocal4"
+	// CapIPv6 permits checked configured IPv6 namespace introspection and service.
+	CapIPv6 wago.Capability = "net.ipv6"
 )
 
 // PolicyConfig and related aliases expose the backend-neutral authority model
@@ -88,6 +93,7 @@ const (
 	PolicyTransportMDNS       = policy.TransportMDNS
 	PolicyTransportDHCPv4     = policy.TransportDHCPv4
 	PolicyTransportLinkLocal4 = policy.TransportLinkLocal4
+	PolicyTransportIPv6       = policy.TransportIPv6
 
 	PolicyInbound  = policy.DirectionInbound
 	PolicyOutbound = policy.DirectionOutbound
@@ -177,7 +183,7 @@ var (
 )
 
 // Option configures shared network composition. Protocol-specific options live
-// in the tcp, udp, dns, icmpv4, ntp, mdns, dhcpv4, and linklocal4 packages rather than in the root package.
+// in the tcp, udp, dns, icmpv4, ntp, mdns, dhcpv4, linklocal4, and ipv6 packages rather than in the root package.
 type Option interface {
 	applyNetwork(*Config) error
 }

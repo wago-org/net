@@ -3,8 +3,9 @@
 Capability-gated networking plugins for the [Wago](https://github.com/wago-org/wago)
 WebAssembly runtime, backed initially by [lneto](https://github.com/soypat/lneto).
 UDP, TCP, DNS, bounded ICMPv4 echo, explicit-clock NTP, bounded IPv4 multicast
-DNS, DHCPv4, and IPv4 link-local/APIPA are implemented today; IPv6,
-ICMPv6/NDP, and DHCPv6 remain absent and are not advertised.
+DNS, DHCPv4, IPv4 link-local/APIPA, and configured IPv6 TCP transport
+enablement are implemented today; ICMPv6/NDP and DHCPv6 remain absent and are
+not advertised.
 
 > [!WARNING]
 > This module is private and experimental. Use it only with the exact Wago
@@ -15,8 +16,8 @@ ICMPv6/NDP, and DHCPv6 remain absent and are not advertised.
 
 The repository exposes the experimental `wago_net.abi_version` core import plus
 separately capability-gated `wago_net_udp`, `wago_net_tcp`, `wago_net_dns`,
-`wago_net_icmpv4`, `wago_net_ntp`, `wago_net_mdns`, `wago_net_dhcpv4`, and
-`wago_net_linklocal4` modules. UDP covers configured-namespace discovery, bind, send,
+`wago_net_icmpv4`, `wago_net_ntp`, `wago_net_mdns`, `wago_net_dhcpv4`,
+`wago_net_linklocal4`, and `wago_net_ipv6` modules. UDP covers configured-namespace discovery, bind, send,
 receive, close, and bounded poll. TCP covers discovery, listen, nonblocking
 connect completion, accept, partial read/write, write-half shutdown,
 kind-specific close, and its own bounded poll. DNS covers configured resolver
@@ -38,7 +39,11 @@ host clock and deterministic seed, emits only internal ARP probes/announcements,
 keeps bounded defense active, and shares DHCPv4's exact single dynamic IPv4
 identity lease domain. Repeated defense conflict rolls back the exact identity
 before bounded reconfiguration; release and close restore the static
-`0.0.0.0` placeholder. The low-level `InfoImports` /
+`0.0.0.0` placeholder. IPv6 contributes one static global or link-local
+identity and checked immutable configuration introspection. It enables only the
+pinned immediate TCP connect and address-specific listen family when TCP is
+separately selected; IPv6 UDP, DNS-over-IPv6, extension headers, fragmentation,
+flow labels, router discovery, DAD, SLAAC, and NDP are not claimed. The low-level `InfoImports` /
 zero-config `Imports(Config{})` path remains core-only
 and exposes only `wago_net.abi_version`; resource-owning protocol imports require
 Runtime lifecycle ownership.
@@ -119,7 +124,11 @@ service attempts. It requires a configured `0.0.0.0` placeholder and fails with
 `INVALID_STATE` if DHCPv4 or another exact dynamic identity already owns the
 namespace. The pinned DHCPv4 client does not implement immediate renewal,
 rebinding, or wire DHCPRELEASE; the guest `release` operation is truthful local
-identity rollback.
+identity rollback. IPv6 requires `ipv6.WithConfig` with a finite static address,
+prefix, and exact link-local scope when applicable. Its three imports provide
+namespace discovery, atomic 64-byte configuration, and bounded shared poll.
+Caller denies on the configured identity prevent publication, and raw IPv6
+packets remain internal.
 
 Registering only TCP exposes `net.info` and `net.tcp`, with
 `wago_net.abi_version` and the eleven `wago_net_tcp` imports. Registering only
@@ -132,22 +141,25 @@ six `wago_net_ntp` imports. Registering only mDNS exposes `net.info`, `net.mdns`
 ten `wago_net_mdns` imports. Registering only DHCPv4 exposes `net.info`,
 `net.dhcpv4`, the shared ABI import, and seven `wago_net_dhcpv4` imports.
 Registering only IPv4 link-local exposes `net.info`, `net.linklocal4`, the shared
-ABI import, and seven `wago_net_linklocal4` imports. Unregistered protocol
+ABI import, and seven `wago_net_linklocal4` imports. Registering only IPv6
+exposes `net.info`, `net.ipv6`, the shared ABI import, and three
+`wago_net_ipv6` imports; its zero deployment configuration is truthfully
+disabled until explicit composition supplies static identity. Unregistered protocol
 imports are absent and fail normal WebAssembly import resolution. The public TCP,
-UDP, DNS, ICMPv4, NTP, mDNS, DHCPv4, and link-local facades each construct an
-opaque descriptor, and all eight checked host tables live in protocol-specific
+UDP, DNS, ICMPv4, NTP, mDNS, DHCPv4, link-local, and IPv6 facades each construct
+an opaque descriptor, and all nine checked host tables live in protocol-specific
 internal binding packages. The
 root package no longer imports those public or binding packages. Dependency and
-runtime-inspection fixtures cover no protocol and all 256 combinations of the
-eight implemented protocols. Omitted public, binding, instance-operation, and fixed ABI
+runtime-inspection fixtures cover no protocol and all 512 combinations of the
+nine implemented protocols. Omitted public, binding, instance-operation, and fixed ABI
 packages are rejected from each fixture's Go dependency graph. Shared checked
 memory, endpoint/handle codecs, and poll layouts live in `internal/abi/core`;
 TCP, UDP, DNS, ICMPv4, NTP, mDNS, DHCPv4, and link-local layouts live only in
-`internal/abi/tcp`, `/udp`, `/dns`, `/icmpv4`, `/ntp`, `/mdns`, `/dhcpv4`, and
-`/linklocal4`.
+`internal/abi/tcp`, `/udp`, `/dns`, `/icmpv4`, `/ntp`, `/mdns`, `/dhcpv4`,
+`/linklocal4`, and `/ipv6`.
 The dependency
 matrix also rejects each omitted protocol's namespace facet and
-`internal/backend/lneto/{tcp,udp,dns,icmpv4,ntp,mdns,dhcpv4,linklocal4}`
+`internal/backend/lneto/{tcp,udp,dns,icmpv4,ntp,mdns,dhcpv4,linklocal4,ipv6}`
 adapter, and rejects the temporary
 aggregate lneto assembler from every selective production graph. One
 protocol-neutral instance core still owns exact attachment, resource identity,
@@ -155,12 +167,12 @@ readiness, quotas, polling, and teardown, while
 `internal/instance/tcp`, `internal/instance/udp`, `internal/instance/dns`, and
 `internal/instance/icmpv4`, `internal/instance/ntp`, and
 `internal/instance/mdns`, `internal/instance/dhcpv4`, and
-`internal/instance/linklocal4` serialize their
+`internal/instance/linklocal4` and `internal/instance/ipv6` serialize their
 operations through that core.
 Namespace ownership is likewise split: `internal/namespace/core` owns shared
 endpoint, failure, readiness, resource, and bounded-service contracts, while
-`/tcp`, `/udp`, `/dns`, `/icmpv4`, `/ntp`, `/mdns`, `/dhcpv4`, and
-`/linklocal4` own
+`/tcp`, `/udp`, `/dns`, `/icmpv4`, `/ntp`, `/mdns`, `/dhcpv4`, `/linklocal4`,
+and `/ipv6` own
 narrow protocol facets and values. Production graphs no longer reach the former
 aggregate namespace compatibility package. `internal/backend/lneto/core` now
 owns the single lifecycle lock, `StackAsync`, packet link, IPv4 identity, frame
@@ -169,7 +181,7 @@ charging, shared UDP-port leases, and deterministic close. TCP listeners and
 streams, UDP sockets and queues, DNS query/wire state, ICMPv4 echo state, NTP
 synchronization state, and mDNS query/response/announcement state now live
 independently in `internal/backend/lneto/tcp`, `/udp`, `/dns`, `/icmpv4`, `/ntp`,
-`/mdns`, `/dhcpv4`, and `/linklocal4`. Focused tests preserve immediate
+`/mdns`, `/dhcpv4`, `/linklocal4`, and `/ipv6`. Focused tests preserve immediate
 operations, shared UDP/DNS/NTP/mDNS/DHCPv4 port ownership, exact
 DHCPv4/link-local identity contention, bounded ARP claim/defense, packet and
 maintenance accounting, response filtering, quotas, and ordered cleanup. Protocol descriptors
@@ -219,6 +231,7 @@ the others:
 import _ "github.com/wago-org/net/tcp/register" // extension key: net-tcp
 // or github.com/wago-org/net/udp/register       // extension key: net-udp
 // or github.com/wago-org/net/dns/register       // extension key: net-dns
+// or github.com/wago-org/net/ipv6/register      // extension key: net-ipv6
 ```
 
 The root package remains the explicit all-protocol bundle:
@@ -228,7 +241,7 @@ import _ "github.com/wago-org/net/register" // extension key: net
 ```
 
 The granular packages install protocol defaults but do not invent deployment
-IPv4 identity/link configuration; DNS resolver storage also remains disabled in
+IPv4 or IPv6 identity/link configuration; DNS resolver storage also remains disabled in
 the zero-configuration self-registering form. Applications needing those values
 should use explicit `wagonet.New` composition. Likewise, low-level `InfoImports`
 and `Imports(Config{})` stay limited to the stateless core ABI-version surface
