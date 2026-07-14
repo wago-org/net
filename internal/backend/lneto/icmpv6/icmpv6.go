@@ -831,7 +831,7 @@ func (a *Adapter) ingressAdvertisementLocked(ipFrame lnetoipv6.Frame, frame lnet
 	if ipFrame.HopLimit() != 255 || frame.Code() != 0 || len(raw) != ndpSize || destination != a.address || dstMAC != a.hardwareAddress {
 		return nil
 	}
-	if raw[4]&0x80 != 0 || raw[4]&0x40 == 0 || raw[4]&0x1f != 0 || !allZero(raw[5:8]) || raw[24] != 2 || raw[25] != 1 || [6]byte(raw[26:32]) != srcMAC {
+	if raw[4]&0x40 == 0 || raw[4]&0x1f != 0 || !allZero(raw[5:8]) || raw[24] != 2 || raw[25] != 1 || [6]byte(raw[26:32]) != srcMAC {
 		return nil
 	}
 	target := netip.AddrFrom16(*(*[16]byte)(raw[8:24]))

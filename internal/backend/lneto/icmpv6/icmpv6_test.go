@@ -1,6 +1,7 @@
 package icmpv6
 
 import (
+	"bytes"
 	"errors"
 	"net/netip"
 	"testing"
@@ -72,6 +73,82 @@ func TestEchoAndNDPExchange(t *testing.T) {
 	result, next, err := echo.TryResult(copied[:])
 	if err != nil || next != icmpns.NextReady || result.Source != b.address || result.Copied != len(copied) || result.PayloadBytes != len("bounded ping6") || string(copied[:]) != "bounded" || echo.Readiness() != nscore.ReadyICMPv6Reply {
 		t.Fatalf("echo result = %+v %v %v payload=%q readiness=%v", result, next, err, copied[:], echo.Readiness())
+	}
+}
+
+func TestNeighborResolutionAcceptsRouterFlaggedAdvertisement(t *testing.T) {
+	coreA, a := newTestAdapter(t, 19, "2001:db8::19")
+	coreB, b := newTestAdapter(t, 20, "2001:db8::20")
+	defer coreA.Close()
+	defer coreB.Close()
+	resource, _, err := a.TryResolve(icmpns.NeighborRequest{Address: b.address})
+	if err != nil {
+		t.Fatal(err)
+	}
+	resolved := resource.(*resolution)
+	var storage [1514]byte
+	n, worked, err := a.egressLocked(storage[:])
+	if err != nil || !worked || n == 0 {
+		t.Fatalf("neighbor solicitation = %d, %v, %v", n, worked, err)
+	}
+	if handled, err := b.ingressLocked(storage[:n]); err != nil || !handled {
+		t.Fatalf("neighbor solicitation ingress = %v, %v", handled, err)
+	}
+	n, worked, err = b.egressLocked(storage[:])
+	if err != nil || !worked || n == 0 {
+		t.Fatalf("neighbor advertisement = %d, %v, %v", n, worked, err)
+	}
+	advertisement := append([]byte(nil), storage[:n]...)
+	ethernetFrame, _ := ethernet.NewFrame(advertisement)
+	ipFrame, _ := lnetoipv6.NewFrame(ethernetFrame.Payload())
+	icmpFrame, _ := lnetoicmp.NewFrame(ipFrame.Payload())
+	ipFrame.Payload()[4] |= 0x80
+	setChecksum(ipFrame, icmpFrame, ipFrame.Payload())
+	if handled, err := a.ingressLocked(advertisement); err != nil || !handled {
+		t.Fatalf("router-flagged neighbor advertisement ingress = %v, %v", handled, err)
+	}
+	neighbor, next, err := resolved.TryResult()
+	if err != nil || next != icmpns.NextReady || neighbor.Address != b.address || neighbor.MAC != b.hardwareAddress {
+		t.Fatalf("router-flagged neighbor result = %+v, %v, %v", neighbor, next, err)
+	}
+}
+
+func TestICMPv6ReplyIgnoresBytesBeyondIPv6PayloadLength(t *testing.T) {
+	coreA, a := newTestAdapter(t, 21, "2001:db8::21")
+	coreB, b := newTestAdapter(t, 22, "2001:db8::22")
+	defer coreA.Close()
+	defer coreB.Close()
+	if err := a.SeedNeighbor(icmpns.Neighbor{Address: b.address, MAC: b.hardwareAddress}); err != nil {
+		t.Fatal(err)
+	}
+	resource, _, err := a.TryEcho(icmpns.EchoRequest{Destination: b.address, Payload: []byte("x")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	exchange := resource.(*echo)
+	var storage [1514]byte
+	n, worked, err := a.egressLocked(storage[:])
+	if err != nil || !worked || n == 0 {
+		t.Fatalf("echo request = %d, %v, %v", n, worked, err)
+	}
+	if handled, err := b.ingressLocked(storage[:n]); err != nil || !handled {
+		t.Fatalf("echo request ingress = %v, %v", handled, err)
+	}
+	n, worked, err = b.egressLocked(storage[:])
+	if err != nil || !worked || n == 0 {
+		t.Fatalf("echo reply = %d, %v, %v", n, worked, err)
+	}
+	reply := append([]byte(nil), storage[:n]...)
+	reply = append(reply, bytes.Repeat([]byte{0xa5}, 17)...)
+	if handled, err := a.ingressLocked(reply); err != nil || !handled {
+		t.Fatalf("echo reply ingress = %v, %v", handled, err)
+	}
+	if got := exchange.Readiness(); got != nscore.ReadyICMPv6Reply {
+		t.Fatalf("reply with trailing link bytes readiness = %v", got)
+	}
+	result, next, err := exchange.TryResult(nil)
+	if err != nil || next != icmpns.NextReady || result.PayloadBytes != 1 {
+		t.Fatalf("reply with trailing link bytes = %+v, %v, %v", result, next, err)
 	}
 }
 
