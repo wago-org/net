@@ -420,6 +420,9 @@ func (a *Adapter) ingressLocked(frame []byte) (bool, error) {
 	if defenseConflict && (r.handler.State() == lnetolinklocal.StateAnnouncing || r.handler.State().IsBound()) {
 		r.defensePending = true
 	}
+	// Conflict detection does not replace ordinary ARP processing. Let the
+	// shared ARP layer observe every structurally valid frame after the claim
+	// state has been updated; malformed claim-local frames are consumed above.
 	return false, nil
 }
 

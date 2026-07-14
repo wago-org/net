@@ -517,6 +517,43 @@ func TestIngressRelevanceConsumesMalformedLocalARPAndLeavesForeignUnhandled(t *t
 	}
 }
 
+func TestConflictMutationFallsThroughToOrdinaryARPProcessing(t *testing.T) {
+	core, adapter, _, _ := newTestAdapter(t, Config{MaxClaims: 1, MaxConflicts: 4, MaxServiceAttempts: 16, Seed: 31})
+	resource, _, err := adapter.TryClaim(linklocalns.Request{FirstCandidate: netip.MustParseAddr("169.254.42.7")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	claim := resource.(*claimResource)
+	ordinaryARPCalls := 0
+	if err := core.Install(lnetocore.Participant{
+		IngressOrder: serviceOrder + 1,
+		Ingress: func(frame []byte) (bool, error) {
+			eth, err := ethernet.NewFrame(frame)
+			if err != nil || eth.EtherTypeOrSize() != ethernet.TypeARP {
+				t.Fatalf("ordinary ARP ingress = %v, %v", eth.EtherTypeOrSize(), err)
+			}
+			ordinaryARPCalls++
+			return true, nil
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	core.Lock()
+	beforeCandidate, beforeConflicts := claim.handler.Candidate(), claim.handler.Conflicts()
+	core.Unlock()
+	serviceIngress(t, core, makeConflict(t, netip.AddrFrom4(beforeCandidate), [6]byte{2, 0, 0, 0, 0, 2}))
+	core.Lock()
+	afterCandidate, afterConflicts, state := claim.handler.Candidate(), claim.handler.Conflicts(), claim.state
+	core.Unlock()
+	if afterConflicts != beforeConflicts+1 || afterCandidate == beforeCandidate || state != stateActive {
+		t.Fatalf("conflict state = candidate %v -> %v conflicts %d -> %d state=%v", beforeCandidate, afterCandidate, beforeConflicts, afterConflicts, state)
+	}
+	if ordinaryARPCalls != 1 {
+		t.Fatalf("ordinary ARP calls = %d, want 1", ordinaryARPCalls)
+	}
+}
+
 func BenchmarkIngressUnrelatedARP(b *testing.B) {
 	core, adapter, _, _ := newTestAdapter(b, Config{MaxClaims: 1, MaxConflicts: 4, MaxServiceAttempts: 16, Seed: 17})
 	if _, _, err := adapter.TryClaim(linklocalns.Request{FirstCandidate: netip.MustParseAddr("169.254.42.7")}); err != nil {
