@@ -22,6 +22,30 @@ import (
 	"github.com/wago-org/net/internal/quota"
 )
 
+func TestConfigRejectsMulticastAndBroadcastResolvers(t *testing.T) {
+	compiled, err := policy.Compile(policy.Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	account := quota.NewAccount(quota.DefaultLimits())
+	base := Config{Server: netip.MustParseAddr("192.0.2.53"), MaxQueries: 1, MaxRecords: 1, MaxResponseBytes: 512, MaxAttempts: 1, RetryServiceAttempts: 1}
+	if !ValidConfig(base, 1500, compiled, account, true) {
+		t.Fatal("valid unicast resolver rejected")
+	}
+	for name, server := range map[string]netip.Addr{
+		"multicast":         netip.MustParseAddr("224.0.0.251"),
+		"limited broadcast": netip.AddrFrom4([4]byte{255, 255, 255, 255}),
+	} {
+		t.Run(name, func(t *testing.T) {
+			invalid := base
+			invalid.Server = server
+			if ValidConfig(invalid, 1500, compiled, account, true) {
+				t.Fatalf("accepted invalid resolver %v", server)
+			}
+		})
+	}
+}
+
 func TestBuildDNSQueryPacketDirectEncoding(t *testing.T) {
 	request := namespace.DNSRequest{Name: "service.api.example.com", Types: namespace.DNSRecordsA | namespace.DNSRecordsAAAA}
 	packet, err := buildDNSQueryPacket(request, 0x1234, 1232)

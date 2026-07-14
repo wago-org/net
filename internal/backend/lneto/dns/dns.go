@@ -1012,9 +1012,13 @@ func ValidConfig(config Config, mtu int, compiled *policy.Policy, account *quota
 	if requireAuthority && (compiled == nil || account == nil) {
 		return false
 	}
-	return config.Server.Is4() && !config.Server.Is4In6() && !config.Server.IsUnspecified() && config.Server.Zone() == "" &&
-		config.MaxRecords > 0 && config.MaxResponseBytes >= lnetodns.MaxSizeUDP && config.MaxResponseBytes <= mtu-28 &&
+	return validResolver(config.Server) && config.MaxRecords > 0 && config.MaxResponseBytes >= lnetodns.MaxSizeUDP && config.MaxResponseBytes <= mtu-28 &&
 		config.MaxResponseBytes <= int(^uint16(0)) && config.MaxAttempts > 0 && config.RetryServiceAttempts > 0
+}
+
+func validResolver(address netip.Addr) bool {
+	return address.Is4() && !address.Is4In6() && !address.IsUnspecified() && !address.IsMulticast() && address.Zone() == "" &&
+		address != netip.AddrFrom4([4]byte{255, 255, 255, 255})
 }
 
 func validUnicastMAC(mac [6]byte) bool {
