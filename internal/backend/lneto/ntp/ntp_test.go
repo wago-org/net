@@ -51,6 +51,11 @@ func TestNTPExchangeUsesExplicitClockValidatesRepliesAndReleasesQuota(t *testing
 	clock.now = arrival1.Add(100 * time.Millisecond)
 	request2 := serviceEgress(t, core)
 	response2, arrival2 := makeNTPResponse(t, request2, 500*time.Millisecond, 30*time.Millisecond)
+	clock.now = ntpPayload(t, request2).TransmitTime().Time().Add(10 * time.Millisecond)
+	serviceIngress(t, core, response1)
+	if got := sync.Readiness(); got != 0 || sync.state != syncWaiting {
+		t.Fatalf("stale first response during second exchange = readiness %v, state %v", got, sync.state)
+	}
 	clock.now = arrival2
 	serviceIngress(t, core, response2)
 	if got := sync.Readiness(); got != nscore.ReadyNTPResult {
@@ -162,6 +167,16 @@ func TestNTPRejectsMalformedServerResponseAndIgnoresOriginMismatch(t *testing.T)
 	serviceIngress(t, core, mismatch)
 	if got := sync.Readiness(); got != 0 {
 		t.Fatalf("origin mismatch became terminal: %v", got)
+	}
+
+	malformedMismatch, _ := makeNTPResponse(t, request, 100*time.Millisecond, 20*time.Millisecond)
+	ntpFrame = ntpPayload(t, malformedMismatch)
+	ntpFrame.SetOriginTime(lnetontp.TimestampFromUint64(1))
+	ntpFrame.SetFlags(lnetontp.ModeClient, lnetontp.Version4, lnetontp.LeapNoWarning)
+	rechecksumUDP(t, malformedMismatch)
+	serviceIngress(t, core, malformedMismatch)
+	if got := sync.Readiness(); got != 0 {
+		t.Fatalf("malformed origin mismatch became terminal: %v", got)
 	}
 
 	malformed, _ := makeNTPResponse(t, request, 100*time.Millisecond, 20*time.Millisecond)

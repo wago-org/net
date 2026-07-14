@@ -484,6 +484,10 @@ func (a *Adapter) ingressLocked(frame []byte) (bool, error) {
 		sync.failLocked(nscore.FailureIO, err)
 		return true, nil
 	}
+	requestFrame, _ := lnetontp.NewFrame(sync.request[:])
+	if ntpFrame.OriginTime() != requestFrame.TransmitTime() {
+		return true, nil
+	}
 	mode, ntpVersion, leap := ntpFrame.Flags()
 	stratum := ntpFrame.Stratum()
 	if mode != lnetontp.ModeServer || ntpVersion != lnetontp.Version4 || leap >= 3 || stratum == 0 || stratum >= lnetontp.StratumUnsync || ntpFrame.ReceiveTime().IsZero() || ntpFrame.TransmitTime().IsZero() {
@@ -495,7 +499,6 @@ func (a *Adapter) ingressLocked(frame []byte) (bool, error) {
 		sync.failLocked(nscore.FailureInvalidState, clockErr)
 		return true, nil
 	}
-	requestFrame, _ := lnetontp.NewFrame(sync.request[:])
 	if sync.clockSample.Before(requestFrame.TransmitTime().Time()) {
 		sync.failLocked(nscore.FailureInvalidState, errClockBackward)
 		return true, nil
