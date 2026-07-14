@@ -39,6 +39,9 @@ func Query(state *core.State, namespaceHandle resource.Handle, request mdnsns.Re
 		}
 		return nil
 	})
+	if err != nil {
+		handle, progress = 0, 0
+	}
 	return
 }
 
@@ -49,16 +52,27 @@ func Next(state *core.State, handle resource.Handle) (record mdnsns.Record, next
 			return lookupErr
 		}
 		record, next, err = query.TryNext()
-		if err == nil && next == mdnsns.NextReady && !record.Valid() {
+		if err != nil {
+			record, next = mdnsns.Record{}, 0
+			return err
+		}
+		switch next {
+		case mdnsns.NextReady:
+			if !record.Valid() {
+				record, next = mdnsns.Record{}, 0
+				return nscore.Fail(nscore.FailureIO, core.ErrInvalidBackendResult)
+			}
+		case mdnsns.NextWouldBlock, mdnsns.NextEOF:
+			record = mdnsns.Record{}
+		default:
 			record, next = mdnsns.Record{}, 0
 			return nscore.Fail(nscore.FailureIO, core.ErrInvalidBackendResult)
 		}
-		if err == nil && next != mdnsns.NextReady && next != mdnsns.NextWouldBlock && next != mdnsns.NextEOF {
-			record, next = mdnsns.Record{}, 0
-			return nscore.Fail(nscore.FailureIO, core.ErrInvalidBackendResult)
-		}
-		return err
+		return nil
 	})
+	if err != nil {
+		record, next = mdnsns.Record{}, 0
+	}
 	return
 }
 
@@ -103,6 +117,9 @@ func Announce(state *core.State, namespaceHandle resource.Handle, service uint16
 		}
 		return nil
 	})
+	if err != nil {
+		handle, progress = 0, 0
+	}
 	return
 }
 
@@ -113,12 +130,19 @@ func FinishAnnouncement(state *core.State, handle resource.Handle) (next mdnsns.
 			return lookupErr
 		}
 		next, err = announcement.TryFinish()
-		if err == nil && next != mdnsns.NextReady && next != mdnsns.NextWouldBlock {
+		if err != nil {
+			next = 0
+			return err
+		}
+		if next != mdnsns.NextReady && next != mdnsns.NextWouldBlock {
 			next = 0
 			return nscore.Fail(nscore.FailureIO, core.ErrInvalidBackendResult)
 		}
-		return err
+		return nil
 	})
+	if err != nil {
+		next = 0
+	}
 	return
 }
 

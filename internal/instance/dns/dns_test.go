@@ -17,7 +17,11 @@ import (
 	wago "github.com/wago-org/wago"
 )
 
-type fakeNamespace struct{ query namespace.DNSQuery }
+type fakeNamespace struct {
+	query    namespace.DNSQuery
+	progress namespace.Progress
+	failure  error
+}
 
 func (*fakeNamespace) Close() error                   { return nil }
 func (*fakeNamespace) Readiness() namespace.Readiness { return namespace.ReadyWritable }
@@ -31,17 +35,24 @@ func (*fakeNamespace) TryConnectTCP(namespace.Endpoint) (namespace.TCPStream, na
 	return nil, 0, namespace.Fail(namespace.FailureNotSupported, nil)
 }
 func (n *fakeNamespace) TryResolve(namespace.DNSRequest) (nscore.Resource, namespace.Progress, error) {
-	return n.query, namespace.ProgressInProgress, nil
+	progress := n.progress
+	if progress == 0 {
+		progress = namespace.ProgressInProgress
+	}
+	return n.query, progress, n.failure
 }
 func (*fakeNamespace) TryService(namespace.ServiceBudget) (namespace.ServiceReport, namespace.Progress, error) {
 	return namespace.ServiceReport{}, namespace.ProgressWouldBlock, nil
 }
 
 type fakeQuery struct {
-	closed   atomic.Int32
-	canceled atomic.Int32
-	records  []namespace.DNSRecord
-	failure  error
+	closed         atomic.Int32
+	canceled       atomic.Int32
+	records        []namespace.DNSRecord
+	failure        error
+	scripted       bool
+	scriptedRecord namespace.DNSRecord
+	scriptedNext   namespace.DNSNext
 }
 
 func (q *fakeQuery) Close() error { q.closed.Add(1); return nil }
@@ -60,6 +71,9 @@ func (q *fakeQuery) Readiness() namespace.Readiness {
 	return 0
 }
 func (q *fakeQuery) TryNext() (namespace.DNSRecord, namespace.DNSNext, error) {
+	if q.scripted {
+		return q.scriptedRecord, q.scriptedNext, q.failure
+	}
 	if q.failure != nil {
 		return namespace.DNSRecord{}, 0, q.failure
 	}
@@ -98,6 +112,48 @@ func TestOperationsPreserveReadinessCancellationAndGenerationSafety(t *testing.T
 	}
 	if _, _, err := Next(state, handle); !errors.Is(err, resource.ErrBadHandle) {
 		t.Fatalf("stale next = %v", err)
+	}
+}
+
+func TestFailedAndUnusedOutputsAreCanonical(t *testing.T) {
+	dirtyRecord := namespace.DNSRecord{Name: "dirty.example.com", Type: namespace.DNSRecordA, TTLSeconds: 60, Address: netip.MustParseAddr("192.0.2.99")}
+	backendFailure := namespace.Fail(namespace.FailureTimedOut, errors.New("timeout"))
+	backend := &fakeNamespace{query: new(fakeQuery), progress: namespace.ProgressDone, failure: backendFailure}
+	state, manager, instance := attachState(t, backend, 2)
+	defer manager.Detach(instance)
+
+	if handle, progress, err := Resolve(state, state.NamespaceHandle(), namespace.DNSRequest{Name: "example.com", Types: namespace.DNSRecordsA}); handle != 0 || progress != 0 || failureOf(t, err) != namespace.FailureTimedOut {
+		t.Fatalf("failed Resolve = %v, %v, %v", handle, progress, err)
+	}
+
+	query := &fakeQuery{scripted: true}
+	backend.query, backend.progress, backend.failure = query, namespace.ProgressInProgress, nil
+	handle, _, err := Resolve(state, state.NamespaceHandle(), namespace.DNSRequest{Name: "example.com", Types: namespace.DNSRecordsA})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, test := range []struct {
+		name string
+		next namespace.DNSNext
+		err  error
+	}{
+		{name: "would block", next: namespace.DNSNextWouldBlock},
+		{name: "EOF", next: namespace.DNSNextEOF},
+		{name: "error", next: namespace.DNSNextReady, err: backendFailure},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			query.scriptedRecord, query.scriptedNext, query.failure = dirtyRecord, test.next, test.err
+			record, next, err := Next(state, handle)
+			if test.err != nil {
+				if record != (namespace.DNSRecord{}) || next != 0 || failureOf(t, err) != namespace.FailureTimedOut {
+					t.Fatalf("Next = %+v, %v, %v", record, next, err)
+				}
+				return
+			}
+			if err != nil || next != test.next || record != (namespace.DNSRecord{}) {
+				t.Fatalf("Next = %+v, %v, %v", record, next, err)
+			}
+		})
 	}
 }
 

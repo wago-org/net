@@ -45,6 +45,9 @@ func Resolve(state *core.State, namespaceHandle resource.Handle, request dnsns.R
 		}
 		return nil
 	})
+	if err != nil {
+		handle, progress = 0, 0
+	}
 	return
 }
 
@@ -56,16 +59,27 @@ func Next(state *core.State, handle resource.Handle) (record dnsns.Record, next 
 			return lookupErr
 		}
 		record, next, err = query.TryNext()
-		if err == nil && next == dnsns.NextReady && !record.Valid() {
+		if err != nil {
+			record, next = dnsns.Record{}, 0
+			return err
+		}
+		switch next {
+		case dnsns.NextReady:
+			if !record.Valid() {
+				record, next = dnsns.Record{}, 0
+				return nscore.Fail(nscore.FailureIO, core.ErrInvalidBackendResult)
+			}
+		case dnsns.NextWouldBlock, dnsns.NextEOF:
+			record = dnsns.Record{}
+		default:
 			record, next = dnsns.Record{}, 0
 			return nscore.Fail(nscore.FailureIO, core.ErrInvalidBackendResult)
 		}
-		if err == nil && next != dnsns.NextReady && next != dnsns.NextWouldBlock && next != dnsns.NextEOF {
-			record, next = dnsns.Record{}, 0
-			return nscore.Fail(nscore.FailureIO, core.ErrInvalidBackendResult)
-		}
-		return err
+		return nil
 	})
+	if err != nil {
+		record, next = dnsns.Record{}, 0
+	}
 	return
 }
 

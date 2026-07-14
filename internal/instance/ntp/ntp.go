@@ -45,6 +45,9 @@ func Sync(state *core.State, namespaceHandle resource.Handle) (handle resource.H
 		}
 		return nil
 	})
+	if err != nil {
+		handle, progress = 0, 0
+	}
 	return
 }
 
@@ -56,16 +59,27 @@ func Result(state *core.State, handle resource.Handle) (sample ntpns.Sample, nex
 			return lookupErr
 		}
 		sample, next, err = synchronization.TryResult()
-		if err == nil && next == ntpns.NextReady && !sample.Valid() {
+		if err != nil {
+			sample, next = ntpns.Sample{}, 0
+			return err
+		}
+		switch next {
+		case ntpns.NextReady:
+			if !sample.Valid() {
+				sample, next = ntpns.Sample{}, 0
+				return nscore.Fail(nscore.FailureIO, core.ErrInvalidBackendResult)
+			}
+		case ntpns.NextWouldBlock:
+			sample = ntpns.Sample{}
+		default:
 			sample, next = ntpns.Sample{}, 0
 			return nscore.Fail(nscore.FailureIO, core.ErrInvalidBackendResult)
 		}
-		if err == nil && next != ntpns.NextReady && next != ntpns.NextWouldBlock {
-			sample, next = ntpns.Sample{}, 0
-			return nscore.Fail(nscore.FailureIO, core.ErrInvalidBackendResult)
-		}
-		return err
+		return nil
 	})
+	if err != nil {
+		sample, next = ntpns.Sample{}, 0
+	}
 	return
 }
 

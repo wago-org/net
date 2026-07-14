@@ -28,14 +28,24 @@ func (*fakeBase) TryService(nscore.ServiceBudget) (nscore.ServiceReport, nscore.
 	return nscore.ServiceReport{}, nscore.ProgressWouldBlock, nil
 }
 
-type fakeNamespace struct{ next nscore.Resource }
+type fakeNamespace struct {
+	next     nscore.Resource
+	progress nscore.Progress
+	failure  error
+}
 
 func (n *fakeNamespace) TrySync() (nscore.Resource, nscore.Progress, error) {
-	return n.next, nscore.ProgressInProgress, nil
+	progress := n.progress
+	if progress == 0 {
+		progress = nscore.ProgressInProgress
+	}
+	return n.next, progress, n.failure
 }
 
 type fakeSync struct {
 	sample   ntpns.Sample
+	next     ntpns.Next
+	failure  error
 	canceled bool
 	closed   bool
 }
@@ -52,7 +62,53 @@ func (s *fakeSync) Readiness() nscore.Readiness {
 	return nscore.ReadyNTPResult
 }
 func (s *fakeSync) TryResult() (ntpns.Sample, ntpns.Next, error) {
-	return s.sample, ntpns.NextReady, nil
+	next := s.next
+	if next == 0 {
+		next = ntpns.NextReady
+	}
+	return s.sample, next, s.failure
+}
+
+func TestInstanceNTPCanonicalizesFailedAndUnusedOutputs(t *testing.T) {
+	dirtySample := ntpns.Sample{
+		Server: netip.MustParseAddr("192.0.2.123"), CorrectedTime: time.Date(2026, 7, 14, 12, 0, 0, 0, time.UTC),
+		RoundTripDelay: time.Millisecond, Stratum: 2, Version: 4,
+	}
+	backendFailure := nscore.Fail(nscore.FailureTimedOut, errors.New("timeout"))
+	adapter := &fakeNamespace{next: new(fakeSync), progress: nscore.ProgressDone, failure: backendFailure}
+	manager, err := instancecore.NewManagerConfigured(instancecore.Config{
+		Limits: quota.DefaultLimits(), Readiness: instancecore.DefaultConfig().Readiness,
+		NamespaceFactory: func(*policy.Policy, *quota.Account) (nscore.Namespace, error) {
+			return nscore.ComposeNamespace(&fakeBase{}, nscore.Service{Key: ntpns.ServiceKey, Value: adapter})
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	instance := new(wago.Instance)
+	if err := manager.Attach(instance); err != nil {
+		t.Fatal(err)
+	}
+	defer manager.Detach(instance)
+	state, _ := manager.ForInstance(instance)
+
+	if handle, progress, err := Sync(state, state.NamespaceHandle()); handle != 0 || progress != 0 || failureOf(err) != nscore.FailureTimedOut {
+		t.Fatalf("failed Sync = %v, %v, %v", handle, progress, err)
+	}
+
+	synchronization := &fakeSync{sample: dirtySample, next: ntpns.NextWouldBlock}
+	adapter.next, adapter.progress, adapter.failure = synchronization, nscore.ProgressInProgress, nil
+	handle, _, err := Sync(state, state.NamespaceHandle())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if sample, next, err := Result(state, handle); err != nil || next != ntpns.NextWouldBlock || sample != (ntpns.Sample{}) {
+		t.Fatalf("would-block Result = %+v, %v, %v", sample, next, err)
+	}
+	synchronization.next, synchronization.failure = ntpns.NextReady, backendFailure
+	if sample, next, err := Result(state, handle); sample != (ntpns.Sample{}) || next != 0 || failureOf(err) != nscore.FailureTimedOut {
+		t.Fatalf("failed Result = %+v, %v, %v", sample, next, err)
+	}
 }
 
 func TestInstanceNTPExactKindLifecycle(t *testing.T) {
@@ -97,4 +153,9 @@ func TestInstanceNTPExactKindLifecycle(t *testing.T) {
 	if _, _, err := Result(state, handle); !errors.Is(err, resource.ErrBadHandle) {
 		t.Fatalf("stale result = %v", err)
 	}
+}
+
+func failureOf(err error) nscore.Failure {
+	failure, _ := nscore.FailureOf(err)
+	return failure
 }
