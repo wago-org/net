@@ -122,6 +122,152 @@ func TestStrictNDPValidationAndTimeoutCancellation(t *testing.T) {
 	}
 }
 
+func TestForeignICMPv6DestinationsRemainUnhandled(t *testing.T) {
+	coreA, a := newTestAdapter(t, 11, "2001:db8::11")
+	coreB, b := newTestAdapter(t, 12, "2001:db8::12")
+	defer coreA.Close()
+	defer coreB.Close()
+	if err := b.SeedNeighbor(icmpns.Neighbor{Address: a.address, MAC: a.hardwareAddress}); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := b.TryEcho(icmpns.EchoRequest{Destination: a.address, Payload: []byte("foreign")}); err != nil {
+		t.Fatal(err)
+	}
+	var storage [1514]byte
+	n, worked, err := b.egressLocked(storage[:])
+	if err != nil || !worked || n == 0 {
+		t.Fatalf("echo request = %d, %v, %v", n, worked, err)
+	}
+	request := append([]byte(nil), storage[:n]...)
+
+	for _, test := range []struct {
+		name   string
+		mutate func([]byte)
+	}{
+		{name: "foreign ethernet destination", mutate: func(frame []byte) {
+			ethernetFrame, _ := ethernet.NewFrame(frame)
+			*ethernetFrame.DestinationHardwareAddr() = [6]byte{0x02, 0, 0, 0, 0, 99}
+		}},
+		{name: "foreign IPv6 destination", mutate: func(frame []byte) {
+			ethernetFrame, _ := ethernet.NewFrame(frame)
+			ipFrame, _ := lnetoipv6.NewFrame(ethernetFrame.Payload())
+			*ipFrame.DestinationAddr() = netip.MustParseAddr("2001:db8::99").As16()
+		}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			frame := append([]byte(nil), request...)
+			test.mutate(frame)
+			handled, err := a.ingressLocked(frame)
+			if err != nil || handled {
+				t.Fatalf("foreign frame = handled:%v err:%v", handled, err)
+			}
+			if len(a.responses) != 0 {
+				t.Fatalf("foreign frame queued responses: %d", len(a.responses))
+			}
+		})
+	}
+}
+
+func TestTerminalEchoAndResolutionCleanupIsolateFreshResources(t *testing.T) {
+	core, adapter := newTestAdapter(t, 13, "2001:db8::13")
+	account := adapter.quotas
+	destination := netip.MustParseAddr("2001:db8::14")
+	resource, _, err := adapter.TryEcho(icmpns.EchoRequest{Destination: destination, Payload: []byte("retained")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	staleEcho := resource.(*echo)
+	staleKey := identityKey(staleEcho.identifier, staleEcho.sequence)
+	if usage, _ := account.Snapshot(); usage != (quota.Usage{Resources: 1, ICMPv6Resources: 1, QueuedBytes: 8, ICMPv6Work: 1}) {
+		t.Fatalf("active echo quota = %+v", usage)
+	}
+	if err := staleEcho.Cancel(); err != nil {
+		t.Fatal(err)
+	}
+	if adapter.byIdentity[staleKey] != nil || staleEcho.Readiness() != nscore.ReadyError {
+		t.Fatalf("canceled echo transport = mapped:%p readiness:%v", adapter.byIdentity[staleKey], staleEcho.Readiness())
+	}
+	if usage, _ := account.Snapshot(); usage != (quota.Usage{Resources: 1, ICMPv6Resources: 1, QueuedBytes: 8}) {
+		t.Fatalf("terminal echo quota = %+v", usage)
+	}
+	if err := staleEcho.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if staleEcho.owner != nil || staleEcho.payload != nil || staleEcho.work.ResetReleased() || staleEcho.retained.ResetReleased() {
+		t.Fatalf("closed echo retained state: %+v", staleEcho)
+	}
+	if usage, _ := account.Snapshot(); usage != (quota.Usage{}) {
+		t.Fatalf("closed echo quota = %+v", usage)
+	}
+
+	resource, _, err = adapter.TryEcho(icmpns.EchoRequest{Destination: destination, Payload: []byte("fresh")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	freshEcho := resource.(*echo)
+	if freshEcho == staleEcho {
+		t.Fatal("fresh echo reused stale wrapper")
+	}
+	if err := staleEcho.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if len(adapter.echoes) != 1 || adapter.echoes[0] != freshEcho {
+		t.Fatalf("stale echo close affected fresh resource: %+v", adapter.echoes)
+	}
+	if err := freshEcho.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	request := icmpns.NeighborRequest{Address: destination}
+	resource, _, err = adapter.TryResolve(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	staleResolution := resource.(*resolution)
+	if usage, _ := account.Snapshot(); usage != (quota.Usage{Resources: 2, ICMPv6Resources: 2, ICMPv6Work: 1}) {
+		t.Fatalf("active resolution quota = %+v", usage)
+	}
+	if err := staleResolution.Cancel(); err != nil {
+		t.Fatal(err)
+	}
+	if adapter.byTarget[destination] != nil || adapter.neighbors[destination] != nil || staleResolution.entry != nil || staleResolution.Readiness() != nscore.ReadyError {
+		t.Fatalf("canceled resolution retained transport/cache: target=%p neighbor=%p entry=%p readiness=%v", adapter.byTarget[destination], adapter.neighbors[destination], staleResolution.entry, staleResolution.Readiness())
+	}
+	if usage, _ := account.Snapshot(); usage != (quota.Usage{Resources: 1, ICMPv6Resources: 1}) {
+		t.Fatalf("terminal resolution quota = %+v", usage)
+	}
+	if err := staleResolution.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if usage, _ := account.Snapshot(); usage != (quota.Usage{}) {
+		t.Fatalf("closed resolution quota = %+v", usage)
+	}
+
+	resource, _, err = adapter.TryResolve(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	freshResolution := resource.(*resolution)
+	if freshResolution == staleResolution {
+		t.Fatal("fresh resolution reused stale wrapper")
+	}
+	if err := staleResolution.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if len(adapter.resolutions) != 1 || adapter.resolutions[0] != freshResolution || adapter.byTarget[destination] != freshResolution {
+		t.Fatalf("stale resolution close affected fresh resource: resolutions=%+v target=%p", adapter.resolutions, adapter.byTarget[destination])
+	}
+	if err := core.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if freshResolution.owner != nil || freshResolution.entry != nil || freshResolution.state != stateClosed || freshResolution.Readiness() != nscore.ReadyClosed {
+		t.Fatalf("namespace close retained fresh resolution: %+v", freshResolution)
+	}
+	if usage, _ := account.Snapshot(); usage != (quota.Usage{}) {
+		t.Fatalf("namespace close quota = %+v", usage)
+	}
+}
+
 func TestSeedLookupRemoveAndQuotaCleanup(t *testing.T) {
 	core, adapter := newTestAdapter(t, 5, "2001:db8::5")
 	if operations := adapter.Operations(); operations != icmpns.SupportedOperations {

@@ -743,6 +743,12 @@ func (a *Adapter) ingressLocked(frame []byte) (bool, error) {
 		return ipFrame.NextHeader() == lneto.IPProtoIPv6ICMP, nil
 	}
 	source, destination := netip.AddrFrom16(*ipFrame.SourceAddr()), netip.AddrFrom16(*ipFrame.DestinationAddr())
+	dstMAC := *ethernetFrame.DestinationHardwareAddr()
+	localUnicast := destination == a.address && dstMAC == a.hardwareAddress
+	localSolicited := destination == solicitedNode(a.address) && dstMAC == solicitedNodeMAC(a.address)
+	if !localUnicast && !localSolicited {
+		return false, nil
+	}
 	payload := ipFrame.Payload()
 	icmpFrame, err := lnetoicmp.NewFrame(payload)
 	if err != nil || !validIPv6Source(source) || destination.IsUnspecified() {
@@ -753,7 +759,7 @@ func (a *Adapter) ingressLocked(frame []byte) (bool, error) {
 	if checksum.PayloadSum16(payload) != 0 {
 		return true, nil
 	}
-	srcMAC, dstMAC := *ethernetFrame.SourceHardwareAddr(), *ethernetFrame.DestinationHardwareAddr()
+	srcMAC := *ethernetFrame.SourceHardwareAddr()
 	if !validUnicastMAC(srcMAC) {
 		return true, nil
 	}
