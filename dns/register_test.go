@@ -59,8 +59,10 @@ func TestRegisterRejectsDuplicateInvalidOptionResolverFrozenAndNilNetwork(t *tes
 	if err := dns.Register(network, dns.AllowSuffixes()); !errors.Is(err, dns.ErrInvalidOption) {
 		t.Fatalf("empty suffix helper = %v", err)
 	}
-	if err := dns.Register(network, dns.Resolver("not-an-address")); !errors.Is(err, dns.ErrInvalidResolver) {
-		t.Fatalf("invalid resolver = %v", err)
+	for _, resolver := range []string{"not-an-address", "127.0.0.1"} {
+		if err := dns.Register(network, dns.Resolver(resolver)); !errors.Is(err, dns.ErrInvalidResolver) {
+			t.Fatalf("invalid resolver %q = %v", resolver, err)
+		}
 	}
 	if err := dns.Register(network); err != nil {
 		t.Fatalf("Register: %v", err)

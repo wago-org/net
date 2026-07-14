@@ -1022,7 +1022,7 @@ func ValidConfig(config Config, mtu int, compiled *policy.Policy, account *quota
 }
 
 func validResolver(address netip.Addr) bool {
-	return address.Is4() && !address.Is4In6() && !address.IsUnspecified() && !address.IsMulticast() && address.Zone() == "" &&
+	return address.Is4() && !address.Is4In6() && !address.IsUnspecified() && !address.IsLoopback() && !address.IsMulticast() && address.Zone() == "" &&
 		address != netip.AddrFrom4([4]byte{255, 255, 255, 255})
 }
 

@@ -62,12 +62,13 @@ func WithConfig(config Config) Option {
 	})
 }
 
-// Resolver selects one explicit IPv4 recursive resolver. If no exact storage
-// override has been supplied, finite client defaults are installed with it.
+// Resolver selects one explicit wire-routable IPv4 recursive resolver. If no
+// exact storage override has been supplied, finite client defaults are installed
+// with it.
 func Resolver(server string) Option {
 	return optionFunc(func(target *registration) error {
 		address, err := netip.ParseAddr(server)
-		if err != nil || !address.Is4() || address.Is4In6() || address.IsUnspecified() || address.IsMulticast() || address == netip.AddrFrom4([4]byte{255, 255, 255, 255}) {
+		if err != nil || !address.Is4() || address.Is4In6() || address.IsUnspecified() || address.IsLoopback() || address.IsMulticast() || address == netip.AddrFrom4([4]byte{255, 255, 255, 255}) {
 			return ErrInvalidResolver
 		}
 		target.resolver = address

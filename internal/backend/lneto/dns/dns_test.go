@@ -22,7 +22,7 @@ import (
 	"github.com/wago-org/net/internal/quota"
 )
 
-func TestConfigRejectsMulticastAndBroadcastResolvers(t *testing.T) {
+func TestConfigRejectsNonWireResolvers(t *testing.T) {
 	compiled, err := policy.Compile(policy.Config{})
 	if err != nil {
 		t.Fatal(err)
@@ -33,6 +33,7 @@ func TestConfigRejectsMulticastAndBroadcastResolvers(t *testing.T) {
 		t.Fatal("valid unicast resolver rejected")
 	}
 	for name, server := range map[string]netip.Addr{
+		"loopback":          netip.MustParseAddr("127.0.0.1"),
 		"multicast":         netip.MustParseAddr("224.0.0.251"),
 		"limited broadcast": netip.AddrFrom4([4]byte{255, 255, 255, 255}),
 	} {
@@ -43,6 +44,38 @@ func TestConfigRejectsMulticastAndBroadcastResolvers(t *testing.T) {
 				t.Fatalf("accepted invalid resolver %v", server)
 			}
 		})
+	}
+}
+
+func TestAdapterRejectsLoopbackResolverBeforeInstallingState(t *testing.T) {
+	config := dnsTestConfig(t, 105)
+	common, err := lnetocore.New(lnetocore.Config{
+		Hostname: config.Hostname, RandSeed: config.RandSeed,
+		HardwareAddress: config.HardwareAddress, GatewayHardwareAddress: config.GatewayHardwareAddress,
+		IPv4Address: config.IPv4Address, MTU: config.MTU, Link: config.Link,
+		Policy: config.Policy, Quotas: config.Quotas,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer common.Close()
+	invalid := config.DNS
+	invalid.Server = netip.MustParseAddr("127.0.0.53")
+	usageBefore, closedBefore := config.Quotas.Snapshot()
+	if adapter, err := New(common, invalid); err == nil || adapter != nil || requireFailure(t, err) != namespace.FailureInvalidArgument {
+		t.Fatalf("loopback resolver adapter = %T, %v", adapter, err)
+	}
+	common.Lock()
+	leases := common.UDPPortLeaseCountLocked()
+	common.Unlock()
+	if leases != 0 {
+		t.Fatalf("rejected resolver retained %d UDP port leases", leases)
+	}
+	if usage, closed := config.Quotas.Snapshot(); usage != usageBefore || closed != closedBefore {
+		t.Fatalf("rejected resolver changed quota = %+v, closed=%v; want %+v, closed=%v", usage, closed, usageBefore, closedBefore)
+	}
+	if adapter, err := New(common, config.DNS); err != nil || adapter == nil {
+		t.Fatalf("valid adapter after rejected resolver = %T, %v", adapter, err)
 	}
 }
 
