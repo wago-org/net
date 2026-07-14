@@ -515,6 +515,64 @@ func TestICMPv4ClosedExchangeLateReplyAndStaleCloseCannotMutateFreshExchange(t *
 	}
 }
 
+func TestICMPv4IngressDropsInvalidIPv4LengthsWithoutMutatingExchange(t *testing.T) {
+	for _, test := range []struct {
+		name        string
+		totalLength uint16
+		headerWords uint8
+	}{
+		{name: "shorter than header", totalLength: 19},
+		{name: "beyond frame", totalLength: 1501},
+		{name: "header beyond total length", headerWords: 15},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			core, adapter, _ := newTestAdapter(t, Config{MaxEchoes: 1, MaxPayloadBytes: 16, MaxAttempts: 2, RetryServiceAttempts: 2})
+			resource, _, err := adapter.TryEcho(icmpns.Request{Destination: netip.MustParseAddr("192.0.2.99"), Payload: []byte("live")})
+			if err != nil {
+				t.Fatal(err)
+			}
+			exchange := resource.(*echo)
+			request := serviceEgress(t, core)
+			reply := makeEchoReply(t, request, nil)
+			malformed := append([]byte(nil), reply...)
+			ethernetFrame, err := ethernet.NewFrame(malformed)
+			if err != nil {
+				t.Fatal(err)
+			}
+			ipFrame, err := ipv4.NewFrame(ethernetFrame.Payload())
+			if err != nil {
+				t.Fatal(err)
+			}
+			if test.headerWords != 0 {
+				ipFrame.SetVersionAndIHL(4, test.headerWords)
+			} else {
+				ipFrame.SetTotalLength(test.totalLength)
+				ipFrame.SetCRC(0)
+				ipFrame.SetCRC(ipFrame.CalculateHeaderCRC())
+			}
+
+			var handled bool
+			var ingressErr error
+			var state echoState
+			var mapped *echo
+			func() {
+				core.Lock()
+				defer core.Unlock()
+				handled, ingressErr = adapter.ingressLocked(malformed)
+				state = exchange.state
+				mapped = adapter.byIdentity[identityKey(exchange.identifier, exchange.sequence)]
+			}()
+			if ingressErr != nil || handled || state != echoWaiting || mapped != exchange || exchange.Readiness() != 0 {
+				t.Fatalf("malformed reply = handled:%v err:%v state:%v mapped:%p readiness:%v", handled, ingressErr, state, mapped, exchange.Readiness())
+			}
+			serviceIngress(t, core, reply)
+			if exchange.Readiness() != nscore.ReadyICMPv4Reply {
+				t.Fatalf("valid reply after malformed length readiness = %v", exchange.Readiness())
+			}
+		})
+	}
+}
+
 func TestICMPv4DropsMalformedCorrelatedIPv4AndAcceptsFollowingReply(t *testing.T) {
 	for _, test := range []struct {
 		name   string
