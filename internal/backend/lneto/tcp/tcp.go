@@ -72,12 +72,16 @@ func New(common *lnetocore.Namespace, config Config) (*Adapter, error) {
 	n := &Adapter{
 		core: common, stack: common.StackLocked(),
 		policy: common.PolicyLocked(), quotas: common.QuotasLocked(), config: config,
-		listeners: make([]*tcpListener, 0, config.MaxListeners),
-		streams:   make([]*tcpStream, 0, streamCapacityHint(config)),
-		ports:     make(map[uint16]struct{}, tcpPortCapacity(config)),
-		nextPort:  firstEphemeralTCPPort,
-		nextISS:   lnetotcp.Value(common.RandSeedLocked()),
+		nextPort: firstEphemeralTCPPort,
+		nextISS:  lnetotcp.Value(common.RandSeedLocked()),
 	}
+	if config.MaxListeners == 0 && config.MaxOutboundStreams == 0 {
+		common.Unlock()
+		return n, nil
+	}
+	n.listeners = make([]*tcpListener, 0, config.MaxListeners)
+	n.streams = make([]*tcpStream, 0, streamCapacityHint(config))
+	n.ports = make(map[uint16]struct{}, tcpPortCapacity(config))
 	n.prepareReusePools()
 	common.Unlock()
 	if err := common.Install(lnetocore.Participant{CloseOrder: closeOrder, Close: n.CloseLocked}); err != nil {

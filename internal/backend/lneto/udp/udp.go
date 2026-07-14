@@ -67,12 +67,15 @@ func New(common *lnetocore.Namespace, config Config) (*Adapter, error) {
 		core: common, config: config,
 		hardwareAddress:        common.HardwareAddressLocked(),
 		gatewayHardwareAddress: common.GatewayHardwareAddressLocked(), policy: common.PolicyLocked(), quotas: common.QuotasLocked(),
-		byPort: make(map[uint16]*udpSocket, config.MaxSockets), sockets: make([]*udpSocket, 0, config.MaxSockets),
 		nextPort: firstEphemeralUDPPort,
 	}
-	if config.MaxSockets > 0 {
-		n.freeBackings = make([]udpSocketBacking, 0, config.MaxSockets)
+	if config.MaxSockets == 0 {
+		common.Unlock()
+		return n, nil
 	}
+	n.byPort = make(map[uint16]*udpSocket, config.MaxSockets)
+	n.sockets = make([]*udpSocket, 0, config.MaxSockets)
+	n.freeBackings = make([]udpSocketBacking, 0, config.MaxSockets)
 	common.Unlock()
 	if err := common.Install(lnetocore.Participant{
 		IngressOrder: serviceOrder,

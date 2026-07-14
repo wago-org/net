@@ -83,12 +83,17 @@ func New(common *lnetocore.Namespace, config Config) (*Adapter, error) {
 		core: common, config: config,
 		hardwareAddress:        common.HardwareAddressLocked(),
 		gatewayHardwareAddress: common.GatewayHardwareAddressLocked(), policy: common.PolicyLocked(), quotas: common.QuotasLocked(),
-		queries: make([]*dnsQuery, 0, config.MaxQueries), byPort: make(map[uint16]*dnsQuery, config.MaxQueries),
-		candidates: make([]dnsns.Record, config.MaxResponseBytes/11),
-		names:      make([]string, 2*(config.MaxResponseBytes/11)),
-		nextPort:   firstEphemeralDNSPort, nextTxID: uint16(common.RandSeedLocked()) | 1,
+		nextPort: firstEphemeralDNSPort, nextTxID: uint16(common.RandSeedLocked()) | 1,
 	}
-	if config.MaxQueries > 0 && int(config.MaxRecords) > inlineDNSRecordCapacity {
+	if config.MaxQueries == 0 {
+		common.Unlock()
+		return n, nil
+	}
+	n.queries = make([]*dnsQuery, 0, config.MaxQueries)
+	n.byPort = make(map[uint16]*dnsQuery, config.MaxQueries)
+	n.candidates = make([]dnsns.Record, config.MaxResponseBytes/11)
+	n.names = make([]string, 2*(config.MaxResponseBytes/11))
+	if int(config.MaxRecords) > inlineDNSRecordCapacity {
 		n.freeRecordOverflow = make([][]dnsns.Record, 0, config.MaxQueries)
 	}
 	common.Unlock()
