@@ -420,6 +420,30 @@ func wrapMDNSFrame(t testing.TB, payload []byte, sourceMAC [6]byte, sourceIP net
 	return frame
 }
 
+func setMDNSTestDestination(t testing.TB, frame []byte, destinationMAC [6]byte, destinationIP netip.Addr) {
+	t.Helper()
+	eth, err := ethernet.NewFrame(frame)
+	if err != nil {
+		t.Fatal(err)
+	}
+	*eth.DestinationHardwareAddr() = destinationMAC
+	ip, err := ipv4.NewFrame(eth.Payload())
+	if err != nil {
+		t.Fatal(err)
+	}
+	*ip.DestinationAddr() = destinationIP.As4()
+	ip.SetCRC(0)
+	ip.SetCRC(ip.CalculateHeaderCRC())
+	udp, err := lnetoudp.NewFrame(ip.Payload())
+	if err != nil {
+		t.Fatal(err)
+	}
+	udp.SetCRC(0)
+	var checksum lneto.CRC791
+	ip.CRCWriteUDPPseudo(&checksum, udp.Length())
+	udp.SetCRC(lneto.NeverZeroSum(checksum.PayloadSum16(udp.RawData()[:udp.Length()])))
+}
+
 func assertMDNSFrame(t testing.TB, frame []byte, response bool) {
 	t.Helper()
 	eth, err := ethernet.NewFrame(frame)
@@ -450,6 +474,98 @@ func failureOf(t testing.TB, err error) nscore.Failure {
 		t.Fatalf("missing semantic failure: %v", err)
 	}
 	return failure
+}
+
+func TestMDNSIngressDropsInvalidIPv4LengthsWithoutMutatingOperations(t *testing.T) {
+	for _, destination := range []struct {
+		name string
+		mac  [6]byte
+		ip   netip.Addr
+	}{
+		{name: "multicast", mac: multicastMAC, ip: multicastAddress},
+		{name: "unicast", mac: [6]byte{2, 0, 0, 0, 0, 11}, ip: netip.MustParseAddr("192.0.2.11")},
+	} {
+		for _, malformedCase := range []struct {
+			name        string
+			totalLength uint16
+			headerWords uint8
+		}{
+			{name: "shorter than header", totalLength: 19},
+			{name: "beyond frame", totalLength: 1501},
+			{name: "header beyond total length", totalLength: 59, headerWords: 15},
+		} {
+			t.Run(destination.name+"/"+malformedCase.name, func(t *testing.T) {
+				service := testService("device", "192.0.2.11")
+				core, adapter, _ := newTestAdapter(t, Config{
+					Services: []mdnsns.Service{service}, MaxServices: 1, MaxQueries: 1, MaxAnnouncements: 1,
+					MaxRecords: 8, MaxPacketBytes: 1200, MaxQueuedResponses: 1, MaxQuestionsPerPacket: 4,
+					MaxRecordsPerPacket: 16, MaxAttempts: 2, RetryServiceAttempts: 2,
+				}, testPolicy())
+				resource, _, err := adapter.TryQuery(mdnsns.Request{Name: "peer.local", Types: mdnsns.RecordsA})
+				if err != nil {
+					t.Fatal(err)
+				}
+				q := resource.(*query)
+				_ = serviceEgress(t, core)
+				responsePayload, err := buildServicePacket(testService("peer", "192.0.2.22"), lnetodns.TypeA, 1200)
+				if err != nil {
+					t.Fatal(err)
+				}
+				valid := wrapMDNSFrame(t, responsePayload, [6]byte{2, 0, 0, 0, 0, 22}, netip.MustParseAddr("192.0.2.22"))
+				setMDNSTestDestination(t, valid, destination.mac, destination.ip)
+				malformed := append([]byte(nil), valid...)
+				eth, err := ethernet.NewFrame(malformed)
+				if err != nil {
+					t.Fatal(err)
+				}
+				ip, err := ipv4.NewFrame(eth.Payload())
+				if err != nil {
+					t.Fatal(err)
+				}
+				if malformedCase.headerWords != 0 {
+					ip.SetVersionAndIHL(4, malformedCase.headerWords)
+				}
+				ip.SetTotalLength(malformedCase.totalLength)
+				ip.SetCRC(0)
+				ip.SetCRC(ip.CalculateHeaderCRC())
+
+				var handled bool
+				var ingressErr error
+				var state operationState
+				var records, queued int
+				func() {
+					core.Lock()
+					defer core.Unlock()
+					handled, ingressErr = adapter.ingressLocked(malformed)
+					state, records, queued = q.state, len(q.records), adapter.responseCount
+				}()
+				if ingressErr != nil || handled || state != stateWaiting || records != 0 || queued != 0 || q.Readiness() != 0 {
+					t.Fatalf("malformed ingress = handled:%v err:%v state:%v records:%d queued:%d readiness:%v", handled, ingressErr, state, records, queued, q.Readiness())
+				}
+				if len(adapter.decode.Questions) != 0 || len(adapter.decode.Answers) != 0 || len(adapter.decode.Authorities) != 0 || len(adapter.decode.Additionals) != 0 {
+					t.Fatalf("malformed ingress mutated decode scratch: %#v", adapter.decode)
+				}
+
+				serviceIngress(t, core, valid)
+				if q.Readiness() != nscore.ReadyMDNSResult {
+					t.Fatalf("valid response after malformed length readiness = %v", q.Readiness())
+				}
+				questionPayload, err := buildQueryPacket(mdnsns.Request{Name: "_demo._udp.local", Types: mdnsns.RecordsPTR}, 1200)
+				if err != nil {
+					t.Fatal(err)
+				}
+				question := wrapMDNSFrame(t, questionPayload, [6]byte{2, 0, 0, 0, 0, 33}, netip.MustParseAddr("192.0.2.33"))
+				setMDNSTestDestination(t, question, destination.mac, destination.ip)
+				serviceIngress(t, core, question)
+				core.Lock()
+				queued = adapter.responseCount
+				core.Unlock()
+				if queued != 1 {
+					t.Fatalf("valid question after malformed length queued %d responses", queued)
+				}
+			})
+		}
+	}
 }
 
 func TestMDNSIngressRelevanceConsumesLocalMalformedAndLeavesForeignUnhandled(t *testing.T) {

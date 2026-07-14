@@ -740,6 +740,11 @@ func (a *Adapter) validateFrame(frame []byte) ([]byte, netip.Addr, bool, error) 
 	if ip.Protocol() != lneto.IPProtoUDP || (destination != multicastAddress && destination != a.core.IPv4AddressLocked()) {
 		return nil, netip.Addr{}, false, nil
 	}
+	var validator lneto.Validator
+	ip.ValidateSize(&validator)
+	if validator.ErrPop() != nil {
+		return nil, netip.Addr{}, false, nil
+	}
 	udp, err := lnetoudp.NewFrame(ip.Payload())
 	if err != nil {
 		return nil, netip.Addr{}, true, err
@@ -750,7 +755,6 @@ func (a *Adapter) validateFrame(frame []byte) ([]byte, netip.Addr, bool, error) 
 	if version != 4 || ihl < 5 || ip.TTL() != 255 {
 		return nil, netip.Addr{}, true, lneto.ErrBadState
 	}
-	var validator lneto.Validator
 	ip.ValidateExceptCRC(&validator)
 	if validator.ErrPop() != nil || ip.CalculateHeaderCRC() != 0 || ip.Flags().MoreFragments() || ip.Flags().FragmentOffset() != 0 {
 		return nil, netip.Addr{}, true, lneto.ErrBadCRC
