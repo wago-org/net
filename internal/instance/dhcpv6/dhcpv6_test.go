@@ -45,9 +45,14 @@ type fakeLease struct {
 	failure       error
 	canceled      bool
 	closed        bool
+	closeCalls    int
 }
 
-func (l *fakeLease) Close() error { l.closed = true; return nil }
+func (l *fakeLease) Close() error {
+	l.closed = true
+	l.closeCalls++
+	return nil
+}
 func (l *fakeLease) Cancel() error {
 	l.canceled = true
 	return nil
@@ -159,17 +164,18 @@ func TestStartClosesInvalidBackendResource(t *testing.T) {
 	}
 	defer manager.Detach(instance)
 	state, _ := manager.ForInstance(instance)
-	if _, _, err := Start(state, state.NamespaceHandle(), dhcpns.OperationAcquire); failureOf(err) != nscore.FailureIO || !lease.closed {
-		t.Fatalf("invalid backend start = %v, closed=%v", err, lease.closed)
+	if handle, progress, err := Start(state, state.NamespaceHandle(), dhcpns.OperationAcquire); handle != 0 || progress != 0 || failureOf(err) != nscore.FailureIO || !lease.closed || lease.closeCalls != 1 {
+		t.Fatalf("invalid backend start = %v, %v, %v, closed=%v calls=%d", handle, progress, err, lease.closed, lease.closeCalls)
 	}
 }
 
 func TestBackendFailuresAndInvalidResultsClearOutputs(t *testing.T) {
-	failure := errors.New("backend failed")
-	lease := &fakeLease{configuration: validConfiguration(t), result: dhcpns.ResultReady, failure: failure}
+	cause := errors.New("backend failed")
+	failure := nscore.Fail(nscore.FailureTemporary, cause)
+	failedLease := &fakeLease{configuration: validConfiguration(t), result: dhcpns.ResultReady}
 	adapter := &fakeNamespace{
 		operations: dhcpns.SupportedOperations | dhcpns.Operations(1<<31),
-		next:       lease, progress: nscore.ProgressDone, failure: failure,
+		next:       failedLease, progress: nscore.ProgressDone, failure: failure,
 	}
 	manager, err := instancecore.NewManagerConfigured(instancecore.Config{
 		Limits: quota.DefaultLimits(), Readiness: instancecore.DefaultConfig().Readiness,
@@ -191,10 +197,24 @@ func TestBackendFailuresAndInvalidResultsClearOutputs(t *testing.T) {
 		t.Fatalf("invalid operations = %v, %v", operations, err)
 	}
 	adapter.operations = dhcpns.SupportedOperations
-	if handle, progress, err := Start(state, state.NamespaceHandle(), dhcpns.OperationAcquire); !errors.Is(err, failure) || handle != 0 || progress != 0 {
+	resourcesBefore := state.Resources().Len()
+	readinessBefore := state.Readiness().Snapshot()
+	if handle, progress, err := Start(state, state.NamespaceHandle(), dhcpns.OperationAcquire); failureOf(err) != nscore.FailureTemporary || !errors.Is(err, cause) || handle != 0 || progress != 0 {
 		t.Fatalf("failed start = %v, %v, %v", handle, progress, err)
 	}
-	adapter.failure = nil
+	if failedLease.closeCalls != 1 || state.Resources().Len() != resourcesBefore || state.Readiness().Snapshot() != readinessBefore {
+		t.Fatalf("failed start published state: closes=%d resources=%d readiness=%+v", failedLease.closeCalls, state.Resources().Len(), state.Readiness().Snapshot())
+	}
+	var typedNil *fakeLease
+	adapter.next = typedNil
+	if handle, progress, err := Start(state, state.NamespaceHandle(), dhcpns.OperationAcquire); failureOf(err) != nscore.FailureTemporary || handle != 0 || progress != 0 {
+		t.Fatalf("typed-nil failed start = %v, %v, %v", handle, progress, err)
+	}
+	if state.Resources().Len() != resourcesBefore || state.Readiness().Snapshot() != readinessBefore {
+		t.Fatalf("typed-nil failed start published state: resources=%d readiness=%+v", state.Resources().Len(), state.Readiness().Snapshot())
+	}
+	lease := &fakeLease{configuration: validConfiguration(t), result: dhcpns.ResultReady, failure: failure}
+	adapter.next, adapter.failure = lease, nil
 	handle, progress, err := Start(state, state.NamespaceHandle(), dhcpns.OperationAcquire)
 	if err != nil || handle == 0 || progress != nscore.ProgressDone {
 		t.Fatalf("successful start = %v, %v, %v", handle, progress, err)

@@ -42,6 +42,9 @@ func Start(state *core.State, namespaceHandle resource.Handle, operation dhcpns.
 		value, backendProgress, backendErr := backend.TryAcquire()
 		progress = backendProgress
 		if backendErr != nil {
+			if !resource.IsNil(value) {
+				_ = value.Close()
+			}
 			progress = 0
 			return backendErr
 		}
@@ -65,6 +68,9 @@ func Start(state *core.State, namespaceHandle resource.Handle, operation dhcpns.
 		}
 		return nil
 	})
+	if err != nil {
+		handle, progress = 0, 0
+	}
 	return
 }
 
