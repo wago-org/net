@@ -475,6 +475,19 @@ func (a *Adapter) writeServerFrame(dst []byte) (int, error) {
 	if err != nil || payloadBytes == 0 {
 		return 0, err
 	}
+	if payloadBytes > len(frame)-42 {
+		clear(frame)
+		return 0, lneto.ErrBadState
+	}
+	payload, err := lnetodhcp.NewFrame(frame[42 : 42+payloadBytes])
+	if err != nil {
+		clear(frame)
+		return 0, err
+	}
+	// This server never accepts or emits relayed exchanges. The pinned codec
+	// also uses Gateway for giaddr; keep the advertised router option but clear
+	// the relay-only header field on direct OFFER and ACK responses.
+	*payload.GIAddr() = [4]byte{}
 	destination := netip.AddrFrom4(*ip.DestinationAddr())
 	if !a.policy.CheckEndpoint(policy.OperationDHCPv4ServerSend, destination, dhcpns.ClientPort) {
 		clear(frame)

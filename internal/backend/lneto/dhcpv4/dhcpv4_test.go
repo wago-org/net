@@ -252,6 +252,55 @@ func TestServerRejectedDiscoverDoesNotConsumeFiniteClientCapacity(t *testing.T) 
 	}
 }
 
+func TestDirectServerResponsesKeepRelayAddressClear(t *testing.T) {
+	clientCore, client := newClient(t, false)
+	serverCore, _ := newServer(t, 1)
+	if _, _, err := client.TryAcquire(dhcpns.Request{}); err != nil {
+		t.Fatal(err)
+	}
+	assertDirect := func(name string, response []byte) {
+		t.Helper()
+		eth, err := ethernet.NewFrame(response)
+		if err != nil {
+			t.Fatal(err)
+		}
+		ip, err := ipv4.NewFrame(eth.Payload())
+		if err != nil {
+			t.Fatal(err)
+		}
+		udp, err := lnetoudp.NewFrame(ip.Payload())
+		if err != nil {
+			t.Fatal(err)
+		}
+		frame, err := lnetodhcp.NewFrame(udp.Payload())
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := *frame.GIAddr(); got != ([4]byte{}) {
+			t.Fatalf("direct %s relay address = %v", name, got)
+		}
+		var router netip.Addr
+		if err := frame.ForEachOption(func(_ int, option lnetodhcp.OptNum, data []byte) error {
+			if option == lnetodhcp.OptRouter && len(data) == 4 {
+				router = netip.AddrFrom4([4]byte(data))
+			}
+			return nil
+		}); err != nil {
+			t.Fatal(err)
+		}
+		if router != netip.MustParseAddr("192.0.2.1") {
+			t.Fatalf("%s advertised router = %v", name, router)
+		}
+	}
+
+	serviceIngress(t, serverCore, serviceEgress(t, clientCore))
+	offer := serviceEgress(t, serverCore)
+	assertDirect("OFFER", offer)
+	serviceIngress(t, clientCore, offer)
+	serviceIngress(t, serverCore, serviceEgress(t, clientCore))
+	assertDirect("ACK", serviceEgress(t, serverCore))
+}
+
 func TestServerPendingResponseLifecyclePreservesRetryReleasePolicyAndClose(t *testing.T) {
 	t.Run("short egress retries and release reuses capacity", func(t *testing.T) {
 		firstCore, first := newClient(t, false)
