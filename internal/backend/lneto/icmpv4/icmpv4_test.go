@@ -341,6 +341,141 @@ func TestICMPv4IngressRejectsForeignEthernetIdentity(t *testing.T) {
 	}
 }
 
+func TestICMPv4ClosedExchangeLateReplyAndStaleCloseCannotMutateFreshExchange(t *testing.T) {
+	core, adapter, account := newTestAdapter(t, Config{MaxEchoes: 1, MaxPayloadBytes: 16, MaxAttempts: 2, RetryServiceAttempts: 2})
+	request := icmpns.Request{Destination: netip.MustParseAddr("192.0.2.99"), Payload: []byte("fresh")}
+	resource, _, err := adapter.TryEcho(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stale := resource.(*echo)
+	staleRequest := serviceEgress(t, core)
+	staleIdentifier, staleSequence := stale.identifier, stale.sequence
+	if err := stale.Close(); err != nil {
+		t.Fatal(err)
+	}
+	resource, _, err = adapter.TryEcho(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fresh := resource.(*echo)
+	if fresh.identifier == staleIdentifier && fresh.sequence == staleSequence {
+		t.Fatalf("fresh exchange reused live-stale identity %d/%d", fresh.identifier, fresh.sequence)
+	}
+	freshRequest := serviceEgress(t, core)
+	if err := stale.Close(); err != nil {
+		t.Fatal(err)
+	}
+	core.Lock()
+	handled, ingressErr := adapter.ingressLocked(makeEchoReply(t, staleRequest, nil))
+	freshState, freshAttempts := fresh.state, fresh.attempts
+	core.Unlock()
+	if ingressErr != nil || handled {
+		t.Fatalf("late stale reply = handled %v, err %v", handled, ingressErr)
+	}
+	if freshState != echoWaiting || freshAttempts != 1 || fresh.Readiness() != 0 {
+		t.Fatalf("late stale reply mutated fresh exchange: state=%v attempts=%d readiness=%v", freshState, freshAttempts, fresh.Readiness())
+	}
+	serviceIngress(t, core, makeEchoReply(t, freshRequest, nil))
+	var payload [8]byte
+	result, next, err := fresh.TryResult(payload[:])
+	if err != nil || next != icmpns.NextReady || result.Source != request.Destination || result.Copied != len(request.Payload) || result.PayloadBytes != len(request.Payload) || string(payload[:len(request.Payload)]) != string(request.Payload) {
+		t.Fatalf("fresh result = %+v, %v, %v payload=%q", result, next, err, payload[:])
+	}
+	if usage, closed := account.Snapshot(); closed || usage != (quota.Usage{Resources: 1, ICMPv4Resources: 1, QueuedBytes: uint64(len(request.Payload))}) {
+		t.Fatalf("fresh terminal quota = %+v, closed=%v", usage, closed)
+	}
+	if err := fresh.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if usage, _ := account.Snapshot(); usage != (quota.Usage{}) {
+		t.Fatalf("fresh close quota = %+v", usage)
+	}
+}
+
+func TestICMPv4ChecksumFailureAndNamespaceCloseClearTerminalAndActiveState(t *testing.T) {
+	core, adapter, account := newTestAdapter(t, Config{MaxEchoes: 2, MaxPayloadBytes: 16, MaxAttempts: 2, RetryServiceAttempts: 2})
+	failedResource, _, err := adapter.TryEcho(icmpns.Request{Destination: netip.MustParseAddr("192.0.2.98"), Payload: []byte("bad")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	failed := failedResource.(*echo)
+	failedRequest := serviceEgress(t, core)
+	badReply := makeEchoReply(t, failedRequest, nil)
+	icmpFrame, err := lnetoicmp.NewFrame(badReply[14+20:])
+	if err != nil {
+		t.Fatal(err)
+	}
+	icmpFrame.SetCRC(icmpFrame.CRC() ^ 1)
+	core.Lock()
+	handled, ingressErr := adapter.ingressLocked(badReply)
+	core.Unlock()
+	if ingressErr != nil || !handled || failed.Readiness() != nscore.ReadyError {
+		t.Fatalf("checksum failure = handled %v, err %v, readiness %v", handled, ingressErr, failed.Readiness())
+	}
+	if _, _, err := failed.TryResult(make([]byte, 3)); failureOf(t, err) != nscore.FailureIO {
+		t.Fatalf("checksum result = %v", err)
+	}
+	if usage, closed := account.Snapshot(); closed || usage != (quota.Usage{Resources: 1, ICMPv4Resources: 1, QueuedBytes: 3}) {
+		t.Fatalf("checksum terminal quota = %+v, closed=%v", usage, closed)
+	}
+	core.Lock()
+	handled, ingressErr = adapter.ingressLocked(makeEchoReply(t, failedRequest, nil))
+	core.Unlock()
+	if ingressErr != nil || handled {
+		t.Fatalf("late valid reply after checksum failure = handled %v, err %v", handled, ingressErr)
+	}
+
+	activeResource, _, err := adapter.TryEcho(icmpns.Request{Destination: netip.MustParseAddr("192.0.2.99"), Payload: []byte("live")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	active := activeResource.(*echo)
+	_ = serviceEgress(t, core)
+	if usage, closed := account.Snapshot(); closed || usage != (quota.Usage{Resources: 2, ICMPv4Resources: 2, QueuedBytes: 7, ICMPv4Work: 1}) {
+		t.Fatalf("mixed terminal/active quota = %+v, closed=%v", usage, closed)
+	}
+	if err := core.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if failed.Readiness() != nscore.ReadyClosed || active.Readiness() != nscore.ReadyClosed {
+		t.Fatalf("namespace close readiness: failed=%v active=%v", failed.Readiness(), active.Readiness())
+	}
+	if _, _, err := active.TryResult(make([]byte, 4)); failureOf(t, err) != nscore.FailureClosed {
+		t.Fatalf("closed active result = %v", err)
+	}
+	if usage, _ := account.Snapshot(); usage != (quota.Usage{}) {
+		t.Fatalf("namespace close quota = %+v", usage)
+	}
+	if len(adapter.echoes) != 0 || adapter.byIdentity != nil || failed.payload != nil || active.payload != nil || failed.failure != nil || active.failure != nil || failed.destination.IsValid() || active.destination.IsValid() {
+		t.Fatalf("namespace close retained state: echoes=%d identities=%v failed=%+v active=%+v", len(adapter.echoes), adapter.byIdentity, failed, active)
+	}
+}
+
+func FuzzICMPv4IngressBoundedMalformedFrames(f *testing.F) {
+	f.Add([]byte(nil))
+	f.Add(make([]byte, 14))
+	f.Add(make([]byte, 42))
+	f.Fuzz(func(t *testing.T, frame []byte) {
+		if len(frame) > 1514 {
+			frame = frame[:1514]
+		}
+		core, adapter, _ := newTestAdapter(t, Config{MaxEchoes: 1, MaxPayloadBytes: 16, MaxAttempts: 1, RetryServiceAttempts: 1})
+		resource, _, err := adapter.TryEcho(icmpns.Request{Destination: netip.MustParseAddr("192.0.2.99"), Payload: []byte("fuzz")})
+		if err != nil {
+			t.Fatal(err)
+		}
+		exchange := resource.(*echo)
+		core.Lock()
+		_, _ = adapter.ingressLocked(frame)
+		state := exchange.state
+		core.Unlock()
+		if state != echoPending && state != echoWaiting && state != echoDone && state != echoFailed {
+			t.Fatalf("invalid state after ingress: %v", state)
+		}
+	})
+}
+
 func BenchmarkIngressEchoReply(b *testing.B) {
 	core, adapter, _ := newTestAdapter(b, Config{MaxEchoes: 1, MaxPayloadBytes: 16, MaxAttempts: 1, RetryServiceAttempts: 2})
 	resource, _, err := adapter.TryEcho(icmpns.Request{Destination: netip.MustParseAddr("192.0.2.99"), Payload: []byte("wire")})
