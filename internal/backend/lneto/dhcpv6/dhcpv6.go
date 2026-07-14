@@ -380,8 +380,21 @@ func (r *leaseResource) closeLocked() error {
 	}
 	r.state = leaseClosed
 	r.client.Reset()
-	clear(r.packet)
+	r.client = lnetodhcp.Client{}
+	if r.packet != nil {
+		clear(r.packet[:cap(r.packet)])
+	}
 	r.packet = nil
+	clear(r.packetInline[:])
+	r.xid = 0
+	r.iaid = [4]byte{}
+	clear(r.clientDUID[:])
+	clear(r.serverDUID[:])
+	r.serverLen = 0
+	r.serverAddr = netip.Addr{}
+	r.serverMAC = [6]byte{}
+	r.attempts = 0
+	r.wait = 0
 	r.result = dhcpns.Configuration{}
 	r.failure = nil
 	r.releaseQuotaLocked()

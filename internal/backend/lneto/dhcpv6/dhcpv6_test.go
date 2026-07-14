@@ -212,8 +212,12 @@ func TestOperationalRetriesMalformedTransportAndNamespaceClosePreserveLifecycle(
 	if err := core.Close(); err != nil {
 		t.Fatal(err)
 	}
-	if lease.state != leaseClosed || lease.owner != nil || lease.packet != nil || lease.result != (dhcpns.Configuration{}) {
-		t.Fatalf("namespace close retained lease state: state=%v owner=%p packet=%v result=%+v", lease.state, lease.owner, lease.packet, lease.result)
+	if lease.state != leaseClosed || lease.owner != nil || lease.packet != nil || lease.packetInline != ([inlinePacketBytes]byte{}) ||
+		lease.client.State() != 0 || *lease.client.ConnectionID() != 0 || lease.result != (dhcpns.Configuration{}) || lease.failure != nil ||
+		lease.xid != 0 || lease.iaid != ([4]byte{}) || lease.clientDUID != ([10]byte{}) || lease.serverLen != 0 ||
+		lease.serverDUID != ([dhcpns.MaxServerDUIDBytes]byte{}) || lease.serverAddr.IsValid() || lease.serverMAC != ([6]byte{}) ||
+		lease.attempts != 0 || lease.wait != 0 {
+		t.Fatalf("namespace close retained correlation or packet state")
 	}
 	if usage, closed := account.Snapshot(); usage != (quota.Usage{}) || closed {
 		t.Fatalf("namespace close quota = %+v closed=%v", usage, closed)
