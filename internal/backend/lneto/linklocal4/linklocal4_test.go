@@ -355,6 +355,168 @@ func TestIngressDropsMalformedARPSenderIdentity(t *testing.T) {
 	}
 }
 
+func TestConflictExhaustionIsTerminalAndLateARPIsolatedFromFreshClaim(t *testing.T) {
+	core, adapter, account, _ := newTestAdapter(t, Config{MaxClaims: 1, MaxConflicts: 1, MaxServiceAttempts: 32, Seed: 19})
+	resource, _, err := adapter.TryClaim(linklocalns.Request{FirstCandidate: netip.MustParseAddr("169.254.42.7")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	stale := resource.(*claimResource)
+	for i := 0; i < 2; i++ {
+		core.Lock()
+		candidate := netip.AddrFrom4(stale.handler.Candidate())
+		core.Unlock()
+		serviceIngress(t, core, makeConflict(t, candidate, [6]byte{2, 0, 0, 0, 0, byte(i + 2)}))
+	}
+	if stale.Readiness() != nscore.ReadyError {
+		t.Fatalf("conflict exhaustion readiness = %v", stale.Readiness())
+	}
+	if _, _, err := stale.TryResult(); failureOf(t, err) != nscore.FailureResourceLimit {
+		t.Fatalf("conflict exhaustion result = %v", err)
+	}
+	if usage, closed := account.Snapshot(); closed || usage != (quota.Usage{Resources: 1, LinkLocal4Resources: 1}) {
+		t.Fatalf("terminal quota = %+v, closed=%v", usage, closed)
+	}
+	core.Lock()
+	failedCandidate, failedConflicts := stale.handler.Candidate(), stale.handler.Conflicts()
+	core.Unlock()
+	serviceIngress(t, core, makeConflict(t, netip.AddrFrom4(failedCandidate), [6]byte{2, 0, 0, 0, 0, 9}))
+	core.Lock()
+	if stale.handler.Candidate() != failedCandidate || stale.handler.Conflicts() != failedConflicts {
+		core.Unlock()
+		t.Fatal("late ARP mutated terminal claim")
+	}
+	core.Unlock()
+	if err := stale.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	freshResource, _, err := adapter.TryClaim(linklocalns.Request{FirstCandidate: netip.MustParseAddr("169.254.55.8")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	fresh := freshResource.(*claimResource)
+	if err := stale.Close(); err != nil {
+		t.Fatal(err)
+	}
+	core.Lock()
+	ownerClaim, freshState, freshCandidate := adapter.claim, fresh.state, fresh.handler.Candidate()
+	core.Unlock()
+	if ownerClaim != fresh || freshState != stateActive || netip.AddrFrom4(freshCandidate) != netip.MustParseAddr("169.254.55.8") {
+		t.Fatalf("stale close mutated fresh claim: owner=%p fresh=%p state=%v candidate=%v", ownerClaim, fresh, freshState, netip.AddrFrom4(freshCandidate))
+	}
+	if usage, _ := account.Snapshot(); usage != (quota.Usage{Resources: 1, LinkLocal4Resources: 1, LinkLocal4Work: 1}) {
+		t.Fatalf("fresh quota = %+v", usage)
+	}
+}
+
+func TestBoundCloseAndNamespaceCloseRollbackIdentityAndQuota(t *testing.T) {
+	core, adapter, account, clock := newTestAdapter(t, Config{MaxClaims: 1, MaxConflicts: 2, MaxServiceAttempts: 64, Seed: 23})
+	resource, _, err := adapter.TryClaim(linklocalns.Request{FirstCandidate: netip.MustParseAddr("169.254.60.7")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	closed := resource.(*claimResource)
+	first := driveBound(t, core, closed, clock)
+	if err := closed.Close(); err != nil {
+		t.Fatal(err)
+	}
+	core.Lock()
+	address, ownerClaim := core.IPv4AddressLocked(), adapter.claim
+	core.Unlock()
+	if !address.IsUnspecified() || ownerClaim != nil || closed.Readiness() != nscore.ReadyClosed {
+		t.Fatalf("direct close state: address=%v owner=%p readiness=%v", address, ownerClaim, closed.Readiness())
+	}
+	if usage, _ := account.Snapshot(); usage != (quota.Usage{}) {
+		t.Fatalf("direct close quota = %+v", usage)
+	}
+
+	resource, _, err = adapter.TryClaim(linklocalns.Request{FirstCandidate: netip.MustParseAddr("169.254.61.8")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	fresh := resource.(*claimResource)
+	second := driveBound(t, core, fresh, clock)
+	if second.Address == first.Address {
+		t.Fatalf("fresh claim reused requested identity unexpectedly: first=%v second=%v", first.Address, second.Address)
+	}
+	if err := closed.Close(); err != nil {
+		t.Fatal(err)
+	}
+	core.Lock()
+	address, ownerClaim = core.IPv4AddressLocked(), adapter.claim
+	core.Unlock()
+	if address != second.Address || ownerClaim != fresh || fresh.Readiness() != nscore.ReadyLinkLocal4Result {
+		t.Fatalf("stale close changed bound fresh claim: address=%v owner=%p fresh=%p readiness=%v", address, ownerClaim, fresh, fresh.Readiness())
+	}
+	if err := core.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if fresh.Readiness() != nscore.ReadyClosed {
+		t.Fatalf("namespace close readiness = %v", fresh.Readiness())
+	}
+	if _, _, err := fresh.TryResult(); failureOf(t, err) != nscore.FailureClosed {
+		t.Fatalf("namespace close result = %v", err)
+	}
+	if usage, _ := account.Snapshot(); usage != (quota.Usage{}) {
+		t.Fatalf("namespace close quota = %+v", usage)
+	}
+	if adapter.claim != nil || fresh.identity.Active() || fresh.handler.State() != 0 || fresh.handler.Candidate() != ([4]byte{}) || fresh.handler.Conflicts() != 0 {
+		t.Fatalf("namespace close retained claim state: owner=%p identity=%v handler=%+v", adapter.claim, fresh.identity.Active(), fresh.handler)
+	}
+}
+
+func TestIngressRelevanceConsumesMalformedLocalARPAndLeavesForeignUnhandled(t *testing.T) {
+	core, adapter, _, _ := newTestAdapter(t, Config{MaxClaims: 1, MaxConflicts: 4, MaxServiceAttempts: 16, Seed: 29})
+	resource, _, err := adapter.TryClaim(linklocalns.Request{FirstCandidate: netip.MustParseAddr("169.254.42.7")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	claim := resource.(*claimResource)
+	base := makeConflict(t, netip.MustParseAddr("169.254.42.7"), [6]byte{2, 0, 0, 0, 0, 2})
+	for _, test := range []struct {
+		name        string
+		wantHandled bool
+		mutate      func([]byte) []byte
+	}{
+		{name: "foreign Ethernet destination", mutate: func(frame []byte) []byte {
+			eth, _ := ethernet.NewFrame(frame)
+			*eth.DestinationHardwareAddr() = [6]byte{2, 0, 0, 0, 0, 99}
+			return frame
+		}},
+		{name: "foreign candidate", mutate: func(frame []byte) []byte {
+			eth, _ := ethernet.NewFrame(frame)
+			aframe, _ := arp.NewFrame(eth.Payload())
+			_, sender := aframe.Sender4()
+			*sender = [4]byte{169, 254, 99, 9}
+			return frame
+		}},
+		{name: "truncated local ARP", wantHandled: true, mutate: func(frame []byte) []byte { return frame[:20] }},
+		{name: "local sender identity mismatch", wantHandled: true, mutate: func(frame []byte) []byte {
+			eth, _ := ethernet.NewFrame(frame)
+			aframe, _ := arp.NewFrame(eth.Payload())
+			sender, _ := aframe.Sender4()
+			*sender = [6]byte{2, 0, 0, 0, 0, 3}
+			return frame
+		}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			frame := test.mutate(append([]byte(nil), base...))
+			core.Lock()
+			beforeCandidate, beforeConflicts := claim.handler.Candidate(), claim.handler.Conflicts()
+			handled, ingressErr := adapter.ingressLocked(frame)
+			afterCandidate, afterConflicts, state := claim.handler.Candidate(), claim.handler.Conflicts(), claim.state
+			core.Unlock()
+			if ingressErr != nil || handled != test.wantHandled {
+				t.Fatalf("ingress = handled %v, err %v; want handled %v", handled, ingressErr, test.wantHandled)
+			}
+			if afterCandidate != beforeCandidate || afterConflicts != beforeConflicts || state != stateActive {
+				t.Fatalf("malformed or foreign ARP mutated claim: candidate %v -> %v conflicts %d -> %d state=%v", beforeCandidate, afterCandidate, beforeConflicts, afterConflicts, state)
+			}
+		})
+	}
+}
+
 func BenchmarkIngressUnrelatedARP(b *testing.B) {
 	core, adapter, _, _ := newTestAdapter(b, Config{MaxClaims: 1, MaxConflicts: 4, MaxServiceAttempts: 16, Seed: 17})
 	if _, _, err := adapter.TryClaim(linklocalns.Request{FirstCandidate: netip.MustParseAddr("169.254.42.7")}); err != nil {
