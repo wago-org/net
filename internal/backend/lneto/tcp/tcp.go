@@ -592,9 +592,11 @@ func (n *Adapter) TryConnect(remote nscore.Endpoint) (nscore.Resource, nscore.Pr
 }
 
 func (l *tcpListener) LocalEndpoint() nscore.Endpoint {
-	if l == nil {
+	if l == nil || l.owner == nil {
 		return nscore.Endpoint{}
 	}
+	l.owner.core.Lock()
+	defer l.owner.core.Unlock()
 	return l.local
 }
 
@@ -722,16 +724,20 @@ func (l *tcpListener) closeLocked() error {
 }
 
 func (s *tcpStream) LocalEndpoint() nscore.Endpoint {
-	if s == nil {
+	if s == nil || s.owner == nil {
 		return nscore.Endpoint{}
 	}
+	s.owner.core.Lock()
+	defer s.owner.core.Unlock()
 	return s.local
 }
 
 func (s *tcpStream) RemoteEndpoint() nscore.Endpoint {
-	if s == nil {
+	if s == nil || s.owner == nil {
 		return nscore.Endpoint{}
 	}
+	s.owner.core.Lock()
+	defer s.owner.core.Unlock()
 	return s.remote
 }
 

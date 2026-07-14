@@ -2,6 +2,7 @@ package tcp
 
 import (
 	"net/netip"
+	"sync"
 	"testing"
 
 	lneto "github.com/soypat/lneto"
@@ -103,6 +104,61 @@ func TestListenerAndConnectReuseReduceSteadyStateAllocations(t *testing.T) {
 	})
 	if connectAllocs > 4 {
 		t.Fatalf("connect/close allocations = %v, want <= 4", connectAllocs)
+	}
+}
+
+func TestEndpointSnapshotsSerializeWithResourceClose(t *testing.T) {
+	core, adapter := newTestAdapter(t, 33, 1, 1)
+	listenerValue, progress, err := adapter.TryListen(nscore.Endpoint{Address: netip.MustParseAddr("192.0.2.33"), Port: 4033})
+	if err != nil || progress != nscore.ProgressDone {
+		t.Fatalf("listen = %T, %v, %v", listenerValue, progress, err)
+	}
+	streamValue, progress, err := adapter.TryConnect(nscore.Endpoint{Address: netip.MustParseAddr("192.0.2.34"), Port: 4034})
+	if err != nil || progress != nscore.ProgressInProgress {
+		t.Fatalf("connect = %T, %v, %v", streamValue, progress, err)
+	}
+	listener := listenerValue.(*tcpListener)
+	stream := streamValue.(*tcpStream)
+	start := make(chan struct{})
+	var workers sync.WaitGroup
+	workers.Add(3)
+	go func() {
+		defer workers.Done()
+		<-start
+		for range 10000 {
+			_ = listener.LocalEndpoint()
+		}
+	}()
+	go func() {
+		defer workers.Done()
+		<-start
+		for range 10000 {
+			_, _ = stream.LocalEndpoint(), stream.RemoteEndpoint()
+		}
+	}()
+	go func() {
+		defer workers.Done()
+		<-start
+		if err := listener.Close(); err != nil {
+			t.Errorf("listener close: %v", err)
+		}
+		if err := stream.Close(); err != nil {
+			t.Errorf("stream close: %v", err)
+		}
+	}()
+	close(start)
+	workers.Wait()
+	if endpoint := listener.LocalEndpoint(); endpoint != (nscore.Endpoint{}) {
+		t.Fatalf("closed listener endpoint = %+v", endpoint)
+	}
+	if local, remote := stream.LocalEndpoint(), stream.RemoteEndpoint(); local != (nscore.Endpoint{}) || remote != (nscore.Endpoint{}) {
+		t.Fatalf("closed stream endpoints = local %+v remote %+v", local, remote)
+	}
+	if usage, _ := adapter.quotas.Snapshot(); usage != (quota.Usage{}) {
+		t.Fatalf("closed resource quota = %+v", usage)
+	}
+	if err := core.Close(); err != nil {
+		t.Fatal(err)
 	}
 }
 
