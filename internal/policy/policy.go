@@ -33,9 +33,10 @@ const (
 	TransportMDNS
 	TransportDHCPv4
 	TransportLinkLocal4
+	TransportIPv6
 
 	transportFirst = TransportUDP
-	transportLast  = TransportLinkLocal4
+	transportLast  = TransportIPv6
 )
 
 // Direction identifies whether authority accepts local inbound traffic or
@@ -68,6 +69,7 @@ const (
 	OperationDHCPv4ServerSend
 	OperationLinkLocal4Claim
 	OperationLinkLocal4Defend
+	OperationIPv6Enable
 )
 
 // PortRange is an inclusive port selector.
@@ -509,6 +511,8 @@ func operationAddress(operation Operation) (Transport, Direction, bool) {
 		return TransportICMPv4, DirectionOutbound, true
 	case OperationLinkLocal4Claim, OperationLinkLocal4Defend:
 		return TransportLinkLocal4, DirectionOutbound, true
+	case OperationIPv6Enable:
+		return TransportIPv6, DirectionInbound, true
 	default:
 		return 0, 0, false
 	}

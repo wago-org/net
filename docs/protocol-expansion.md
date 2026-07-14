@@ -1,7 +1,8 @@
 # lneto protocol expansion plan
 
 Status: active implementation plan. ICMPv4, NTP, mDNS, DHCPv4, and IPv4
-link-local/APIPA are complete; IPv6 and later modules remain planned.
+link-local/APIPA are complete; IPv6 namespace/transport work is in progress and
+ICMPv6/NDP plus DHCPv6 remain planned.
 
 ## Goal
 
@@ -96,6 +97,42 @@ retry, queue, scan, and operation dimension must have a finite configured bound.
 The order is dependency-driven. Later modules may reuse only backend-neutral
 contracts established by earlier modules; they must not import another public
 protocol facade or binding package.
+
+## Pinned IPv6 operational audit
+
+The pinned revision provides an immediate 40-byte IPv6 frame codec and an
+`internet.StackIPv6` demultiplexer/encapsulator. `x/xnet.Stack6` registers
+separate finite TCP and UDP port muxes, can open outbound TCP/UDP, can register
+family-specific TCP/UDP listeners, and computes mandatory IPv6 TCP/UDP pseudo-
+header checksums. The high-level DNS path explicitly rejects an IPv6 DNS server;
+AAAA records remain available only over the existing IPv4 DNS transport.
+
+The pinned IPv6 demultiplexer follows only the base header's direct
+`Next Header` value. It does not scan Hop-by-Hop, routing, fragment, ESP, AH,
+destination-options, mobility, HIP, Shim6, or experimental extension headers,
+and it does not implement IPv6 fragmentation/reassembly or jumbograms. Wago's
+initial IPv6 namespace therefore sets the finite extension-header bound to zero
+and rejects extension-header ingress rather than implying support. Flow labels
+are likewise not set by the pinned transport path and remain zero.
+
+The pinned ICMPv6 client implements echo plus finite Neighbor Solicitation and
+Neighbor Advertisement cache operations. It does not implement router
+solicitation/advertisement processing, redirects, Duplicate Address Detection,
+SLAAC, prefix/router lifetime management, or a route table. Enabling ICMPv6 in
+`x/xnet` also enables its NDP cache and deferred MAC patching; that behavior is
+reserved for the separately selectable ICMPv6/NDP module. Until that module is
+selected, IPv6 transport uses the namespace's explicitly configured gateway MAC
+and no NDP behavior is claimed. Static global or link-local identity, prefix,
+and numeric single-interface scope are configuration data rather than raw IPv6
+packet access.
+
+The initial selectable IPv6 module exposes the transport family only where the
+existing Wago adapter can preserve its immediate lifecycle contract: TCP connect
+and address-specific TCP listen. The current Wago UDP adapter deliberately owns
+IPv4 Ethernet/IP/UDP codecs and empty-datagram queues, so IPv6 UDP is not claimed
+in this slice even though pinned `x/xnet` has an immediate UDP connection path.
+No raw IPv6, Ethernet, neighbor-cache, router, packet-capture, blocking,
+deadline, retry/backoff, sleep, or goroutine API becomes guest-visible.
 
 ## Completion ledger
 

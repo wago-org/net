@@ -25,6 +25,7 @@ type Limits struct {
 	MDNSResources       uint64
 	DHCPv4Resources     uint64
 	LinkLocal4Resources uint64
+	IPv6Resources       uint64
 	QueuedBytes         uint64
 	DNSWork             uint64
 	ICMPv4Work          uint64
@@ -48,6 +49,7 @@ func DefaultLimits() Limits {
 		MDNSResources:       32,
 		DHCPv4Resources:     4,
 		LinkLocal4Resources: 2,
+		IPv6Resources:       1,
 		QueuedBytes:         4 << 20,
 		DNSWork:             32,
 		ICMPv4Work:          32,
@@ -70,6 +72,7 @@ type Usage struct {
 	MDNSResources       uint64
 	DHCPv4Resources     uint64
 	LinkLocal4Resources uint64
+	IPv6Resources       uint64
 	QueuedBytes         uint64
 	DNSWork             uint64
 	ICMPv4Work          uint64
@@ -94,6 +97,7 @@ const (
 	ResourceMDNS
 	ResourceDHCPv4
 	ResourceLinkLocal4
+	ResourceIPv6
 )
 
 // Account is one instance's bounded, concurrently safe quota ledger.
@@ -133,6 +137,8 @@ func (a *Account) ReserveResource(class ResourceClass, count uint64) (*Reservati
 		amount.DHCPv4Resources = count
 	case ResourceLinkLocal4:
 		amount.LinkLocal4Resources = count
+	case ResourceIPv6:
+		amount.IPv6Resources = count
 	default:
 		return nil, ErrInvalidUnits
 	}
@@ -288,6 +294,7 @@ func (a *Account) acquire(amount Usage) error {
 		!fits(a.used.MDNSResources, amount.MDNSResources, a.limits.MDNSResources) ||
 		!fits(a.used.DHCPv4Resources, amount.DHCPv4Resources, a.limits.DHCPv4Resources) ||
 		!fits(a.used.LinkLocal4Resources, amount.LinkLocal4Resources, a.limits.LinkLocal4Resources) ||
+		!fits(a.used.IPv6Resources, amount.IPv6Resources, a.limits.IPv6Resources) ||
 		!fits(a.used.QueuedBytes, amount.QueuedBytes, a.limits.QueuedBytes) ||
 		!fits(a.used.DNSWork, amount.DNSWork, a.limits.DNSWork) ||
 		!fits(a.used.ICMPv4Work, amount.ICMPv4Work, a.limits.ICMPv4Work) ||
@@ -338,6 +345,7 @@ func (a *Account) fitsLocked(amount Usage) bool {
 		fits(a.used.MDNSResources, amount.MDNSResources, a.limits.MDNSResources) &&
 		fits(a.used.DHCPv4Resources, amount.DHCPv4Resources, a.limits.DHCPv4Resources) &&
 		fits(a.used.LinkLocal4Resources, amount.LinkLocal4Resources, a.limits.LinkLocal4Resources) &&
+		fits(a.used.IPv6Resources, amount.IPv6Resources, a.limits.IPv6Resources) &&
 		fits(a.used.QueuedBytes, amount.QueuedBytes, a.limits.QueuedBytes) &&
 		fits(a.used.DNSWork, amount.DNSWork, a.limits.DNSWork) &&
 		fits(a.used.ICMPv4Work, amount.ICMPv4Work, a.limits.ICMPv4Work) &&
@@ -388,6 +396,7 @@ func (a *Account) release(amount Usage) {
 	a.used.MDNSResources = subtract(a.used.MDNSResources, amount.MDNSResources)
 	a.used.DHCPv4Resources = subtract(a.used.DHCPv4Resources, amount.DHCPv4Resources)
 	a.used.LinkLocal4Resources = subtract(a.used.LinkLocal4Resources, amount.LinkLocal4Resources)
+	a.used.IPv6Resources = subtract(a.used.IPv6Resources, amount.IPv6Resources)
 	a.used.QueuedBytes = subtract(a.used.QueuedBytes, amount.QueuedBytes)
 	a.used.DNSWork = subtract(a.used.DNSWork, amount.DNSWork)
 	a.used.ICMPv4Work = subtract(a.used.ICMPv4Work, amount.ICMPv4Work)
@@ -506,6 +515,8 @@ func resourceUsage(class ResourceClass, count uint64) (Usage, bool) {
 		amount.DHCPv4Resources = count
 	case ResourceLinkLocal4:
 		amount.LinkLocal4Resources = count
+	case ResourceIPv6:
+		amount.IPv6Resources = count
 	default:
 		return Usage{}, false
 	}
@@ -533,6 +544,7 @@ func (u *Usage) add(other Usage) {
 	u.MDNSResources += other.MDNSResources
 	u.DHCPv4Resources += other.DHCPv4Resources
 	u.LinkLocal4Resources += other.LinkLocal4Resources
+	u.IPv6Resources += other.IPv6Resources
 	u.QueuedBytes += other.QueuedBytes
 	u.DNSWork += other.DNSWork
 	u.ICMPv4Work += other.ICMPv4Work

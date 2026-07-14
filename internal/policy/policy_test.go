@@ -330,6 +330,27 @@ func TestMDNSAuthorityIsProtocolLocalMulticastAndDenyWins(t *testing.T) {
 	}
 }
 
+func TestIPv6EnableAuthorityIsProtocolLocalAndDenyWins(t *testing.T) {
+	configured := mustAddr("2001:db8:42::7")
+	compiled, err := Compile(Config{Rules: []Rule{
+		{Action: ActionAllow, Transports: []Transport{TransportIPv6}, Directions: []Direction{DirectionInbound}, Prefixes: []netip.Prefix{mustPrefix("2001:db8:42::/64")}},
+		{Action: ActionDeny, Transports: []Transport{TransportIPv6}, Directions: []Direction{DirectionInbound}, Prefixes: []netip.Prefix{mustPrefix("2001:db8:42::7/128")}},
+		{Action: ActionAllow, Transports: []Transport{TransportTCP}, Directions: []Direction{DirectionInbound}},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if compiled.CheckAddress(OperationIPv6Enable, configured) {
+		t.Fatal("caller IPv6 deny did not win over the broader grant")
+	}
+	if compiled.CheckAddress(OperationIPv6Enable, mustAddr("2001:db8:43::7")) {
+		t.Fatal("unmatched IPv6 namespace address was allowed")
+	}
+	if !compiled.CheckEndpoint(OperationTCPListen, configured, 8080) {
+		t.Fatal("IPv6 namespace authority unexpectedly changed TCP authority")
+	}
+}
+
 func TestICMPv4AddressAuthorityIsTransportScopedAndPortless(t *testing.T) {
 	compiled, err := Compile(Config{
 		Rules: []Rule{

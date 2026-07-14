@@ -132,6 +132,26 @@ func TestMDNSResourceQueuedBytesAndActiveWorkAccounting(t *testing.T) {
 	}
 }
 
+func TestIPv6NamespaceResourceAccounting(t *testing.T) {
+	account := NewAccount(Limits{Resources: 1, IPv6Resources: 1})
+	var retained, denied Charge
+	if err := account.AcquireResource(&retained, ResourceIPv6, 1); err != nil {
+		t.Fatal(err)
+	}
+	if usage, closed := account.Snapshot(); closed || usage != (Usage{Resources: 1, IPv6Resources: 1}) {
+		t.Fatalf("IPv6 usage = %+v, closed=%v", usage, closed)
+	}
+	if err := account.AcquireResource(&denied, ResourceIPv6, 1); !errors.Is(err, ErrLimit) {
+		t.Fatalf("IPv6 resource limit error = %v", err)
+	}
+	if !retained.Release() {
+		t.Fatal("IPv6 charge did not release")
+	}
+	if usage, _ := account.Snapshot(); usage != (Usage{}) {
+		t.Fatalf("IPv6 release leaked usage: %+v", usage)
+	}
+}
+
 func TestLinkLocal4ResourceAndActiveWorkAccounting(t *testing.T) {
 	account := NewAccount(Limits{Resources: 1, LinkLocal4Resources: 1, LinkLocal4Work: 1})
 	var retained, work Charge
