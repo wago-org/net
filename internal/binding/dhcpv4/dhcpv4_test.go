@@ -36,13 +36,14 @@ func (*fakeBase) TryService(nscore.ServiceBudget) (nscore.ServiceReport, nscore.
 }
 
 type fakeNamespace struct {
-	lease *fakeLease
-	calls int
+	lease    *fakeLease
+	progress nscore.Progress
+	calls    int
 }
 
 func (n *fakeNamespace) TryAcquire(dhcpns.Request) (nscore.Resource, nscore.Progress, error) {
 	n.calls++
-	return n.lease, nscore.ProgressInProgress, nil
+	return n.lease, n.progress, nil
 }
 
 type fakeLease struct {
@@ -69,7 +70,7 @@ func (l *fakeLease) TryResult() (dhcpns.Lease, dhcpns.ResultState, error) {
 
 func TestBindingsPrevalidateAcquireAndPreserveResultOutputs(t *testing.T) {
 	lease := &fakeLease{result: dhcpns.ResultWouldBlock}
-	backend := &fakeNamespace{lease: lease}
+	backend := &fakeNamespace{lease: lease, progress: nscore.ProgressInProgress}
 	manager, instance := attachManager(t, backend)
 	defer manager.Detach(instance)
 	host := testHost{instance: instance, memory: bytes.Repeat([]byte{0xa5}, 1024)}
@@ -101,8 +102,13 @@ func TestBindingsPrevalidateAcquireAndPreserveResultOutputs(t *testing.T) {
 	if status := callBinding(t, bindingByName(t, bindings, "acquire"), host, namespaceHandle, 0, 256); status != guest.StatusIO || backend.calls != 1 || !bytes.Equal(host.memory[256:264], outBefore) {
 		t.Fatalf("typed-nil acquire = %v, calls=%d", status, backend.calls)
 	}
-	backend.lease = lease
-	if status := callBinding(t, bindingByName(t, bindings, "acquire"), host, namespaceHandle, 0, 256); status != guest.StatusInProgress || backend.calls != 2 {
+	malformed := new(fakeLease)
+	backend.lease, backend.progress = malformed, 99
+	if status := callBinding(t, bindingByName(t, bindings, "acquire"), host, namespaceHandle, 0, 256); status != guest.StatusIO || backend.calls != 2 || !malformed.closed || !bytes.Equal(host.memory[256:264], outBefore) {
+		t.Fatalf("malformed-progress acquire = %v, calls=%d closed=%v", status, backend.calls, malformed.closed)
+	}
+	backend.lease, backend.progress = lease, nscore.ProgressInProgress
+	if status := callBinding(t, bindingByName(t, bindings, "acquire"), host, namespaceHandle, 0, 256); status != guest.StatusInProgress || backend.calls != 3 {
 		t.Fatalf("valid acquire = %v, calls=%d", status, backend.calls)
 	}
 	leaseHandle := binary.LittleEndian.Uint64(host.memory[256:264])
@@ -116,6 +122,13 @@ func TestBindingsPrevalidateAcquireAndPreserveResultOutputs(t *testing.T) {
 		t.Fatalf("failed result = %v", status)
 	}
 	lease.failure = nil
+	lease.result = 99
+	if status := callBinding(t, bindingByName(t, bindings, "result"), host, leaseHandle, 400); status != guest.StatusIO || !bytes.Equal(host.memory[400:400+dhcpabi.LeaseV1Size], resultBefore) {
+		t.Fatalf("malformed result state = %v", status)
+	}
+	if status := callBinding(t, bindingByName(t, bindings, "result"), host, namespaceHandle, 400); status != guest.StatusBadHandle || !bytes.Equal(host.memory[400:400+dhcpabi.LeaseV1Size], resultBefore) {
+		t.Fatalf("wrong-kind result = %v", status)
+	}
 	lease.lease = validLease(t)
 	lease.result = dhcpns.ResultReady
 	if status := callBinding(t, bindingByName(t, bindings, "result"), host, leaseHandle, 400); status != guest.StatusOK || binary.LittleEndian.Uint32(host.memory[532:536]) != lease.lease.LeaseSeconds || host.memory[400+dhcpabi.LeaseV1Size-1] != 0 {
@@ -135,7 +148,7 @@ func TestBindingsPrevalidateAcquireAndPreserveResultOutputs(t *testing.T) {
 	}
 
 	fresh := &fakeLease{result: dhcpns.ResultWouldBlock}
-	backend.lease = fresh
+	backend.lease, backend.progress = fresh, nscore.ProgressInProgress
 	if status := callBinding(t, bindingByName(t, bindings, "acquire"), host, namespaceHandle, 0, 264); status != guest.StatusInProgress {
 		t.Fatalf("fresh acquire = %v", status)
 	}
@@ -229,7 +242,7 @@ func callBinding(t testing.TB, function wago.HostFunc, host testHost, params ...
 
 func BenchmarkResultBindingReady(b *testing.B) {
 	lease := &fakeLease{lease: validLease(b), result: dhcpns.ResultReady}
-	manager, instance := attachManager(b, &fakeNamespace{lease: lease})
+	manager, instance := attachManager(b, &fakeNamespace{lease: lease, progress: nscore.ProgressDone})
 	defer manager.Detach(instance)
 	state, _ := manager.ForInstance(instance)
 	handle, err := state.Resources().Add(resource.KindDHCPv4Lease, lease)
