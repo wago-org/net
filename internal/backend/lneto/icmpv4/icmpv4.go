@@ -421,11 +421,6 @@ func (a *Adapter) ingressLocked(frame []byte) (bool, error) {
 	if version != 4 || headerWords < 5 || ipFrame.Protocol() != lneto.IPProtoICMP || netip.AddrFrom4(*ipFrame.DestinationAddr()) != a.core.IPv4AddressLocked() {
 		return false, nil
 	}
-	var validator lneto.Validator
-	ipFrame.ValidateExceptCRC(&validator)
-	if err := validator.ErrPop(); err != nil || ipFrame.CalculateHeaderCRC() != 0 || ipFrame.Flags().MoreFragments() || ipFrame.Flags().FragmentOffset() != 0 {
-		return false, nil
-	}
 	icmpFrame, err := lnetoicmp.NewFrame(ipFrame.Payload())
 	if err != nil || icmpFrame.Type() != lnetoicmp.TypeEchoReply || icmpFrame.Code() != 0 {
 		return false, nil
@@ -434,6 +429,11 @@ func (a *Adapter) ingressLocked(frame []byte) (bool, error) {
 	exchange := a.byIdentity[identityKey(echoFrame.Identifier(), echoFrame.SequenceNumber())]
 	if exchange == nil || (exchange.state != echoPending && exchange.state != echoWaiting) || netip.AddrFrom4(*ipFrame.SourceAddr()) != exchange.destination {
 		return false, nil
+	}
+	var validator lneto.Validator
+	ipFrame.ValidateExceptCRC(&validator)
+	if err := validator.ErrPop(); err != nil || ipFrame.CalculateHeaderCRC() != 0 || ipFrame.Flags().MoreFragments() || ipFrame.Flags().FragmentOffset() != 0 {
+		return true, nil
 	}
 	var checksum lneto.CRC791
 	if checksum.PayloadSum16(echoFrame.RawData()) != 0 {

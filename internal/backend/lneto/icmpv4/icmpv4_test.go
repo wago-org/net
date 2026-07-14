@@ -393,6 +393,63 @@ func TestICMPv4ClosedExchangeLateReplyAndStaleCloseCannotMutateFreshExchange(t *
 	}
 }
 
+func TestICMPv4DropsMalformedCorrelatedIPv4AndAcceptsFollowingReply(t *testing.T) {
+	for _, test := range []struct {
+		name   string
+		mutate func(*testing.T, []byte)
+	}{
+		{
+			name: "bad IPv4 checksum",
+			mutate: func(_ *testing.T, frame []byte) {
+				frame[14+8] ^= 1
+			},
+		},
+		{
+			name: "fragmented IPv4",
+			mutate: func(t *testing.T, frame []byte) {
+				ethernetFrame, err := ethernet.NewFrame(frame)
+				if err != nil {
+					t.Fatal(err)
+				}
+				ipFrame, err := ipv4.NewFrame(ethernetFrame.Payload())
+				if err != nil {
+					t.Fatal(err)
+				}
+				ipFrame.SetFlags(ipv4.FlagMoreFragments)
+				ipFrame.SetCRC(0)
+				ipFrame.SetCRC(ipFrame.CalculateHeaderCRC())
+			},
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			core, adapter, _ := newTestAdapter(t, Config{MaxEchoes: 1, MaxPayloadBytes: 16, MaxAttempts: 2, RetryServiceAttempts: 2})
+			resource, _, err := adapter.TryEcho(icmpns.Request{Destination: netip.MustParseAddr("192.0.2.99"), Payload: []byte("live")})
+			if err != nil {
+				t.Fatal(err)
+			}
+			exchange := resource.(*echo)
+			request := serviceEgress(t, core)
+			malformed := makeEchoReply(t, request, nil)
+			test.mutate(t, malformed)
+
+			core.Lock()
+			handled, ingressErr := adapter.ingressLocked(malformed)
+			state, mapped := exchange.state, adapter.byIdentity[identityKey(exchange.identifier, exchange.sequence)]
+			core.Unlock()
+			if ingressErr != nil || !handled || state != echoWaiting || mapped != exchange || exchange.Readiness() != 0 {
+				t.Fatalf("malformed reply = handled %v, err %v, state %v, mapped %p, readiness %v", handled, ingressErr, state, mapped, exchange.Readiness())
+			}
+
+			core.Lock()
+			handled, ingressErr = adapter.ingressLocked(makeEchoReply(t, request, nil))
+			core.Unlock()
+			if ingressErr != nil || !handled || exchange.Readiness() != nscore.ReadyICMPv4Reply {
+				t.Fatalf("following valid reply = handled %v, err %v, readiness %v", handled, ingressErr, exchange.Readiness())
+			}
+		})
+	}
+}
+
 func TestICMPv4ChecksumFailureAndNamespaceCloseClearTerminalAndActiveState(t *testing.T) {
 	core, adapter, account := newTestAdapter(t, Config{MaxEchoes: 2, MaxPayloadBytes: 16, MaxAttempts: 2, RetryServiceAttempts: 2})
 	failedResource, _, err := adapter.TryEcho(icmpns.Request{Destination: netip.MustParseAddr("192.0.2.98"), Payload: []byte("bad")})
