@@ -1,0 +1,160 @@
+package dhcpv6
+
+import (
+	"errors"
+	"net/netip"
+	"testing"
+
+	instancecore "github.com/wago-org/net/internal/instance/core"
+	nscore "github.com/wago-org/net/internal/namespace/core"
+	dhcpns "github.com/wago-org/net/internal/namespace/dhcpv6"
+	"github.com/wago-org/net/internal/policy"
+	"github.com/wago-org/net/internal/quota"
+	"github.com/wago-org/net/internal/resource"
+	wago "github.com/wago-org/wago"
+)
+
+type fakeBase struct{ closed bool }
+
+func (b *fakeBase) Close() error { b.closed = true; return nil }
+func (b *fakeBase) Readiness() nscore.Readiness {
+	if b.closed {
+		return nscore.ReadyClosed
+	}
+	return 0
+}
+func (*fakeBase) TryService(nscore.ServiceBudget) (nscore.ServiceReport, nscore.Progress, error) {
+	return nscore.ServiceReport{}, nscore.ProgressWouldBlock, nil
+}
+
+type fakeNamespace struct {
+	operations dhcpns.Operations
+	next       nscore.Resource
+	progress   nscore.Progress
+}
+
+func (n *fakeNamespace) Operations() dhcpns.Operations { return n.operations }
+func (n *fakeNamespace) TryAcquire() (nscore.Resource, nscore.Progress, error) {
+	return n.next, n.progress, nil
+}
+
+type fakeLease struct {
+	configuration dhcpns.Configuration
+	canceled      bool
+	closed        bool
+}
+
+func (l *fakeLease) Close() error { l.closed = true; return nil }
+func (l *fakeLease) Cancel() error {
+	l.canceled = true
+	return nil
+}
+func (l *fakeLease) Readiness() nscore.Readiness {
+	if l.closed {
+		return nscore.ReadyClosed
+	}
+	return nscore.ReadyDHCPv6Result
+}
+func (l *fakeLease) TryResult() (dhcpns.Configuration, dhcpns.ResultState, error) {
+	return l.configuration, dhcpns.ResultReady, nil
+}
+
+func TestInstanceDHCPv6ExactKindLifecycleAndUnsupportedValidation(t *testing.T) {
+	lease := &fakeLease{configuration: validConfiguration(t)}
+	adapter := &fakeNamespace{operations: dhcpns.SupportedOperations, next: lease, progress: nscore.ProgressInProgress}
+	manager, err := instancecore.NewManagerConfigured(instancecore.Config{
+		Limits: quota.DefaultLimits(), Readiness: instancecore.DefaultConfig().Readiness,
+		NamespaceFactory: func(*policy.Policy, *quota.Account) (nscore.Namespace, error) {
+			return nscore.ComposeNamespace(&fakeBase{}, nscore.Service{Key: dhcpns.ServiceKey, Value: adapter})
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	instance := new(wago.Instance)
+	if err := manager.Attach(instance); err != nil {
+		t.Fatal(err)
+	}
+	defer manager.Detach(instance)
+	state, _ := manager.ForInstance(instance)
+	namespaceHandle := state.NamespaceHandle()
+
+	operations, err := Operations(state, namespaceHandle)
+	if err != nil || operations != dhcpns.SupportedOperations {
+		t.Fatalf("Operations = %v, %v", operations, err)
+	}
+	if _, _, err := Start(state, resource.Handle(1), dhcpns.OperationRenew); !errors.Is(err, resource.ErrBadHandle) {
+		t.Fatalf("unsupported operation skipped namespace validation: %v", err)
+	}
+	if _, _, err := Start(state, namespaceHandle, dhcpns.OperationRenew); failureOf(err) != nscore.FailureNotSupported {
+		t.Fatalf("Renew = %v", err)
+	}
+
+	handle, progress, err := Start(state, namespaceHandle, dhcpns.OperationAcquire)
+	if err != nil || progress != nscore.ProgressInProgress || handle == 0 {
+		t.Fatalf("Start = %v, %v, %v", handle, progress, err)
+	}
+	if _, err := state.Resources().Lookup(handle, resource.KindDNSQuery); !errors.Is(err, resource.ErrBadHandle) {
+		t.Fatalf("wrong-kind lookup = %v", err)
+	}
+	configuration, result, err := Result(state, handle)
+	if err != nil || result != dhcpns.ResultReady || !configuration.Valid() {
+		t.Fatalf("Result = %+v, %v, %v", configuration, result, err)
+	}
+	if err := Cancel(state, handle); err != nil || !lease.canceled {
+		t.Fatalf("Cancel = %v, canceled=%v", err, lease.canceled)
+	}
+	if err := state.CloseHandle(handle, resource.KindDHCPv6Lease); err != nil || !lease.closed {
+		t.Fatalf("CloseHandle = %v, closed=%v", err, lease.closed)
+	}
+	if _, _, err := Result(state, handle); !errors.Is(err, resource.ErrBadHandle) {
+		t.Fatalf("stale result = %v", err)
+	}
+}
+
+func TestStartClosesInvalidBackendResource(t *testing.T) {
+	lease := &fakeLease{configuration: validConfiguration(t)}
+	adapter := &fakeNamespace{operations: dhcpns.SupportedOperations, next: lease, progress: 99}
+	manager, err := instancecore.NewManagerConfigured(instancecore.Config{
+		Limits: quota.DefaultLimits(), Readiness: instancecore.DefaultConfig().Readiness,
+		NamespaceFactory: func(*policy.Policy, *quota.Account) (nscore.Namespace, error) {
+			return nscore.ComposeNamespace(&fakeBase{}, nscore.Service{Key: dhcpns.ServiceKey, Value: adapter})
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	instance := new(wago.Instance)
+	if err := manager.Attach(instance); err != nil {
+		t.Fatal(err)
+	}
+	defer manager.Detach(instance)
+	state, _ := manager.ForInstance(instance)
+	if _, _, err := Start(state, state.NamespaceHandle(), dhcpns.OperationAcquire); failureOf(err) != nscore.FailureIO || !lease.closed {
+		t.Fatalf("invalid backend start = %v, closed=%v", err, lease.closed)
+	}
+}
+
+func validConfiguration(t testing.TB) dhcpns.Configuration {
+	t.Helper()
+	configuration := dhcpns.Configuration{
+		TransactionID:            0x123456,
+		IAID:                     [4]byte{2, 0, 0, 1},
+		AssignedAddr:             netip.MustParseAddr("2001:db8::10"),
+		ServerAddr:               netip.MustParseAddr("fe80::2"),
+		ServerScopeID:            7,
+		ServerDUIDLength:         10,
+		PreferredLifetimeSeconds: 1800,
+		ValidLifetimeSeconds:     3600,
+	}
+	copy(configuration.ServerDUID[:], []byte{0, 3, 0, 1, 2, 0, 0, 0, 0, 2})
+	if !configuration.Valid() {
+		t.Fatal("invalid fixture")
+	}
+	return configuration
+}
+
+func failureOf(err error) nscore.Failure {
+	failure, _ := nscore.FailureOf(err)
+	return failure
+}

@@ -145,7 +145,7 @@ func Result(host plugin.Host, module wago.HostModule, params, results []uint64) 
 		guest.SetStatus(results, guest.StatusAgain)
 		return
 	}
-	if result != dhcpns.ResultReady || !dhcpabi.EncodeConfigurationV1(memory, out, configuration) {
+	if result != dhcpns.ResultReady || !dhcpabi.EncodeConfigurationV1(memory, out, &configuration) {
 		guest.SetStatus(results, guest.StatusIO)
 		return
 	}

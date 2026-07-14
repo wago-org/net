@@ -135,6 +135,90 @@ func TestMalformedCorrelationStatusAndRepeatedBoundsDoNotMutate(t *testing.T) {
 	}
 }
 
+func TestWireNamesAreCanonicalizedWithoutRetainingInput(t *testing.T) {
+	wire := encodeName("EXAMPLE.Com")
+	var names [dhcpns.MaxDomainSearch]dhcpns.Name
+	var count uint8
+	if !parseNames(wire, names[:], dhcpns.MaxDomainSearch, &count) || count != 1 || names[0].String() != "example.com" {
+		t.Fatalf("canonicalized names = %q count=%d", names[0].String(), count)
+	}
+	for i := range wire {
+		wire[i] = 0xff
+	}
+	if names[0].String() != "example.com" || !names[0].Valid() {
+		t.Fatalf("wire input was retained: %q", names[0].String())
+	}
+}
+
+func TestDuplicateStatusOptionsAreRejectedAtEverySupportedNesting(t *testing.T) {
+	config := defaultConfig()
+	xid := uint32(0x123456)
+	iaid := [4]byte{2, 0, 0, 1}
+	clientDUID := []byte{0, 3, 0, 1, 2, 0, 0, 0, 0, 1}
+	serverDUID := []byte{0, 3, 0, 1, 2, 0, 0, 0, 0, 2}
+	assigned := netip.MustParseAddr("2001:db8::10")
+	status := []byte{0, 0}
+
+	top := buildServerPayload(t, lnetodhcp.MsgReply, xid, clientDUID, serverDUID, iaid, assigned, false)
+	top = appendOption(top, lnetodhcp.OptStatusCode, status)
+	if _, ok := inspectMessage(top, lnetodhcp.MsgReply, xid, clientDUID, iaid, config, serverDUID); !ok {
+		t.Fatal("single top-level success status rejected")
+	}
+	top = appendOption(top, lnetodhcp.OptStatusCode, status)
+	if _, ok := inspectMessage(top, lnetodhcp.MsgReply, xid, clientDUID, iaid, config, serverDUID); ok {
+		t.Fatal("duplicate top-level status accepted")
+	}
+
+	iana := buildServerPayload(t, lnetodhcp.MsgReply, xid, clientDUID, serverDUID, iaid, assigned, false)
+	iana = appendToLastOption(t, iana, lnetodhcp.OptIANA, appendSuboption(nil, uint16(lnetodhcp.OptStatusCode), status))
+	if _, ok := inspectMessage(iana, lnetodhcp.MsgReply, xid, clientDUID, iaid, config, serverDUID); !ok {
+		t.Fatal("single IA_NA success status rejected")
+	}
+	iana = appendToLastOption(t, iana, lnetodhcp.OptIANA, appendSuboption(nil, uint16(lnetodhcp.OptStatusCode), status))
+	if _, ok := inspectMessage(iana, lnetodhcp.MsgReply, xid, clientDUID, iaid, config, serverDUID); ok {
+		t.Fatal("duplicate IA_NA status accepted")
+	}
+
+	iapd := buildServerPayload(t, lnetodhcp.MsgReply, xid, clientDUID, serverDUID, iaid, assigned, true)
+	iapd = appendToLastOption(t, iapd, lnetodhcp.OptIAPD, appendSuboption(nil, uint16(lnetodhcp.OptStatusCode), status))
+	if _, ok := inspectMessage(iapd, lnetodhcp.MsgReply, xid, clientDUID, iaid, config, serverDUID); !ok {
+		t.Fatal("single IA_PD success status rejected")
+	}
+	iapd = appendToLastOption(t, iapd, lnetodhcp.OptIAPD, appendSuboption(nil, uint16(lnetodhcp.OptStatusCode), status))
+	if _, ok := inspectMessage(iapd, lnetodhcp.MsgReply, xid, clientDUID, iaid, config, serverDUID); ok {
+		t.Fatal("duplicate IA_PD status accepted")
+	}
+}
+
+func FuzzDHCPv6WireReply(f *testing.F) {
+	config := defaultConfig()
+	xid := uint32(0x123456)
+	iaid := [4]byte{2, 0, 0, 1}
+	clientDUID := []byte{0, 3, 0, 1, 2, 0, 0, 0, 0, 1}
+	serverDUID := []byte{0, 3, 0, 1, 2, 0, 0, 0, 0, 2}
+	seed := buildServerPayload(f, lnetodhcp.MsgReply, xid, clientDUID, serverDUID, iaid, netip.MustParseAddr("2001:db8::10"), true)
+	f.Add(seed)
+	f.Add([]byte{byte(lnetodhcp.MsgReply), byte(xid >> 16), byte(xid >> 8), byte(xid)})
+	f.Fuzz(func(t *testing.T, payload []byte) {
+		if len(payload) > config.MaxPacketBytes {
+			return
+		}
+		info, ok := inspectMessage(payload, lnetodhcp.MsgReply, xid, clientDUID, iaid, config, serverDUID)
+		if !ok {
+			return
+		}
+		if len(info.serverDUID) == 0 || info.assigned == (netip.Addr{}) || info.dnsCount > config.MaxDNSServers ||
+			info.domainCount > config.MaxDomainSearch || info.ntpCount > config.MaxNTPServers ||
+			info.ntpMulticastCount > config.MaxNTPMulticastServers || info.ntpNameCount > config.MaxNTPServerNames ||
+			info.prefixCount > config.MaxDelegatedPrefixes {
+			t.Fatalf("accepted invalid packet info: %+v", info)
+		}
+		if configuration, valid := info.configuration(xid, iaid, netip.MustParseAddr("fe80::2"), 7, serverDUID); !valid || !configuration.Valid() {
+			t.Fatalf("accepted reply produced invalid configuration: %+v", configuration)
+		}
+	})
+}
+
 func TestTimeoutCancellationPortOwnershipAndDeterministicClose(t *testing.T) {
 	config := defaultConfig()
 	config.MaxAttempts = 1
@@ -344,6 +428,31 @@ func appendSuboption(dst []byte, code uint16, data []byte) []byte {
 	return append(dst, data...)
 }
 
+func appendToLastOption(t testing.TB, payload []byte, want lnetodhcp.OptCode, nested []byte) []byte {
+	t.Helper()
+	payload = append([]byte(nil), payload...)
+	last := -1
+	for ptr := lnetodhcp.OptionsOffset; ptr < len(payload); {
+		code, _, next, ok := nextOption(payload, ptr)
+		if !ok {
+			t.Fatal("malformed test payload")
+		}
+		if code == want {
+			last = ptr
+		}
+		ptr = next
+	}
+	if last < 0 || last+4+int(binary.BigEndian.Uint16(payload[last+2:last+4])) != len(payload) {
+		t.Fatalf("option %v is not last", want)
+	}
+	length := int(binary.BigEndian.Uint16(payload[last+2 : last+4]))
+	if length+len(nested) > int(^uint16(0)) {
+		t.Fatal("nested test option too large")
+	}
+	binary.BigEndian.PutUint16(payload[last+2:last+4], uint16(length+len(nested)))
+	return append(payload, nested...)
+}
+
 func encodeName(name string) []byte {
 	var result []byte
 	for len(name) != 0 {
@@ -405,6 +514,13 @@ func TestConfigRejectsUnboundedOrOversizedValues(t *testing.T) {
 	config.MaxLeases = 2
 	if ValidConfig(config, 1500, new(policy.Policy), quota.NewAccount(quota.DefaultLimits()), true) {
 		t.Fatal("multiple port-546 leases accepted")
+	}
+	small := defaultConfig()
+	small.MaxPacketBytes = 256
+	large := defaultConfig()
+	large.MaxPacketBytes = 1200
+	if retainedBytes(small) != retainedBytes(defaultConfig()) || retainedBytes(large) != retainedBytes(defaultConfig())+1200 {
+		t.Fatalf("inline packet accounting = small:%d default:%d large:%d", retainedBytes(small), retainedBytes(defaultConfig()), retainedBytes(large))
 	}
 	if _, ok := nscore.FailureOf(errors.New("plain")); ok {
 		t.Fatal("plain errors unexpectedly categorized")

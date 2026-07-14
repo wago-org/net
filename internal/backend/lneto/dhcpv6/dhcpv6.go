@@ -24,8 +24,9 @@ import (
 )
 
 const (
-	serviceOrder = -80
-	closeOrder   = 8
+	serviceOrder      = -80
+	closeOrder        = 8
+	inlinePacketBytes = 1024
 )
 
 var (
@@ -33,6 +34,8 @@ var (
 	allServersMAC       = [6]byte{0x33, 0x33, 0, 1, 0, 2}
 	errPolicyDenied     = errors.New("net: DHCPv6 policy denied operation")
 	errPortInUse        = errors.New("net: DHCPv6 UDP port already owned")
+	errCanceled         = errors.New("DHCPv6 acquisition canceled")
+	errResponseLimit    = errors.New("DHCPv6 response service-attempt limit reached")
 )
 
 // Config fixes every transaction, packet, repeated-option, retry, retained
@@ -82,23 +85,24 @@ const (
 )
 
 type leaseResource struct {
-	owner      *Adapter
-	client     lnetodhcp.Client
-	state      leaseState
-	xid        uint32
-	iaid       [4]byte
-	clientDUID [10]byte
-	serverDUID [dhcpns.MaxServerDUIDBytes]byte
-	serverLen  uint16
-	serverAddr netip.Addr
-	serverMAC  [6]byte
-	packet     []byte
-	attempts   uint16
-	wait       uint16
-	result     dhcpns.Configuration
-	failure    error
-	retained   quota.Charge
-	work       quota.Charge
+	owner        *Adapter
+	client       lnetodhcp.Client
+	state        leaseState
+	xid          uint32
+	iaid         [4]byte
+	clientDUID   [10]byte
+	serverDUID   [dhcpns.MaxServerDUIDBytes]byte
+	serverLen    uint16
+	serverAddr   netip.Addr
+	serverMAC    [6]byte
+	packet       []byte
+	packetInline [inlinePacketBytes]byte
+	attempts     uint16
+	wait         uint16
+	result       dhcpns.Configuration
+	failure      error
+	retained     quota.Charge
+	work         quota.Charge
 }
 
 var _ dhcpns.Resource = (*leaseResource)(nil)
@@ -191,7 +195,11 @@ func (a *Adapter) Operations() dhcpns.Operations {
 func retainedBytes(config Config) uint64 {
 	// Account both the Wago-owned packet/result and the pinned client's bounded
 	// repeated-option backing arrays and copied DUID storage conservatively.
-	return uint64(config.MaxPacketBytes+2*dhcpns.FixedResultRetainedBytes) +
+	packetBytes := inlinePacketBytes
+	if config.MaxPacketBytes > inlinePacketBytes {
+		packetBytes += config.MaxPacketBytes
+	}
+	return uint64(packetBytes+2*dhcpns.FixedResultRetainedBytes) +
 		uint64(config.MaxServerDUIDBytes) + uint64(config.MaxDNSServers+config.MaxNTPServers+config.MaxNTPMulticastServers)*16 +
 		uint64(config.MaxDomainSearch+config.MaxNTPServerNames)*256 + uint64(config.MaxDelegatedPrefixes)*32
 }
@@ -213,7 +221,9 @@ func (a *Adapter) TryAcquire() (nscore.Resource, nscore.Progress, error) {
 	}
 	xid := a.nextTransactionIDLocked()
 	r := &leaseResource{owner: a, state: leaseSolicitPending, xid: xid, iaid: [4]byte(a.hardwareAddress[:4])}
-	copy(r.clientDUID[:], lnetodhcp.AppendDUIDLL(nil, a.hardwareAddress))
+	if duid := lnetodhcp.AppendDUIDLL(r.clientDUID[:0], a.hardwareAddress); len(duid) != len(r.clientDUID) {
+		return nil, 0, nscore.Fail(nscore.FailureIO, lneto.ErrBadState)
+	}
 	if err := a.quotas.AcquireResourceAndQueuedBytes(&r.retained, quota.ResourceDHCPv6, 1, retainedBytes(a.config)); err != nil {
 		return nil, 0, lnetocore.MapError(err)
 	}
@@ -222,7 +232,11 @@ func (a *Adapter) TryAcquire() (nscore.Resource, nscore.Progress, error) {
 		r.retained.ResetReleased()
 		return nil, 0, lnetocore.MapError(err)
 	}
-	r.packet = make([]byte, a.config.MaxPacketBytes)
+	if a.config.MaxPacketBytes <= len(r.packetInline) {
+		r.packet = r.packetInline[:a.config.MaxPacketBytes]
+	} else {
+		r.packet = make([]byte, a.config.MaxPacketBytes)
+	}
 	if err := r.client.BeginRequest(xid, lnetodhcp.RequestConfig{
 		ClientHardwareAddr: a.hardwareAddress,
 		Limits: lnetodhcp.Limits{
@@ -340,7 +354,7 @@ func (r *leaseResource) Cancel() error {
 	defer r.owner.core.Unlock()
 	switch r.state {
 	case leaseSolicitPending, leaseWaitAdvertise, leaseRequestPending, leaseWaitReply:
-		r.failLocked(nscore.FailureCanceled, errors.New("DHCPv6 acquisition canceled"))
+		r.failLocked(nscore.FailureCanceled, errCanceled)
 		return nil
 	case leaseClosed:
 		return nscore.Fail(nscore.FailureClosed, net.ErrClosed)
@@ -421,7 +435,7 @@ func (a *Adapter) egressLocked(dst []byte) (int, bool, error) {
 			return 0, true, nil
 		}
 		if r.attempts >= a.config.MaxAttempts {
-			r.failLocked(nscore.FailureTimedOut, errors.New("DHCPv6 response service-attempt limit reached"))
+			r.failLocked(nscore.FailureTimedOut, errResponseLimit)
 			return 0, true, nil
 		}
 		if r.state == leaseWaitAdvertise {
@@ -610,7 +624,7 @@ func inspectMessage(payload []byte, want lnetodhcp.MsgType, xid uint32, clientDU
 		return packetInfo{}, false
 	}
 	var info packetInfo
-	var clientIDs, serverIDs, ianas, iapds, dnsOptions, domainOptions, ntpOptions int
+	var clientIDs, serverIDs, statuses, ianas, iapds, dnsOptions, domainOptions, ntpOptions int
 	ok := true
 	err = frame.ForEachOption(func(_ int, code lnetodhcp.OptCode, data []byte) error {
 		switch code {
@@ -627,7 +641,8 @@ func inspectMessage(payload []byte, want lnetodhcp.MsgType, xid uint32, clientDU
 				info.serverDUID = data
 			}
 		case lnetodhcp.OptStatusCode:
-			ok = ok && successStatus(data)
+			statuses++
+			ok = ok && statuses == 1 && successStatus(data)
 		case lnetodhcp.OptIANA:
 			ianas++
 			ok = ok && ianas == 1 && parseIANA(data, iaid, &info)
@@ -662,6 +677,7 @@ func parseIANA(data []byte, iaid [4]byte, info *packetInfo) bool {
 	}
 	info.t1, info.t2 = binary.BigEndian.Uint32(data[4:8]), binary.BigEndian.Uint32(data[8:12])
 	found := false
+	statuses := 0
 	for ptr := 12; ptr < len(data); {
 		code, sub, next, ok := nextOption(data, ptr)
 		if !ok {
@@ -679,7 +695,8 @@ func parseIANA(data []byte, iaid [4]byte, info *packetInfo) bool {
 			}
 			info.assigned, info.preferred, info.valid, found = address, preferred, valid, true
 		case lnetodhcp.OptStatusCode:
-			if !successStatus(sub) {
+			statuses++
+			if statuses != 1 || !successStatus(sub) {
 				return false
 			}
 		}
@@ -695,6 +712,7 @@ func parseIAPD(data []byte, iaid [4]byte, limit uint8, info *packetInfo) bool {
 	info.pdT1, info.pdT2 = binary.BigEndian.Uint32(data[4:8]), binary.BigEndian.Uint32(data[8:12])
 	initialCount := info.prefixCount
 	var maximum uint32
+	statuses := 0
 	for ptr := 12; ptr < len(data); {
 		code, sub, next, ok := nextOption(data, ptr)
 		if !ok {
@@ -717,7 +735,8 @@ func parseIAPD(data []byte, iaid [4]byte, limit uint8, info *packetInfo) bool {
 				maximum = valid
 			}
 		case lnetodhcp.OptStatusCode:
-			if !successStatus(sub) {
+			statuses++
+			if statuses != 1 || !successStatus(sub) {
 				return false
 			}
 		}
@@ -754,7 +773,8 @@ func parseNames(data []byte, destination []dhcpns.Name, limit uint8, count *uint
 			return false
 		}
 		start := offset
-		var dotted []byte
+		var dotted [dhcpns.MaxNameBytes]byte
+		written := 0
 		for {
 			if offset >= len(data) {
 				return false
@@ -764,19 +784,30 @@ func parseNames(data []byte, destination []dhcpns.Name, limit uint8, count *uint
 			if length == 0 {
 				break
 			}
-			if length > 63 || offset+length > len(data) {
+			separator := 0
+			if written != 0 {
+				separator = 1
+			}
+			if length > 63 || offset+length > len(data) || written+separator+length > len(dotted) {
 				return false
 			}
-			if len(dotted) != 0 {
-				dotted = append(dotted, '.')
+			if separator != 0 {
+				dotted[written] = '.'
+				written++
 			}
-			dotted = append(dotted, data[offset:offset+length]...)
+			for _, value := range data[offset : offset+length] {
+				if value >= 'A' && value <= 'Z' {
+					value += 'a' - 'A'
+				}
+				dotted[written] = value
+				written++
+			}
 			offset += length
 		}
 		if offset == start+1 {
 			return false
 		}
-		name, ok := dhcpns.NewName(string(dotted))
+		name, ok := dhcpns.NewNameBytes(dotted[:written])
 		if !ok {
 			return false
 		}
@@ -851,7 +882,7 @@ func validTimers(t1, t2, lifetime uint32) bool {
 	return (t1 == 0 || t1 <= lifetime) && (t2 == 0 || t2 <= lifetime) && (t1 == 0 || t2 == 0 || t1 <= t2)
 }
 
-func (info packetInfo) configuration(xid uint32, iaid [4]byte, server netip.Addr, scopeID uint32, serverDUID []byte) (dhcpns.Configuration, bool) {
+func (info *packetInfo) configuration(xid uint32, iaid [4]byte, server netip.Addr, scopeID uint32, serverDUID []byte) (dhcpns.Configuration, bool) {
 	configuration := dhcpns.Configuration{
 		TransactionID: xid, IAID: iaid, AssignedAddr: info.assigned, ServerAddr: server,
 		RenewalSeconds: info.t1, RebindingSeconds: info.t2, PreferredLifetimeSeconds: info.preferred, ValidLifetimeSeconds: info.valid,

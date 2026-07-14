@@ -78,7 +78,16 @@ type Name struct {
 
 func NewName(value string) (Name, bool) {
 	normalized, ok := dnsname.Normalize(value)
-	if !ok || normalized != value || len(value) > MaxNameBytes {
+	if !ok || normalized != value {
+		return Name{}, false
+	}
+	return NewNameBytes([]byte(value))
+}
+
+// NewNameBytes copies one already-canonical DNS name into inline storage
+// without converting it to a heap-backed string.
+func NewNameBytes(value []byte) (Name, bool) {
+	if len(value) > MaxNameBytes || !dnsname.ValidCanonicalBytes(value) {
 		return Name{}, false
 	}
 	var result Name
@@ -90,12 +99,7 @@ func NewName(value string) (Name, bool) {
 func (name Name) String() string { return string(name.Bytes[:name.Length]) }
 
 func (name Name) Valid() bool {
-	if name.Length == 0 || int(name.Length) > len(name.Bytes) {
-		return false
-	}
-	value := string(name.Bytes[:name.Length])
-	normalized, ok := dnsname.Normalize(value)
-	if !ok || normalized != value {
+	if name.Length == 0 || int(name.Length) > len(name.Bytes) || !dnsname.ValidCanonicalBytes(name.Bytes[:name.Length]) {
 		return false
 	}
 	for _, b := range name.Bytes[name.Length:] {
@@ -160,7 +164,10 @@ type Configuration struct {
 	DelegatedPrefixes [MaxDelegatedPrefixes]DelegatedPrefix
 }
 
-func (configuration Configuration) Valid() bool {
+func (configuration *Configuration) Valid() bool {
+	if configuration == nil {
+		return false
+	}
 	if configuration.TransactionID == 0 || configuration.TransactionID > 0x00ff_ffff || configuration.IAID == ([4]byte{}) ||
 		!validUnicast(configuration.AssignedAddr, 0) || !validUnicast(configuration.ServerAddr, configuration.ServerScopeID) ||
 		configuration.ServerDUIDLength == 0 || int(configuration.ServerDUIDLength) > len(configuration.ServerDUID) ||
@@ -237,7 +244,7 @@ func validTimers(t1, t2, lifetime uint32) bool {
 	return (t1 == 0 || t1 <= lifetime) && (t2 == 0 || t2 <= lifetime) && (t1 == 0 || t2 == 0 || t1 <= t2)
 }
 
-func maxPrefixLifetime(configuration Configuration) uint32 {
+func maxPrefixLifetime(configuration *Configuration) uint32 {
 	var maximum uint32
 	for i := 0; i < int(configuration.PrefixCount); i++ {
 		if configuration.DelegatedPrefixes[i].ValidLifetime > maximum {
