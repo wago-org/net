@@ -69,10 +69,11 @@ type Adapter struct {
 	lease           *leaseResource
 	nextXID         uint32
 
-	server        lnetodhcp.Server
-	serverEnabled bool
-	serverClients []serverClientKey
-	serverPending uint16
+	server           lnetodhcp.Server
+	serverEnabled    bool
+	serverClients    []serverClientKey
+	serverPending    uint16
+	clientEgressTurn bool
 }
 
 type leaseState uint8
@@ -360,22 +361,38 @@ func (r *leaseResource) releaseWorkLocked() {
 	r.work.ResetReleased()
 }
 
+func (a *Adapter) clientHasWorkLocked() bool {
+	return a.lease != nil && (a.lease.state == leaseDiscover || a.lease.state == leaseWaitOffer || a.lease.state == leaseRequest || a.lease.state == leaseWaitACK)
+}
+
 func (a *Adapter) hasWorkLocked() bool {
-	return a.serverPending != 0 || a.lease != nil && (a.lease.state == leaseDiscover || a.lease.state == leaseWaitOffer || a.lease.state == leaseRequest || a.lease.state == leaseWaitACK)
+	return a.serverPending != 0 || a.clientHasWorkLocked()
 }
 
 func (a *Adapter) egressLocked(dst []byte) (int, bool, error) {
-	if a.serverPending != 0 {
+	clientWork := a.clientHasWorkLocked()
+	if a.serverPending != 0 && (!clientWork || !a.clientEgressTurn) {
 		n, err := a.writeServerFrame(dst)
-		if err == nil && a.serverPending != 0 {
-			a.serverPending--
+		if err == nil {
+			if a.serverPending != 0 {
+				a.serverPending--
+			}
+			a.clientEgressTurn = true
 		}
 		return n, true, err
 	}
-	r := a.lease
-	if r == nil {
+	if !clientWork {
 		return 0, false, nil
 	}
+	n, worked, err := a.egressClientLocked(dst)
+	if err == nil && worked {
+		a.clientEgressTurn = false
+	}
+	return n, worked, err
+}
+
+func (a *Adapter) egressClientLocked(dst []byte) (int, bool, error) {
+	r := a.lease
 	if r.state == leaseWaitOffer || r.state == leaseWaitACK {
 		if r.wait > 1 {
 			r.wait--
@@ -383,9 +400,6 @@ func (a *Adapter) egressLocked(dst []byte) (int, bool, error) {
 		}
 		r.failLocked(nscore.FailureTimedOut, errResponseLimit)
 		return 0, true, nil
-	}
-	if r.state != leaseDiscover && r.state != leaseRequest {
-		return 0, false, nil
 	}
 	n, err := a.writeClientFrame(dst, r)
 	if err != nil {
@@ -804,6 +818,7 @@ func (a *Adapter) CloseLocked() {
 	clear(a.serverClients)
 	a.serverClients = nil
 	a.serverPending = 0
+	a.clientEgressTurn = false
 	a.server = lnetodhcp.Server{}
 	a.clientPort.ReleaseLocked()
 	a.serverPort.ReleaseLocked()

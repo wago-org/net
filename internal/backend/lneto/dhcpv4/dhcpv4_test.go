@@ -333,6 +333,80 @@ func TestServerPendingResponseLifecyclePreservesRetryReleasePolicyAndClose(t *te
 	})
 }
 
+func TestCombinedClientServerEgressBoundsClientSchedulingDelay(t *testing.T) {
+	config := defaultConfig()
+	config.Server = ServerConfig{ServerAddr: netip.MustParseAddr("192.0.2.1"), Gateway: netip.MustParseAddr("192.0.2.1"), DNS: netip.MustParseAddr("192.0.2.53"), Subnet: netip.MustParsePrefix("192.0.2.0/24"), LeaseSeconds: 3600, MaxClients: 1}
+	_, combined := newAdapter(t, config.Server.ServerAddr, [6]byte{2, 0, 0, 0, 0, 1}, config, policy.Merge(clientPolicy(), serverPolicy()))
+	externalCore, external := newAdapter(t, netip.IPv4Unspecified(), [6]byte{2, 0, 0, 0, 0, 3}, defaultConfig(), clientPolicy())
+	if _, _, err := external.TryAcquire(dhcpns.Request{}); err != nil {
+		t.Fatal(err)
+	}
+	discover := serviceEgress(t, externalCore)
+	resource, _, err := combined.TryAcquire(dhcpns.Request{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	lease := resource.(*leaseResource)
+	if handled, err := combined.ingressLocked(discover); err != nil || !handled || combined.serverPending != 1 {
+		t.Fatalf("initial external discover = handled:%v err:%v pending:%d", handled, err, combined.serverPending)
+	}
+
+	var storage [1514]byte
+	n, worked, err := combined.egressLocked(storage[:])
+	if err != nil || !worked || n == 0 {
+		t.Fatalf("initial server response = %d, %v, %v", n, worked, err)
+	}
+	assertUDPPorts(t, storage[:n], dhcpns.ServerPort, dhcpns.ClientPort)
+	if handled, err := combined.ingressLocked(discover); err != nil || !handled || combined.serverPending != 1 {
+		t.Fatalf("replacement external discover = handled:%v err:%v pending:%d", handled, err, combined.serverPending)
+	}
+
+	n, worked, err = combined.egressLocked(storage[:])
+	if err != nil || !worked || n == 0 {
+		t.Fatalf("bounded client egress = %d, %v, %v", n, worked, err)
+	}
+	assertUDPPorts(t, storage[:n], dhcpns.ClientPort, dhcpns.ServerPort)
+	if lease.state != leaseWaitOffer || combined.serverPending != 1 {
+		t.Fatalf("client egress lifecycle = state:%v pending:%d", lease.state, combined.serverPending)
+	}
+
+	n, worked, err = combined.egressLocked(storage[:])
+	if err != nil || !worked || n == 0 || combined.serverPending != 0 {
+		t.Fatalf("server retry after client = %d, %v, %v pending:%d", n, worked, err, combined.serverPending)
+	}
+	assertUDPPorts(t, storage[:n], dhcpns.ServerPort, dhcpns.ClientPort)
+	if handled, err := combined.ingressLocked(discover); err != nil || !handled || combined.serverPending != 1 {
+		t.Fatalf("maintenance replacement discover = handled:%v err:%v pending:%d", handled, err, combined.serverPending)
+	}
+
+	waitBefore := lease.wait
+	if n, worked, err := combined.egressLocked(storage[:]); err != nil || !worked || n != 0 || lease.wait != waitBefore-1 || combined.serverPending != 1 {
+		t.Fatalf("bounded client maintenance = %d, %v, %v wait:%d pending:%d", n, worked, err, lease.wait, combined.serverPending)
+	}
+	if n, worked, err := combined.egressLocked(storage[:]); err != nil || !worked || n == 0 || combined.serverPending != 0 {
+		t.Fatalf("server response after maintenance = %d, %v, %v pending:%d", n, worked, err, combined.serverPending)
+	}
+}
+
+func assertUDPPorts(t testing.TB, frame []byte, source, destination uint16) {
+	t.Helper()
+	eth, err := ethernet.NewFrame(frame)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ip, err := ipv4.NewFrame(eth.Payload())
+	if err != nil {
+		t.Fatal(err)
+	}
+	udp, err := lnetoudp.NewFrame(ip.Payload())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if udp.SourcePort() != source || udp.DestinationPort() != destination {
+		t.Fatalf("UDP ports = %d -> %d, want %d -> %d", udp.SourcePort(), udp.DestinationPort(), source, destination)
+	}
+}
+
 func TestServerClientBoundAndPoolAreFinite(t *testing.T) {
 	_, _ = newServer(t, 1)
 	config := defaultConfig()
