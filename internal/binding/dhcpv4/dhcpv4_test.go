@@ -47,12 +47,13 @@ func (n *fakeNamespace) TryAcquire(dhcpns.Request) (nscore.Resource, nscore.Prog
 }
 
 type fakeLease struct {
-	lease    dhcpns.Lease
-	result   dhcpns.ResultState
-	failure  error
-	closed   bool
-	canceled bool
-	released bool
+	lease       dhcpns.Lease
+	result      dhcpns.ResultState
+	failure     error
+	resultCalls int
+	closed      bool
+	canceled    bool
+	released    bool
 }
 
 func (l *fakeLease) Close() error { l.closed = true; return nil }
@@ -65,6 +66,7 @@ func (*fakeLease) Readiness() nscore.Readiness {
 	return nscore.ReadyDHCPv4Lease
 }
 func (l *fakeLease) TryResult() (dhcpns.Lease, dhcpns.ResultState, error) {
+	l.resultCalls++
 	return l.lease, l.result, l.failure
 }
 
@@ -167,6 +169,56 @@ func TestBindingsPrevalidateAcquireAndPreserveResultOutputs(t *testing.T) {
 	}
 	if status := callBinding(t, bindingByName(t, bindings, "close"), host, freshHandle); status != guest.StatusOK || !fresh.closed {
 		t.Fatalf("fresh close = %v, closed=%v", status, fresh.closed)
+	}
+}
+
+func TestBindingsRejectHighBitI32AliasesBeforeStateAndBackendWork(t *testing.T) {
+	lease := &fakeLease{result: dhcpns.ResultWouldBlock}
+	backend := &fakeNamespace{lease: lease, progress: nscore.ProgressInProgress}
+	manager, instance := attachManager(t, backend)
+	defer manager.Detach(instance)
+	host := testHost{instance: instance, memory: bytes.Repeat([]byte{0x4d}, 1024)}
+	bindings := Bindings(plugin.NewHost(manager))
+	state, ok := manager.ForInstance(instance)
+	if !ok {
+		t.Fatal("attached state missing")
+	}
+	namespaceHandle := state.NamespaceHandle()
+	leaseHandle, err := state.Resources().Add(resource.KindDHCPv4Lease, lease)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := dhcpns.Request{RequestedAddr: netip.MustParseAddr("192.0.2.20"), HostnameLength: 4}
+	copy(request.Hostname[:], "host")
+	if !dhcpabi.EncodeRequestV1(host.memory, 0, request) {
+		t.Fatal("encode request")
+	}
+
+	high := uint64(1) << 32
+	tests := []struct {
+		name    string
+		binding string
+		params  []uint64
+	}{
+		{name: "namespace output", binding: "namespace_default", params: []uint64{high | 900}},
+		{name: "acquire request", binding: "acquire", params: []uint64{uint64(namespaceHandle), high, 900}},
+		{name: "acquire output", binding: "acquire", params: []uint64{uint64(namespaceHandle), 0, high | 900}},
+		{name: "result output", binding: "result", params: []uint64{uint64(leaseHandle), high | 400}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			before := append([]byte(nil), host.memory...)
+			acquireCalls, resultCalls := backend.calls, lease.resultCalls
+			if status := callBinding(t, bindingByName(t, bindings, test.binding), host, test.params...); status != guest.StatusInvalidArgument {
+				t.Fatalf("status = %v", status)
+			}
+			if backend.calls != acquireCalls || lease.resultCalls != resultCalls {
+				t.Fatalf("backend work changed: acquire=%d result=%d", backend.calls, lease.resultCalls)
+			}
+			if !bytes.Equal(host.memory, before) {
+				t.Fatal("invalid alias mutated guest memory")
+			}
+		})
 	}
 }
 
