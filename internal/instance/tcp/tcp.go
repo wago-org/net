@@ -22,6 +22,9 @@ func Listen(state *core.State, namespaceHandle resource.Handle, local nscore.End
 		listener, backendProgress, backendErr := backend.TryListenTCP(local)
 		progress = backendProgress
 		if backendErr != nil {
+			if !resource.IsNil(listener) {
+				_ = listener.Close()
+			}
 			return backendErr
 		}
 		typedListener, ok := listener.(tcpns.Listener)
@@ -45,6 +48,9 @@ func Listen(state *core.State, namespaceHandle resource.Handle, local nscore.End
 		}
 		return nil
 	})
+	if err != nil {
+		handle, progress = 0, 0
+	}
 	return
 }
 
@@ -62,6 +68,9 @@ func Connect(state *core.State, namespaceHandle resource.Handle, remote nscore.E
 		stream, backendProgress, backendErr := backend.TryConnectTCP(remote)
 		progress = backendProgress
 		if backendErr != nil {
+			if !resource.IsNil(stream) {
+				_ = stream.Close()
+			}
 			return backendErr
 		}
 		typedStream, ok := stream.(tcpns.Stream)
@@ -78,6 +87,9 @@ func Connect(state *core.State, namespaceHandle resource.Handle, remote nscore.E
 		}
 		return err
 	})
+	if err != nil {
+		handle, progress = 0, 0
+	}
 	return
 }
 
@@ -95,6 +107,9 @@ func Accept(state *core.State, listenerHandle resource.Handle) (handle resource.
 		stream, backendProgress, backendErr := listener.TryAccept()
 		progress = backendProgress
 		if backendErr != nil {
+			if !resource.IsNil(stream) {
+				_ = stream.Close()
+			}
 			return backendErr
 		}
 		if progress == nscore.ProgressWouldBlock {
@@ -119,6 +134,9 @@ func Accept(state *core.State, listenerHandle resource.Handle) (handle resource.
 		}
 		return err
 	})
+	if err != nil {
+		handle, progress = 0, 0
+	}
 	return
 }
 
@@ -160,12 +178,19 @@ func FinishConnect(state *core.State, handle resource.Handle) (progress nscore.P
 			return lookupErr
 		}
 		progress, err = stream.TryFinishConnect()
-		if err == nil && !progress.Valid() {
+		if err != nil {
+			progress = 0
+			return err
+		}
+		if !progress.Valid() {
 			progress = 0
 			return nscore.Fail(nscore.FailureIO, core.ErrInvalidBackendResult)
 		}
-		return err
+		return nil
 	})
+	if err != nil {
+		progress = 0
+	}
 	return
 }
 
@@ -207,12 +232,19 @@ func Write(state *core.State, handle resource.Handle, src []byte) (result nscore
 			return lookupErr
 		}
 		result, err = stream.TryWrite(src)
-		if err == nil && !result.Valid(len(src)) {
+		if err != nil {
+			result = nscore.IOResult{}
+			return err
+		}
+		if !result.Valid(len(src)) {
 			result = nscore.IOResult{}
 			return nscore.Fail(nscore.FailureIO, core.ErrInvalidBackendResult)
 		}
-		return err
+		return nil
 	})
+	if err != nil {
+		result = nscore.IOResult{}
+	}
 	return
 }
 
@@ -224,12 +256,19 @@ func ShutdownWrite(state *core.State, handle resource.Handle) (progress nscore.P
 			return lookupErr
 		}
 		progress, err = stream.TryShutdownWrite()
-		if err == nil && !progress.Valid() {
+		if err != nil {
+			progress = 0
+			return err
+		}
+		if !progress.Valid() {
 			progress = 0
 			return nscore.Fail(nscore.FailureIO, core.ErrInvalidBackendResult)
 		}
-		return err
+		return nil
 	})
+	if err != nil {
+		progress = 0
+	}
 	return
 }
 

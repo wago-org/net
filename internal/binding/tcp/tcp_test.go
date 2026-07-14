@@ -157,9 +157,11 @@ func TestBindingsConnectStreamIOAtomicStatusesAndLifecycle(t *testing.T) {
 	}
 	host.memory[28] = 0
 
+	failedStream := new(fakeStream)
+	backend.stream = failedStream
 	backend.connectFailure = nscore.Fail(nscore.FailureConnectionRefused, errors.New("refused"))
-	if status := callBinding(t, bindingByName(t, bindings, "connect"), host, uint64(namespaceHandle), 0, 64); status != guest.StatusConnectionRefused || backend.connectCalls != 1 || !bytes.Equal(host.memory[64:64+tcpabi.StreamV1Size], streamBefore) {
-		t.Fatalf("failed connect = %v, calls=%d", status, backend.connectCalls)
+	if status := callBinding(t, bindingByName(t, bindings, "connect"), host, uint64(namespaceHandle), 0, 64); status != guest.StatusConnectionRefused || backend.connectCalls != 1 || failedStream.closeCalls != 1 || !bytes.Equal(host.memory[64:64+tcpabi.StreamV1Size], streamBefore) {
+		t.Fatalf("failed connect = %v, calls=%d closes=%d", status, backend.connectCalls, failedStream.closeCalls)
 	}
 	backend.connectFailure = nil
 	var typedNil *fakeStream

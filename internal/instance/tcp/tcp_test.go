@@ -18,26 +18,40 @@ import (
 )
 
 type fakeNamespace struct {
-	listener tcpns.Listener
-	stream   tcpns.Stream
+	listener        tcpns.Listener
+	listenProgress  nscore.Progress
+	listenFailure   error
+	stream          tcpns.Stream
+	connectProgress nscore.Progress
+	connectFailure  error
 }
 
 func (*fakeNamespace) Close() error                { return nil }
 func (*fakeNamespace) Readiness() nscore.Readiness { return nscore.ReadyWritable }
 func (n *fakeNamespace) TryListenTCP(nscore.Endpoint) (nscore.Resource, nscore.Progress, error) {
-	return n.listener, nscore.ProgressDone, nil
+	progress := n.listenProgress
+	if progress == 0 {
+		progress = nscore.ProgressDone
+	}
+	return n.listener, progress, n.listenFailure
 }
 func (n *fakeNamespace) TryConnectTCP(nscore.Endpoint) (nscore.Resource, nscore.Progress, error) {
-	return n.stream, nscore.ProgressInProgress, nil
+	progress := n.connectProgress
+	if progress == 0 {
+		progress = nscore.ProgressInProgress
+	}
+	return n.stream, progress, n.connectFailure
 }
 func (*fakeNamespace) TryService(nscore.ServiceBudget) (nscore.ServiceReport, nscore.Progress, error) {
 	return nscore.ServiceReport{}, nscore.ProgressWouldBlock, nil
 }
 
 type fakeListener struct {
-	closed   atomic.Int32
-	local    nscore.Endpoint
-	accepted tcpns.Stream
+	closed         atomic.Int32
+	local          nscore.Endpoint
+	accepted       tcpns.Stream
+	acceptProgress nscore.Progress
+	acceptFailure  error
 }
 
 func (l *fakeListener) Close() error                   { l.closed.Add(1); return nil }
@@ -45,33 +59,49 @@ func (*fakeListener) Readiness() nscore.Readiness      { return nscore.ReadyAcce
 func (l *fakeListener) LocalEndpoint() nscore.Endpoint { return l.local }
 func (l *fakeListener) TryAccept() (nscore.Resource, nscore.Progress, error) {
 	if l.accepted == nil {
-		return nil, nscore.ProgressWouldBlock, nil
+		return nil, nscore.ProgressWouldBlock, l.acceptFailure
 	}
 	stream := l.accepted
 	l.accepted = nil
-	return stream, nscore.ProgressDone, nil
+	progress := l.acceptProgress
+	if progress == 0 {
+		progress = nscore.ProgressDone
+	}
+	return stream, progress, l.acceptFailure
 }
 
 type fakeStream struct {
-	closed      atomic.Int32
-	local       nscore.Endpoint
-	remote      nscore.Endpoint
-	input       []byte
-	written     []byte
-	scriptRead  bool
-	readPayload []byte
-	readResult  nscore.IOResult
-	readFailure error
-	readDstLen  int
+	closed           atomic.Int32
+	local            nscore.Endpoint
+	remote           nscore.Endpoint
+	input            []byte
+	written          []byte
+	finishProgress   nscore.Progress
+	finishFailure    error
+	scriptRead       bool
+	readPayload      []byte
+	readResult       nscore.IOResult
+	readFailure      error
+	readDstLen       int
+	writeResult      nscore.IOResult
+	writeFailure     error
+	shutdownProgress nscore.Progress
+	shutdownFailure  error
 }
 
 func (s *fakeStream) Close() error { s.closed.Add(1); return nil }
 func (*fakeStream) Readiness() nscore.Readiness {
 	return nscore.ReadyConnected | nscore.ReadyReadable | nscore.ReadyWritable
 }
-func (s *fakeStream) LocalEndpoint() nscore.Endpoint           { return s.local }
-func (s *fakeStream) RemoteEndpoint() nscore.Endpoint          { return s.remote }
-func (*fakeStream) TryFinishConnect() (nscore.Progress, error) { return nscore.ProgressDone, nil }
+func (s *fakeStream) LocalEndpoint() nscore.Endpoint  { return s.local }
+func (s *fakeStream) RemoteEndpoint() nscore.Endpoint { return s.remote }
+func (s *fakeStream) TryFinishConnect() (nscore.Progress, error) {
+	progress := s.finishProgress
+	if progress == 0 {
+		progress = nscore.ProgressDone
+	}
+	return progress, s.finishFailure
+}
 func (s *fakeStream) TryRead(dst []byte) (nscore.IOResult, error) {
 	if s.scriptRead {
 		s.readDstLen = len(dst)
@@ -86,11 +116,20 @@ func (s *fakeStream) TryRead(dst []byte) (nscore.IOResult, error) {
 	return nscore.IOResult{Bytes: n, State: nscore.IOReady}, nil
 }
 func (s *fakeStream) TryWrite(src []byte) (nscore.IOResult, error) {
+	if s.writeFailure != nil || s.writeResult != (nscore.IOResult{}) {
+		return s.writeResult, s.writeFailure
+	}
 	n := min(3, len(src))
 	s.written = append(s.written, src[:n]...)
 	return nscore.IOResult{Bytes: n, State: nscore.IOReady}, nil
 }
-func (*fakeStream) TryShutdownWrite() (nscore.Progress, error) { return nscore.ProgressDone, nil }
+func (s *fakeStream) TryShutdownWrite() (nscore.Progress, error) {
+	progress := s.shutdownProgress
+	if progress == 0 {
+		progress = nscore.ProgressDone
+	}
+	return progress, s.shutdownFailure
+}
 
 func TestOperationsPreserveReadinessPartialIOAndKindSafety(t *testing.T) {
 	local := nscore.Endpoint{Address: netip.MustParseAddr("192.0.2.1"), Port: 4300}
@@ -224,6 +263,91 @@ func TestReadCommitsOnlyValidatedReadyBytes(t *testing.T) {
 		if value != 0xa5 {
 			t.Fatalf("bounded tail[%d] = %x", i, value)
 		}
+	}
+}
+
+func TestCreationErrorsCloseResourcesAndDoNotPublish(t *testing.T) {
+	local := nscore.Endpoint{Address: netip.MustParseAddr("192.0.2.1"), Port: 4302}
+	remote := nscore.Endpoint{Address: netip.MustParseAddr("192.0.2.2"), Port: 4303}
+	backendFailure := nscore.Fail(nscore.FailureTimedOut, errors.New("timeout"))
+	failedListener := &fakeListener{local: local}
+	failedConnect := &fakeStream{local: local, remote: remote}
+	backend := &fakeNamespace{
+		listener: failedListener, listenProgress: nscore.ProgressDone, listenFailure: backendFailure,
+		stream: failedConnect, connectProgress: nscore.ProgressInProgress, connectFailure: backendFailure,
+	}
+	state, manager, instance := attachState(t, backend, 4)
+	defer manager.Detach(instance)
+	resourcesBefore := state.Resources().Len()
+	readinessBefore := state.Readiness().Snapshot()
+
+	if handle, progress, err := Listen(state, state.NamespaceHandle(), local); handle != 0 || progress != 0 || failureOf(t, err) != nscore.FailureTimedOut {
+		t.Fatalf("failed Listen = %v, %v, %v", handle, progress, err)
+	}
+	if handle, progress, err := Connect(state, state.NamespaceHandle(), remote); handle != 0 || progress != 0 || failureOf(t, err) != nscore.FailureTimedOut {
+		t.Fatalf("failed Connect = %v, %v, %v", handle, progress, err)
+	}
+	if failedListener.closed.Load() != 1 || failedConnect.closed.Load() != 1 || state.Resources().Len() != resourcesBefore || state.Readiness().Snapshot() != readinessBefore {
+		t.Fatalf("failed creations retained state: listener closes=%d stream closes=%d resources=%d readiness=%+v", failedListener.closed.Load(), failedConnect.closed.Load(), state.Resources().Len(), state.Readiness().Snapshot())
+	}
+
+	var typedNilListener *fakeListener
+	var typedNilStream *fakeStream
+	backend.listener, backend.stream = typedNilListener, typedNilStream
+	if handle, progress, err := Listen(state, state.NamespaceHandle(), local); handle != 0 || progress != 0 || failureOf(t, err) != nscore.FailureTimedOut {
+		t.Fatalf("typed-nil failed Listen = %v, %v, %v", handle, progress, err)
+	}
+	if handle, progress, err := Connect(state, state.NamespaceHandle(), remote); handle != 0 || progress != 0 || failureOf(t, err) != nscore.FailureTimedOut {
+		t.Fatalf("typed-nil failed Connect = %v, %v, %v", handle, progress, err)
+	}
+
+	listener := &fakeListener{local: local}
+	backend.listener, backend.listenFailure = listener, nil
+	listenerHandle, progress, err := Listen(state, state.NamespaceHandle(), local)
+	if err != nil || progress != nscore.ProgressDone {
+		t.Fatalf("setup Listen = %v, %v", progress, err)
+	}
+	failedAccept := &fakeStream{local: local, remote: remote}
+	listener.accepted, listener.acceptFailure = failedAccept, backendFailure
+	if handle, progress, err := Accept(state, listenerHandle); handle != 0 || progress != 0 || failureOf(t, err) != nscore.FailureTimedOut {
+		t.Fatalf("failed Accept = %v, %v, %v", handle, progress, err)
+	}
+	if failedAccept.closed.Load() != 1 || state.Resources().Len() != resourcesBefore+1 || state.Readiness().Snapshot().Registrations != readinessBefore.Registrations+1 {
+		t.Fatalf("failed Accept retained state: closes=%d resources=%d readiness=%+v", failedAccept.closed.Load(), state.Resources().Len(), state.Readiness().Snapshot())
+	}
+	listener.accepted = typedNilStream
+	if handle, progress, err := Accept(state, listenerHandle); handle != 0 || progress != 0 || failureOf(t, err) != nscore.FailureTimedOut {
+		t.Fatalf("typed-nil failed Accept = %v, %v, %v", handle, progress, err)
+	}
+	listener.acceptFailure = nil
+	if handle, progress, err := Accept(state, listenerHandle); handle != 0 || progress != nscore.ProgressWouldBlock || err != nil {
+		t.Fatalf("would-block Accept = %v, %v, %v", handle, progress, err)
+	}
+}
+
+func TestOperationErrorsCanonicalizeBackendOutputs(t *testing.T) {
+	local := nscore.Endpoint{Address: netip.MustParseAddr("192.0.2.1"), Port: 4302}
+	remote := nscore.Endpoint{Address: netip.MustParseAddr("192.0.2.2"), Port: 4303}
+	stream := &fakeStream{local: local, remote: remote}
+	state, manager, instance := attachState(t, &fakeNamespace{stream: stream}, 2)
+	defer manager.Detach(instance)
+	handle, _, err := Connect(state, state.NamespaceHandle(), remote)
+	if err != nil {
+		t.Fatal(err)
+	}
+	backendFailure := nscore.Fail(nscore.FailureConnectionReset, errors.New("reset"))
+
+	stream.finishProgress, stream.finishFailure = nscore.ProgressDone, backendFailure
+	if progress, err := FinishConnect(state, handle); progress != 0 || failureOf(t, err) != nscore.FailureConnectionReset {
+		t.Fatalf("failed FinishConnect = %v, %v", progress, err)
+	}
+	stream.writeResult, stream.writeFailure = nscore.IOResult{Bytes: 3, State: nscore.IOReady}, backendFailure
+	if result, err := Write(state, handle, []byte("payload")); result != (nscore.IOResult{}) || failureOf(t, err) != nscore.FailureConnectionReset {
+		t.Fatalf("failed Write = %+v, %v", result, err)
+	}
+	stream.shutdownProgress, stream.shutdownFailure = nscore.ProgressDone, backendFailure
+	if progress, err := ShutdownWrite(state, handle); progress != 0 || failureOf(t, err) != nscore.FailureConnectionReset {
+		t.Fatalf("failed ShutdownWrite = %v, %v", progress, err)
 	}
 }
 
