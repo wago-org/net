@@ -131,6 +131,37 @@ func TestCoordinatorRemovesStaleHandlesWithinScanBudget(t *testing.T) {
 	}
 }
 
+func TestCoordinatorSeparatesStaleAndFreshGenerationsInReusedSlot(t *testing.T) {
+	table := newTable(t)
+	coordinator := newCoordinator(t, table, Config{MaxRegistrations: 2})
+	stale := &testPollable{ready: namespace.ReadyReadable}
+	staleHandle := addAndRegister(t, table, coordinator, resource.KindUDPSocket, stale)
+	if err := table.CloseHandle(staleHandle, resource.KindUDPSocket); err != nil {
+		t.Fatal(err)
+	}
+	fresh := &testPollable{ready: namespace.ReadyWritable}
+	freshHandle := addAndRegister(t, table, coordinator, resource.KindUDPSocket, fresh)
+	if freshHandle == staleHandle || uint16(freshHandle) != uint16(staleHandle) {
+		t.Fatalf("generation-safe slot reuse = stale %v, fresh %v", staleHandle, freshHandle)
+	}
+
+	events := make([]Event, 1)
+	budget := Budget{Scans: 2, Events: 1}
+	report, progress, err := coordinator.TryPoll(events, budget)
+	if err != nil || progress != namespace.ProgressDone || !report.ValidFor(budget) {
+		t.Fatalf("generation poll = %+v, %v, %v", report, progress, err)
+	}
+	if report != (Report{Scanned: 2, Events: 1, StaleRegistrations: 1}) || events[0] != (Event{Handle: freshHandle, Readiness: namespace.ReadyWritable}) {
+		t.Fatalf("generation poll result = %+v, %+v", report, events)
+	}
+	if coordinator.Unregister(staleHandle) {
+		t.Fatal("stale generation unregistered fresh registration")
+	}
+	if snapshot := coordinator.Snapshot(); snapshot.Registrations != 1 {
+		t.Fatalf("fresh registration removed with stale generation: %+v", snapshot)
+	}
+}
+
 func TestCoordinatorBoundsServiceAttemptsAndRotatesCursor(t *testing.T) {
 	table := newTable(t)
 	coordinator := newCoordinator(t, table, Config{MaxRegistrations: 2})
