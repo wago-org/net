@@ -243,6 +243,9 @@ func (a *Adapter) TryEcho(request icmpns.EchoRequest) (nscore.Resource, nscore.P
 	if !a.policy.CheckAddress(policy.OperationICMPv6Echo, request.Destination) {
 		return nil, 0, nscore.Fail(nscore.FailureAccessDenied, errPolicyDenied)
 	}
+	if _, ok := a.destinationMACLocked(request.Destination); !ok {
+		return nil, 0, nscore.Fail(nscore.FailureInvalidState, lneto.ErrBadState)
+	}
 	if len(a.echoes) >= int(a.config.MaxEchoes) {
 		return nil, 0, nscore.Fail(nscore.FailureResourceLimit, lneto.ErrExhausted)
 	}
@@ -724,7 +727,13 @@ func (a *Adapter) egressLocked(dst []byte) (int, bool, error) {
 			e.state = statePending
 			return 0, true, nil
 		}
-		written, err := a.writeEchoLocked(dst, e.destination, a.destinationMACLocked(e.destination), lnetoicmp.TypeEchoRequest, e.identifier, e.sequence, e.payload, 64)
+		destinationMAC, ok := a.destinationMACLocked(e.destination)
+		if !ok {
+			a.cursor = (index + 1) % total
+			e.failLocked(nscore.FailureInvalidState, lneto.ErrBadState)
+			return 0, true, nil
+		}
+		written, err := a.writeEchoLocked(dst, e.destination, destinationMAC, lnetoicmp.TypeEchoRequest, e.identifier, e.sequence, e.payload, 64)
 		if err != nil {
 			return 0, false, err
 		}
@@ -949,11 +958,11 @@ func setChecksum(ipFrame lnetoipv6.Frame, icmpFrame lnetoicmp.Frame, payload []b
 	icmpFrame.SetCRC(checksum.PayloadSum16(payload))
 }
 
-func (a *Adapter) destinationMACLocked(address netip.Addr) [6]byte {
+func (a *Adapter) destinationMACLocked(address netip.Addr) ([6]byte, bool) {
 	if entry := a.neighbors[address]; entry != nil && entry.complete {
-		return entry.mac
+		return entry.mac, true
 	}
-	return a.gatewayHardwareAddress
+	return a.gatewayHardwareAddress, validUnicastMAC(a.gatewayHardwareAddress)
 }
 
 func (a *Adapter) seedPassiveLocked(address netip.Addr, scopeID uint32, mac [6]byte) error {

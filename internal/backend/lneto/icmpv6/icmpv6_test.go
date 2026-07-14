@@ -18,6 +18,67 @@ import (
 	"github.com/wago-org/net/internal/quota"
 )
 
+func TestEchoRequiresAUsableGatewayOrResolvedNeighbor(t *testing.T) {
+	target := netip.MustParseAddr("2001:db8::99")
+	neighborMAC := [6]byte{0x02, 0, 0, 0, 0, 99}
+	for name, gateway := range map[string][6]byte{
+		"zero":      {},
+		"multicast": {0x01, 0, 0, 0, 0, 1},
+		"broadcast": {0xff, 0xff, 0xff, 0xff, 0xff, 0xff},
+	} {
+		t.Run(name, func(t *testing.T) {
+			core, adapter := newTestAdapterWithGateway(t, 9, "2001:db8::9", gateway)
+			before, _ := adapter.quotas.Snapshot()
+			if _, _, err := adapter.TryEcho(icmpns.EchoRequest{Destination: target, Payload: []byte("unresolved")}); nscoreFailure(err) != nscore.FailureInvalidState {
+				t.Fatalf("echo without usable layer-2 destination = %v", err)
+			}
+			if usage, _ := adapter.quotas.Snapshot(); usage != before || len(adapter.echoes) != 0 || len(adapter.byIdentity) != 0 {
+				t.Fatalf("rejected echo retained state: usage=%+v before=%+v echoes=%d identities=%d", usage, before, len(adapter.echoes), len(adapter.byIdentity))
+			}
+
+			neighbor := icmpns.Neighbor{Address: target, MAC: neighborMAC}
+			if err := adapter.SeedNeighbor(neighbor); err != nil {
+				t.Fatal(err)
+			}
+			resource, progress, err := adapter.TryEcho(icmpns.EchoRequest{Destination: target, Payload: []byte("removed")})
+			if err != nil || progress != nscore.ProgressInProgress {
+				t.Fatalf("seeded echo = %T, %v, %v", resource, progress, err)
+			}
+			exchange := resource.(*echo)
+			if err := adapter.RemoveNeighbor(icmpns.NeighborRequest{Address: target}); err != nil {
+				t.Fatal(err)
+			}
+			frame := bytes.Repeat([]byte{0xa5}, core.Link().MaxFrameBytes())
+			written, worked, err := adapter.egressLocked(frame)
+			if err != nil || !worked || written != 0 || !bytes.Equal(frame, bytes.Repeat([]byte{0xa5}, len(frame))) {
+				t.Fatalf("removed-neighbor egress = %d, %v, %v frame-prefix=%x", written, worked, err, frame[:6])
+			}
+			if _, _, err := exchange.TryResult(nil); nscoreFailure(err) != nscore.FailureInvalidState {
+				t.Fatalf("removed-neighbor result = %v", err)
+			}
+			if err := exchange.Close(); err != nil {
+				t.Fatal(err)
+			}
+
+			if err := adapter.SeedNeighbor(neighbor); err != nil {
+				t.Fatal(err)
+			}
+			resource, progress, err = adapter.TryEcho(icmpns.EchoRequest{Destination: target, Payload: []byte("seeded")})
+			if err != nil || progress != nscore.ProgressInProgress {
+				t.Fatalf("reseeded echo = %T, %v, %v", resource, progress, err)
+			}
+			clear(frame)
+			written, worked, err = adapter.egressLocked(frame)
+			if err != nil || !worked || written == 0 || [6]byte(frame[:6]) != neighborMAC {
+				t.Fatalf("seeded-neighbor egress = %d, %v, %v destination=%x", written, worked, err, frame[:6])
+			}
+			if err := resource.Close(); err != nil {
+				t.Fatal(err)
+			}
+		})
+	}
+}
+
 func TestEchoAndNDPExchange(t *testing.T) {
 	coreA, a := newTestAdapter(t, 1, "2001:db8::1")
 	coreB, b := newTestAdapter(t, 2, "2001:db8::2")
@@ -853,6 +914,11 @@ func nscoreFailure(err error) nscore.Failure {
 
 func newTestAdapter(t testing.TB, id byte, addressText string) (*lnetocore.Namespace, *Adapter) {
 	t.Helper()
+	return newTestAdapterWithGateway(t, id, addressText, [6]byte{0x02, 0, 0, 0, 0, id ^ 1})
+}
+
+func newTestAdapterWithGateway(t testing.TB, id byte, addressText string, gateway [6]byte) (*lnetocore.Namespace, *Adapter) {
+	t.Helper()
 	address := netip.MustParseAddr(addressText)
 	scopeID := uint32(0)
 	if address.IsLinkLocalUnicast() {
@@ -865,7 +931,7 @@ func newTestAdapter(t testing.TB, id byte, addressText string) (*lnetocore.Names
 	account := quota.NewAccount(quota.Limits{Resources: 128, ICMPv6Resources: 128, ICMPv6Work: 32, QueuedBytes: 1 << 16, IPv6Resources: 1, ServiceUnits: 128})
 	core, err := lnetocore.New(lnetocore.Config{
 		Hostname: "icmp6", RandSeed: int64(id) + 1,
-		HardwareAddress: [6]byte{0x02, 0, 0, 0, 0, id}, GatewayHardwareAddress: [6]byte{0x02, 0, 0, 0, 0, id ^ 1},
+		HardwareAddress: [6]byte{0x02, 0, 0, 0, 0, id}, GatewayHardwareAddress: gateway,
 		IPv4Address: netip.AddrFrom4([4]byte{192, 0, 2, id}), IPv6Address: address, IPv6PrefixBits: 64, IPv6ScopeID: scopeID,
 		MTU: 1500, Link: packetlink.Config{MaxFrameBytes: 1514, IngressFrames: 4, EgressFrames: 4}, Policy: compiled, Quotas: account,
 	})
