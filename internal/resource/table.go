@@ -30,6 +30,7 @@ const (
 	KindLinkLocal4Claim
 	KindICMPv6Echo
 	KindICMPv6Neighbor
+	KindDHCPv6Lease
 	KindPollable
 )
 
@@ -288,6 +289,8 @@ func (k Kind) String() string {
 		return "icmpv6_echo"
 	case KindICMPv6Neighbor:
 		return "icmpv6_neighbor"
+	case KindDHCPv6Lease:
+		return "dhcpv6_lease"
 	case KindPollable:
 		return "pollable"
 	default:

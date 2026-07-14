@@ -35,9 +35,10 @@ const (
 	TransportLinkLocal4
 	TransportIPv6
 	TransportICMPv6
+	TransportDHCPv6
 
 	transportFirst = TransportUDP
-	transportLast  = TransportICMPv6
+	transportLast  = TransportDHCPv6
 )
 
 // Direction identifies whether authority accepts local inbound traffic or
@@ -78,6 +79,9 @@ const (
 	OperationICMPv6Lookup
 	OperationICMPv6Seed
 	OperationICMPv6Remove
+	OperationDHCPv6ClientBind
+	OperationDHCPv6ClientSend
+	OperationDHCPv6ClientReceive
 )
 
 // PortRange is an inclusive port selector.
@@ -508,6 +512,10 @@ func operationEndpoint(operation Operation) (Transport, Direction, bool) {
 		return TransportDHCPv4, DirectionInbound, true
 	case OperationDHCPv4ClientSend, OperationDHCPv4ServerSend:
 		return TransportDHCPv4, DirectionOutbound, true
+	case OperationDHCPv6ClientBind, OperationDHCPv6ClientReceive:
+		return TransportDHCPv6, DirectionInbound, true
+	case OperationDHCPv6ClientSend:
+		return TransportDHCPv6, DirectionOutbound, true
 	default:
 		return 0, 0, false
 	}

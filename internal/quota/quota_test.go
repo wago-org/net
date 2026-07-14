@@ -154,6 +154,28 @@ func TestICMPv6ResourceAndWorkAccounting(t *testing.T) {
 	}
 }
 
+func TestDHCPv6ResourceAndWorkAccounting(t *testing.T) {
+	account := NewAccount(Limits{Resources: 1, DHCPv6Resources: 1, DHCPv6Work: 1})
+	var retained, work, denied Charge
+	if err := account.AcquireResource(&retained, ResourceDHCPv6, 1); err != nil {
+		t.Fatal(err)
+	}
+	if err := account.AcquireDHCPv6Work(&work, 1); err != nil {
+		t.Fatal(err)
+	}
+	if usage, closed := account.Snapshot(); closed || usage != (Usage{Resources: 1, DHCPv6Resources: 1, DHCPv6Work: 1}) {
+		t.Fatalf("DHCPv6 usage = %+v, closed=%v", usage, closed)
+	}
+	if err := account.AcquireResource(&denied, ResourceDHCPv6, 1); !errors.Is(err, ErrLimit) {
+		t.Fatalf("second DHCPv6 resource = %v", err)
+	}
+	work.Release()
+	retained.Release()
+	if usage, _ := account.Snapshot(); usage != (Usage{}) {
+		t.Fatalf("released DHCPv6 usage = %+v", usage)
+	}
+}
+
 func TestIPv6NamespaceResourceAccounting(t *testing.T) {
 	account := NewAccount(Limits{Resources: 1, IPv6Resources: 1})
 	var retained, denied Charge
@@ -356,6 +378,7 @@ func TestAccountRejectsInvalidZeroAndOverflowingUnits(t *testing.T) {
 		func() error { _, err := account.ReserveQueuedBytes(0); return err },
 		func() error { _, err := account.ReserveDNSWork(0); return err },
 		func() error { return account.AcquireNTPWork(new(Charge), 0) },
+		func() error { return account.AcquireDHCPv6Work(new(Charge), 0) },
 		func() error { _, err := account.ReserveService(0); return err },
 		func() error { return account.WithService(0, func() {}) },
 		func() error { return account.WithService(1, nil) },

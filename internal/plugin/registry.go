@@ -27,6 +27,7 @@ const (
 	ModuleLinkLocal4 ModuleKey = "linklocal4"
 	ModuleIPv6       ModuleKey = "ipv6"
 	ModuleICMPv6     ModuleKey = "icmpv6"
+	ModuleDHCPv6     ModuleKey = "dhcpv6"
 )
 
 var (

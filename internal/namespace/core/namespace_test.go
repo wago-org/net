@@ -50,6 +50,9 @@ func TestProtocolResultReadinessIsKnown(t *testing.T) {
 	if !ReadyICMPv6Reply.Valid() || !ReadyICMPv6Neighbor.Valid() || !(ReadyICMPv6Reply | ReadyICMPv6Neighbor | ReadyError | ReadyClosed).Valid() {
 		t.Fatal("ICMPv6 readiness rejected")
 	}
+	if !ReadyDHCPv6Result.Valid() || !(ReadyDHCPv6Result | ReadyError | ReadyClosed).Valid() {
+		t.Fatal("DHCPv6 readiness rejected")
+	}
 	if Readiness(1 << 31).Valid() {
 		t.Fatal("unknown readiness bit accepted")
 	}

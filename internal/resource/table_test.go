@@ -139,6 +139,24 @@ func TestLinkLocal4ClaimKindIsExactAndNamed(t *testing.T) {
 	}
 }
 
+func TestDHCPv6LeaseKindIsExactAndNamed(t *testing.T) {
+	table := newTable(t)
+	lease := &testResource{}
+	handle, err := table.Add(KindDHCPv6Lease, lease)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if KindDHCPv6Lease.String() != "dhcpv6_lease" {
+		t.Fatalf("DHCPv6 kind name = %q", KindDHCPv6Lease.String())
+	}
+	if _, err := table.Lookup(handle, KindDHCPv4Lease); !errors.Is(err, ErrBadHandle) {
+		t.Fatalf("wrong-kind lookup error = %v", err)
+	}
+	if err := table.CloseHandle(handle, KindDHCPv6Lease); err != nil || lease.closed.Load() != 1 {
+		t.Fatalf("close = %v, count=%d", err, lease.closed.Load())
+	}
+}
+
 func TestTableReuseAdvancesGeneration(t *testing.T) {
 	table := newTable(t)
 	first := &testResource{}
