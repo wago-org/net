@@ -541,6 +541,11 @@ func (a *Adapter) validateFrame(frame []byte) ([]byte, netip.Addr, uint16, uint1
 	if version != 4 || ihl < 5 || ip.Protocol() != lneto.IPProtoUDP {
 		return nil, netip.Addr{}, 0, 0, false, nil
 	}
+	var validator lneto.Validator
+	ip.ValidateSize(&validator)
+	if validator.ErrPop() != nil {
+		return nil, netip.Addr{}, 0, 0, false, nil
+	}
 	udp, err := lnetoudp.NewFrame(ip.Payload())
 	if err != nil {
 		return nil, netip.Addr{}, 0, 0, false, err
@@ -553,7 +558,6 @@ func (a *Adapter) validateFrame(frame []byte) ([]byte, netip.Addr, uint16, uint1
 	if !validUnicastMAC(*eth.SourceHardwareAddr()) {
 		return nil, netip.Addr{}, 0, 0, true, nil
 	}
-	var validator lneto.Validator
 	ip.ValidateExceptCRC(&validator)
 	if validator.ErrPop() != nil || ip.CalculateHeaderCRC() != 0 || ip.Flags().MoreFragments() || ip.Flags().FragmentOffset() != 0 {
 		return nil, netip.Addr{}, 0, 0, true, lneto.ErrBadCRC

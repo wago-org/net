@@ -753,6 +753,58 @@ func TestServerRejectsInvalidAdvertisementsBeforeOwnership(t *testing.T) {
 	}
 }
 
+func TestClientIngressDropsInvalidIPv4LengthsWithoutMutatingLease(t *testing.T) {
+	for _, test := range []struct {
+		name        string
+		totalLength uint16
+	}{
+		{name: "shorter than header", totalLength: 19},
+		{name: "beyond frame", totalLength: 1501},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			clientCore, client := newClient(t, false)
+			serverCore, _ := newServer(t, 1)
+			resource, _, err := client.TryAcquire(dhcpns.Request{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			lease := resource.(*leaseResource)
+			transferOne(t, clientCore, serverCore)
+			offer := serviceEgress(t, serverCore)
+			malformed := append([]byte(nil), offer...)
+			eth, err := ethernet.NewFrame(malformed)
+			if err != nil {
+				t.Fatal(err)
+			}
+			ip, err := ipv4.NewFrame(eth.Payload())
+			if err != nil {
+				t.Fatal(err)
+			}
+			ip.SetTotalLength(test.totalLength)
+			ip.SetCRC(0)
+			ip.SetCRC(ip.CalculateHeaderCRC())
+
+			var handled bool
+			var ingressErr error
+			var state leaseState
+			var wait uint16
+			func() {
+				clientCore.Lock()
+				defer clientCore.Unlock()
+				handled, ingressErr = client.ingressLocked(malformed)
+				state, wait = lease.state, lease.wait
+			}()
+			if ingressErr != nil || handled || state != leaseWaitOffer || wait != client.config.ResponseServiceAttempts {
+				t.Fatalf("malformed ingress = handled:%v err:%v state:%v wait:%d", handled, ingressErr, state, wait)
+			}
+			serviceIngress(t, clientCore, offer)
+			if lease.state != leaseRequest || lease.wait != 0 {
+				t.Fatalf("valid offer after malformed length = state:%v wait:%d", lease.state, lease.wait)
+			}
+		})
+	}
+}
+
 func TestClientIngressRejectsInvalidEthernetSources(t *testing.T) {
 	invalid := map[string][6]byte{
 		"zero":      {},
