@@ -132,6 +132,28 @@ func TestMDNSResourceQueuedBytesAndActiveWorkAccounting(t *testing.T) {
 	}
 }
 
+func TestICMPv6ResourceAndWorkAccounting(t *testing.T) {
+	account := NewAccount(Limits{Resources: 1, ICMPv6Resources: 1, ICMPv6Work: 1})
+	var retained, work, denied Charge
+	if err := account.AcquireResource(&retained, ResourceICMPv6, 1); err != nil {
+		t.Fatal(err)
+	}
+	if err := account.AcquireICMPv6Work(&work, 1); err != nil {
+		t.Fatal(err)
+	}
+	if usage, closed := account.Snapshot(); closed || usage != (Usage{Resources: 1, ICMPv6Resources: 1, ICMPv6Work: 1}) {
+		t.Fatalf("ICMPv6 usage = %+v, closed=%v", usage, closed)
+	}
+	if err := account.AcquireResource(&denied, ResourceICMPv6, 1); !errors.Is(err, ErrLimit) {
+		t.Fatalf("second ICMPv6 resource = %v", err)
+	}
+	work.Release()
+	retained.Release()
+	if usage, _ := account.Snapshot(); usage != (Usage{}) {
+		t.Fatalf("released ICMPv6 usage = %+v", usage)
+	}
+}
+
 func TestIPv6NamespaceResourceAccounting(t *testing.T) {
 	account := NewAccount(Limits{Resources: 1, IPv6Resources: 1})
 	var retained, denied Charge

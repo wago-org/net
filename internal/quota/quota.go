@@ -26,6 +26,7 @@ type Limits struct {
 	DHCPv4Resources     uint64
 	LinkLocal4Resources uint64
 	IPv6Resources       uint64
+	ICMPv6Resources     uint64
 	QueuedBytes         uint64
 	DNSWork             uint64
 	ICMPv4Work          uint64
@@ -33,6 +34,7 @@ type Limits struct {
 	MDNSWork            uint64
 	DHCPv4Work          uint64
 	LinkLocal4Work      uint64
+	ICMPv6Work          uint64
 	ServiceUnits        uint64
 }
 
@@ -50,6 +52,7 @@ func DefaultLimits() Limits {
 		DHCPv4Resources:     4,
 		LinkLocal4Resources: 2,
 		IPv6Resources:       1,
+		ICMPv6Resources:     32,
 		QueuedBytes:         4 << 20,
 		DNSWork:             32,
 		ICMPv4Work:          32,
@@ -57,6 +60,7 @@ func DefaultLimits() Limits {
 		MDNSWork:            32,
 		DHCPv4Work:          4,
 		LinkLocal4Work:      2,
+		ICMPv6Work:          32,
 		ServiceUnits:        4096,
 	}
 }
@@ -73,6 +77,7 @@ type Usage struct {
 	DHCPv4Resources     uint64
 	LinkLocal4Resources uint64
 	IPv6Resources       uint64
+	ICMPv6Resources     uint64
 	QueuedBytes         uint64
 	DNSWork             uint64
 	ICMPv4Work          uint64
@@ -80,6 +85,7 @@ type Usage struct {
 	MDNSWork            uint64
 	DHCPv4Work          uint64
 	LinkLocal4Work      uint64
+	ICMPv6Work          uint64
 	ServiceUnits        uint64
 }
 
@@ -98,6 +104,7 @@ const (
 	ResourceDHCPv4
 	ResourceLinkLocal4
 	ResourceIPv6
+	ResourceICMPv6
 )
 
 // Account is one instance's bounded, concurrently safe quota ledger.
@@ -139,6 +146,8 @@ func (a *Account) ReserveResource(class ResourceClass, count uint64) (*Reservati
 		amount.LinkLocal4Resources = count
 	case ResourceIPv6:
 		amount.IPv6Resources = count
+	case ResourceICMPv6:
+		amount.ICMPv6Resources = count
 	default:
 		return nil, ErrInvalidUnits
 	}
@@ -227,6 +236,15 @@ func (a *Account) AcquireLinkLocal4Work(charge *Charge, units uint64) error {
 	return a.acquireInto(charge, Usage{LinkLocal4Work: units})
 }
 
+// AcquireICMPv6Work commits one active echo or Neighbor Solicitation until it
+// reaches a terminal state.
+func (a *Account) AcquireICMPv6Work(charge *Charge, units uint64) error {
+	if units == 0 {
+		return ErrInvalidUnits
+	}
+	return a.acquireInto(charge, Usage{ICMPv6Work: units})
+}
+
 // ReserveQueuedBytes tentatively accounts bytes retained outside a host call.
 func (a *Account) ReserveQueuedBytes(bytes uint64) (*Reservation, error) {
 	if bytes == 0 {
@@ -295,6 +313,7 @@ func (a *Account) acquire(amount Usage) error {
 		!fits(a.used.DHCPv4Resources, amount.DHCPv4Resources, a.limits.DHCPv4Resources) ||
 		!fits(a.used.LinkLocal4Resources, amount.LinkLocal4Resources, a.limits.LinkLocal4Resources) ||
 		!fits(a.used.IPv6Resources, amount.IPv6Resources, a.limits.IPv6Resources) ||
+		!fits(a.used.ICMPv6Resources, amount.ICMPv6Resources, a.limits.ICMPv6Resources) ||
 		!fits(a.used.QueuedBytes, amount.QueuedBytes, a.limits.QueuedBytes) ||
 		!fits(a.used.DNSWork, amount.DNSWork, a.limits.DNSWork) ||
 		!fits(a.used.ICMPv4Work, amount.ICMPv4Work, a.limits.ICMPv4Work) ||
@@ -302,6 +321,7 @@ func (a *Account) acquire(amount Usage) error {
 		!fits(a.used.MDNSWork, amount.MDNSWork, a.limits.MDNSWork) ||
 		!fits(a.used.DHCPv4Work, amount.DHCPv4Work, a.limits.DHCPv4Work) ||
 		!fits(a.used.LinkLocal4Work, amount.LinkLocal4Work, a.limits.LinkLocal4Work) ||
+		!fits(a.used.ICMPv6Work, amount.ICMPv6Work, a.limits.ICMPv6Work) ||
 		!fits(a.used.ServiceUnits, amount.ServiceUnits, a.limits.ServiceUnits) {
 		return ErrLimit
 	}
@@ -346,6 +366,7 @@ func (a *Account) fitsLocked(amount Usage) bool {
 		fits(a.used.DHCPv4Resources, amount.DHCPv4Resources, a.limits.DHCPv4Resources) &&
 		fits(a.used.LinkLocal4Resources, amount.LinkLocal4Resources, a.limits.LinkLocal4Resources) &&
 		fits(a.used.IPv6Resources, amount.IPv6Resources, a.limits.IPv6Resources) &&
+		fits(a.used.ICMPv6Resources, amount.ICMPv6Resources, a.limits.ICMPv6Resources) &&
 		fits(a.used.QueuedBytes, amount.QueuedBytes, a.limits.QueuedBytes) &&
 		fits(a.used.DNSWork, amount.DNSWork, a.limits.DNSWork) &&
 		fits(a.used.ICMPv4Work, amount.ICMPv4Work, a.limits.ICMPv4Work) &&
@@ -353,6 +374,7 @@ func (a *Account) fitsLocked(amount Usage) bool {
 		fits(a.used.MDNSWork, amount.MDNSWork, a.limits.MDNSWork) &&
 		fits(a.used.DHCPv4Work, amount.DHCPv4Work, a.limits.DHCPv4Work) &&
 		fits(a.used.LinkLocal4Work, amount.LinkLocal4Work, a.limits.LinkLocal4Work) &&
+		fits(a.used.ICMPv6Work, amount.ICMPv6Work, a.limits.ICMPv6Work) &&
 		fits(a.used.ServiceUnits, amount.ServiceUnits, a.limits.ServiceUnits)
 }
 
@@ -397,6 +419,7 @@ func (a *Account) release(amount Usage) {
 	a.used.DHCPv4Resources = subtract(a.used.DHCPv4Resources, amount.DHCPv4Resources)
 	a.used.LinkLocal4Resources = subtract(a.used.LinkLocal4Resources, amount.LinkLocal4Resources)
 	a.used.IPv6Resources = subtract(a.used.IPv6Resources, amount.IPv6Resources)
+	a.used.ICMPv6Resources = subtract(a.used.ICMPv6Resources, amount.ICMPv6Resources)
 	a.used.QueuedBytes = subtract(a.used.QueuedBytes, amount.QueuedBytes)
 	a.used.DNSWork = subtract(a.used.DNSWork, amount.DNSWork)
 	a.used.ICMPv4Work = subtract(a.used.ICMPv4Work, amount.ICMPv4Work)
@@ -404,6 +427,7 @@ func (a *Account) release(amount Usage) {
 	a.used.MDNSWork = subtract(a.used.MDNSWork, amount.MDNSWork)
 	a.used.DHCPv4Work = subtract(a.used.DHCPv4Work, amount.DHCPv4Work)
 	a.used.LinkLocal4Work = subtract(a.used.LinkLocal4Work, amount.LinkLocal4Work)
+	a.used.ICMPv6Work = subtract(a.used.ICMPv6Work, amount.ICMPv6Work)
 	a.used.ServiceUnits = subtract(a.used.ServiceUnits, amount.ServiceUnits)
 }
 
@@ -517,6 +541,8 @@ func resourceUsage(class ResourceClass, count uint64) (Usage, bool) {
 		amount.LinkLocal4Resources = count
 	case ResourceIPv6:
 		amount.IPv6Resources = count
+	case ResourceICMPv6:
+		amount.ICMPv6Resources = count
 	default:
 		return Usage{}, false
 	}
@@ -545,6 +571,7 @@ func (u *Usage) add(other Usage) {
 	u.DHCPv4Resources += other.DHCPv4Resources
 	u.LinkLocal4Resources += other.LinkLocal4Resources
 	u.IPv6Resources += other.IPv6Resources
+	u.ICMPv6Resources += other.ICMPv6Resources
 	u.QueuedBytes += other.QueuedBytes
 	u.DNSWork += other.DNSWork
 	u.ICMPv4Work += other.ICMPv4Work
@@ -552,5 +579,6 @@ func (u *Usage) add(other Usage) {
 	u.MDNSWork += other.MDNSWork
 	u.DHCPv4Work += other.DHCPv4Work
 	u.LinkLocal4Work += other.LinkLocal4Work
+	u.ICMPv6Work += other.ICMPv6Work
 	u.ServiceUnits += other.ServiceUnits
 }

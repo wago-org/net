@@ -330,6 +330,30 @@ func TestMDNSAuthorityIsProtocolLocalMulticastAndDenyWins(t *testing.T) {
 	}
 }
 
+func TestICMPv6AuthorityIsProtocolLocalAndDenyWins(t *testing.T) {
+	allowed := mustAddr("2001:db8:64::8")
+	denied := mustAddr("2001:db8:64::9")
+	compiled, err := Compile(Config{Rules: []Rule{
+		{Action: ActionAllow, Transports: []Transport{TransportICMPv6}, Directions: []Direction{DirectionOutbound}, Prefixes: []netip.Prefix{mustPrefix("2001:db8:64::/64")}},
+		{Action: ActionDeny, Transports: []Transport{TransportICMPv6}, Directions: []Direction{DirectionOutbound}, Prefixes: []netip.Prefix{netip.PrefixFrom(denied, 128)}},
+		{Action: ActionAllow, Transports: []Transport{TransportIPv6}, Directions: []Direction{DirectionInbound}, Prefixes: []netip.Prefix{mustPrefix("2001:db8:64::/64")}},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, operation := range []Operation{OperationICMPv6Echo, OperationICMPv6Resolve, OperationICMPv6Lookup, OperationICMPv6Seed, OperationICMPv6Remove} {
+		if !compiled.CheckAddress(operation, allowed) {
+			t.Fatalf("operation %d did not receive ICMPv6 grant", operation)
+		}
+		if compiled.CheckAddress(operation, denied) {
+			t.Fatalf("operation %d ignored caller deny", operation)
+		}
+	}
+	if compiled.CheckAddress(OperationICMPv4Echo, allowed) {
+		t.Fatal("ICMPv6 authority widened ICMPv4")
+	}
+}
+
 func TestIPv6EnableAuthorityIsProtocolLocalAndDenyWins(t *testing.T) {
 	configured := mustAddr("2001:db8:42::7")
 	compiled, err := Compile(Config{Rules: []Rule{
