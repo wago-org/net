@@ -94,7 +94,13 @@ func TestBindingsPrevalidateClaimAndPreserveResultOutputs(t *testing.T) {
 		t.Fatalf("reserved claim = %v, calls=%d", status, backend.calls)
 	}
 	host.memory[16] = 0
-	if status := callBinding(t, bindingByName(t, bindings, "claim"), host, namespaceHandle, 0, 64); status != guest.StatusInProgress || backend.calls != 1 {
+	var typedNil *fakeClaim
+	backend.claim = typedNil
+	if status := callBinding(t, bindingByName(t, bindings, "claim"), host, namespaceHandle, 0, 64); status != guest.StatusIO || backend.calls != 1 || !bytes.Equal(host.memory[64:72], outBefore) {
+		t.Fatalf("typed-nil claim = %v, calls=%d", status, backend.calls)
+	}
+	backend.claim = claim
+	if status := callBinding(t, bindingByName(t, bindings, "claim"), host, namespaceHandle, 0, 64); status != guest.StatusInProgress || backend.calls != 2 {
 		t.Fatalf("valid claim = %v, calls=%d", status, backend.calls)
 	}
 	claimHandle := binary.LittleEndian.Uint64(host.memory[64:72])
@@ -124,6 +130,25 @@ func TestBindingsPrevalidateClaimAndPreserveResultOutputs(t *testing.T) {
 	}
 	if status := callBinding(t, bindingByName(t, bindings, "result"), host, claimHandle, 128); status != guest.StatusBadHandle {
 		t.Fatalf("stale result = %v", status)
+	}
+
+	fresh := &fakeClaim{result: linklocalns.ResultWouldBlock}
+	backend.claim = fresh
+	if status := callBinding(t, bindingByName(t, bindings, "claim"), host, namespaceHandle, 0, 72); status != guest.StatusInProgress {
+		t.Fatalf("fresh claim = %v", status)
+	}
+	freshHandle := binary.LittleEndian.Uint64(host.memory[72:80])
+	if freshHandle == claimHandle || uint16(freshHandle) != uint16(claimHandle) {
+		t.Fatalf("generation-safe slot reuse = old %v, fresh %v", claimHandle, freshHandle)
+	}
+	if status := callBinding(t, bindingByName(t, bindings, "release"), host, claimHandle); status != guest.StatusBadHandle || fresh.released {
+		t.Fatalf("stale release = %v, fresh released=%v", status, fresh.released)
+	}
+	if status := callBinding(t, bindingByName(t, bindings, "result"), host, freshHandle, 128); status != guest.StatusAgain {
+		t.Fatalf("fresh result = %v", status)
+	}
+	if status := callBinding(t, bindingByName(t, bindings, "close"), host, freshHandle); status != guest.StatusOK || !fresh.closed {
+		t.Fatalf("close fresh = %v, closed=%v", status, fresh.closed)
 	}
 }
 

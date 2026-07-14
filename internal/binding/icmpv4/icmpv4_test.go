@@ -109,12 +109,18 @@ func TestBindingsPrevalidateEchoAndPreserveResultOutputs(t *testing.T) {
 		t.Fatalf("failed echo = %v, calls=%d", status, backend.calls)
 	}
 
+	var typedNil *fakeEcho
+	backend.next, backend.progress, backend.failure = typedNil, nscore.ProgressDone, nil
+	if status := callBinding(t, bindingByName(t, bindings, "echo"), host, namespaceHandle, 0, 80); status != guest.StatusIO || backend.calls != 2 || !bytes.Equal(host.memory[80:88], handleBefore) {
+		t.Fatalf("typed-nil echo = %v, calls=%d", status, backend.calls)
+	}
+
 	echo := &fakeEcho{
 		payload: []byte("reply"), next: icmpns.NextWouldBlock,
 		result: icmpns.Result{Source: netip.MustParseAddr("192.0.2.1"), Identifier: 7, Sequence: 11, PayloadBytes: 5},
 	}
-	backend.next, backend.progress, backend.failure = echo, nscore.ProgressDone, nil
-	if status := callBinding(t, bindingByName(t, bindings, "echo"), host, namespaceHandle, 0, 80); status != guest.StatusOK || backend.calls != 2 || backend.destination != netip.MustParseAddr("192.0.2.9") || string(backend.payload) != "ping" {
+	backend.next, backend.progress = echo, nscore.ProgressDone
+	if status := callBinding(t, bindingByName(t, bindings, "echo"), host, namespaceHandle, 0, 80); status != guest.StatusOK || backend.calls != 3 || backend.destination != netip.MustParseAddr("192.0.2.9") || string(backend.payload) != "ping" {
 		t.Fatalf("echo = %v, calls=%d destination=%v payload=%q", status, backend.calls, backend.destination, backend.payload)
 	}
 	echoHandle := binary.LittleEndian.Uint64(host.memory[80:88])
@@ -168,6 +174,25 @@ func TestBindingsPrevalidateEchoAndPreserveResultOutputs(t *testing.T) {
 	}
 	if status := callBinding(t, bindingByName(t, bindings, "result"), host, echoHandle, 256, 16, 320); status != guest.StatusBadHandle {
 		t.Fatalf("stale result = %v", status)
+	}
+
+	fresh := &fakeEcho{next: icmpns.NextWouldBlock}
+	backend.next, backend.progress = fresh, nscore.ProgressDone
+	if status := callBinding(t, bindingByName(t, bindings, "echo"), host, namespaceHandle, 0, 96); status != guest.StatusOK {
+		t.Fatalf("fresh echo = %v", status)
+	}
+	freshHandle := binary.LittleEndian.Uint64(host.memory[96:104])
+	if freshHandle == echoHandle || uint16(freshHandle) != uint16(echoHandle) {
+		t.Fatalf("generation-safe slot reuse = old %v, fresh %v", echoHandle, freshHandle)
+	}
+	if status := callBinding(t, bindingByName(t, bindings, "cancel"), host, echoHandle); status != guest.StatusBadHandle || fresh.cancelCalls != 0 {
+		t.Fatalf("stale cancel = %v, fresh calls=%d", status, fresh.cancelCalls)
+	}
+	if status := callBinding(t, bindingByName(t, bindings, "result"), host, freshHandle, 256, 16, 320); status != guest.StatusAgain || fresh.resultCalls != 1 {
+		t.Fatalf("fresh result = %v, calls=%d", status, fresh.resultCalls)
+	}
+	if status := callBinding(t, bindingByName(t, bindings, "close"), host, freshHandle); status != guest.StatusOK || fresh.closeCalls != 1 {
+		t.Fatalf("close fresh = %v, calls=%d", status, fresh.closeCalls)
 	}
 	if status := callBinding(t, bindingByName(t, bindings, "close"), host, pendingHandle); status != guest.StatusOK || pending.closeCalls != 1 {
 		t.Fatalf("close pending = %v, calls=%d", status, pending.closeCalls)
