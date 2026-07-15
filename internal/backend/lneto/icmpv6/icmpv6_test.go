@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"errors"
 	"net/netip"
+	"strconv"
 	"testing"
 
 	lneto "github.com/soypat/lneto"
@@ -840,6 +841,58 @@ func TestStrictNDPValidationAndTimeoutCancellation(t *testing.T) {
 	}
 	if _, _, err := resolved.TryResult(); err == nil || !errors.Is(err, resolved.failure) {
 		t.Fatalf("timeout result = %v", err)
+	}
+}
+
+func TestICMPv6OwnershipUsesOnlyDeclaredPayloadBytes(t *testing.T) {
+	core, adapter := newTestAdapter(t, 38, "2001:db8::38")
+	defer core.Close()
+
+	storage := make([]byte, core.Link().MaxFrameBytes())
+	core.Lock()
+	n, err := adapter.writeEchoLocked(storage, adapter.address, adapter.hardwareAddress, lnetoicmp.TypeEchoRequest, 7, 9, []byte("x"), 64)
+	core.Unlock()
+	if err != nil {
+		t.Fatal(err)
+	}
+	valid := append([]byte(nil), storage[:n]...)
+	foreign := netip.MustParseAddr("2001:db8::99").As16()
+
+	for declared := 0; declared <= icmpHeader; declared++ {
+		for _, test := range []struct {
+			name        string
+			typ         lnetoicmp.Type
+			local       bool
+			wantHandled bool
+		}{
+			{name: "owned local", typ: lnetoicmp.TypeEchoRequest, local: true, wantHandled: declared != 0},
+			{name: "unsupported local", typ: lnetoicmp.Type(1), local: true},
+			{name: "owned foreign", typ: lnetoicmp.TypeEchoRequest},
+		} {
+			t.Run(test.name+"/declared="+strconv.Itoa(declared), func(t *testing.T) {
+				frame := append([]byte(nil), valid...)
+				ethernetFrame, err := ethernet.NewFrame(frame)
+				if err != nil {
+					t.Fatal(err)
+				}
+				ipFrame, err := lnetoipv6.NewFrame(ethernetFrame.Payload())
+				if err != nil {
+					t.Fatal(err)
+				}
+				ipFrame.SetPayloadLength(uint16(declared))
+				ipFrame.RawData()[40] = byte(test.typ)
+				if !test.local {
+					*ipFrame.DestinationAddr() = foreign
+				}
+				handled, err := adapter.ingressLocked(frame)
+				if err != nil || handled != test.wantHandled {
+					t.Fatalf("ingress = %v, %v; want handled %v", handled, err, test.wantHandled)
+				}
+				if len(adapter.responses) != 0 || len(adapter.neighbors) != 0 {
+					t.Fatalf("short or unowned ingress mutated state: responses=%d neighbors=%d", len(adapter.responses), len(adapter.neighbors))
+				}
+			})
+		}
 	}
 }
 

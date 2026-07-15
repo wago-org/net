@@ -780,7 +780,7 @@ func (a *Adapter) ingressLocked(frame []byte) (bool, error) {
 	raw := ipFrame.RawData()
 	payloadBytes := int(ipFrame.PayloadLength())
 	availablePayload := raw[40:]
-	if len(availablePayload) == 0 || !ownedICMPv6Type(lnetoicmp.Type(availablePayload[0])) {
+	if payloadBytes == 0 || len(availablePayload) == 0 || !ownedICMPv6Type(lnetoicmp.Type(availablePayload[0])) {
 		return false, nil
 	}
 	if payloadBytes > len(availablePayload) {
