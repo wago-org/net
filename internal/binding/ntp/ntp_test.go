@@ -94,8 +94,19 @@ func TestBindingsSyncResultAtomicStatusesAndLifecycle(t *testing.T) {
 	if status := callBinding(t, bindingByName(t, bindings, "sync"), host, uint64(namespaceHandle), 32); status != guest.StatusIO || backend.calls != 2 || !bytes.Equal(host.memory[32:40], handleBefore) {
 		t.Fatalf("typed-nil sync = %v, calls=%d", status, backend.calls)
 	}
-	backend.next = synchronization
-	if status := callBinding(t, bindingByName(t, bindings, "sync"), host, uint64(namespaceHandle), 32); status != guest.StatusOK || backend.calls != 3 {
+	state, ok := manager.ForInstance(instance)
+	if !ok {
+		t.Fatal("attached state missing")
+	}
+	resourcesBefore := state.Resources().Len()
+	readinessBefore := state.Readiness().Snapshot()
+	invalidProgress := new(fakeSync)
+	backend.next, backend.progress = invalidProgress, nscore.Progress(99)
+	if status := callBinding(t, bindingByName(t, bindings, "sync"), host, uint64(namespaceHandle), 32); status != guest.StatusIO || backend.calls != 3 || invalidProgress.closeCalls != 1 || state.Resources().Len() != resourcesBefore || state.Readiness().Snapshot() != readinessBefore || !bytes.Equal(host.memory[32:40], handleBefore) {
+		t.Fatalf("invalid-progress sync = %v, calls=%d closes=%d resources=%d readiness=%+v", status, backend.calls, invalidProgress.closeCalls, state.Resources().Len(), state.Readiness().Snapshot())
+	}
+	backend.next, backend.progress = synchronization, nscore.ProgressDone
+	if status := callBinding(t, bindingByName(t, bindings, "sync"), host, uint64(namespaceHandle), 32); status != guest.StatusOK || backend.calls != 4 {
 		t.Fatalf("sync = %v, calls=%d", status, backend.calls)
 	}
 	handle := resource.Handle(binary.LittleEndian.Uint64(host.memory[32:40]))
