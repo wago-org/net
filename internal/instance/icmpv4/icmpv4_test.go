@@ -110,6 +110,11 @@ func TestResultLeavesDestinationUnchangedOnBackendFailure(t *testing.T) {
 	if result, next, err := Result(state, handle, dst); failureOf(err) != nscore.FailureIO || result != (icmpns.Result{}) || next != 0 || !bytes.Equal(dst, before) {
 		t.Fatalf("unrepresentable result = %+v, %v, %v, payload=%x", result, next, err, dst)
 	}
+
+	exchange.next = icmpns.NextWouldBlock
+	if result, next, err := Result(state, handle, dst); err != nil || result != (icmpns.Result{}) || next != icmpns.NextWouldBlock || !bytes.Equal(dst, before) {
+		t.Fatalf("dirty would-block result = %+v, %v, %v, payload=%x", result, next, err, dst)
+	}
 }
 
 func failureOf(err error) nscore.Failure {
