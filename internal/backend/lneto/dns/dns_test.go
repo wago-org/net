@@ -849,6 +849,98 @@ func TestDNSTerminalFailuresRetireTransportImmediately(t *testing.T) {
 	}
 }
 
+func TestDNSTerminalFailuresIsolateForcedPortReuseAndStaleClose(t *testing.T) {
+	for _, test := range []struct {
+		name        string
+		terminalize func(*testing.T, *testNamespace, *dnsQuery, namespaceTestConfig, []byte)
+	}{
+		{
+			name: "cancel",
+			terminalize: func(t *testing.T, _ *testNamespace, query *dnsQuery, _ namespaceTestConfig, _ []byte) {
+				if err := query.Cancel(); err != nil {
+					t.Fatal(err)
+				}
+			},
+		},
+		{
+			name: "timeout",
+			terminalize: func(t *testing.T, ns *testNamespace, _ *dnsQuery, _ namespaceTestConfig, _ []byte) {
+				if report := serviceDNSMaintenance(t, ns); report != (namespace.ServiceReport{Operations: 1}) {
+					t.Fatalf("timeout maintenance = %+v", report)
+				}
+			},
+		},
+		{
+			name: "parser failure",
+			terminalize: func(t *testing.T, ns *testNamespace, _ *dnsQuery, config namespaceTestConfig, outgoing []byte) {
+				txid, localPort := dnsPacketIdentity(t, outgoing)
+				requestName := lnetodns.MustNewName("example.com")
+				message := lnetodns.Message{Questions: []lnetodns.Question{{Name: requestName, Type: lnetodns.TypeA, Class: lnetodns.ClassINET}}}
+				serviceDNSIngressFrame(t, ns, buildDNSFrame(t, config, txid, localPort, message, lnetodns.HeaderFlags(1<<15)))
+			},
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			config := dnsTestConfig(t, 48)
+			config.DNS.MaxQueries = 2
+			config.DNS.MaxAttempts = 1
+			config.DNS.RetryServiceAttempts = 1
+			ns := newTestNamespace(t, config)
+			request := namespace.DNSRequest{Name: "example.com", Types: namespace.DNSRecordsA | namespace.DNSRecordsAAAA}
+			resource, _, err := ns.TryResolve(request)
+			if err != nil {
+				t.Fatal(err)
+			}
+			stale := resource.(*dnsQuery)
+			outgoing := serviceDNSPacket(t, ns)
+			staleTxID, stalePort := dnsPacketIdentity(t, outgoing)
+			staleResponse := buildDNSResponseFrame(t, config, staleTxID, stalePort, request.Name)
+			test.terminalize(t, ns, stale, config, outgoing)
+			if stale.state != dnsQueryFailed || stale.Readiness() != namespace.ReadyError || stale.localPort != 0 || stale.portLease.UDPPort() != 0 || ns.adapter.byPort[stalePort] != nil {
+				t.Fatalf("terminal transport = state:%v readiness:%v local:%d lease:%d mapped:%p", stale.state, stale.Readiness(), stale.localPort, stale.portLease.UDPPort(), ns.adapter.byPort[stalePort])
+			}
+
+			ns.adapter.nextPort = stalePort
+			resource, _, err = ns.TryResolve(request)
+			if err != nil {
+				t.Fatal(err)
+			}
+			fresh := resource.(*dnsQuery)
+			if fresh.localPort != stalePort || fresh.txid == staleTxID || ns.adapter.byPort[stalePort] != fresh {
+				t.Fatalf("forced port reuse = port:%d txid:%d/%d mapped:%p", fresh.localPort, staleTxID, fresh.txid, ns.adapter.byPort[stalePort])
+			}
+			ns.core.Lock()
+			handled, ingressErr := ns.adapter.ingressLocked(staleResponse)
+			ns.core.Unlock()
+			if ingressErr != nil || !handled || fresh.state != dnsQueryPending || fresh.Readiness() != 0 || len(fresh.records) != 0 || ns.adapter.byPort[stalePort] != fresh {
+				t.Fatalf("stale response on reused port = handled:%v err:%v state:%v readiness:%v records:%d mapped:%p", handled, ingressErr, fresh.state, fresh.Readiness(), len(fresh.records), ns.adapter.byPort[stalePort])
+			}
+			if err := stale.Close(); err != nil {
+				t.Fatal(err)
+			}
+			if ns.adapter.byPort[stalePort] != fresh || fresh.localPort != stalePort {
+				t.Fatalf("stale close affected fresh transport: mapped=%p port=%d", ns.adapter.byPort[stalePort], fresh.localPort)
+			}
+			if usage, closed := config.Quotas.Snapshot(); closed || usage.Resources != 1 || usage.DNSResources != 1 || usage.DNSWork != 2 || usage.QueuedBytes != dnsRetainedBytes(config.DNS) {
+				t.Fatalf("fresh quota after stale close = %+v, closed=%v", usage, closed)
+			}
+
+			freshOutgoing := serviceDNSPacket(t, ns)
+			freshTxID, freshPort := dnsPacketIdentity(t, freshOutgoing)
+			serviceDNSIngressFrame(t, ns, buildDNSResponseFrame(t, config, freshTxID, freshPort, request.Name))
+			if fresh.state != dnsQueryDone || fresh.Readiness() != namespace.ReadyDNSResult {
+				t.Fatalf("fresh completion = state:%v readiness:%v", fresh.state, fresh.Readiness())
+			}
+			if err := fresh.Close(); err != nil {
+				t.Fatal(err)
+			}
+			if usage, _ := config.Quotas.Snapshot(); usage != (quota.Usage{}) {
+				t.Fatalf("closed quota = %+v", usage)
+			}
+		})
+	}
+}
+
 func TestDNSResponseFailureMappingAndRecordBound(t *testing.T) {
 	request := namespace.DNSRequest{Name: "example.com", Types: namespace.DNSRecordsA}
 	name := lnetodns.MustNewName(request.Name)
