@@ -13,7 +13,7 @@ type IPv4IdentityLease struct {
 // and shared namespace identity. Only one dynamic contributor may be active.
 func (n *Namespace) TryApplyIPv4IdentityLocked(lease *IPv4IdentityLease, address netip.Addr, subnet netip.Prefix) bool {
 	if n == nil || n.closed || n.stack == nil || lease == nil || lease.active || n.ipv4IdentityLease != nil ||
-		!address.Is4() || address.Is4In6() || address.IsUnspecified() || address.IsMulticast() || address.Zone() != "" ||
+		!validIPv4Identity(address) || address.IsUnspecified() ||
 		!subnet.IsValid() || !subnet.Addr().Is4() || !subnet.Contains(address) {
 		return false
 	}
