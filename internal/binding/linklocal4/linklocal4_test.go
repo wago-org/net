@@ -167,6 +167,65 @@ func TestBindingsPrevalidateClaimAndPreserveResultOutputs(t *testing.T) {
 	}
 }
 
+func TestBindingsPreserveFullWidthNamespaceAndClaimHandles(t *testing.T) {
+	claim := &fakeClaim{value: validResult(t), result: linklocalns.ResultReady}
+	backend := &fakeNamespace{claim: claim, progress: nscore.ProgressInProgress}
+	manager, instance := attachManager(t, backend)
+	defer manager.Detach(instance)
+	host := testHost{instance: instance, memory: bytes.Repeat([]byte{0x6d}, 512)}
+	bindings := Bindings(plugin.NewHost(manager))
+	state, ok := manager.ForInstance(instance)
+	if !ok {
+		t.Fatal("attached state missing")
+	}
+	namespaceHandle := state.NamespaceHandle()
+	if !linklocalabi.EncodeRequestV1(host.memory, 0, linklocalns.Request{FirstCandidate: netip.MustParseAddr("169.254.42.7")}) {
+		t.Fatal("encode request")
+	}
+
+	high := uint64(1) << 63
+	namespaceAlias := uint64(namespaceHandle) | high
+	handleBefore := append([]byte(nil), host.memory[64:72]...)
+	if status := callBinding(t, bindingByName(t, bindings, "claim"), host, namespaceAlias, 0, 64); status != guest.StatusBadHandle || backend.calls != 0 || !bytes.Equal(host.memory[64:72], handleBefore) {
+		t.Fatalf("aliased namespace claim = %v, calls=%d, output=%x", status, backend.calls, host.memory[64:72])
+	}
+	if status := callBinding(t, bindingByName(t, bindings, "claim"), host, uint64(namespaceHandle), 0, 64); status != guest.StatusInProgress || backend.calls != 1 {
+		t.Fatalf("exact namespace claim = %v, calls=%d", status, backend.calls)
+	}
+	claimHandle := binary.LittleEndian.Uint64(host.memory[64:72])
+	claimAlias := claimHandle | high
+
+	resultBefore := append([]byte(nil), host.memory[128:128+linklocalabi.ResultV1Size]...)
+	if status := callBinding(t, bindingByName(t, bindings, "result"), host, claimAlias, 128); status != guest.StatusBadHandle || claim.resultCalls != 0 || !bytes.Equal(host.memory[128:128+linklocalabi.ResultV1Size], resultBefore) {
+		t.Fatalf("aliased claim result = %v, calls=%d", status, claim.resultCalls)
+	}
+	if status := callBinding(t, bindingByName(t, bindings, "cancel"), host, claimAlias); status != guest.StatusBadHandle || claim.canceled {
+		t.Fatalf("aliased claim cancel = %v, canceled=%v", status, claim.canceled)
+	}
+	if status := callBinding(t, bindingByName(t, bindings, "release"), host, claimAlias); status != guest.StatusBadHandle || claim.released {
+		t.Fatalf("aliased claim release = %v, released=%v", status, claim.released)
+	}
+	if status := callBinding(t, bindingByName(t, bindings, "close"), host, claimAlias); status != guest.StatusBadHandle || claim.closed {
+		t.Fatalf("aliased claim close = %v, closed=%v", status, claim.closed)
+	}
+
+	if status := callBinding(t, bindingByName(t, bindings, "result"), host, claimHandle, 128); status != guest.StatusOK || claim.resultCalls != 1 || bytes.Equal(host.memory[128:128+linklocalabi.ResultV1Size], resultBefore) {
+		t.Fatalf("exact claim result = %v, calls=%d", status, claim.resultCalls)
+	}
+	if status := callBinding(t, bindingByName(t, bindings, "cancel"), host, claimHandle); status != guest.StatusOK || !claim.canceled {
+		t.Fatalf("exact claim cancel = %v, canceled=%v", status, claim.canceled)
+	}
+	if status := callBinding(t, bindingByName(t, bindings, "release"), host, claimHandle); status != guest.StatusOK || !claim.released {
+		t.Fatalf("exact claim release = %v, released=%v", status, claim.released)
+	}
+	if status := callBinding(t, bindingByName(t, bindings, "close"), host, claimHandle); status != guest.StatusOK || !claim.closed {
+		t.Fatalf("exact claim close = %v, closed=%v", status, claim.closed)
+	}
+	if status := callBinding(t, bindingByName(t, bindings, "result"), host, claimHandle, 128); status != guest.StatusBadHandle {
+		t.Fatalf("stale exact claim result = %v", status)
+	}
+}
+
 func TestBindingsRejectHighBitI32AliasesBeforeStateAndBackendWork(t *testing.T) {
 	claim := &fakeClaim{result: linklocalns.ResultWouldBlock}
 	backend := &fakeNamespace{claim: claim, progress: nscore.ProgressInProgress}
