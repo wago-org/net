@@ -51,6 +51,15 @@ func TestNarrowUDPFacetAndDatagramValidation(t *testing.T) {
 	if (DatagramResult{Ready: true, DatagramBytes: MaxDatagramPayloadBytes + 1, Source: endpoint(53), Truncated: true}).Valid(0) {
 		t.Fatal("oversized UDP datagram accepted")
 	}
+	for name, source := range map[string]nscore.Endpoint{
+		"port":      {Port: 53},
+		"scope":     {ScopeID: 7},
+		"flow info": {FlowInfo: 11},
+	} {
+		if (DatagramResult{Source: source}).Valid(0) {
+			t.Fatalf("not-ready datagram with %s metadata accepted", name)
+		}
+	}
 }
 
 func endpoint(port uint16) nscore.Endpoint {

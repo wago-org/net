@@ -45,7 +45,7 @@ func (r DatagramResult) Valid(size int) bool {
 		return false
 	}
 	if !r.Ready {
-		return r.Copied == 0 && r.DatagramBytes == 0 && !r.Truncated && !r.Source.Address.IsValid()
+		return r.Copied == 0 && r.DatagramBytes == 0 && !r.Truncated && r.Source == (nscore.Endpoint{})
 	}
 	return r.Source.Valid() && r.Truncated == (r.Copied < r.DatagramBytes)
 }

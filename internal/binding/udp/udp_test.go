@@ -187,9 +187,20 @@ func TestBindingsBindSendReceiveAtomicStatusesAndLifecycle(t *testing.T) {
 	}
 	socket.receiveFailure = nil
 	socket.receivePayload = []byte("mutation")
-	socket.receiveResult = udpns.DatagramResult{Ready: true, Copied: 9, DatagramBytes: 9, Source: remote}
-	if status := callBinding(t, bindingByName(t, bindings, "receive"), host, uint64(socketHandle), payloadPtr, payloadLen, resultPtr); status != guest.StatusIO || !bytes.Equal(host.memory[payloadPtr:payloadPtr+payloadLen], payloadBefore) || !bytes.Equal(host.memory[resultPtr:resultPtr+uint64(udpabi.ReceiveResultV1Size)], resultBefore) {
-		t.Fatalf("malformed receive = %v", status)
+	for name, malformed := range map[string]udpns.DatagramResult{
+		"copied beyond buffer": {Ready: true, Copied: 9, DatagramBytes: 9, Source: remote},
+		"not ready with port":  {Source: nscore.Endpoint{Port: 53}},
+		"not ready with scope": {Source: nscore.Endpoint{ScopeID: 7}},
+		"ready without source": {Ready: true},
+		"missing truncation":   {Ready: true, Copied: 7, DatagramBytes: 8, Source: remote},
+	} {
+		t.Run("malformed receive/"+name, func(t *testing.T) {
+			before := append([]byte(nil), host.memory...)
+			socket.receiveResult = malformed
+			if status := callBinding(t, bindingByName(t, bindings, "receive"), host, uint64(socketHandle), payloadPtr, payloadLen, resultPtr); status != guest.StatusIO || !bytes.Equal(host.memory, before) {
+				t.Fatalf("receive = %v, memory changed=%v", status, !bytes.Equal(host.memory, before))
+			}
+		})
 	}
 	socket.receivePayload = []byte("response-data")
 	socket.receiveResult = udpns.DatagramResult{Ready: true, Copied: 8, DatagramBytes: len(socket.receivePayload), Source: remote, Truncated: true}
