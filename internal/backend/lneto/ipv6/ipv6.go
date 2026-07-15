@@ -92,7 +92,12 @@ func configurationFrom(config Config, mtu uint16) ipv6ns.Configuration {
 
 // Configuration returns the immutable selected contribution.
 func (a *Adapter) Configuration() ipv6ns.Configuration {
-	if a == nil || a.closed {
+	if a == nil || a.core == nil {
+		return ipv6ns.Configuration{}
+	}
+	a.core.Lock()
+	defer a.core.Unlock()
+	if a.closed || a.core.ClosedLocked() {
 		return ipv6ns.Configuration{}
 	}
 	return a.configuration
@@ -107,7 +112,6 @@ func (a *Adapter) CloseLocked() {
 	a.retained.Release()
 	a.retained.ResetReleased()
 	a.configuration = ipv6ns.Configuration{}
-	a.core = nil
 }
 
 // ingressLocked drops malformed IPv6 and every extension-header packet before

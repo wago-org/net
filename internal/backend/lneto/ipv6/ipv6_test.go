@@ -2,11 +2,14 @@ package ipv6
 
 import (
 	"net/netip"
+	"runtime"
+	"sync"
 	"testing"
 
 	"github.com/soypat/lneto/ethernet"
 	lnetoipv6 "github.com/soypat/lneto/ipv6"
 	lnetocore "github.com/wago-org/net/internal/backend/lneto/core"
+	ipv6ns "github.com/wago-org/net/internal/namespace/ipv6"
 	"github.com/wago-org/net/internal/packetlink"
 	"github.com/wago-org/net/internal/policy"
 	"github.com/wago-org/net/internal/quota"
@@ -50,6 +53,70 @@ func TestAdapterOwnsExactQuotaAndConfiguration(t *testing.T) {
 	}
 	if got := adapter.Configuration(); got.Valid() {
 		t.Fatalf("closed adapter retained configuration: %+v", got)
+	}
+}
+
+func TestConfigurationIsSerializedWithNamespaceClose(t *testing.T) {
+	address := netip.MustParseAddr("2001:db8::8")
+	compiled, err := policy.Compile(policy.Config{Rules: []policy.Rule{{
+		Action: policy.ActionAllow, Transports: []policy.Transport{policy.TransportIPv6},
+		Directions: []policy.Direction{policy.DirectionInbound}, Prefixes: []netip.Prefix{netip.PrefixFrom(address, 128)},
+	}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	account := quota.NewAccount(quota.Limits{Resources: 1, IPv6Resources: 1})
+	common, err := lnetocore.New(lnetocore.Config{
+		Hostname: "ipv6-close", RandSeed: 8,
+		HardwareAddress: [6]byte{2, 0, 0, 0, 0, 8}, GatewayHardwareAddress: [6]byte{2, 0, 0, 0, 0, 2},
+		IPv4Address: netip.MustParseAddr("192.0.2.8"), IPv6Address: address, IPv6PrefixBits: 64,
+		MTU: 1500, Link: packetlink.Config{MaxFrameBytes: 1514, IngressFrames: 1, EgressFrames: 1},
+		Policy: compiled, Quotas: account,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	adapter, err := New(common, Config{Address: address, PrefixBits: 64})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	stop := make(chan struct{})
+	started := make(chan struct{})
+	var readers sync.WaitGroup
+	for range 4 {
+		readers.Add(1)
+		go func() {
+			defer readers.Done()
+			started <- struct{}{}
+			for {
+				select {
+				case <-stop:
+					return
+				default:
+					configuration := adapter.Configuration()
+					if configuration.Valid() && configuration.Address != address {
+						panic("IPv6 configuration changed before close")
+					}
+					runtime.Gosched()
+				}
+			}
+		}()
+	}
+	for range 4 {
+		<-started
+	}
+	runtime.Gosched()
+	if err := common.Close(); err != nil {
+		t.Fatal(err)
+	}
+	close(stop)
+	readers.Wait()
+	if got := adapter.Configuration(); got != (ipv6ns.Configuration{}) {
+		t.Fatalf("configuration after close = %+v", got)
+	}
+	if usage, _ := account.Snapshot(); usage != (quota.Usage{}) {
+		t.Fatalf("close leaked quota: %+v", usage)
 	}
 }
 
