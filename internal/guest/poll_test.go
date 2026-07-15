@@ -255,6 +255,69 @@ func TestPollQuotaAndBackendFailuresPreserveOutputs(t *testing.T) {
 	})
 }
 
+func TestPollInvalidServiceResultRetriesAtomicallyThenRotates(t *testing.T) {
+	first := &pollNamespace{progress: nscore.ProgressDone}
+	manager, instance := attachPollManager(t, first, quota.DefaultLimits())
+	defer manager.Detach(instance)
+	state, ok := manager.ForInstance(instance)
+	if !ok {
+		t.Fatal("attached state missing")
+	}
+	second := &pollNamespace{report: nscore.ServiceReport{Operations: 1}, progress: nscore.ProgressDone}
+	secondHandle, err := state.Resources().Add(resource.KindNamespace, second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := state.Readiness().Register(secondHandle, resource.KindNamespace); err != nil {
+		t.Fatal(err)
+	}
+
+	host := pollTestHost{instance: instance, memory: bytes.Repeat([]byte{0x4d}, 160)}
+	writePollBudget(host.memory, 0, 2, 2, 1, 1, 64, 1)
+	pluginHost := plugin.NewHost(manager)
+	before := append([]byte(nil), host.memory...)
+	for attempt := 1; attempt <= 2; attempt++ {
+		if status := callPoll(pluginHost, host, 32, 2, 0, 80); status != StatusIO {
+			t.Fatalf("invalid service attempt %d = %v", attempt, status)
+		}
+		if first.serviceCalls != attempt || first.readinessCalls != 0 || second.serviceCalls != 0 || second.readinessCalls != 0 {
+			t.Fatalf("invalid service calls %d = first service/readiness %d/%d second %d/%d", attempt, first.serviceCalls, first.readinessCalls, second.serviceCalls, second.readinessCalls)
+		}
+		if !bytes.Equal(host.memory, before) {
+			t.Fatalf("invalid service attempt %d mutated guest memory", attempt)
+		}
+	}
+
+	first.report = nscore.ServiceReport{Operations: 1}
+	first.ready = nscore.ReadyReadable
+	firstHandle := state.NamespaceHandle()
+	if status := callPoll(pluginHost, host, 32, 2, 0, 80); status != StatusOK {
+		t.Fatalf("recovered first poll = %v", status)
+	}
+	if got := resource.Handle(binary.LittleEndian.Uint64(host.memory[32:40])); got != firstHandle {
+		t.Fatalf("recovered first event handle = %v, want %v", got, firstHandle)
+	}
+	assertPollResult(t, host.memory[80:104], 1, 2, 1, 1, 0)
+	if first.serviceCalls != 3 || first.readinessCalls != 1 || second.serviceCalls != 0 || second.readinessCalls != 1 {
+		t.Fatalf("recovered first calls = first %d/%d second %d/%d", first.serviceCalls, first.readinessCalls, second.serviceCalls, second.readinessCalls)
+	}
+
+	second.ready = nscore.ReadyReadable
+	if status := callPoll(pluginHost, host, 32, 2, 0, 80); status != StatusOK {
+		t.Fatalf("rotated second poll = %v", status)
+	}
+	if got := resource.Handle(binary.LittleEndian.Uint64(host.memory[32:40])); got != firstHandle {
+		t.Fatalf("rotated first event handle = %v, want %v", got, firstHandle)
+	}
+	if got := resource.Handle(binary.LittleEndian.Uint64(host.memory[48:56])); got != secondHandle {
+		t.Fatalf("rotated second event handle = %v, want %v", got, secondHandle)
+	}
+	assertPollResult(t, host.memory[80:104], 2, 2, 1, 1, 0)
+	if first.serviceCalls != 3 || second.serviceCalls != 1 {
+		t.Fatalf("service rotation calls = %d/%d", first.serviceCalls, second.serviceCalls)
+	}
+}
+
 func TestPollChargesExactInstanceScopedServiceUnits(t *testing.T) {
 	backend := &pollNamespace{report: nscore.ServiceReport{Operations: 1}, progress: nscore.ProgressDone, ready: nscore.ReadyReadable}
 	manager, instance := attachPollManager(t, backend, quota.DefaultLimits())
