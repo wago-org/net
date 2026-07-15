@@ -1236,6 +1236,26 @@ func TestVerifyRejectsNoncanonicalOrPolicyDriftedManifest(t *testing.T) {
 	}
 }
 
+func TestReleaseSignoffBenchmarkCheckMatchesProvenancePolicy(t *testing.T) {
+	data, err := os.ReadFile("../../scripts/release-signoff.sh")
+	if err != nil {
+		t.Fatal(err)
+	}
+	script := string(data)
+	for _, required := range []string{
+		"-bench '^Benchmark'",
+		"-benchmem",
+		"record_check " + releaseBenchmarkCheck + " pass",
+	} {
+		if !strings.Contains(script, required) {
+			t.Fatalf("release signoff does not record %q", required)
+		}
+	}
+	if count := strings.Count(script, "record_check "+releaseBenchmarkCheck+" pass"); count != 1 {
+		t.Fatalf("release benchmark check records = %d, want 1", count)
+	}
+}
+
 func validReviewFixture(t *testing.T) (string, VerifyOptions) {
 	t.Helper()
 	dir := t.TempDir()
@@ -1255,8 +1275,7 @@ func validReviewFixture(t *testing.T) (string, VerifyOptions) {
 		{Name: "go-list", Status: "pass"},
 		{Name: "go-mod-tidy", Status: "pass"},
 		{Name: "fuzz-smoke", Status: "pass"},
-		{Name: "benchmark-guest-poll", Status: "pass"},
-		{Name: "benchmark-udp-queue", Status: "pass"},
+		{Name: releaseBenchmarkCheck, Status: "pass", Detail: "all runtime benchmarks; benchmem; 100ms; count=1; cpu=1"},
 		{Name: "tinygo-test", Status: "pass"},
 		{Name: "cross-build", Status: "pass"},
 		{Name: "arm64-execution", Status: "skipped-no-runner"},

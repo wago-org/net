@@ -426,12 +426,14 @@ func expectedReviewSourceRepositories(opts VerifyOptions) []Repository {
 	}
 }
 
+const releaseBenchmarkCheck = "benchmark-runtime"
+
 func validateChecks(checks []Check, arm64Status string) error {
 	requiredPass := []string{
 		"pinned-revisions", "initial-clean-trees", "wago-plugin-plan-compat", "current-plugin-topology-audit", "wasi-preview1-fix-review",
 		"go-test-workspace", "go-test-module", "go-test-race", "go-vet", "go-list", "go-mod-tidy",
 		"fuzz-smoke",
-		"benchmark-guest-poll", "benchmark-udp-queue", "tinygo-test", "cross-build",
+		releaseBenchmarkCheck, "tinygo-test", "cross-build",
 		"source-boundaries", "custom-cli-inspection", "wago-lifecycle-worker-tests", "lneto-test", "final-clean-trees",
 		"source-object-packs", "current-plugin-review-signoff",
 	}
