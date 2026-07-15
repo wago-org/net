@@ -1069,6 +1069,56 @@ func TestMDNSCanonicalDuplicateQuestionsAndKnownAnswerSuppression(t *testing.T) 
 	_ = serviceEgress(t, core)
 }
 
+func TestMDNSCompressedKnownAnswerSuppressesResponseAndRejectsForwardPointer(t *testing.T) {
+	service := testService("device", "192.0.2.11")
+	config := Config{
+		Services: []mdnsns.Service{service}, MaxServices: 1, MaxQueries: 1, MaxAnnouncements: 1,
+		MaxRecords: 8, MaxPacketBytes: 1200, MaxQueuedResponses: 1, MaxQuestionsPerPacket: 4,
+		MaxRecordsPerPacket: 4, MaxAttempts: 1, RetryServiceAttempts: 1,
+	}
+	core, adapter, _ := newTestAdapter(t, config, testPolicy())
+	serviceType, err := lnetodns.NewName("_demo._udp.local")
+	if err != nil {
+		t.Fatal(err)
+	}
+	question := lnetodns.Question{Name: serviceType, Type: lnetodns.TypePTR, Class: lnetodns.ClassINET}
+	message := lnetodns.Message{Questions: []lnetodns.Question{question}}
+	payload, err := message.AppendTo(make([]byte, 0, config.MaxPacketBytes), 0, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	binary.BigEndian.PutUint16(payload[6:8], 1)
+	answer := []byte{
+		0xc0, 0x0c,
+		0x00, byte(lnetodns.TypePTR),
+		0x00, byte(lnetodns.ClassINET),
+		0x00, 0x00, 0x00, 0x78,
+		0x00, 0x09,
+		0x06, 'd', 'e', 'v', 'i', 'c', 'e', 0xc0, 0x0c,
+	}
+	payload = append(payload, answer...)
+	serviceIngress(t, core, wrapMDNSFrame(t, payload, [6]byte{2, 0, 0, 0, 0, 34}, netip.MustParseAddr("192.0.2.34")))
+	core.Lock()
+	queued := adapter.responseCount
+	working := adapter.hasWorkLocked()
+	core.Unlock()
+	if queued != 0 || working {
+		t.Fatalf("compressed known answer queued response: queued=%d working=%v", queued, working)
+	}
+
+	known, err := serviceResources(service, lnetodns.TypePTR)
+	if err != nil || len(known) != 1 {
+		t.Fatalf("service PTR resources = %d, %v", len(known), err)
+	}
+	decoded := lnetodns.Message{Questions: []lnetodns.Question{question}, Answers: known}
+	malformed := append([]byte(nil), payload...)
+	pointer := len(malformed) - 2
+	malformed[pointer], malformed[pointer+1] = 0xc0, byte(pointer+1)
+	if normalizeCompressedResourceNames(malformed, &decoded) {
+		t.Fatal("forward compressed known-answer pointer accepted")
+	}
+}
+
 func TestMDNSKnownAnswerComparisonCoversEveryServiceRecord(t *testing.T) {
 	service := testService("device", "192.0.2.11")
 	records, err := serviceResources(service, 0)
