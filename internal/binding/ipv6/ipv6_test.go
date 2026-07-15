@@ -137,6 +137,55 @@ func TestConfigurationPreservesOutputForMissingAndMalformedServices(t *testing.T
 	}
 }
 
+func TestConfigurationEncodesLinkLocalScopeAndRejectsMalformedBackendValuesAtomically(t *testing.T) {
+	linkLocal := validConfiguration()
+	linkLocal.Address = netip.MustParseAddr("fe80::42")
+	linkLocal.ScopeID = 7
+	backend := &fakeNamespace{configuration: linkLocal}
+	manager, instance := attachManager(t, backend)
+	host := testHost{instance: instance, memory: bytes.Repeat([]byte{0x6c}, 128)}
+	state, _ := manager.ForInstance(instance)
+	if status := callBinding(t, bindingByName(t, Bindings(plugin.NewHost(manager)), "configuration"), host, uint64(state.NamespaceHandle()), 32); status != guest.StatusOK {
+		t.Fatalf("link-local configuration = %v", status)
+	}
+	endpoint, ok := abicore.DecodeEndpointV1(host.memory, 32)
+	if !ok || endpoint.Address != linkLocal.Address || endpoint.ScopeID != linkLocal.ScopeID || endpoint.Port != 0 || endpoint.FlowInfo != 0 {
+		t.Fatalf("link-local endpoint = %+v, ok=%v", endpoint, ok)
+	}
+	if flags := binary.LittleEndian.Uint32(host.memory[68:72]); flags != ipv6abi.ConfigurationFlagEnabled|ipv6abi.ConfigurationFlagLinkLocal {
+		t.Fatalf("link-local flags = %#x", flags)
+	}
+	if err := manager.Detach(instance); err != nil {
+		t.Fatal(err)
+	}
+
+	for name, mutate := range map[string]func(*ipv6ns.Configuration){
+		"global scope":      func(c *ipv6ns.Configuration) { c.ScopeID = 1 },
+		"link scope absent": func(c *ipv6ns.Configuration) { c.Address = netip.MustParseAddr("fe80::42") },
+		"loopback":          func(c *ipv6ns.Configuration) { c.Address = netip.IPv6Loopback() },
+		"zero prefix":       func(c *ipv6ns.Configuration) { c.PrefixBits = 0 },
+		"small mtu":         func(c *ipv6ns.Configuration) { c.MTU = 1279 },
+		"extension headers": func(c *ipv6ns.Configuration) { c.MaxExtensionHeaders = 1 },
+		"zero transports":   func(c *ipv6ns.Configuration) { c.Transports = 0 },
+		"unknown transport": func(c *ipv6ns.Configuration) { c.Transports |= 1 << 31 },
+	} {
+		t.Run(name, func(t *testing.T) {
+			invalid := validConfiguration()
+			mutate(&invalid)
+			backend := &fakeNamespace{configuration: invalid}
+			manager, instance := attachManager(t, backend)
+			defer manager.Detach(instance)
+			state, _ := manager.ForInstance(instance)
+			host := testHost{instance: instance, memory: bytes.Repeat([]byte{0xa7}, 128)}
+			before := append([]byte(nil), host.memory[32:32+ipv6abi.ConfigurationV1Size]...)
+			status := callBinding(t, bindingByName(t, Bindings(plugin.NewHost(manager)), "configuration"), host, uint64(state.NamespaceHandle()), 32)
+			if status != guest.StatusIO || backend.calls != 1 || !bytes.Equal(host.memory[32:32+ipv6abi.ConfigurationV1Size], before) {
+				t.Fatalf("configuration = %v, calls=%d, output mutated=%v", status, backend.calls, !bytes.Equal(host.memory[32:32+ipv6abi.ConfigurationV1Size], before))
+			}
+		})
+	}
+}
+
 func TestBindingsPreserveFullWidthNamespaceHandle(t *testing.T) {
 	backend := &fakeNamespace{configuration: validConfiguration()}
 	manager, instance := attachManager(t, backend)
