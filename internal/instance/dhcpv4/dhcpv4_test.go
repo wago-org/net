@@ -110,35 +110,60 @@ func TestInstanceDHCPv4ExactKindLifecycle(t *testing.T) {
 	}
 }
 
-func TestAcquireRejectsInvalidBackendResourcesAndRollsBackRegistration(t *testing.T) {
+func TestAcquireRejectsMalformedSuccessfulBackendResources(t *testing.T) {
 	var typedNil *fakeLease
-	backend := &fakeNamespace{next: typedNil, progress: nscore.ProgressDone}
-	state, manager, instance, _ := attachState(t, backend, 4)
-	if handle, progress, err := Acquire(state, state.NamespaceHandle(), dhcpns.Request{}); handle != 0 || progress != 0 || failureOf(err) != nscore.FailureIO {
-		t.Fatalf("typed nil acquire = %v, %v, %v", handle, progress, err)
-	}
-	if state.Resources().Len() != 1 || state.Readiness().Snapshot().Registrations != 1 {
-		t.Fatalf("typed nil published: resources=%d readiness=%+v", state.Resources().Len(), state.Readiness().Snapshot())
-	}
-	_ = manager.Detach(instance)
+	for _, test := range []struct {
+		name     string
+		resource nscore.Resource
+		progress nscore.Progress
+	}{
+		{name: "wrong resource type", resource: new(fakeBase), progress: nscore.ProgressDone},
+		{name: "would-block progress", resource: new(fakeLease), progress: nscore.ProgressWouldBlock},
+		{name: "unknown progress", resource: new(fakeLease), progress: nscore.Progress(99)},
+		{name: "typed nil resource", resource: typedNil, progress: nscore.ProgressDone},
+		{name: "missing resource", progress: nscore.ProgressDone},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			backend := &fakeNamespace{next: test.resource, progress: test.progress}
+			state, manager, instance, _ := attachState(t, backend, 4)
+			defer manager.Detach(instance)
+			resourcesBefore := state.Resources().Len()
+			readinessBefore := state.Readiness().Snapshot()
 
+			handle, progress, err := Acquire(state, state.NamespaceHandle(), dhcpns.Request{})
+			if handle != 0 || progress != 0 || failureOf(err) != nscore.FailureIO {
+				t.Fatalf("malformed acquire = %v, %v, %v", handle, progress, err)
+			}
+			if state.Resources().Len() != resourcesBefore || state.Readiness().Snapshot() != readinessBefore {
+				t.Fatalf("malformed acquire published state: resources=%d readiness=%+v", state.Resources().Len(), state.Readiness().Snapshot())
+			}
+			switch created := test.resource.(type) {
+			case *fakeBase:
+				if !created.closed {
+					t.Fatal("wrong-type resource was not closed")
+				}
+			case *fakeLease:
+				if created != nil && created.closeCalls != 1 {
+					t.Fatalf("invalid-progress close calls = %d", created.closeCalls)
+				}
+			}
+		})
+	}
+}
+
+func TestAcquireReadinessRegistrationFailureRollsBackResource(t *testing.T) {
 	lease := &fakeLease{lease: validLease(t), result: dhcpns.ResultReady}
-	backend = &fakeNamespace{next: lease, progress: 99}
-	state, manager, instance, _ = attachState(t, backend, 4)
-	if handle, _, err := Acquire(state, state.NamespaceHandle(), dhcpns.Request{}); handle != 0 || failureOf(err) != nscore.FailureIO || !lease.closed {
-		t.Fatalf("invalid progress = %v, %v, closed=%v", handle, err, lease.closed)
-	}
-	_ = manager.Detach(instance)
-
-	lease = &fakeLease{lease: validLease(t), result: dhcpns.ResultReady}
-	backend = &fakeNamespace{next: lease, progress: nscore.ProgressDone}
-	state, manager, instance, _ = attachState(t, backend, 1)
+	backend := &fakeNamespace{next: lease, progress: nscore.ProgressDone}
+	state, manager, instance, _ := attachState(t, backend, 1)
 	defer manager.Detach(instance)
-	if handle, progress, err := Acquire(state, state.NamespaceHandle(), dhcpns.Request{}); handle != 0 || progress != 0 || !errors.Is(err, readiness.ErrLimit) || !lease.closed || lease.closeCalls != 1 {
-		t.Fatalf("registration rollback = %v, %v, %v, closed=%v calls=%d", handle, progress, err, lease.closed, lease.closeCalls)
+	resourcesBefore := state.Resources().Len()
+	readinessBefore := state.Readiness().Snapshot()
+
+	if handle, progress, err := Acquire(state, state.NamespaceHandle(), dhcpns.Request{}); handle != 0 || progress != 0 || !errors.Is(err, readiness.ErrLimit) {
+		t.Fatalf("registration rollback = %v, %v, %v", handle, progress, err)
 	}
-	if state.Resources().Len() != 1 || state.Readiness().Snapshot().Registrations != 1 {
-		t.Fatalf("rollback retained state: resources=%d readiness=%+v", state.Resources().Len(), state.Readiness().Snapshot())
+	if lease.closeCalls != 1 || state.Resources().Len() != resourcesBefore || state.Readiness().Snapshot() != readinessBefore {
+		t.Fatalf("rollback retained state: closes=%d resources=%d readiness=%+v", lease.closeCalls, state.Resources().Len(), state.Readiness().Snapshot())
 	}
 }
 
