@@ -905,6 +905,56 @@ func TestClientIngressDropsInvalidIPv4LengthsWithoutMutatingLease(t *testing.T) 
 	}
 }
 
+func TestIngressRejectsInvalidEthernetSourcesOnlyForEnabledDirection(t *testing.T) {
+	clientCore, client := newClient(t, false)
+	serverCore, server := newServer(t, 1)
+	resource, _, err := client.TryAcquire(dhcpns.Request{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	lease := resource.(*leaseResource)
+	discover := serviceEgress(t, clientCore)
+	serviceIngress(t, serverCore, discover)
+	offer := serviceEgress(t, serverCore)
+
+	invalidDiscover := rewriteEthernetSource(t, discover, [6]byte{})
+	invalidOffer := rewriteEthernetSource(t, offer, [6]byte{})
+	offerToServer := append([]byte(nil), invalidOffer...)
+	serverEthernet, err := ethernet.NewFrame(offerToServer)
+	if err != nil {
+		t.Fatal(err)
+	}
+	*serverEthernet.DestinationHardwareAddr() = server.hardwareAddress
+
+	for _, test := range []struct {
+		name        string
+		adapter     *Adapter
+		frame       []byte
+		wantHandled bool
+	}{
+		{name: "client owns replies", adapter: client, frame: invalidOffer, wantHandled: true},
+		{name: "client does not own requests", adapter: client, frame: invalidDiscover},
+		{name: "server owns requests", adapter: server, frame: invalidDiscover, wantHandled: true},
+		{name: "server does not own replies", adapter: server, frame: offerToServer},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			test.adapter.core.Lock()
+			handled, ingressErr := test.adapter.ingressLocked(test.frame)
+			test.adapter.core.Unlock()
+			if ingressErr != nil || handled != test.wantHandled {
+				t.Fatalf("ingress = handled %v, err %v; want handled %v", handled, ingressErr, test.wantHandled)
+			}
+		})
+	}
+	if lease.state != leaseWaitOffer || lease.wait != client.config.ResponseServiceAttempts || len(server.serverClients) != 1 || server.serverPending != 0 {
+		t.Fatalf("disabled-direction traffic mutated state: lease=%v wait=%d clients=%d pending=%d", lease.state, lease.wait, len(server.serverClients), server.serverPending)
+	}
+	serviceIngress(t, clientCore, offer)
+	if lease.state != leaseRequest || lease.wait != 0 {
+		t.Fatalf("valid offer after disabled-direction traffic = state:%v wait:%d", lease.state, lease.wait)
+	}
+}
+
 func TestClientIngressRejectsInvalidEthernetSources(t *testing.T) {
 	invalid := map[string][6]byte{
 		"zero":      {},

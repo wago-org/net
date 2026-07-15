@@ -546,7 +546,7 @@ func (a *Adapter) ingressLocked(frame []byte) (bool, error) {
 	if err != nil {
 		return true, nil
 	}
-	if destinationPort == dhcpns.ClientPort && sourcePort == dhcpns.ServerPort {
+	if destinationPort == dhcpns.ClientPort && sourcePort == dhcpns.ServerPort && a.config.MaxLeases != 0 {
 		a.acceptClientLocked(payload, source)
 		return true, nil
 	}
@@ -589,7 +589,7 @@ func (a *Adapter) validateFrame(frame []byte) ([]byte, netip.Addr, uint16, uint1
 		return nil, netip.Addr{}, 0, 0, false, nil
 	}
 	if !validUnicastMAC(*eth.SourceHardwareAddr()) {
-		return nil, netip.Addr{}, 0, 0, true, nil
+		return nil, netip.Addr{}, sourcePort, destinationPort, true, nil
 	}
 	ip.ValidateExceptCRC(&validator)
 	if validator.ErrPop() != nil || ip.CalculateHeaderCRC() != 0 || ip.Flags().MoreFragments() || ip.Flags().FragmentOffset() != 0 {
