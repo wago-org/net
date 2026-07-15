@@ -59,6 +59,40 @@ type hostModule struct {
 func (m hostModule) Memory() []byte           { return m.memory }
 func (m hostModule) Instance() *wago.Instance { return m.instance }
 
+func TestActualLinkLocalConfigurationPreservesNumericScope(t *testing.T) {
+	base := wagonet.Config{StaticIPv4: &wagonet.StaticIPv4Config{
+		Hostname: "ipv6-link-local", RandSeed: 72, HardwareAddress: [6]byte{2, 0, 0, 0, 0, 72},
+		IPv4Address: netip.MustParseAddr("192.0.2.72"), MTU: 1500,
+		Link: wagonet.PacketLinkConfig{MaxFrameBytes: 1514, IngressFrames: 2, EgressFrames: 2},
+	}}
+	network := wagonet.New(wagonet.WithConfig(base))
+	address := netip.MustParseAddr("fe80::72")
+	if err := Register(network, WithConfig(DefaultConfig(address, 64, 17))); err != nil {
+		t.Fatal(err)
+	}
+	runtime, host := instantiate(t, network)
+	if _, ok := runtime.HostImports()[wagonet.TCPModule+".namespace_default"]; ok {
+		t.Fatal("IPv6 configuration exposed an unselected TCP import")
+	}
+	if got := callImport(t, runtime, host, "namespace_default", 200); got != guest.StatusOK {
+		t.Fatalf("namespace = %v", got)
+	}
+	namespace := resource.Handle(binary.LittleEndian.Uint64(host.memory[200:208]))
+	if got := callImport(t, runtime, host, "configuration", uint64(namespace), 32); got != guest.StatusOK {
+		t.Fatalf("configuration = %v", got)
+	}
+	encoded := host.memory[32 : 32+ipv6abi.ConfigurationV1Size]
+	if got := binary.LittleEndian.Uint32(encoded[4:8]); got != 17 {
+		t.Fatalf("scope ID = %d", got)
+	}
+	if got := netip.AddrFrom16(*(*[16]byte)(encoded[8:24])); got != address {
+		t.Fatalf("address = %v", got)
+	}
+	if got := binary.LittleEndian.Uint32(encoded[36:40]); got != ipv6abi.ConfigurationFlagEnabled|ipv6abi.ConfigurationFlagLinkLocal {
+		t.Fatalf("flags = %#x", got)
+	}
+}
+
 func TestActualCheckedConfigurationAndDisabledTruth(t *testing.T) {
 	base := wagonet.Config{StaticIPv4: &wagonet.StaticIPv4Config{
 		Hostname: "ipv6-guest", RandSeed: 71, HardwareAddress: [6]byte{2, 0, 0, 0, 0, 71}, GatewayHardwareAddress: [6]byte{2, 0, 0, 0, 0, 1},
