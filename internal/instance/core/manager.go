@@ -366,7 +366,10 @@ func (s *State) LookupNamespace(namespaceHandle resource.Handle) (nscore.Namespa
 	if err != nil {
 		return nil, err
 	}
-	if owned, ok := value.(*ownedNamespace); ok && !resource.IsNil(owned.Namespace) {
+	if owned, ok := value.(*ownedNamespace); ok {
+		if resource.IsNil(owned.Namespace) {
+			return nil, nscore.Fail(nscore.FailureIO, ErrInvalidBackendResult)
+		}
 		return owned.Namespace, nil
 	}
 	backend, ok := value.(nscore.Namespace)

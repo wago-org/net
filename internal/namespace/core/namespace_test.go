@@ -150,6 +150,34 @@ func TestNamespaceCompositionAvoidsPerServiceHeapGrowthForPlannedSuite(t *testin
 	}
 }
 
+type testNamespaceCarrier struct{ namespace Namespace }
+
+func (c testNamespaceCarrier) NamespaceBackend() Namespace { return c.namespace }
+
+func TestResolveNamespaceBaseUnwrapsOwnershipAndComposition(t *testing.T) {
+	base := new(compositionBase)
+	composed, err := ComposeNamespace(base, Service{Key: "tcp", Value: new(int)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := ResolveNamespaceBase(base); got != base {
+		t.Fatalf("direct base = %T %p, want %p", got, got, base)
+	}
+	if got := ResolveNamespaceBase(composed); got != base {
+		t.Fatalf("composed base = %T %p, want %p", got, got, base)
+	}
+	if got := ResolveNamespaceBase(testNamespaceCarrier{namespace: composed}); got != base {
+		t.Fatalf("owned composed base = %T %p, want %p", got, got, base)
+	}
+	carrier := composed.(BaseCarrier)
+	if carrier.NamespaceBase() != base {
+		t.Fatal("base carrier did not preserve exact namespace")
+	}
+	if (*composedNamespace)(nil).NamespaceBase() != nil {
+		t.Fatal("nil composed namespace exposed a base")
+	}
+}
+
 func compositionServices(count int) []Service {
 	services := make([]Service, count)
 	for i := range services {

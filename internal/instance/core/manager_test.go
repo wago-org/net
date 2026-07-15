@@ -187,6 +187,104 @@ type fakePollable struct{}
 func (fakePollable) Close() error                   { return nil }
 func (fakePollable) Readiness() namespace.Readiness { return namespace.ReadyReadable }
 
+func TestLifecycleHooksAttachAndDetachExactInstance(t *testing.T) {
+	backend := new(fakeNamespace)
+	config := DefaultConfig()
+	config.NamespaceFactory = func(*policy.Policy, *quota.Account) (nscore.Namespace, error) {
+		return nscore.ComposeNamespace(backend)
+	}
+	manager, err := NewManagerConfigured(config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	instance := new(wago.Instance)
+	if err := manager.AfterInstantiate(nil, instance); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := manager.ForInstance(instance); !ok {
+		t.Fatal("lifecycle hook did not publish exact instance state")
+	}
+	if err := manager.AfterInstantiate(nil, instance); !errors.Is(err, ErrAlreadyAttached) {
+		t.Fatalf("duplicate AfterInstantiate = %v", err)
+	}
+	manager.BeforeClose(nil)
+	if _, ok := manager.ForInstance(instance); !ok {
+		t.Fatal("nil close context detached live instance")
+	}
+	manager.BeforeClose(&wago.InstanceContext{Instance: instance})
+	if _, ok := manager.ForInstance(instance); ok {
+		t.Fatal("BeforeClose retained exact instance state")
+	}
+	manager.BeforeClose(&wago.InstanceContext{Instance: instance})
+	if backend.closed.Load() != 1 {
+		t.Fatalf("backend close calls = %d, want 1", backend.closed.Load())
+	}
+}
+
+func TestLookupNamespaceReturnsOnlyExactBackendNeutralOwners(t *testing.T) {
+	if _, err := (*State)(nil).LookupNamespace(1); !errors.Is(err, ErrInvalidConfig) {
+		t.Fatalf("nil state lookup = %v", err)
+	}
+	base := new(fakeNamespace)
+	service := new(int)
+	config := DefaultConfig()
+	config.NamespaceFactory = func(*policy.Policy, *quota.Account) (nscore.Namespace, error) {
+		return nscore.ComposeNamespace(base, nscore.Service{Key: "test", Value: service})
+	}
+	manager, err := NewManagerConfigured(config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	instance := new(wago.Instance)
+	if err := manager.Attach(instance); err != nil {
+		t.Fatal(err)
+	}
+	state, _ := manager.ForInstance(instance)
+	backend, err := state.LookupNamespace(state.NamespaceHandle())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := nscore.ResolveNamespaceBase(backend); got != base {
+		t.Fatalf("resolved base = %T %p, want %p", got, got, base)
+	}
+	owned := &ownedNamespace{Namespace: backend}
+	if owned.NamespaceBackend() != backend || (*ownedNamespace)(nil).NamespaceBackend() != nil {
+		t.Fatal("owned namespace backend facade changed ownership")
+	}
+
+	direct := new(fakeNamespace)
+	directHandle, err := state.Resources().Add(resource.KindNamespace, direct)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, err := state.LookupNamespace(directHandle); err != nil || got != direct {
+		t.Fatalf("direct namespace lookup = %T %v", got, err)
+	}
+	invalidHandle, err := state.Resources().Add(resource.KindNamespace, fakePollable{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := state.LookupNamespace(invalidHandle); !errors.Is(err, ErrInvalidBackendResult) {
+		t.Fatalf("invalid namespace lookup = %v", err)
+	}
+	nilOwnedHandle, err := state.Resources().Add(resource.KindNamespace, &ownedNamespace{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := state.LookupNamespace(nilOwnedHandle); !errors.Is(err, ErrInvalidBackendResult) {
+		t.Fatalf("nil owned namespace lookup = %v", err)
+	}
+	if _, err := state.LookupNamespace(resource.Handle(^uint64(0))); !errors.Is(err, resource.ErrBadHandle) {
+		t.Fatalf("unknown namespace lookup = %v", err)
+	}
+	if err := manager.Detach(instance); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := state.LookupNamespace(state.NamespaceHandle()); !errors.Is(err, resource.ErrClosed) {
+		t.Fatalf("closed namespace lookup = %v", err)
+	}
+}
+
 type panicInstanceHost struct {
 	instance *wago.Instance
 }
