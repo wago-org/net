@@ -371,18 +371,14 @@ func (a *Adapter) ingressLocked(frame []byte) (bool, error) {
 	if destination != ethernet.BroadcastAddr() && destination != a.core.HardwareAddressLocked() {
 		return false, nil
 	}
-	source := *eth.SourceHardwareAddr()
-	if !validUnicastMAC(source) {
-		return true, nil
-	}
 	aframe, err := arp.NewFrame(eth.Payload())
 	if err != nil {
-		return true, nil
+		return false, nil
 	}
 	var validator lneto.Validator
 	aframe.ValidateSize(&validator)
 	if validator.ErrPop() != nil {
-		return true, nil
+		return false, nil
 	}
 	hardwareType, hardwareLength := aframe.Hardware()
 	protocolType, protocolLength := aframe.Protocol()
@@ -390,17 +386,16 @@ func (a *Adapter) ingressLocked(frame []byte) (bool, error) {
 		return false, nil
 	}
 	senderHW, senderProto := aframe.Sender4()
-	if *senderHW != source {
-		return true, nil
+	_, targetProto := aframe.Target4()
+	candidate := r.handler.Candidate()
+	relevant := *senderProto == candidate || *targetProto == candidate
+	source := *eth.SourceHardwareAddr()
+	if !validUnicastMAC(source) || *senderHW != source {
+		return relevant, nil
 	}
 	operation := aframe.Operation()
 	if operation != arp.OpRequest && operation != arp.OpReply {
-		_, targetProto := aframe.Target4()
-		candidate := r.handler.Candidate()
-		if *senderProto == candidate || *targetProto == candidate {
-			return true, nil
-		}
-		return false, nil
+		return relevant, nil
 	}
 	beforeState := r.handler.State()
 	beforeCandidate := r.handler.Candidate()

@@ -578,7 +578,18 @@ func TestIngressRelevanceConsumesMalformedLocalARPAndLeavesForeignUnhandled(t *t
 			*sender = [4]byte{169, 254, 99, 9}
 			return frame
 		}},
-		{name: "truncated local ARP", wantHandled: true, mutate: func(frame []byte) []byte { return frame[:20] }},
+		{name: "truncated local ARP", mutate: func(frame []byte) []byte { return frame[:20] }},
+		{name: "invalid source foreign candidate", mutate: func(frame []byte) []byte {
+			eth, _ := ethernet.NewFrame(frame)
+			*eth.SourceHardwareAddr() = [6]byte{1, 0, 0, 0, 0, 2}
+			aframe, _ := arp.NewFrame(eth.Payload())
+			sender, senderProto := aframe.Sender4()
+			*sender = [6]byte{1, 0, 0, 0, 0, 2}
+			*senderProto = [4]byte{169, 254, 99, 9}
+			_, targetProto := aframe.Target4()
+			*targetProto = [4]byte{169, 254, 99, 10}
+			return frame
+		}},
 		{name: "local sender identity mismatch", wantHandled: true, mutate: func(frame []byte) []byte {
 			eth, _ := ethernet.NewFrame(frame)
 			aframe, _ := arp.NewFrame(eth.Payload())
@@ -690,6 +701,43 @@ func TestConflictAcceptsEthernetLinkPadding(t *testing.T) {
 	}
 	if afterConflicts != beforeConflicts+1 || afterCandidate == beforeCandidate || state != stateActive {
 		t.Fatalf("padded conflict state = candidate %v -> %v conflicts %d -> %d state=%v", beforeCandidate, afterCandidate, beforeConflicts, afterConflicts, state)
+	}
+}
+
+func TestUncorrelatableMalformedARPReachesOrdinaryProcessing(t *testing.T) {
+	core, adapter, _, _ := newTestAdapter(t, Config{MaxClaims: 1, MaxConflicts: 4, MaxServiceAttempts: 16, Seed: 31})
+	resource, _, err := adapter.TryClaim(linklocalns.Request{FirstCandidate: netip.MustParseAddr("169.254.42.7")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	claim := resource.(*claimResource)
+	ordinaryARPCalls := 0
+	if err := core.Install(lnetocore.Participant{
+		IngressOrder: serviceOrder + 1,
+		Ingress: func(frame []byte) (bool, error) {
+			ordinaryARPCalls++
+			return true, nil
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	candidate := netip.AddrFrom4(claim.handler.Candidate())
+	truncated := makeConflict(t, candidate, [6]byte{2, 0, 0, 0, 0, 2})[:20]
+	serviceIngress(t, core, truncated)
+	foreignInvalidSource := makeConflict(t, netip.MustParseAddr("169.254.99.9"), [6]byte{1, 0, 0, 0, 0, 2})
+	serviceIngress(t, core, foreignInvalidSource)
+	if ordinaryARPCalls != 2 {
+		t.Fatalf("ordinary ARP calls after uncorrelatable frames = %d, want 2", ordinaryARPCalls)
+	}
+
+	exactInvalidSource := makeConflict(t, candidate, [6]byte{1, 0, 0, 0, 0, 3})
+	serviceIngress(t, core, exactInvalidSource)
+	core.Lock()
+	afterCandidate, conflicts, state := claim.handler.Candidate(), claim.handler.Conflicts(), claim.state
+	core.Unlock()
+	if ordinaryARPCalls != 2 || afterCandidate != candidate.As4() || conflicts != 0 || state != stateActive {
+		t.Fatalf("exact malformed conflict leaked or mutated: calls=%d candidate=%v conflicts=%d state=%v", ordinaryARPCalls, netip.AddrFrom4(afterCandidate), conflicts, state)
 	}
 }
 
