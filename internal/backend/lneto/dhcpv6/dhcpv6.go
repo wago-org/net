@@ -712,7 +712,7 @@ func parseIANA(data []byte, iaid [4]byte, info *packetInfo) bool {
 		}
 		switch code {
 		case lnetodhcp.OptIAAddr:
-			if found || len(sub) != 24 {
+			if found || len(sub) < 24 || !validIAValueOptions(sub[24:]) {
 				return false
 			}
 			address := netip.AddrFrom16([16]byte(sub[:16]))
@@ -748,7 +748,7 @@ func parseIAPD(data []byte, iaid [4]byte, limit uint8, info *packetInfo) bool {
 		}
 		switch code {
 		case lnetodhcp.OptIAPrefix:
-			if len(sub) != 25 || info.prefixCount >= limit {
+			if len(sub) < 25 || !validIAValueOptions(sub[25:]) || info.prefixCount >= limit {
 				return false
 			}
 			preferred, valid, bits := binary.BigEndian.Uint32(sub[:4]), binary.BigEndian.Uint32(sub[4:8]), int(sub[8])
@@ -900,6 +900,24 @@ func parseNTP(data []byte, config Config, info *packetInfo) bool {
 			return false
 		}
 		ptr += 4 + length
+	}
+	return true
+}
+
+func validIAValueOptions(data []byte) bool {
+	statuses := 0
+	for ptr := 0; ptr < len(data); {
+		code, sub, next, ok := nextOption(data, ptr)
+		if !ok {
+			return false
+		}
+		if code == lnetodhcp.OptStatusCode {
+			statuses++
+			if statuses != 1 || !successStatus(sub) {
+				return false
+			}
+		}
+		ptr = next
 	}
 	return true
 }

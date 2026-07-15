@@ -530,6 +530,62 @@ func TestWireNamesAreCanonicalizedWithoutRetainingInput(t *testing.T) {
 	}
 }
 
+func TestIAAddressAndPrefixNestedOptionsAreValidated(t *testing.T) {
+	config := defaultConfig()
+	xid := uint32(0x123456)
+	iaid := [4]byte{2, 0, 0, 1}
+	clientDUID := []byte{0, 3, 0, 1, 2, 0, 0, 0, 0, 1}
+	serverDUID := []byte{0, 3, 0, 1, 2, 0, 0, 0, 0, 2}
+	assigned := netip.MustParseAddr("2001:db8::10")
+
+	address := buildServerPayload(t, lnetodhcp.MsgReply, xid, clientDUID, serverDUID, iaid, assigned, false)
+	address = appendToLastNestedOption(t, address, lnetodhcp.OptIANA, lnetodhcp.OptIAAddr, appendOption(nil, lnetodhcp.OptStatusCode, []byte{0, 0}))
+	if _, ok := inspectMessage(address, lnetodhcp.MsgReply, xid, clientDUID, iaid, config, serverDUID); !ok {
+		t.Fatal("IA Address success status rejected")
+	}
+	failedAddress := buildServerPayload(t, lnetodhcp.MsgReply, xid, clientDUID, serverDUID, iaid, assigned, false)
+	failedAddress = appendToLastNestedOption(t, failedAddress, lnetodhcp.OptIANA, lnetodhcp.OptIAAddr, appendOption(nil, lnetodhcp.OptStatusCode, []byte{0, byte(lnetodhcp.StatusNoAddrsAvail)}))
+	if _, ok := inspectMessage(failedAddress, lnetodhcp.MsgReply, xid, clientDUID, iaid, config, serverDUID); ok {
+		t.Fatal("IA Address failure status accepted")
+	}
+
+	prefix := buildServerPayload(t, lnetodhcp.MsgReply, xid, clientDUID, serverDUID, iaid, assigned, true)
+	prefix = appendToLastNestedOption(t, prefix, lnetodhcp.OptIAPD, lnetodhcp.OptIAPrefix, appendOption(nil, lnetodhcp.OptCode(65000), []byte{1, 2, 3}))
+	if _, ok := inspectMessage(prefix, lnetodhcp.MsgReply, xid, clientDUID, iaid, config, serverDUID); !ok {
+		t.Fatal("unknown IA Prefix option rejected")
+	}
+	malformedPrefix := buildServerPayload(t, lnetodhcp.MsgReply, xid, clientDUID, serverDUID, iaid, assigned, true)
+	malformedPrefix = appendToLastNestedOption(t, malformedPrefix, lnetodhcp.OptIAPD, lnetodhcp.OptIAPrefix, []byte{0, byte(lnetodhcp.OptStatusCode), 0})
+	if _, ok := inspectMessage(malformedPrefix, lnetodhcp.MsgReply, xid, clientDUID, iaid, config, serverDUID); ok {
+		t.Fatal("malformed IA Prefix option accepted")
+	}
+
+	_, adapter, _ := newTestAdapter(t, config)
+	resource, _, err := adapter.TryAcquire()
+	if err != nil {
+		t.Fatal(err)
+	}
+	lease := resource.(*leaseResource)
+	var scratch [1514]byte
+	if _, _, err := adapter.egressLocked(scratch[:]); err != nil {
+		t.Fatal(err)
+	}
+	serverAddr := netip.MustParseAddr("fe80::2")
+	serverMAC := [6]byte{0x02, 0, 0, 0, 0, 2}
+	advertise := buildServerPayload(t, lnetodhcp.MsgAdvertise, lease.xid, lease.clientDUID[:], serverDUID, lease.iaid, assigned, false)
+	if handled, err := adapter.ingressLocked(wrapServerFrame(t, adapter, serverAddr, serverMAC, advertise)); err != nil || !handled || lease.state != leaseRequestPending {
+		t.Fatalf("Advertise = %v %v state=%v", handled, err, lease.state)
+	}
+	if _, _, err := adapter.egressLocked(scratch[:]); err != nil {
+		t.Fatal(err)
+	}
+	reply := buildServerPayload(t, lnetodhcp.MsgReply, lease.xid, lease.clientDUID[:], serverDUID, lease.iaid, assigned, true)
+	reply = appendToLastNestedOption(t, reply, lnetodhcp.OptIAPD, lnetodhcp.OptIAPrefix, appendOption(nil, lnetodhcp.OptCode(65000), []byte{1, 2, 3}))
+	if handled, err := adapter.ingressLocked(wrapServerFrame(t, adapter, serverAddr, serverMAC, reply)); err != nil || !handled || lease.state != leaseBound {
+		t.Fatalf("Reply with nested IA Prefix option = %v %v state=%v", handled, err, lease.state)
+	}
+}
+
 func TestDuplicateStatusOptionsAreRejectedAtEverySupportedNesting(t *testing.T) {
 	config := defaultConfig()
 	xid := uint32(0x123456)
@@ -908,6 +964,47 @@ func appendSuboption(dst []byte, code uint16, data []byte) []byte {
 	binary.BigEndian.PutUint16(dst[start:start+2], code)
 	binary.BigEndian.PutUint16(dst[start+2:start+4], uint16(len(data)))
 	return append(dst, data...)
+}
+
+func appendToLastNestedOption(t testing.TB, payload []byte, outer, inner lnetodhcp.OptCode, nested []byte) []byte {
+	t.Helper()
+	payload = append([]byte(nil), payload...)
+	outerOffset := -1
+	for ptr := lnetodhcp.OptionsOffset; ptr < len(payload); {
+		code, _, next, ok := nextOption(payload, ptr)
+		if !ok {
+			t.Fatal("malformed test payload")
+		}
+		if code == outer {
+			outerOffset = ptr
+		}
+		ptr = next
+	}
+	if outerOffset < 0 || outerOffset+4+int(binary.BigEndian.Uint16(payload[outerOffset+2:outerOffset+4])) != len(payload) {
+		t.Fatalf("outer option %v is not last", outer)
+	}
+	innerOffset := -1
+	for ptr := outerOffset + 4 + 12; ptr < len(payload); {
+		code, _, next, ok := nextOption(payload, ptr)
+		if !ok {
+			t.Fatal("malformed nested test payload")
+		}
+		if code == inner {
+			innerOffset = ptr
+		}
+		ptr = next
+	}
+	if innerOffset < 0 || innerOffset+4+int(binary.BigEndian.Uint16(payload[innerOffset+2:innerOffset+4])) != len(payload) {
+		t.Fatalf("inner option %v is not last", inner)
+	}
+	outerLength := int(binary.BigEndian.Uint16(payload[outerOffset+2 : outerOffset+4]))
+	innerLength := int(binary.BigEndian.Uint16(payload[innerOffset+2 : innerOffset+4]))
+	if outerLength+len(nested) > int(^uint16(0)) || innerLength+len(nested) > int(^uint16(0)) {
+		t.Fatal("nested test option too large")
+	}
+	binary.BigEndian.PutUint16(payload[outerOffset+2:outerOffset+4], uint16(outerLength+len(nested)))
+	binary.BigEndian.PutUint16(payload[innerOffset+2:innerOffset+4], uint16(innerLength+len(nested)))
+	return append(payload, nested...)
 }
 
 func appendToLastOption(t testing.TB, payload []byte, want lnetodhcp.OptCode, nested []byte) []byte {
