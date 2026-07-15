@@ -4,7 +4,7 @@ import (
 	"reflect"
 	"testing"
 
-	wagonet "github.com/wago-org/net"
+	"github.com/wago-org/net/internal/inspectionpolicy"
 	_ "github.com/wago-org/net/register"
 	wago "github.com/wago-org/wago"
 )
@@ -21,16 +21,26 @@ func TestAllProtocolFactoryHasExactRuntimeSurface(t *testing.T) {
 	if err := runtime.Use(extension); err != nil {
 		t.Fatalf("Use: %v", err)
 	}
-	wantCapabilities := []wago.Capability{wagonet.CapDHCPv4, wagonet.CapDHCPv6, wagonet.CapDNS, wagonet.CapICMPv4, wagonet.CapICMPv6, wagonet.CapInfo, wagonet.CapIPv6, wagonet.CapLinkLocal4, wagonet.CapMDNS, wagonet.CapNTP, wagonet.CapTCP, wagonet.CapUDP}
-	if got := runtime.Capabilities(); !reflect.DeepEqual(got, wantCapabilities) {
-		t.Fatalf("capabilities = %v, want %v", got, wantCapabilities)
+	policy, err := inspectionpolicy.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	want, ok := inspectionpolicy.Aggregate(policy)
+	if !ok {
+		t.Fatal("aggregate inspection policy missing")
+	}
+	gotCapabilities := make([]string, len(runtime.Capabilities()))
+	for index, capability := range runtime.Capabilities() {
+		gotCapabilities[index] = string(capability)
+	}
+	if !reflect.DeepEqual(gotCapabilities, want.Capabilities) {
+		t.Fatalf("capabilities = %v, want %v", gotCapabilities, want.Capabilities)
 	}
 	gotImports := make(map[string]int)
 	for _, spec := range runtime.ProvidedImports() {
 		gotImports[spec.Module]++
 	}
-	wantImports := map[string]int{wagonet.Module: 1, wagonet.DHCPv4Module: 7, wagonet.DHCPv6Module: 7, wagonet.DNSModule: 6, wagonet.ICMPv4Module: 6, wagonet.ICMPv6Module: 14, wagonet.IPv6Module: 3, wagonet.LinkLocal4Module: 7, wagonet.MDNSModule: 10, wagonet.NTPModule: 6, wagonet.TCPModule: 11, wagonet.UDPModule: 6}
-	if !reflect.DeepEqual(gotImports, wantImports) {
-		t.Fatalf("import modules = %v, want %v", gotImports, wantImports)
+	if !reflect.DeepEqual(gotImports, want.Imports) {
+		t.Fatalf("import modules = %v, want %v", gotImports, want.Imports)
 	}
 }

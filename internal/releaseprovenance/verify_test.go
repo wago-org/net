@@ -14,6 +14,8 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+
+	"github.com/wago-org/net/internal/inspectionpolicy"
 )
 
 func TestVerifyAndDeterministicBundleExport(t *testing.T) {
@@ -1305,22 +1307,7 @@ func validReviewFixture(t *testing.T) (string, VerifyOptions) {
 	binaryHash := strings.Repeat("b", 64)
 	writeTestFile(t, filepath.Join(dir, "arm64", "binary.sha256"), binaryHash+"  net-arm64.test\n")
 
-	var imports []map[string]string
-	for module, count := range map[string]int{"wago_net": 1, "wago_net_dns": 6, "wago_net_tcp": 11, "wago_net_udp": 6} {
-		for i := 0; i < count; i++ {
-			imports = append(imports, map[string]string{"module": module})
-		}
-	}
-	sortInspectionImports(imports)
-	inspectionData, err := json.Marshal(struct {
-		Capabilities []string            `json:"capabilities"`
-		Imports      []map[string]string `json:"imports"`
-	}{Capabilities: []string{"net.dns", "net.info", "net.tcp", "net.udp"}, Imports: imports})
-	if err != nil {
-		t.Fatal(err)
-	}
-	writeTestFile(t, filepath.Join(dir, "custom-cli", "inspection-go.json"), string(inspectionData))
-	writeTestFile(t, filepath.Join(dir, "custom-cli", "inspection-tinygo.json"), string(inspectionData))
+	writeCanonicalInspectionEvidence(t, dir)
 
 	var inspection Inspection
 	if err := readInspection(dir, &inspection); err != nil {
@@ -1385,6 +1372,37 @@ func validReviewFixture(t *testing.T) (string, VerifyOptions) {
 			repositories.currentWago.Repository,
 			repositories.workers.Repository,
 		},
+	}
+}
+
+func writeCanonicalInspectionEvidence(t testing.TB, dir string) {
+	t.Helper()
+	policy, err := inspectionpolicy.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeTestFile(t, filepath.Join(dir, "custom-cli", "inspection-policy.json"), string(inspectionpolicy.Data()))
+	for _, bundle := range policy.Bundles {
+		var imports []map[string]string
+		for module, count := range bundle.Imports {
+			for range count {
+				imports = append(imports, map[string]string{"module": module})
+			}
+		}
+		sortInspectionImports(imports)
+		inspectionData, err := json.Marshal(struct {
+			Capabilities []string            `json:"capabilities"`
+			Imports      []map[string]string `json:"imports"`
+		}{Capabilities: bundle.Capabilities, Imports: imports})
+		if err != nil {
+			t.Fatal(err)
+		}
+		writeTestFile(t, filepath.Join(dir, "custom-cli", "inspection-"+bundle.Key+"-go.json"), string(inspectionData))
+		writeTestFile(t, filepath.Join(dir, "custom-cli", "inspection-"+bundle.Key+"-tinygo.json"), string(inspectionData))
+		if bundle.Key == inspectionpolicy.AggregateKey {
+			writeTestFile(t, filepath.Join(dir, "custom-cli", "inspection-go.json"), string(inspectionData))
+			writeTestFile(t, filepath.Join(dir, "custom-cli", "inspection-tinygo.json"), string(inspectionData))
+		}
 	}
 }
 

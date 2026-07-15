@@ -16,9 +16,17 @@ for dir in "$wago_dir" "$lneto_dir" "$workers_dir"; do
 done
 command -v go >/dev/null
 command -v tinygo >/dev/null
+command -v python3 >/dev/null
+
+policy="$net_dir/internal/inspectionpolicy/policy.json"
+[[ -f $policy ]] || {
+  echo "custom-cli: missing inspection policy $policy" >&2
+  exit 1
+}
 
 rm -rf "$out"
 mkdir -p "$out/cmd/validate"
+cp "$policy" "$out/inspection-policy.json"
 cat >"$out/go.mod" <<EOF
 module github.com/wago-org/net-signoff
 
@@ -49,14 +57,35 @@ import (
 func main() { wagocli.Main("$key-release-signoff") }
 EOF
 }
-write_cli net github.com/wago-org/net/register
-keys=(net)
-if [[ -d "$net_dir/tcp/register" && -d "$net_dir/udp/register" && -d "$net_dir/dns/register" ]]; then
-  write_cli net-tcp github.com/wago-org/net/tcp/register
-  write_cli net-udp github.com/wago-org/net/udp/register
-  write_cli net-dns github.com/wago-org/net/dns/register
-  keys+=(net-tcp net-udp net-dns)
-fi
+python3 - "$policy" "$out/bundles.tsv" <<'PY'
+import json
+import sys
+
+source, destination = sys.argv[1:]
+with open(source, encoding="utf-8") as stream:
+    policy = json.load(stream)
+bundles = policy.get("bundles", [])
+if not bundles:
+    raise SystemExit("custom-cli: inspection policy has no bundles")
+rows = []
+for bundle in bundles:
+    key = bundle.get("key", "")
+    package = bundle.get("package", "")
+    if not key or not package or "\t" in key + package or "\n" in key + package:
+        raise SystemExit("custom-cli: invalid inspection bundle")
+    rows.append((key, package))
+if rows != sorted(rows):
+    raise SystemExit("custom-cli: inspection bundles are not sorted by key")
+with open(destination, "w", encoding="utf-8") as stream:
+    for key, package in rows:
+        stream.write(f"{key}\t{package}\n")
+PY
+
+keys=()
+while IFS=$'\t' read -r key package; do
+  write_cli "$key" "$package"
+  keys+=("$key")
+done <"$out/bundles.tsv"
 
 cat >"$out/cmd/validate/main.go" <<'EOF'
 package main
@@ -75,39 +104,39 @@ type inspection struct {
 	} `json:"imports"`
 }
 
-type expectation struct {
-	capabilities []string
-	imports      map[string]int
+type policy struct {
+	Bundles []expectation `json:"bundles"`
 }
 
-var expectations = map[string]expectation{
-	"net": {
-		capabilities: []string{"net.dns", "net.info", "net.tcp", "net.udp"},
-		imports: map[string]int{"wago_net": 1, "wago_net_dns": 6, "wago_net_tcp": 11, "wago_net_udp": 6},
-	},
-	"net-tcp": {
-		capabilities: []string{"net.info", "net.tcp"},
-		imports: map[string]int{"wago_net": 1, "wago_net_tcp": 11},
-	},
-	"net-udp": {
-		capabilities: []string{"net.info", "net.udp"},
-		imports: map[string]int{"wago_net": 1, "wago_net_udp": 6},
-	},
-	"net-dns": {
-		capabilities: []string{"net.dns", "net.info"},
-		imports: map[string]int{"wago_net": 1, "wago_net_dns": 6},
-	},
+type expectation struct {
+	Key          string         `json:"key"`
+	Capabilities []string       `json:"capabilities"`
+	Imports      map[string]int `json:"imports"`
 }
 
 func main() {
-	if len(os.Args) != 3 {
-		panic("usage: validate <plugin> <inspection.json>")
+	if len(os.Args) != 4 {
+		panic("usage: validate <policy.json> <plugin> <inspection.json>")
 	}
-	want, ok := expectations[os.Args[1]]
-	if !ok {
-		panic("unknown plugin " + os.Args[1])
+	policyData, err := os.ReadFile(os.Args[1])
+	if err != nil {
+		panic(err)
 	}
-	data, err := os.ReadFile(os.Args[2])
+	var configured policy
+	if err := json.Unmarshal(policyData, &configured); err != nil {
+		panic(err)
+	}
+	var want *expectation
+	for index := range configured.Bundles {
+		if configured.Bundles[index].Key == os.Args[2] {
+			want = &configured.Bundles[index]
+			break
+		}
+	}
+	if want == nil {
+		panic("unknown plugin " + os.Args[2])
+	}
+	data, err := os.ReadFile(os.Args[3])
 	if err != nil {
 		panic(err)
 	}
@@ -115,15 +144,15 @@ func main() {
 	if err := json.Unmarshal(data, &got); err != nil {
 		panic(err)
 	}
-	if !reflect.DeepEqual(got.Capabilities, want.capabilities) {
-		panic(fmt.Sprintf("capabilities = %v, want %v", got.Capabilities, want.capabilities))
+	if !reflect.DeepEqual(got.Capabilities, want.Capabilities) {
+		panic(fmt.Sprintf("capabilities = %v, want %v", got.Capabilities, want.Capabilities))
 	}
 	counts := map[string]int{}
 	for _, imp := range got.Imports {
 		counts[imp.Module]++
 	}
-	if !reflect.DeepEqual(counts, want.imports) {
-		panic(fmt.Sprintf("imports = %d %v, want %v", len(got.Imports), counts, want.imports))
+	if !reflect.DeepEqual(counts, want.Imports) {
+		panic(fmt.Sprintf("imports = %d %v, want %v", len(got.Imports), counts, want.Imports))
 	}
 }
 EOF
@@ -146,14 +175,10 @@ inspect_package() {
     inspect_package "./wago-$key-go" "$key" "inspection-$key-go.json"
     inspect_package "./wago-$key-tinygo" "$key" "inspection-$key-tinygo.json"
     cmp "inspection-$key-go.json" "inspection-$key-tinygo.json"
-    GOWORK=off go run ./cmd/validate "$key" "inspection-$key-go.json"
+    GOWORK=off go run ./cmd/validate inspection-policy.json "$key" "inspection-$key-go.json"
   done
   cp inspection-net-go.json inspection-go.json
   cp inspection-net-tinygo.json inspection-tinygo.json
 )
 
-if ((${#keys[@]} == 4)); then
-  echo "custom-cli: standard Go and TinyGo inspection match for net, net-tcp, net-udp, and net-dns at $out"
-else
-  echo "custom-cli: standard Go and TinyGo aggregate inspection match for historical source without granular bundles at $out"
-fi
+echo "custom-cli: standard Go and TinyGo inspection match for all ${#keys[@]} canonical bundles at $out"

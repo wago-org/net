@@ -55,14 +55,42 @@ func TestReadChecksAndInspection(t *testing.T) {
 	}
 
 	inspection := `{"capabilities":["net.dns","net.info","net.tcp","net.udp"],"imports":[{"module":"wago_net"},{"module":"wago_net_udp"},{"module":"wago_net_udp"}]}`
-	writeTestFile(t, filepath.Join(dir, "custom-cli", "inspection-go.json"), inspection)
-	writeTestFile(t, filepath.Join(dir, "custom-cli", "inspection-tinygo.json"), inspection)
-	var got Inspection
-	if err := readInspection(dir, &got); err != nil {
+	writeTestFile(t, filepath.Join(dir, "inspection-net-go.json"), inspection)
+	writeTestFile(t, filepath.Join(dir, "inspection-net-tinygo.json"), inspection)
+	got, err := readBundleInspection(dir, "net")
+	if err != nil {
 		t.Fatal(err)
 	}
 	if !got.GoTinyGoEqual || got.ImportCount != 3 || got.ImportsByModule["wago_net_udp"] != 2 {
 		t.Fatalf("inspection = %+v", got)
+	}
+}
+
+func TestInspectionEvidenceRejectsStaleAggregateAndRequiresEveryBundle(t *testing.T) {
+	dir := t.TempDir()
+	writeCanonicalInspectionEvidence(t, dir)
+	var current Inspection
+	if err := readInspection(dir, &current); err != nil {
+		t.Fatalf("current all-protocol inspection: %v", err)
+	}
+	if len(current.Capabilities) != 12 || current.ImportCount != 84 {
+		t.Fatalf("current aggregate = %d capabilities, %d imports", len(current.Capabilities), current.ImportCount)
+	}
+
+	stale := `{"capabilities":["net.dns","net.info","net.tcp","net.udp"],"imports":[{"module":"wago_net"},{"module":"wago_net_dns"},{"module":"wago_net_tcp"},{"module":"wago_net_udp"}]}`
+	writeTestFile(t, filepath.Join(dir, "custom-cli", "inspection-net-go.json"), stale)
+	writeTestFile(t, filepath.Join(dir, "custom-cli", "inspection-net-tinygo.json"), stale)
+	if err := readInspection(dir, new(Inspection)); err == nil {
+		t.Fatal("stale four-capability aggregate unexpectedly accepted")
+	}
+
+	dir = t.TempDir()
+	writeCanonicalInspectionEvidence(t, dir)
+	if err := os.Remove(filepath.Join(dir, "custom-cli", "inspection-net-udp-tinygo.json")); err != nil {
+		t.Fatal(err)
+	}
+	if err := readInspection(dir, new(Inspection)); err == nil {
+		t.Fatal("missing granular TinyGo inspection unexpectedly accepted")
 	}
 }
 

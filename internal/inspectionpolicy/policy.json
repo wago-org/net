@@ -1,0 +1,76 @@
+{
+  "bundles": [
+    {
+      "key": "net",
+      "package": "github.com/wago-org/net/register",
+      "capabilities": ["net.dhcpv4", "net.dhcpv6", "net.dns", "net.icmpv4", "net.icmpv6", "net.info", "net.ipv6", "net.linklocal4", "net.mdns", "net.ntp", "net.tcp", "net.udp"],
+      "imports": {"wago_net": 1, "wago_net_dhcpv4": 7, "wago_net_dhcpv6": 7, "wago_net_dns": 6, "wago_net_icmpv4": 6, "wago_net_icmpv6": 14, "wago_net_ipv6": 3, "wago_net_linklocal4": 7, "wago_net_mdns": 10, "wago_net_ntp": 6, "wago_net_tcp": 11, "wago_net_udp": 6}
+    },
+    {
+      "key": "net-dhcpv4",
+      "package": "github.com/wago-org/net/dhcpv4/register",
+      "capabilities": ["net.dhcpv4", "net.info"],
+      "imports": {"wago_net": 1, "wago_net_dhcpv4": 7}
+    },
+    {
+      "key": "net-dhcpv6",
+      "package": "github.com/wago-org/net/dhcpv6/register",
+      "capabilities": ["net.dhcpv6", "net.info"],
+      "imports": {"wago_net": 1, "wago_net_dhcpv6": 7}
+    },
+    {
+      "key": "net-dns",
+      "package": "github.com/wago-org/net/dns/register",
+      "capabilities": ["net.dns", "net.info"],
+      "imports": {"wago_net": 1, "wago_net_dns": 6}
+    },
+    {
+      "key": "net-icmpv4",
+      "package": "github.com/wago-org/net/icmpv4/register",
+      "capabilities": ["net.icmpv4", "net.info"],
+      "imports": {"wago_net": 1, "wago_net_icmpv4": 6}
+    },
+    {
+      "key": "net-icmpv6",
+      "package": "github.com/wago-org/net/icmpv6/register",
+      "capabilities": ["net.icmpv6", "net.info"],
+      "imports": {"wago_net": 1, "wago_net_icmpv6": 14}
+    },
+    {
+      "key": "net-ipv6",
+      "package": "github.com/wago-org/net/ipv6/register",
+      "capabilities": ["net.info", "net.ipv6"],
+      "imports": {"wago_net": 1, "wago_net_ipv6": 3}
+    },
+    {
+      "key": "net-linklocal4",
+      "package": "github.com/wago-org/net/linklocal4/register",
+      "capabilities": ["net.info", "net.linklocal4"],
+      "imports": {"wago_net": 1, "wago_net_linklocal4": 7}
+    },
+    {
+      "key": "net-mdns",
+      "package": "github.com/wago-org/net/mdns/register",
+      "capabilities": ["net.info", "net.mdns"],
+      "imports": {"wago_net": 1, "wago_net_mdns": 10}
+    },
+    {
+      "key": "net-ntp",
+      "package": "github.com/wago-org/net/ntp/register",
+      "capabilities": ["net.info", "net.ntp"],
+      "imports": {"wago_net": 1, "wago_net_ntp": 6}
+    },
+    {
+      "key": "net-tcp",
+      "package": "github.com/wago-org/net/tcp/register",
+      "capabilities": ["net.info", "net.tcp"],
+      "imports": {"wago_net": 1, "wago_net_tcp": 11}
+    },
+    {
+      "key": "net-udp",
+      "package": "github.com/wago-org/net/udp/register",
+      "capabilities": ["net.info", "net.udp"],
+      "imports": {"wago_net": 1, "wago_net_udp": 6}
+    }
+  ]
+}

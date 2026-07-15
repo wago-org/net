@@ -213,7 +213,7 @@ log "source boundaries and custom package inspection"
 record_check source-boundaries pass 'lneto imports and blocking API guard'
 WAGO_DIR="$wago_dir" LNETO_DIR="$lneto_dir" SIGNOFF_CUSTOM_DIR="$out/custom-cli" \
   "$root/scripts/custom-cli-signoff.sh"
-record_check custom-cli-inspection pass 'Go and TinyGo byte-identical for granular TCP/UDP/DNS and explicit all-protocol bundles'
+record_check custom-cli-inspection pass 'Go and TinyGo byte-identical for all 11 granular protocol bundles and the explicit all-protocol bundle'
 
 helper="$wago_dir/src/wago/trap_code_release_signoff_test.go"
 [[ ! -e "$helper" ]] || fail "temporary Wago trap helper already exists"

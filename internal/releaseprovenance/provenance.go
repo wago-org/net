@@ -3,6 +3,7 @@ package releaseprovenance
 
 import (
 	"bufio"
+	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -15,6 +16,8 @@ import (
 	"reflect"
 	"sort"
 	"strings"
+
+	"github.com/wago-org/net/internal/inspectionpolicy"
 )
 
 const SchemaV2 = "github.com/wago-org/net/release-provenance/v2"
@@ -152,12 +155,6 @@ func Generate(cfg Config) (*Manifest, error) {
 	}
 	if err := readInspection(cfg.OutputDir, &manifest.Inspection); err != nil {
 		return nil, err
-	}
-	wantCapabilities := []string{"net.dns", "net.info", "net.tcp", "net.udp"}
-	wantImports := map[string]int{"wago_net": 1, "wago_net_dns": 6, "wago_net_tcp": 11, "wago_net_udp": 6}
-	if !manifest.Inspection.GoTinyGoEqual || !reflect.DeepEqual(manifest.Inspection.Capabilities, wantCapabilities) ||
-		manifest.Inspection.ImportCount != 24 || !reflect.DeepEqual(manifest.Inspection.ImportsByModule, wantImports) {
-		return nil, fmt.Errorf("release provenance: inspection facts do not match the complete advertised networking surface")
 	}
 	if manifest.Targets.CrossBuild.Status != "pass" {
 		return nil, fmt.Errorf("release provenance: cross-build status is %q, want pass", manifest.Targets.CrossBuild.Status)
@@ -318,15 +315,48 @@ func readToolchains(path string, dst *Toolchains) error {
 }
 
 func readInspection(out string, dst *Inspection) error {
-	goPath := filepath.Join(out, "custom-cli", "inspection-go.json")
-	tinyPath := filepath.Join(out, "custom-cli", "inspection-tinygo.json")
-	goData, err := os.ReadFile(goPath)
+	policyData, err := os.ReadFile(filepath.Join(out, "custom-cli", "inspection-policy.json"))
 	if err != nil {
 		return err
 	}
-	tinyData, err := os.ReadFile(tinyPath)
+	if !bytes.Equal(policyData, inspectionpolicy.Data()) {
+		return fmt.Errorf("release provenance: archived inspection policy does not match verifier policy")
+	}
+	policy, err := inspectionpolicy.Load()
 	if err != nil {
 		return err
+	}
+	foundAggregate := false
+	for _, bundle := range policy.Bundles {
+		inspection, err := readBundleInspection(filepath.Join(out, "custom-cli"), bundle.Key)
+		if err != nil {
+			return err
+		}
+		if !inspection.GoTinyGoEqual || !reflect.DeepEqual(inspection.Capabilities, bundle.Capabilities) ||
+			inspection.ImportCount != inspectionpolicy.ImportCount(bundle) || !reflect.DeepEqual(inspection.ImportsByModule, bundle.Imports) {
+			return fmt.Errorf("release provenance: inspection facts for %q do not match policy", bundle.Key)
+		}
+		if bundle.Key == inspectionpolicy.AggregateKey {
+			*dst = inspection
+			foundAggregate = true
+		}
+	}
+	if !foundAggregate {
+		return fmt.Errorf("release provenance: aggregate inspection is missing from policy")
+	}
+	return nil
+}
+
+func readBundleInspection(directory, key string) (Inspection, error) {
+	goPath := filepath.Join(directory, "inspection-"+key+"-go.json")
+	tinyPath := filepath.Join(directory, "inspection-"+key+"-tinygo.json")
+	goData, err := os.ReadFile(goPath)
+	if err != nil {
+		return Inspection{}, err
+	}
+	tinyData, err := os.ReadFile(tinyPath)
+	if err != nil {
+		return Inspection{}, err
 	}
 	var decoded struct {
 		Capabilities []string `json:"capabilities"`
@@ -335,18 +365,20 @@ func readInspection(out string, dst *Inspection) error {
 		} `json:"imports"`
 	}
 	if err := json.Unmarshal(goData, &decoded); err != nil {
-		return err
+		return Inspection{}, err
 	}
 	sum := sha256.Sum256(goData)
-	dst.SHA256 = hex.EncodeToString(sum[:])
-	dst.GoTinyGoEqual = string(goData) == string(tinyData)
-	dst.Capabilities = append([]string(nil), decoded.Capabilities...)
-	dst.ImportCount = len(decoded.Imports)
-	dst.ImportsByModule = map[string]int{}
-	for _, item := range decoded.Imports {
-		dst.ImportsByModule[item.Module]++
+	inspection := Inspection{
+		SHA256:          hex.EncodeToString(sum[:]),
+		GoTinyGoEqual:   string(goData) == string(tinyData),
+		Capabilities:    append([]string(nil), decoded.Capabilities...),
+		ImportCount:     len(decoded.Imports),
+		ImportsByModule: make(map[string]int),
 	}
-	return nil
+	for _, item := range decoded.Imports {
+		inspection.ImportsByModule[item.Module]++
+	}
+	return inspection, nil
 }
 
 func readArm64(out string, dst *TargetResult) error {

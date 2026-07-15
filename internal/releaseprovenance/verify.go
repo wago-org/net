@@ -15,6 +15,8 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/wago-org/net/internal/inspectionpolicy"
 )
 
 const (
@@ -342,11 +344,18 @@ func validateManifest(manifest *Manifest, opts VerifyOptions) error {
 	if manifest.Toolchains.Go == "" || manifest.Toolchains.TinyGo == "" {
 		return fmt.Errorf("release provenance: incomplete toolchains")
 	}
-	wantCapabilities := []string{"net.dns", "net.info", "net.tcp", "net.udp"}
-	wantImports := map[string]int{"wago_net": 1, "wago_net_dns": 6, "wago_net_tcp": 11, "wago_net_udp": 6}
+	policy, err := inspectionpolicy.Load()
+	if err != nil {
+		return err
+	}
+	aggregate, ok := inspectionpolicy.Aggregate(policy)
+	if !ok {
+		return fmt.Errorf("release provenance: aggregate inspection policy is missing")
+	}
 	if !validSHA256(manifest.Inspection.SHA256) || !manifest.Inspection.GoTinyGoEqual ||
-		!reflect.DeepEqual(manifest.Inspection.Capabilities, wantCapabilities) || manifest.Inspection.ImportCount != 24 ||
-		!reflect.DeepEqual(manifest.Inspection.ImportsByModule, wantImports) {
+		!reflect.DeepEqual(manifest.Inspection.Capabilities, aggregate.Capabilities) ||
+		manifest.Inspection.ImportCount != inspectionpolicy.ImportCount(aggregate) ||
+		!reflect.DeepEqual(manifest.Inspection.ImportsByModule, aggregate.Imports) {
 		return fmt.Errorf("release provenance: inspection facts do not match the complete advertised networking surface")
 	}
 	if manifest.Targets.CrossBuild != (TargetResult{GOOS: "linux", GOARCH: "arm64", Status: "pass"}) {
