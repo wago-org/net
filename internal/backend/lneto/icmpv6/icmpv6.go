@@ -22,7 +22,9 @@ import (
 )
 
 const (
-	serviceOrder = -90
+	// Direct ICMPv6 validation precedes the generic IPv6 base-header guard so
+	// strict unspecified-source DAD solicitations reach Neighbor Discovery.
+	serviceOrder = -110
 	closeOrder   = 6
 	icmpHeader   = 8
 	ndpSize      = 32

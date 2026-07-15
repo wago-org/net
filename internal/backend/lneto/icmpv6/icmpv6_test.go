@@ -11,6 +11,7 @@ import (
 	lnetoipv6 "github.com/soypat/lneto/ipv6"
 	lnetoicmp "github.com/soypat/lneto/ipv6/icmpv6"
 	lnetocore "github.com/wago-org/net/internal/backend/lneto/core"
+	ipv6backend "github.com/wago-org/net/internal/backend/lneto/ipv6"
 	nscore "github.com/wago-org/net/internal/namespace/core"
 	icmpns "github.com/wago-org/net/internal/namespace/icmpv6"
 	"github.com/wago-org/net/internal/packetlink"
@@ -745,6 +746,56 @@ func TestDuplicateAddressDetectionSolicitationProducesUnsolicitedAdvertisement(t
 	}
 }
 
+func TestDuplicateAddressDetectionSurvivesIPv6ModuleComposition(t *testing.T) {
+	coreA, a := newTestAdapter(t, 36, "fe80::36")
+	coreB, b := newTestAdapter(t, 37, "fe80::37")
+	defer coreA.Close()
+	defer coreB.Close()
+	if _, err := ipv6backend.New(coreB, ipv6backend.Config{Address: b.address, PrefixBits: 64, ScopeID: b.scopeID}); err != nil {
+		t.Fatal(err)
+	}
+
+	frame := make([]byte, 14+40+24)
+	payload, ipFrame := a.baseFrameLocked(frame, solicitedNode(b.address), solicitedNodeMAC(b.address), 24, 255)
+	*ipFrame.SourceAddr() = [16]byte{}
+	icmpFrame, err := lnetoicmp.NewFrame(payload)
+	if err != nil {
+		t.Fatal(err)
+	}
+	icmpFrame.SetType(lnetoicmp.TypeNeighborSolicitation)
+	icmpFrame.SetCode(0)
+	copy(payload[8:24], b.address.AsSlice())
+	setChecksum(ipFrame, icmpFrame, payload)
+	if err := coreB.Link().TryEnqueue(packetlink.Ingress, frame); err != nil {
+		t.Fatal(err)
+	}
+	coreB.Lock()
+	coreB.SetNextIngressLocked(true)
+	coreB.Unlock()
+	budget := nscore.ServiceBudget{Packets: 1, Bytes: uint32(coreB.Link().MaxFrameBytes()), Operations: 1}
+	report, progress, err := coreB.TryService(budget)
+	if err != nil || progress != nscore.ProgressDone || report != (nscore.ServiceReport{Packets: 1, Bytes: uint32(len(frame)), Operations: 1}) {
+		t.Fatalf("composed DAD ingress = %+v, %v, %v", report, progress, err)
+	}
+	if len(b.responses) != 1 || b.responses[0].destination != allNodes() || b.responses[0].dstMAC != allNodesMAC() || b.responses[0].solicited {
+		t.Fatalf("composed DAD response state = %+v", b.responses)
+	}
+
+	coreB.Lock()
+	coreB.SetNextIngressLocked(false)
+	coreB.Unlock()
+	report, progress, err = coreB.TryService(budget)
+	if err != nil || progress != nscore.ProgressDone || report.Packets != 1 || report.Bytes != 14+40+ndpSize || report.Operations != 1 {
+		t.Fatalf("composed DAD advertisement = %+v, %v, %v", report, progress, err)
+	}
+	advertisement := make([]byte, coreB.Link().MaxFrameBytes())
+	dequeued, err := coreB.Link().TryDequeue(packetlink.Egress, advertisement)
+	if err != nil || !dequeued.Ready || dequeued.Truncated || dequeued.Copied != 14+40+ndpSize {
+		t.Fatalf("dequeue composed DAD advertisement = %+v, %v", dequeued, err)
+	}
+	assertNDPFrame(t, advertisement[:dequeued.Copied], lnetoicmp.TypeNeighborAdvertisement, 255, allNodesMAC())
+}
+
 func TestStrictNDPValidationAndTimeoutCancellation(t *testing.T) {
 	coreA, a := newTestAdapter(t, 3, "fe80::3")
 	coreB, b := newTestAdapter(t, 4, "fe80::4")
@@ -1113,7 +1164,10 @@ func newTestAdapterWithGateway(t testing.TB, id byte, addressText string, gatewa
 	if address.IsLinkLocalUnicast() {
 		scopeID = 7
 	}
-	compiled, err := policy.Compile(policy.Config{Rules: []policy.Rule{{Action: policy.ActionAllow, Transports: []policy.Transport{policy.TransportICMPv6}, Directions: []policy.Direction{policy.DirectionInbound, policy.DirectionOutbound}, Prefixes: []netip.Prefix{netip.MustParsePrefix("::/0")}}}})
+	compiled, err := policy.Compile(policy.Config{Rules: []policy.Rule{
+		{Action: policy.ActionAllow, Transports: []policy.Transport{policy.TransportICMPv6}, Directions: []policy.Direction{policy.DirectionInbound, policy.DirectionOutbound}, Prefixes: []netip.Prefix{netip.MustParsePrefix("::/0")}},
+		{Action: policy.ActionAllow, Transports: []policy.Transport{policy.TransportIPv6}, Directions: []policy.Direction{policy.DirectionInbound}, Prefixes: []netip.Prefix{netip.PrefixFrom(address, 128)}},
+	}})
 	if err != nil {
 		t.Fatal(err)
 	}
