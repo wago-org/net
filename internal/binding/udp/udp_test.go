@@ -258,6 +258,36 @@ func TestBindingsBindSendReceiveAtomicStatusesAndLifecycle(t *testing.T) {
 	}
 }
 
+func TestReceiveBindingAllowsEmptyDatagramAtResultAndRejectsNonemptyAlias(t *testing.T) {
+	remote := nscore.Endpoint{Address: netip.MustParseAddr("192.0.2.53"), Port: 53}
+	socket := &fakeSocket{receiveResult: udpns.DatagramResult{Source: remote, Ready: true}}
+	manager, instance := attachManager(t, &fakeNamespace{})
+	defer manager.Detach(instance)
+	state, ok := manager.ForInstance(instance)
+	if !ok {
+		t.Fatal("attached state missing")
+	}
+	handle, err := state.Resources().Add(resource.KindUDPSocket, socket)
+	if err != nil {
+		t.Fatal(err)
+	}
+	host := testHost{instance: instance, memory: bytes.Repeat([]byte{0xa5}, 128)}
+	bindings := Bindings(plugin.NewHost(manager))
+
+	if status := callBinding(t, bindingByName(t, bindings, "receive"), host, uint64(handle), 32, 0, 32); status != guest.StatusOK || socket.receiveCalls != 1 {
+		t.Fatalf("empty receive = %v calls=%d", status, socket.receiveCalls)
+	}
+	encoded := host.memory[32 : 32+udpabi.ReceiveResultV1Size]
+	if source, ok := abicore.DecodeEndpointV1(encoded, 0); !ok || source != remote || !bytes.Equal(encoded[32:], make([]byte, udpabi.ReceiveResultV1Size-32)) {
+		t.Fatalf("empty receive result = %x source=%+v/%v", encoded, source, ok)
+	}
+
+	before := append([]byte(nil), host.memory...)
+	if status := callBinding(t, bindingByName(t, bindings, "receive"), host, uint64(handle), 64, 1, 64); status != guest.StatusInvalidArgument || socket.receiveCalls != 1 || !bytes.Equal(host.memory, before) {
+		t.Fatalf("aliased receive = %v calls=%d memory changed=%v", status, socket.receiveCalls, !bytes.Equal(host.memory, before))
+	}
+}
+
 func TestBindingsRejectHighBitI32AliasesBeforeBackendCalls(t *testing.T) {
 	local := nscore.Endpoint{Address: netip.MustParseAddr("0.0.0.0"), Port: 53000}
 	remote := nscore.Endpoint{Address: netip.MustParseAddr("192.0.2.53"), Port: 53}

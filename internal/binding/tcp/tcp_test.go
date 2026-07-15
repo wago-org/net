@@ -301,6 +301,46 @@ func TestBindingsConnectStreamIOAtomicStatusesAndLifecycle(t *testing.T) {
 	}
 }
 
+func TestBindingsAllowZeroLengthIOAtResultAndRejectNonemptyAliases(t *testing.T) {
+	local := nscore.Endpoint{Address: netip.MustParseAddr("192.0.2.10"), Port: 41000}
+	remote := nscore.Endpoint{Address: netip.MustParseAddr("192.0.2.20"), Port: 443}
+	stream := &fakeStream{
+		local: local, remote: remote,
+		readResult:  nscore.IOResult{State: nscore.IOReady},
+		writeResult: nscore.IOResult{State: nscore.IOReady},
+	}
+	manager, instance := attachManager(t, &fakeNamespace{})
+	defer manager.Detach(instance)
+	state, ok := manager.ForInstance(instance)
+	if !ok {
+		t.Fatal("attached state missing")
+	}
+	handle, err := state.Resources().Add(resource.KindTCPStream, stream)
+	if err != nil {
+		t.Fatal(err)
+	}
+	host := testHost{instance: instance, memory: bytes.Repeat([]byte{0xa5}, 128)}
+	bindings := Bindings(plugin.NewHost(manager))
+
+	if status := callBinding(t, bindingByName(t, bindings, "read"), host, uint64(handle), 32, 0, 32); status != guest.StatusOK || stream.readCalls != 1 || !bytes.Equal(host.memory[32:40], make([]byte, tcpabi.IOResultV1Size)) {
+		t.Fatalf("zero-length read = %v calls=%d result=%x", status, stream.readCalls, host.memory[32:40])
+	}
+	if status := callBinding(t, bindingByName(t, bindings, "write"), host, uint64(handle), 48, 0, 48); status != guest.StatusOK || stream.writeCalls != 1 || len(stream.written) != 0 || !bytes.Equal(host.memory[48:56], make([]byte, tcpabi.IOResultV1Size)) {
+		t.Fatalf("zero-length write = %v calls=%d payload=%x result=%x", status, stream.writeCalls, stream.written, host.memory[48:56])
+	}
+
+	for _, operation := range []string{"read", "write"} {
+		before := append([]byte(nil), host.memory...)
+		readCalls, writeCalls := stream.readCalls, stream.writeCalls
+		if status := callBinding(t, bindingByName(t, bindings, operation), host, uint64(handle), 64, 1, 64); status != guest.StatusInvalidArgument {
+			t.Fatalf("aliased %s = %v", operation, status)
+		}
+		if stream.readCalls != readCalls || stream.writeCalls != writeCalls || !bytes.Equal(host.memory, before) {
+			t.Fatalf("aliased %s changed backend or memory: reads=%d writes=%d", operation, stream.readCalls, stream.writeCalls)
+		}
+	}
+}
+
 func TestConnectBindingInvalidRegisteredEndpointRollsBackAtomically(t *testing.T) {
 	local := nscore.Endpoint{Address: netip.MustParseAddr("192.0.2.10"), Port: 41000}
 	remote := nscore.Endpoint{Address: netip.MustParseAddr("2001:db8::20"), Port: 443}
