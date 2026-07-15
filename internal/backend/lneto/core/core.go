@@ -367,7 +367,11 @@ func (n *Namespace) TryService(budget nscore.ServiceBudget) (nscore.ServiceRepor
 }
 
 func (n *Namespace) tryIngress(remainingBytes uint32) (bool, bool, int, error) {
-	result, err := n.link.TryDequeueWithin(packetlink.Ingress, n.scratch, int(remainingBytes))
+	maxBytes := len(n.scratch)
+	if uint64(remainingBytes) < uint64(maxBytes) {
+		maxBytes = int(remainingBytes)
+	}
+	result, err := n.link.TryDequeueWithin(packetlink.Ingress, n.scratch, maxBytes)
 	if errors.Is(err, packetlink.ErrFrameBudget) {
 		return false, false, 0, nil
 	}

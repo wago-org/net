@@ -475,6 +475,29 @@ func TestMalformedEgressResultFailsClosedAsIO(t *testing.T) {
 	}
 }
 
+func TestMaximumByteBudgetServicesIngressPortably(t *testing.T) {
+	ns := newTestNamespace(t, 30)
+	calls := 0
+	if err := ns.Install(Participant{Ingress: func(frame []byte) (bool, error) {
+		calls++
+		return len(frame) == 1 && frame[0] == 0x30, nil
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := ns.Link().TryEnqueue(packetlink.Ingress, []byte{0x30}); err != nil {
+		t.Fatal(err)
+	}
+	ns.Lock()
+	ns.SetNextIngressLocked(true)
+	ns.Unlock()
+
+	budget := nscore.ServiceBudget{Packets: 1, Bytes: ^uint32(0), Operations: 1}
+	report, progress, err := ns.TryService(budget)
+	if err != nil || progress != nscore.ProgressDone || report != (nscore.ServiceReport{Packets: 1, Bytes: 1, Operations: 1}) || calls != 1 {
+		t.Fatalf("maximum byte budget service = %+v, %v, %v, calls=%d", report, progress, err, calls)
+	}
+}
+
 func TestPacketServiceBudgetEdgesPreserveQueuedWorkAndAlternate(t *testing.T) {
 	t.Run("queue full egress falls through to ingress", func(t *testing.T) {
 		ns := newTestNamespace(t, 31)
