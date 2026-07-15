@@ -35,6 +35,7 @@ type testService struct {
 	attempts atomic.Int32
 	work     bool
 	failure  error
+	invalid  bool
 }
 
 func (s *testService) TryService(budget namespace.ServiceBudget) (namespace.ServiceReport, namespace.Progress, error) {
@@ -44,6 +45,9 @@ func (s *testService) TryService(budget namespace.ServiceBudget) (namespace.Serv
 	}
 	if s.failure != nil {
 		return namespace.ServiceReport{}, 0, s.failure
+	}
+	if s.invalid {
+		return namespace.ServiceReport{}, namespace.ProgressDone, nil
 	}
 	if !s.work {
 		return namespace.ServiceReport{}, namespace.ProgressWouldBlock, nil
@@ -389,6 +393,82 @@ func TestServiceErrorCursorRecoversAfterOffenderRemoval(t *testing.T) {
 	}
 	if report, progress, err := coordinator.TryPoll(events, budget); err != nil || progress != namespace.ProgressDone || report != (Report{Scanned: 1, Events: 1, ServiceAttempts: 1, ServiceCompleted: 1}) || events[0] != (Event{Handle: goodHandle, Readiness: namespace.ReadyReadable}) || good.attempts.Load() != 1 {
 		t.Fatalf("service after removal = %+v, %v, %v, events=%+v attempts=%d", report, progress, err, events, good.attempts.Load())
+	}
+}
+
+func TestServiceFailuresPreserveCursorsForDeterministicRetry(t *testing.T) {
+	for _, test := range []struct {
+		name      string
+		configure func(*testService)
+		checkErr  func(error) bool
+	}{
+		{
+			name: "backend error",
+			configure: func(service *testService) {
+				service.failure = namespace.Fail(namespace.FailureTemporary, errors.New("temporary"))
+			},
+			checkErr: func(err error) bool {
+				failure, ok := namespace.FailureOf(err)
+				return ok && failure == namespace.FailureTemporary
+			},
+		},
+		{
+			name: "invalid backend result",
+			configure: func(service *testService) {
+				service.invalid = true
+			},
+			checkErr: func(err error) bool {
+				failure, ok := namespace.FailureOf(err)
+				return ok && failure == namespace.FailureIO && errors.Is(err, ErrInvalidServiceResult)
+			},
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			table := newTable(t)
+			coordinator := newCoordinator(t, table, Config{MaxRegistrations: 2})
+			first := new(testService)
+			test.configure(first)
+			second := &testService{work: true}
+			firstHandle := addAndRegister(t, table, coordinator, resource.KindNamespace, first)
+			secondHandle := addAndRegister(t, table, coordinator, resource.KindNamespace, second)
+			budget := Budget{
+				Scans: 2, Events: 2, ServiceAttempts: 1,
+				Service: namespace.ServiceBudget{Packets: 1, Bytes: 64, Operations: 1},
+			}
+			events := make([]Event, 2)
+
+			for attempt := int32(1); attempt <= 2; attempt++ {
+				report, progress, err := coordinator.TryPoll(events, budget)
+				if !test.checkErr(err) || progress != namespace.ProgressWouldBlock || report != (Report{Scanned: 1, ServiceAttempts: 1}) {
+					t.Fatalf("failed poll %d = %+v, %v, %v", attempt, report, progress, err)
+				}
+				if first.attempts.Load() != attempt || second.attempts.Load() != 0 {
+					t.Fatalf("failed attempts %d = %d/%d", attempt, first.attempts.Load(), second.attempts.Load())
+				}
+				coordinator.mu.Lock()
+				cursor, serviceCursor := coordinator.cursor, coordinator.serviceCursor
+				coordinator.mu.Unlock()
+				if cursor != 0 || serviceCursor != 0 {
+					t.Fatalf("failed cursors %d = %d/%d", attempt, cursor, serviceCursor)
+				}
+			}
+
+			first.failure = nil
+			first.invalid = false
+			first.work = true
+			report, progress, err := coordinator.TryPoll(events, budget)
+			if err != nil || progress != namespace.ProgressDone || report != (Report{Scanned: 2, Events: 1, ServiceAttempts: 1, ServiceCompleted: 1}) || events[0] != (Event{Handle: firstHandle, Readiness: namespace.ReadyReadable}) {
+				t.Fatalf("recovered first poll = %+v, %v, %v, events=%+v", report, progress, err, events)
+			}
+			clear(events)
+			report, progress, err = coordinator.TryPoll(events, budget)
+			if err != nil || progress != namespace.ProgressDone || report != (Report{Scanned: 2, Events: 2, ServiceAttempts: 1, ServiceCompleted: 1}) || events[0] != (Event{Handle: firstHandle, Readiness: namespace.ReadyReadable}) || events[1] != (Event{Handle: secondHandle, Readiness: namespace.ReadyReadable}) {
+				t.Fatalf("recovered rotation poll = %+v, %v, %v, events=%+v", report, progress, err, events)
+			}
+			if first.attempts.Load() != 3 || second.attempts.Load() != 1 {
+				t.Fatalf("recovered attempts = %d/%d", first.attempts.Load(), second.attempts.Load())
+			}
+		})
 	}
 }
 
