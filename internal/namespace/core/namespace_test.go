@@ -71,14 +71,28 @@ func TestSharedResultAndServiceContracts(t *testing.T) {
 	}
 
 	budget := ServiceBudget{Packets: 2, Bytes: 128, Operations: 4}
-	if !(ServiceReport{Packets: 2, Bytes: 128, Operations: 4}).ValidResult(budget, ProgressDone) {
-		t.Fatal("exact service budget rejected")
+	for _, report := range []ServiceReport{
+		{Packets: 2, Bytes: 128, Operations: 4},
+		{Packets: 1, Operations: 1},
+		{Operations: 1},
+	} {
+		if !report.ValidResult(budget, ProgressDone) {
+			t.Fatalf("valid service report rejected: %+v", report)
+		}
 	}
 	if !(ServiceReport{}).ValidResult(budget, ProgressWouldBlock) || (ServiceReport{}).ValidResult(budget, ProgressDone) {
 		t.Fatal("service progress semantics accepted an ambiguous result")
 	}
-	if (ServiceReport{Packets: 3}).ValidFor(budget) || (ServiceReport{Bytes: 129}).ValidFor(budget) || (ServiceReport{Operations: 5}).ValidFor(budget) {
-		t.Fatal("over-budget service report accepted")
+	for _, report := range []ServiceReport{
+		{Packets: 3},
+		{Bytes: 129},
+		{Operations: 5},
+		{Bytes: 1, Operations: 1},
+		{Packets: 2, Operations: 1},
+	} {
+		if report.ValidFor(budget) {
+			t.Fatalf("impossible or over-budget service report accepted: %+v", report)
+		}
 	}
 }
 

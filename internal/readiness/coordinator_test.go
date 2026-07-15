@@ -2,6 +2,7 @@ package readiness
 
 import (
 	"errors"
+	"fmt"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -58,10 +59,13 @@ func (s *testService) TryService(budget namespace.ServiceBudget) (namespace.Serv
 	return namespace.ServiceReport{Packets: 1, Bytes: 1, Operations: 1}, namespace.ProgressDone, nil
 }
 
-type badService struct{ testPollable }
+type badService struct {
+	testPollable
+	report namespace.ServiceReport
+}
 
 func (s *badService) TryService(namespace.ServiceBudget) (namespace.ServiceReport, namespace.Progress, error) {
-	return namespace.ServiceReport{}, namespace.ProgressDone, nil
+	return s.report, namespace.ProgressDone, nil
 }
 
 type closeOnly struct{}
@@ -541,19 +545,27 @@ func TestInvalidReadinessAfterServicePreservesCursorsForDeterministicRetry(t *te
 }
 
 func TestCoordinatorRejectsInvalidBackendServiceResults(t *testing.T) {
-	table := newTable(t)
-	coordinator := newCoordinator(t, table, Config{MaxRegistrations: 1})
-	addAndRegister(t, table, coordinator, resource.KindNamespace, &badService{})
 	budget := Budget{
 		Scans:           1,
 		Events:          1,
 		ServiceAttempts: 1,
-		Service:         namespace.ServiceBudget{Packets: 1, Bytes: 1, Operations: 1},
+		Service:         namespace.ServiceBudget{Packets: 2, Bytes: 2, Operations: 2},
 	}
-	_, _, err := coordinator.TryPoll(make([]Event, 1), budget)
-	failure, ok := namespace.FailureOf(err)
-	if !ok || failure != namespace.FailureIO || !errors.Is(err, ErrInvalidServiceResult) {
-		t.Fatalf("invalid service result error = %v", err)
+	for _, report := range []namespace.ServiceReport{
+		{},
+		{Bytes: 1, Operations: 1},
+		{Packets: 2, Operations: 1},
+	} {
+		t.Run(fmt.Sprint(report), func(t *testing.T) {
+			table := newTable(t)
+			coordinator := newCoordinator(t, table, Config{MaxRegistrations: 1})
+			addAndRegister(t, table, coordinator, resource.KindNamespace, &badService{report: report})
+			_, _, err := coordinator.TryPoll(make([]Event, 1), budget)
+			failure, ok := namespace.FailureOf(err)
+			if !ok || failure != namespace.FailureIO || !errors.Is(err, ErrInvalidServiceResult) {
+				t.Fatalf("invalid service result error = %v", err)
+			}
+		})
 	}
 }
 

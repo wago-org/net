@@ -310,9 +310,12 @@ type ServiceReport struct {
 	Operations uint32
 }
 
-// ValidFor reports whether no budget dimension was exceeded.
+// ValidFor reports whether no budget dimension was exceeded and the counters
+// could arise from one packet-or-maintenance result per completed operation.
+// Zero-length packets are valid, but bytes cannot exist without a packet.
 func (r ServiceReport) ValidFor(b ServiceBudget) bool {
-	return b.Valid() && r.Packets <= b.Packets && r.Bytes <= b.Bytes && r.Operations <= b.Operations
+	return b.Valid() && r.Packets <= b.Packets && r.Bytes <= b.Bytes && r.Operations <= b.Operations &&
+		r.Packets <= r.Operations && (r.Bytes == 0 || r.Packets != 0)
 }
 
 // ValidResult also checks progress semantics: service either completes at least
