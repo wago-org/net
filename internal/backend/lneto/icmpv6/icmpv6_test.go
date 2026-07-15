@@ -680,6 +680,71 @@ func TestNeighborSolicitationRetainsPassiveLearningWhenResponseQuotaIsFull(t *te
 	}
 }
 
+func TestDuplicateAddressDetectionSolicitationProducesUnsolicitedAdvertisement(t *testing.T) {
+	coreA, a := newTestAdapter(t, 34, "fe80::34")
+	coreB, b := newTestAdapter(t, 35, "fe80::35")
+	defer coreA.Close()
+	defer coreB.Close()
+
+	buildDAD := func(includeSourceOption bool) []byte {
+		payloadBytes := 24
+		if includeSourceOption {
+			payloadBytes = ndpSize
+		}
+		frame := make([]byte, 14+40+payloadBytes)
+		payload, ipFrame := a.baseFrameLocked(frame, solicitedNode(b.address), solicitedNodeMAC(b.address), payloadBytes, 255)
+		*ipFrame.SourceAddr() = [16]byte{}
+		icmpFrame, err := lnetoicmp.NewFrame(payload)
+		if err != nil {
+			t.Fatal(err)
+		}
+		icmpFrame.SetType(lnetoicmp.TypeNeighborSolicitation)
+		icmpFrame.SetCode(0)
+		copy(payload[8:24], b.address.AsSlice())
+		if includeSourceOption {
+			payload[24], payload[25] = 1, 1
+			copy(payload[26:32], a.hardwareAddress[:])
+		}
+		setChecksum(ipFrame, icmpFrame, payload)
+		return frame
+	}
+
+	if handled, err := b.ingressLocked(buildDAD(true)); err != nil || !handled {
+		t.Fatalf("DAD solicitation with source option ingress = %v, %v", handled, err)
+	}
+	if len(b.responses) != 0 || b.neighbors[a.address] != nil {
+		t.Fatalf("malformed DAD solicitation mutated state: responses=%d neighbor=%+v", len(b.responses), b.neighbors[a.address])
+	}
+
+	if handled, err := b.ingressLocked(buildDAD(false)); err != nil || !handled {
+		t.Fatalf("DAD solicitation ingress = %v, %v", handled, err)
+	}
+	if len(b.responses) != 1 || b.responses[0].destination != allNodes() || b.responses[0].dstMAC != allNodesMAC() || b.responses[0].solicited || b.neighbors[a.address] != nil {
+		t.Fatalf("DAD response state = responses=%+v neighbor=%+v", b.responses, b.neighbors[a.address])
+	}
+
+	var storage [1514]byte
+	n, worked, err := b.egressLocked(storage[:])
+	if err != nil || !worked || n != 14+40+ndpSize {
+		t.Fatalf("DAD advertisement egress = %d, %v, %v", n, worked, err)
+	}
+	ethernetFrame, err := ethernet.NewFrame(storage[:n])
+	if err != nil || *ethernetFrame.DestinationHardwareAddr() != allNodesMAC() {
+		t.Fatalf("DAD advertisement ethernet = %v destination=%x", err, *ethernetFrame.DestinationHardwareAddr())
+	}
+	ipFrame, err := lnetoipv6.NewFrame(ethernetFrame.Payload())
+	if err != nil || netip.AddrFrom16(*ipFrame.DestinationAddr()) != allNodes() || ipFrame.HopLimit() != 255 {
+		t.Fatalf("DAD advertisement IPv6 = %v destination=%v hop=%d", err, netip.AddrFrom16(*ipFrame.DestinationAddr()), ipFrame.HopLimit())
+	}
+	icmpFrame, err := lnetoicmp.NewFrame(ipFrame.Payload())
+	if err != nil || icmpFrame.Type() != lnetoicmp.TypeNeighborAdvertisement || ipFrame.Payload()[4] != 0x20 || netip.AddrFrom16(*(*[16]byte)(ipFrame.Payload()[8:24])) != b.address {
+		t.Fatalf("DAD advertisement ICMPv6 = %v type=%v flags=%#x target=%v", err, icmpFrame.Type(), ipFrame.Payload()[4], netip.AddrFrom16(*(*[16]byte)(ipFrame.Payload()[8:24])))
+	}
+	if usage, _ := b.quotas.Snapshot(); usage != (quota.Usage{}) {
+		t.Fatalf("drained DAD response quota = %+v", usage)
+	}
+}
+
 func TestStrictNDPValidationAndTimeoutCancellation(t *testing.T) {
 	coreA, a := newTestAdapter(t, 3, "fe80::3")
 	coreB, b := newTestAdapter(t, 4, "fe80::4")

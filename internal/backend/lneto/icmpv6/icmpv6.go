@@ -135,6 +135,7 @@ type response struct {
 	identifier  uint16
 	sequence    uint16
 	payload     []byte
+	solicited   bool
 	retained    quota.Charge
 }
 
@@ -776,7 +777,7 @@ func (a *Adapter) ingressLocked(frame []byte) (bool, error) {
 	}
 	payload := ipFrame.Payload()
 	icmpFrame, err := lnetoicmp.NewFrame(payload)
-	if err != nil || !validIPv6Source(source) || destination.IsUnspecified() {
+	if err != nil || destination.IsUnspecified() {
 		return true, nil
 	}
 	var checksum lneto.CRC791
@@ -790,12 +791,24 @@ func (a *Adapter) ingressLocked(frame []byte) (bool, error) {
 	}
 	switch icmpFrame.Type() {
 	case lnetoicmp.TypeEchoRequest:
+		if !validIPv6Source(source) {
+			return true, nil
+		}
 		return true, a.ingressEchoRequestLocked(ipFrame, icmpFrame, source, destination, srcMAC, dstMAC)
 	case lnetoicmp.TypeEchoReply:
+		if !validIPv6Source(source) {
+			return true, nil
+		}
 		return true, a.ingressEchoReplyLocked(icmpFrame, source, destination, dstMAC)
 	case lnetoicmp.TypeNeighborSolicitation:
+		if !source.IsUnspecified() && !validIPv6Source(source) {
+			return true, nil
+		}
 		return true, a.ingressSolicitationLocked(ipFrame, icmpFrame, payload, source, destination, srcMAC, dstMAC)
 	case lnetoicmp.TypeNeighborAdvertisement:
+		if !validIPv6Source(source) {
+			return true, nil
+		}
 		return true, a.ingressAdvertisementLocked(ipFrame, icmpFrame, payload, source, destination, srcMAC, dstMAC)
 	default:
 		return true, nil
@@ -834,17 +847,26 @@ func (a *Adapter) ingressEchoReplyLocked(frame lnetoicmp.Frame, source, destinat
 }
 
 func (a *Adapter) ingressSolicitationLocked(ipFrame lnetoipv6.Frame, frame lnetoicmp.Frame, raw []byte, source, destination netip.Addr, srcMAC, dstMAC [6]byte) error {
-	if ipFrame.HopLimit() != 255 || frame.Code() != 0 || len(raw) != ndpSize || destination != solicitedNode(a.address) || dstMAC != solicitedNodeMAC(a.address) || !a.policy.CheckAddress(policy.OperationICMPv6Advertise, source) {
+	if ipFrame.HopLimit() != 255 || frame.Code() != 0 || len(raw) < 24 || destination != solicitedNode(a.address) || dstMAC != solicitedNodeMAC(a.address) ||
+		!allZero(raw[4:8]) || netip.AddrFrom16(*(*[16]byte)(raw[8:24])) != a.address {
 		return nil
 	}
-	if !allZero(raw[4:8]) || netip.AddrFrom16(*(*[16]byte)(raw[8:24])) != a.address || raw[24] != 1 || raw[25] != 1 || [6]byte(raw[26:32]) != srcMAC {
+	responseDestination, responseMAC, solicited := source, srcMAC, true
+	if source.IsUnspecified() {
+		if len(raw) != 24 || !a.policy.CheckAddress(policy.OperationICMPv6Advertise, a.address) {
+			return nil
+		}
+		responseDestination, responseMAC, solicited = allNodes(), allNodesMAC(), false
+	} else if len(raw) != ndpSize || raw[24] != 1 || raw[25] != 1 || [6]byte(raw[26:32]) != srcMAC || !a.policy.CheckAddress(policy.OperationICMPv6Advertise, source) {
 		return nil
 	}
 	if len(a.responses) >= int(a.config.MaxQueuedResponses) {
 		return nil
 	}
-	_ = a.seedPassiveLocked(source, a.scopeFor(source), srcMAC)
-	response := &response{kind: responseAdvertisement, destination: source, dstMAC: srcMAC}
+	if !source.IsUnspecified() {
+		_ = a.seedPassiveLocked(source, a.scopeFor(source), srcMAC)
+	}
+	response := &response{kind: responseAdvertisement, destination: responseDestination, dstMAC: responseMAC, solicited: solicited}
 	if err := a.quotas.AcquireResource(&response.retained, quota.ResourceICMPv6, 1); err != nil {
 		return nil
 	}
@@ -878,7 +900,7 @@ func (a *Adapter) writeResponseLocked(dst []byte, response *response) (int, erro
 	case responseEcho:
 		return a.writeEchoLocked(dst, response.destination, response.dstMAC, lnetoicmp.TypeEchoReply, response.identifier, response.sequence, response.payload, 64)
 	case responseAdvertisement:
-		return a.writeAdvertisementLocked(dst, response.destination, response.dstMAC)
+		return a.writeAdvertisementLocked(dst, response.destination, response.dstMAC, response.solicited)
 	default:
 		return 0, lneto.ErrBug
 	}
@@ -925,7 +947,7 @@ func (a *Adapter) writeSolicitationLocked(dst []byte, entry *neighborEntry) (int
 	return frameBytes, nil
 }
 
-func (a *Adapter) writeAdvertisementLocked(dst []byte, destination netip.Addr, dstMAC [6]byte) (int, error) {
+func (a *Adapter) writeAdvertisementLocked(dst []byte, destination netip.Addr, dstMAC [6]byte, solicited bool) (int, error) {
 	frameBytes := 14 + 40 + ndpSize
 	if len(dst) < frameBytes {
 		return 0, lneto.ErrShortBuffer
@@ -936,7 +958,10 @@ func (a *Adapter) writeAdvertisementLocked(dst []byte, destination netip.Addr, d
 	icmpFrame, _ := lnetoicmp.NewFrame(payload)
 	icmpFrame.SetType(lnetoicmp.TypeNeighborAdvertisement)
 	icmpFrame.SetCode(0)
-	payload[4] = 0x60
+	payload[4] = 0x20
+	if solicited {
+		payload[4] |= 0x40
+	}
 	copy(payload[8:24], a.address.AsSlice())
 	payload[24], payload[25] = 2, 1
 	copy(payload[26:32], a.hardwareAddress[:])
@@ -1128,9 +1153,17 @@ func adjustCursorAfterRemoval(owner *Adapter, removedIndex, oldTotal int) {
 	}
 }
 
+func allNodes() netip.Addr {
+	return netip.AddrFrom16([16]byte{0xff, 0x02, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1})
+}
+
+func allNodesMAC() [6]byte {
+	return [6]byte{0x33, 0x33, 0, 0, 0, 1}
+}
+
 func solicitedNode(address netip.Addr) netip.Addr {
 	value := address.As16()
-	return netip.AddrFrom16([16]byte{0xff, 0x02, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0xff, value[13], value[14], value[15]})
+	return netip.AddrFrom16([16]byte{0xff, 0x02, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0xff, value[13], value[14], value[15]})
 }
 
 func solicitedNodeMAC(address netip.Addr) [6]byte {
