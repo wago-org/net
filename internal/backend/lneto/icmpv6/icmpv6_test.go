@@ -843,6 +843,88 @@ func TestStrictNDPValidationAndTimeoutCancellation(t *testing.T) {
 	}
 }
 
+func TestUnsupportedLocalICMPv6FallsThroughBeforeStrictOwnedValidation(t *testing.T) {
+	core, adapter := newTestAdapter(t, 10, "2001:db8::10")
+	defer core.Close()
+	observed := 0
+	if err := core.Install(lnetocore.Participant{
+		IngressOrder: serviceOrder + 1,
+		Ingress: func([]byte) (bool, error) {
+			observed++
+			return true, nil
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	storage := make([]byte, core.Link().MaxFrameBytes())
+	core.Lock()
+	n, err := adapter.writeEchoLocked(storage, adapter.address, adapter.hardwareAddress, lnetoicmp.TypeEchoRequest, 7, 9, []byte("x"), 64)
+	core.Unlock()
+	if err != nil {
+		t.Fatal(err)
+	}
+	valid := append([]byte(nil), storage[:n]...)
+	unsupported := append([]byte(nil), valid...)
+	ethernetFrame, _ := ethernet.NewFrame(unsupported)
+	ipFrame, _ := lnetoipv6.NewFrame(ethernetFrame.Payload())
+	icmpFrame, _ := lnetoicmp.NewFrame(ipFrame.Payload())
+	icmpFrame.SetType(lnetoicmp.Type(1))
+	setChecksum(ipFrame, icmpFrame, ipFrame.Payload())
+	badChecksumUnsupported := append([]byte(nil), unsupported...)
+	badChecksumUnsupported[len(badChecksumUnsupported)-1] ^= 0xff
+	shortOwned := append([]byte(nil), valid...)
+	shortEthernet, _ := ethernet.NewFrame(shortOwned)
+	shortIP, _ := lnetoipv6.NewFrame(shortEthernet.Payload())
+	shortIP.SetPayloadLength(1)
+	localOverrunOwned := append([]byte(nil), valid...)
+	localOverrunEthernet, _ := ethernet.NewFrame(localOverrunOwned)
+	localOverrunIP, _ := lnetoipv6.NewFrame(localOverrunEthernet.Payload())
+	localOverrunIP.SetPayloadLength(512)
+	unsupportedOverrun := append([]byte(nil), unsupported...)
+	unsupportedOverrunEthernet, _ := ethernet.NewFrame(unsupportedOverrun)
+	unsupportedOverrunIP, _ := lnetoipv6.NewFrame(unsupportedOverrunEthernet.Payload())
+	unsupportedOverrunIP.SetPayloadLength(512)
+	foreignOverrunOwned := append([]byte(nil), localOverrunOwned...)
+	foreignOverrunEthernet, _ := ethernet.NewFrame(foreignOverrunOwned)
+	foreignOverrunIP, _ := lnetoipv6.NewFrame(foreignOverrunEthernet.Payload())
+	*foreignOverrunIP.DestinationAddr() = netip.MustParseAddr("2001:db8::99").As16()
+
+	service := func(frame []byte) {
+		t.Helper()
+		core.Lock()
+		core.SetNextIngressLocked(true)
+		core.Unlock()
+		if err := core.Link().TryEnqueue(packetlink.Ingress, frame); err != nil {
+			t.Fatal(err)
+		}
+		report, progress, err := core.TryService(nscore.ServiceBudget{Packets: 1, Bytes: uint32(len(frame)), Operations: 1})
+		if err != nil || progress != nscore.ProgressDone || report.Packets != 1 || report.Operations != 1 || report.Bytes != uint32(len(frame)) {
+			t.Fatalf("service = %+v, %v, %v", report, progress, err)
+		}
+	}
+
+	service(unsupported)
+	service(badChecksumUnsupported)
+	if observed != 2 || len(adapter.responses) != 0 {
+		t.Fatalf("unsupported local traffic = observed %d responses %d", observed, len(adapter.responses))
+	}
+	service(shortOwned)
+	service(localOverrunOwned)
+	if observed != 2 || len(adapter.responses) != 0 {
+		t.Fatalf("malformed owned traffic = observed %d responses %d", observed, len(adapter.responses))
+	}
+	service(unsupportedOverrun)
+	service(foreignOverrunOwned)
+	if observed != 4 || len(adapter.responses) != 0 {
+		t.Fatalf("uncorrelated overrun traffic = observed %d responses %d", observed, len(adapter.responses))
+	}
+	service(valid)
+	if observed != 4 || len(adapter.responses) != 1 {
+		t.Fatalf("valid owned traffic = observed %d responses %d", observed, len(adapter.responses))
+	}
+}
+
 func TestForeignICMPv6DestinationsRemainUnhandled(t *testing.T) {
 	coreA, a := newTestAdapter(t, 11, "2001:db8::11")
 	coreB, b := newTestAdapter(t, 12, "2001:db8::12")

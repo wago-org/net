@@ -764,11 +764,11 @@ func (a *Adapter) ingressLocked(frame []byte) (bool, error) {
 	}
 	ipFrame, err := lnetoipv6.NewFrame(ethernetFrame.Payload())
 	if err != nil {
-		return true, nil
+		return false, nil
 	}
 	version, _, _ := ipFrame.VersionTrafficAndFlow()
-	if version != 6 || ipFrame.NextHeader() != lneto.IPProtoIPv6ICMP || int(ipFrame.PayloadLength())+40 > len(ethernetFrame.Payload()) {
-		return ipFrame.NextHeader() == lneto.IPProtoIPv6ICMP, nil
+	if version != 6 || ipFrame.NextHeader() != lneto.IPProtoIPv6ICMP {
+		return false, nil
 	}
 	source, destination := netip.AddrFrom16(*ipFrame.SourceAddr()), netip.AddrFrom16(*ipFrame.DestinationAddr())
 	dstMAC := *ethernetFrame.DestinationHardwareAddr()
@@ -777,7 +777,16 @@ func (a *Adapter) ingressLocked(frame []byte) (bool, error) {
 	if !localUnicast && !localSolicited {
 		return false, nil
 	}
-	payload := ipFrame.Payload()
+	raw := ipFrame.RawData()
+	payloadBytes := int(ipFrame.PayloadLength())
+	availablePayload := raw[40:]
+	if len(availablePayload) == 0 || !ownedICMPv6Type(lnetoicmp.Type(availablePayload[0])) {
+		return false, nil
+	}
+	if payloadBytes > len(availablePayload) {
+		return true, nil
+	}
+	payload := availablePayload[:payloadBytes]
 	icmpFrame, err := lnetoicmp.NewFrame(payload)
 	if err != nil || destination.IsUnspecified() {
 		return true, nil
@@ -813,7 +822,16 @@ func (a *Adapter) ingressLocked(frame []byte) (bool, error) {
 		}
 		return true, a.ingressAdvertisementLocked(ipFrame, icmpFrame, payload, source, destination, srcMAC, dstMAC)
 	default:
-		return true, nil
+		return false, nil
+	}
+}
+
+func ownedICMPv6Type(typ lnetoicmp.Type) bool {
+	switch typ {
+	case lnetoicmp.TypeEchoRequest, lnetoicmp.TypeEchoReply, lnetoicmp.TypeNeighborSolicitation, lnetoicmp.TypeNeighborAdvertisement:
+		return true
+	default:
+		return false
 	}
 }
 
