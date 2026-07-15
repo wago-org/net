@@ -919,6 +919,131 @@ func TestIngressContainsTruncatedUDPOnlyForEnabledDirection(t *testing.T) {
 	}
 }
 
+func TestIngressDeclaredEnvelopeOwnershipForEnabledDirections(t *testing.T) {
+	t.Run("client response", func(t *testing.T) {
+		clientCore, client := newClient(t, false)
+		serverCore, _ := newServer(t, 1)
+		resource, _, err := client.TryAcquire(dhcpns.Request{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		lease := resource.(*leaseResource)
+		transferOne(t, clientCore, serverCore)
+		offer := serviceEgress(t, serverCore)
+		stateBefore, waitBefore, readinessBefore := lease.state, lease.wait, lease.Readiness()
+		usageBefore, _ := client.quotas.Snapshot()
+
+		assertDHCPv4DeclaredEnvelopeOwnership(t, clientCore, client, offer)
+		if lease.state != stateBefore || lease.wait != waitBefore || lease.Readiness() != readinessBefore || lease.result != (dhcpns.Lease{}) || lease.failure != nil {
+			t.Fatalf("malformed declared response mutated lease: state=%v wait=%d readiness=%v result=%+v failure=%v", lease.state, lease.wait, lease.Readiness(), lease.result, lease.failure)
+		}
+		if usage, _ := client.quotas.Snapshot(); usage != usageBefore {
+			t.Fatalf("malformed declared response changed quota = %+v, want %+v", usage, usageBefore)
+		}
+		serviceIngress(t, clientCore, offer)
+		if lease.state != leaseRequest || lease.wait != 0 {
+			t.Fatalf("valid offer after malformed envelopes = state:%v wait:%d", lease.state, lease.wait)
+		}
+	})
+
+	t.Run("server request", func(t *testing.T) {
+		clientCore, client := newClient(t, false)
+		serverCore, server := newServer(t, 1)
+		if _, _, err := client.TryAcquire(dhcpns.Request{}); err != nil {
+			t.Fatal(err)
+		}
+		discover := serviceEgress(t, clientCore)
+		usageBefore, _ := server.quotas.Snapshot()
+
+		assertDHCPv4DeclaredEnvelopeOwnership(t, serverCore, server, discover)
+		if len(server.serverClients) != 0 || server.serverPending != 0 || server.hasWorkLocked() {
+			t.Fatalf("malformed declared request mutated server: clients=%d pending=%d work=%v", len(server.serverClients), server.serverPending, server.hasWorkLocked())
+		}
+		if usage, _ := server.quotas.Snapshot(); usage != usageBefore {
+			t.Fatalf("malformed declared request changed quota = %+v, want %+v", usage, usageBefore)
+		}
+		serviceIngress(t, serverCore, discover)
+		if len(server.serverClients) != 1 || server.serverPending != 1 || !server.hasWorkLocked() {
+			t.Fatalf("valid discover after malformed envelopes = clients:%d pending:%d work:%v", len(server.serverClients), server.serverPending, server.hasWorkLocked())
+		}
+	})
+}
+
+func assertDHCPv4DeclaredEnvelopeOwnership(t testing.TB, core *lnetocore.Namespace, adapter *Adapter, valid []byte) {
+	t.Helper()
+	eth, err := ethernet.NewFrame(valid)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ip, err := ipv4.NewFrame(eth.Payload())
+	if err != nil {
+		t.Fatal(err)
+	}
+	completeIPv4Bytes := int(ip.TotalLength())
+	udp, err := lnetoudp.NewFrame(ip.Payload())
+	if err != nil {
+		t.Fatal(err)
+	}
+	completeUDPBytes := int(udp.Length())
+
+	for declared := 0; declared < completeIPv4Bytes; declared++ {
+		malformed := declareDHCPv4IPv4Bytes(t, valid, uint16(declared))
+		core.Lock()
+		handled, ingressErr := adapter.ingressLocked(malformed)
+		core.Unlock()
+		wantHandled := declared >= 24
+		if ingressErr != nil || handled != wantHandled {
+			t.Fatalf("declared IPv4 bytes %d = handled:%v err:%v, want handled:%v", declared, handled, ingressErr, wantHandled)
+		}
+	}
+	for declared := 0; declared < completeUDPBytes; declared++ {
+		malformed := declareDHCPv4UDPBytes(t, valid, uint16(declared))
+		core.Lock()
+		handled, ingressErr := adapter.ingressLocked(malformed)
+		core.Unlock()
+		if ingressErr != nil || !handled {
+			t.Fatalf("declared UDP bytes %d = handled:%v err:%v", declared, handled, ingressErr)
+		}
+	}
+}
+
+func declareDHCPv4IPv4Bytes(t testing.TB, frame []byte, declared uint16) []byte {
+	t.Helper()
+	frame = append([]byte(nil), frame...)
+	eth, err := ethernet.NewFrame(frame)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ip, err := ipv4.NewFrame(eth.Payload())
+	if err != nil {
+		t.Fatal(err)
+	}
+	ip.SetTotalLength(declared)
+	ip.SetCRC(0)
+	ip.SetCRC(ip.CalculateHeaderCRC())
+	return frame
+}
+
+func declareDHCPv4UDPBytes(t testing.TB, frame []byte, declared uint16) []byte {
+	t.Helper()
+	frame = append([]byte(nil), frame...)
+	eth, err := ethernet.NewFrame(frame)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ip, err := ipv4.NewFrame(eth.Payload())
+	if err != nil {
+		t.Fatal(err)
+	}
+	udp, err := lnetoudp.NewFrame(ip.Payload())
+	if err != nil {
+		t.Fatal(err)
+	}
+	udp.SetLength(declared)
+	udp.SetCRC(0)
+	return frame
+}
+
 func TestClientIngressDropsInvalidIPv4LengthsWithoutMutatingLease(t *testing.T) {
 	for _, test := range []struct {
 		name        string
