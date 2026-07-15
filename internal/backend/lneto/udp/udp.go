@@ -1,6 +1,7 @@
 package udp
 
 import (
+	"encoding/binary"
 	"errors"
 	"net"
 	"net/netip"
@@ -622,6 +623,16 @@ func (n *Adapter) ingressLocked(frame []byte) (bool, error) {
 	if version != 4 || headerWords < 5 || ipFrame.Protocol() != lneto.IPProtoUDP || netip.AddrFrom4(*ipFrame.DestinationAddr()) != n.core.IPv4AddressLocked() {
 		return false, nil
 	}
+	headerLength := int(headerWords) * 4
+	rawIP := ipFrame.RawData()
+	if headerLength > len(rawIP) || len(rawIP)-headerLength < 4 {
+		return false, nil
+	}
+	destinationPort := binary.BigEndian.Uint16(rawIP[headerLength+2 : headerLength+4])
+	selected := n.byPort[destinationPort]
+	if selected == nil || selected.closed {
+		return false, nil
+	}
 	if !validUnicastMAC(*ethernetFrame.SourceHardwareAddr()) {
 		return true, nil
 	}
@@ -652,10 +663,6 @@ func (n *Adapter) ingressLocked(frame []byte) (bool, error) {
 		if checksum.PayloadSum16(udpFrame.RawData()[:udpLength]) != 0 {
 			return true, nil
 		}
-	}
-	selected := n.byPort[udpFrame.DestinationPort()]
-	if selected == nil || selected.closed {
-		return false, nil
 	}
 	sourceAddress := netip.AddrFrom4(*ipFrame.SourceAddr())
 	if sourceAddress.IsUnspecified() || sourceAddress.IsLoopback() || sourceAddress.IsMulticast() || sourceAddress == netip.AddrFrom4([4]byte{255, 255, 255, 255}) {

@@ -240,6 +240,79 @@ func TestUDPIngressRequiresLocalEthernetDestinationAndValidSource(t *testing.T) 
 	}
 }
 
+func TestUDPIngressLeavesUnownedOrUncorrelatableInvalidSourceTrafficUnhandled(t *testing.T) {
+	sourceCore, sourceAdapter, _ := newTestAdapter(t, 57)
+	_, destinationAdapter, _ := newTestAdapter(t, 58)
+	sourceEndpoint := nscore.Endpoint{Address: netip.MustParseAddr("192.0.2.57"), Port: 4057}
+	destinationEndpoint := nscore.Endpoint{Address: netip.MustParseAddr("192.0.2.58"), Port: 4058}
+	source := bindTestSocket(t, sourceAdapter, sourceEndpoint)
+	destination := bindTestSocket(t, destinationAdapter, destinationEndpoint).(*udpSocket)
+	if progress, err := source.TrySend([]byte("payload"), destinationEndpoint); err != nil || progress != nscore.ProgressDone {
+		t.Fatalf("send = %v, %v", progress, err)
+	}
+	valid := serviceUDPFrame(t, sourceCore)
+	ethernetFrame, err := ethernet.NewFrame(valid)
+	if err != nil {
+		t.Fatal(err)
+	}
+	*ethernetFrame.DestinationHardwareAddr() = destinationAdapter.hardwareAddress
+
+	unowned := append([]byte(nil), valid...)
+	unownedEthernet, err := ethernet.NewFrame(unowned)
+	if err != nil {
+		t.Fatal(err)
+	}
+	*unownedEthernet.SourceHardwareAddr() = [6]byte{}
+	unownedIP, unownedUDP := decodeUDPFrame(t, unowned)
+	unownedUDP.SetDestinationPort(destinationEndpoint.Port + 1)
+	rechecksumUDPFrame(unownedIP, unownedUDP)
+
+	short := append([]byte(nil), valid[:14+20+3]...)
+	shortEthernet, err := ethernet.NewFrame(short)
+	if err != nil {
+		t.Fatal(err)
+	}
+	*shortEthernet.SourceHardwareAddr() = [6]byte{}
+	shortIP, err := ipv4.NewFrame(shortEthernet.Payload())
+	if err != nil {
+		t.Fatal(err)
+	}
+	shortIP.SetTotalLength(23)
+	shortIP.SetCRC(0)
+	shortIP.SetCRC(shortIP.CalculateHeaderCRC())
+
+	for _, test := range []struct {
+		name  string
+		frame []byte
+	}{
+		{name: "unowned port", frame: unowned},
+		{name: "truncated before destination port", frame: short},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			destinationAdapter.core.Lock()
+			handled, ingressErr := destinationAdapter.ingressLocked(test.frame)
+			queued := destination.rx.count
+			destinationAdapter.core.Unlock()
+			if ingressErr != nil || handled || queued != 0 {
+				t.Fatalf("unowned ingress = handled %v, err %v, queued %d", handled, ingressErr, queued)
+			}
+		})
+	}
+
+	destinationAdapter.core.Lock()
+	handled, ingressErr := destinationAdapter.ingressLocked(valid)
+	queued := destination.rx.count
+	destinationAdapter.core.Unlock()
+	if ingressErr != nil || !handled || queued != 1 {
+		t.Fatalf("valid ingress after unowned traffic = handled %v, err %v, queued %d", handled, ingressErr, queued)
+	}
+	buffer := make([]byte, 16)
+	result, err := destination.TryReceive(buffer)
+	if err != nil || !result.Ready || result.Source != sourceEndpoint || string(buffer[:result.Copied]) != "payload" {
+		t.Fatalf("receive after unowned traffic = %+v, %q, %v", result, buffer[:result.Copied], err)
+	}
+}
+
 func TestUDPIngressConsumesInvalidIPv4SourcesWithoutQueueing(t *testing.T) {
 	for _, sourceAddress := range []netip.Addr{
 		netip.IPv4Unspecified(),
