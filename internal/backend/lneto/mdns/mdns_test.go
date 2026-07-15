@@ -264,6 +264,76 @@ func TestMDNSQueryAcceptsRecordsFromEveryResponseSection(t *testing.T) {
 	}
 }
 
+func TestMDNSResponseRecordOverflowFailsAtomicallyAndIsolatesOtherQueries(t *testing.T) {
+	config := queryOnlyConfig()
+	config.MaxQueries = 2
+	config.MaxRecords = 1
+	config.MaxRecordsPerPacket = 2
+	core, adapter, account := newTestAdapter(t, config, testPolicy())
+	firstResource, _, err := adapter.TryQuery(mdnsns.Request{Name: "peer.local", Types: mdnsns.RecordsA})
+	if err != nil {
+		t.Fatal(err)
+	}
+	secondResource, _, err := adapter.TryQuery(mdnsns.Request{Name: "other.local", Types: mdnsns.RecordsA})
+	if err != nil {
+		t.Fatal(err)
+	}
+	first := firstResource.(*query)
+	second := secondResource.(*query)
+	_ = serviceEgress(t, core)
+	_ = serviceEgress(t, core)
+
+	firstAnswer := resourceOfType(t, testService("peer", "192.0.2.41"), lnetodns.TypeA)
+	secondAnswer := resourceOfType(t, testService("peer", "192.0.2.42"), lnetodns.TypeA)
+	payload, err := (&lnetodns.Message{Answers: []lnetodns.Resource{firstAnswer, secondAnswer}}).AppendTo(make([]byte, 0, config.MaxPacketBytes), 0, lnetodns.HeaderFlags(1<<15|1<<10))
+	if err != nil {
+		t.Fatal(err)
+	}
+	serviceIngress(t, core, wrapMDNSFrame(t, payload, [6]byte{2, 0, 0, 0, 0, 41}, netip.MustParseAddr("192.0.2.41")))
+	if first.state != stateFailed || first.Readiness() != nscore.ReadyError || len(first.records) != 0 {
+		t.Fatalf("overflowed query = state:%v readiness:%v records:%d", first.state, first.Readiness(), len(first.records))
+	}
+	if _, _, err := first.TryNext(); failureOf(t, err) != nscore.FailureResourceLimit {
+		t.Fatalf("overflow failure = %v", err)
+	}
+	if second.state != stateWaiting || second.Readiness() != 0 || len(second.records) != 0 {
+		t.Fatalf("unrelated query after overflow = state:%v readiness:%v records:%d", second.state, second.Readiness(), len(second.records))
+	}
+	assertMDNSDecodeScratchReset(t, &adapter.decode)
+	if usage, closed := account.Snapshot(); closed || usage.Resources != 2 || usage.MDNSResources != 2 || usage.MDNSWork != 1 {
+		t.Fatalf("overflow quota = %+v, closed=%v", usage, closed)
+	}
+
+	valid, err := buildServicePacket(testService("other", "192.0.2.43"), lnetodns.TypeA, config.MaxPacketBytes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	serviceIngress(t, core, wrapMDNSFrame(t, valid, [6]byte{2, 0, 0, 0, 0, 43}, netip.MustParseAddr("192.0.2.43")))
+	if second.state != stateDone || second.Readiness() != nscore.ReadyMDNSResult {
+		t.Fatalf("unrelated completion = state:%v readiness:%v", second.state, second.Readiness())
+	}
+	record, next, err := second.TryNext()
+	if err != nil || next != mdnsns.NextReady || record.Name != "other.local" || record.Address != netip.MustParseAddr("192.0.2.43") {
+		t.Fatalf("unrelated result = %+v, %v, %v", record, next, err)
+	}
+	if _, next, err := second.TryNext(); err != nil || next != mdnsns.NextEOF {
+		t.Fatalf("unrelated EOF = %v, %v", next, err)
+	}
+	if first.state != stateFailed || len(first.records) != 0 {
+		t.Fatalf("later response revived overflowed query: state=%v records=%d", first.state, len(first.records))
+	}
+	assertMDNSDecodeScratchReset(t, &adapter.decode)
+	if err := first.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := second.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if usage, _ := account.Snapshot(); usage != (quota.Usage{}) {
+		t.Fatalf("closed quota = %+v", usage)
+	}
+}
+
 func TestMDNSQueryAcceptsCompressedNameResourceData(t *testing.T) {
 	for _, test := range []struct {
 		name       string
