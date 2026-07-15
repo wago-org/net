@@ -750,6 +750,9 @@ func (a *Adapter) validateFrame(frame []byte) ([]byte, netip.Addr, bool, error) 
 	if binary.BigEndian.Uint16(ipPayload[:2]) != Port || binary.BigEndian.Uint16(ipPayload[2:4]) != Port {
 		return nil, netip.Addr{}, false, nil
 	}
+	if (destination == multicastAddress) != (destinationMAC == multicastMAC) {
+		return nil, netip.Addr{}, true, lneto.ErrInvalidAddr
+	}
 	udp, err := lnetoudp.NewFrame(ipPayload)
 	if err != nil {
 		return nil, netip.Addr{}, true, err

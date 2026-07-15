@@ -878,6 +878,54 @@ func TestMDNSIngressRejectsTrailingIPv4PayloadOutsideUDPDatagram(t *testing.T) {
 	}
 }
 
+func TestMDNSIngressContainsMismatchedLocalDestinationPairs(t *testing.T) {
+	service := testService("device", "192.0.2.11")
+	core, adapter, _ := newTestAdapter(t, Config{
+		Services: []mdnsns.Service{service}, MaxServices: 1, MaxQueries: 1, MaxAnnouncements: 1,
+		MaxRecords: 8, MaxPacketBytes: 1200, MaxQueuedResponses: 1, MaxQuestionsPerPacket: 4,
+		MaxRecordsPerPacket: 16, MaxAttempts: 2, RetryServiceAttempts: 2,
+	}, testPolicy())
+	resource, _, err := adapter.TryQuery(mdnsns.Request{Name: "peer.local", Types: mdnsns.RecordsA})
+	if err != nil {
+		t.Fatal(err)
+	}
+	query := resource.(*query)
+	_ = serviceEgress(t, core)
+	responsePayload, err := buildServicePacket(testService("peer", "192.0.2.22"), lnetodns.TypeA, 1200)
+	if err != nil {
+		t.Fatal(err)
+	}
+	base := wrapMDNSFrame(t, responsePayload, [6]byte{2, 0, 0, 0, 0, 22}, netip.MustParseAddr("192.0.2.22"))
+	localAddress := netip.MustParseAddr("192.0.2.11")
+	for _, destination := range []struct {
+		name string
+		mac  [6]byte
+		ip   netip.Addr
+	}{
+		{name: "multicast IP with unicast MAC", mac: adapter.hardwareAddress, ip: multicastAddress},
+		{name: "unicast IP with multicast MAC", mac: multicastMAC, ip: localAddress},
+	} {
+		t.Run(destination.name, func(t *testing.T) {
+			frame := append([]byte(nil), base...)
+			setMDNSTestDestination(t, frame, destination.mac, destination.ip)
+			core.Lock()
+			handled, ingressErr := adapter.ingressLocked(frame)
+			state, records, queued := query.state, len(query.records), adapter.responseCount
+			core.Unlock()
+			if ingressErr != nil || !handled {
+				t.Fatalf("mismatched destination ingress = handled:%v err:%v", handled, ingressErr)
+			}
+			if state != stateWaiting || records != 0 || queued != 0 || query.Readiness() != 0 {
+				t.Fatalf("mismatched destination mutated operation: state=%v records=%d queued=%d readiness=%v", state, records, queued, query.Readiness())
+			}
+		})
+	}
+	serviceIngress(t, core, base)
+	if query.Readiness() != nscore.ReadyMDNSResult {
+		t.Fatalf("valid response after mismatched destinations readiness = %v", query.Readiness())
+	}
+}
+
 func TestMDNSIngressRelevanceConsumesLocalMalformedAndLeavesForeignUnhandled(t *testing.T) {
 	service := testService("device", "192.0.2.11")
 	core, adapter, _ := newTestAdapter(t, Config{
