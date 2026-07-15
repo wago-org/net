@@ -8,6 +8,7 @@ import (
 	lneto "github.com/soypat/lneto"
 	"github.com/soypat/lneto/ethernet"
 	"github.com/soypat/lneto/ipv4"
+	lnetoipv6 "github.com/soypat/lneto/ipv6"
 	lnetotcp "github.com/soypat/lneto/tcp"
 	lnetocore "github.com/wago-org/net/internal/backend/lneto/core"
 	ipv6backend "github.com/wago-org/net/internal/backend/lneto/ipv6"
@@ -433,6 +434,92 @@ func TestIPv6ListenerConnectAndDataExchange(t *testing.T) {
 	buffer := make([]byte, len(payload))
 	if result, err := serverStream.TryRead(buffer); err != nil || result.Bytes != len(payload) || string(buffer) != string(payload) {
 		t.Fatalf("IPv6 read = %+v, %v, %q", result, err, buffer)
+	}
+}
+
+func TestCorrelatedMalformedIPv6TCPIsHandledDropAndListenerRemainsRetryable(t *testing.T) {
+	clientCore, client := newIPv6TestAdapter(t, 45, netip.MustParseAddr("2001:db8::45"), 0, 1)
+	serverCore, server := newIPv6TestAdapter(t, 46, netip.MustParseAddr("2001:db8::46"), 1, 0)
+	endpoint := nscore.Endpoint{Address: netip.MustParseAddr("2001:db8::46"), Port: 4246}
+	listenerValue, progress, err := server.TryListen(endpoint)
+	if err != nil || progress != nscore.ProgressDone {
+		t.Fatalf("listen = %T, %v, %v", listenerValue, progress, err)
+	}
+	listener := listenerValue.(*tcpListener)
+	clientValue, progress, err := client.TryConnect(endpoint)
+	if err != nil || progress != nscore.ProgressInProgress {
+		t.Fatalf("connect = %T, %v, %v", clientValue, progress, err)
+	}
+	clientStream := clientValue.(*tcpStream)
+	validSYN := nextTCPFrame(t, clientCore)
+
+	unowned := append([]byte(nil), validSYN...)
+	unownedIP, err := lnetoipv6.NewFrame(unowned[14:])
+	if err != nil {
+		t.Fatal(err)
+	}
+	unownedTCP, err := lnetotcp.NewFrame(unownedIP.Payload())
+	if err != nil {
+		t.Fatal(err)
+	}
+	unownedTCP.SetDestinationPort(endpoint.Port + 1)
+	unownedTCP.SetCRC(unownedTCP.CRC() ^ 1)
+	serverCore.Lock()
+	handled, ingressErr := server.ingressLocked(unowned)
+	serverCore.Unlock()
+	if ingressErr != nil || handled {
+		t.Fatalf("unowned malformed ingress = handled %v, err %v", handled, ingressErr)
+	}
+
+	for _, test := range []struct {
+		name   string
+		mutate func(lnetoipv6.Frame, lnetotcp.Frame)
+	}{
+		{name: "bad TCP checksum", mutate: func(_ lnetoipv6.Frame, tcpFrame lnetotcp.Frame) {
+			tcpFrame.SetCRC(tcpFrame.CRC() ^ 1)
+		}},
+		{name: "invalid TCP header length", mutate: func(ipFrame lnetoipv6.Frame, tcpFrame lnetotcp.Frame) {
+			_, flags := tcpFrame.OffsetAndFlags()
+			tcpFrame.SetOffsetAndFlags(4, flags)
+			tcpFrame.SetCRC(0)
+			var checksum lneto.CRC791
+			ipFrame.CRCWritePseudo(&checksum)
+			tcpFrame.SetCRC(checksum.PayloadSum16(tcpFrame.RawData()))
+		}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			malformed := append([]byte(nil), validSYN...)
+			ipFrame, err := lnetoipv6.NewFrame(malformed[14:])
+			if err != nil {
+				t.Fatal(err)
+			}
+			tcpFrame, err := lnetotcp.NewFrame(ipFrame.Payload())
+			if err != nil {
+				t.Fatal(err)
+			}
+			test.mutate(ipFrame, tcpFrame)
+			serviceTCPIngressFrame(t, serverCore, malformed)
+			serverCore.Lock()
+			serverCore.SetNextIngressLocked(false)
+			required := serverCore.RequiredFrameBytesLocked()
+			serverCore.Unlock()
+			if report, progress, err := serverCore.TryService(nscore.ServiceBudget{Packets: 1, Bytes: uint32(required), Operations: 1}); err != nil || progress != nscore.ProgressWouldBlock || report != (nscore.ServiceReport{}) {
+				t.Fatalf("malformed SYN scheduled response = %+v, %v, %v", report, progress, err)
+			}
+			if ready := listener.Readiness(); ready != 0 {
+				t.Fatalf("malformed SYN listener readiness = %v", ready)
+			}
+		})
+	}
+
+	serviceTCPIngressFrame(t, serverCore, validSYN)
+	serviceTCPIngressFrame(t, clientCore, nextTCPFrame(t, serverCore))
+	serviceTCPIngressFrame(t, serverCore, nextTCPFrame(t, clientCore))
+	if progress, err := clientStream.TryFinishConnect(); err != nil || progress != nscore.ProgressDone {
+		t.Fatalf("finish after valid retry = %v, %v", progress, err)
+	}
+	if ready := listener.Readiness(); ready != nscore.ReadyAccept {
+		t.Fatalf("valid retry listener readiness = %v", ready)
 	}
 }
 

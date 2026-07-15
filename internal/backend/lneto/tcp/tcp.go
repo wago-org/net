@@ -10,6 +10,7 @@ import (
 	lneto "github.com/soypat/lneto"
 	"github.com/soypat/lneto/ethernet"
 	"github.com/soypat/lneto/ipv4"
+	lnetoipv6 "github.com/soypat/lneto/ipv6"
 	lnetotcp "github.com/soypat/lneto/tcp"
 	lnetocore "github.com/wago-org/net/internal/backend/lneto/core"
 	nscore "github.com/wago-org/net/internal/namespace/core"
@@ -446,10 +447,21 @@ func (p *tcpPool) destroyLocked() {
 
 func (n *Adapter) ingressLocked(frame []byte) (bool, error) {
 	ethernetFrame, err := ethernet.NewFrame(frame)
-	if err != nil || ethernetFrame.EtherTypeOrSize() != ethernet.TypeIPv4 || *ethernetFrame.DestinationHardwareAddr() != n.core.HardwareAddressLocked() {
+	if err != nil || *ethernetFrame.DestinationHardwareAddr() != n.core.HardwareAddressLocked() {
 		return false, nil
 	}
-	ipFrame, err := ipv4.NewFrame(ethernetFrame.Payload())
+	switch ethernetFrame.EtherTypeOrSize() {
+	case ethernet.TypeIPv4:
+		return n.ingressIPv4Locked(ethernetFrame.Payload())
+	case ethernet.TypeIPv6:
+		return n.ingressIPv6Locked(ethernetFrame.Payload())
+	default:
+		return false, nil
+	}
+}
+
+func (n *Adapter) ingressIPv4Locked(packet []byte) (bool, error) {
+	ipFrame, err := ipv4.NewFrame(packet)
 	if err != nil {
 		return false, nil
 	}
@@ -468,6 +480,32 @@ func (n *Adapter) ingressLocked(frame []byte) (bool, error) {
 		return true, nil
 	}
 	payload := ipFrame.RawData()[headerLength:totalLength]
+	var checksum lneto.CRC791
+	ipFrame.CRCWriteTCPPseudo(&checksum)
+	return n.ingressTCPPayloadLocked(payload, &checksum)
+}
+
+func (n *Adapter) ingressIPv6Locked(packet []byte) (bool, error) {
+	ipFrame, err := lnetoipv6.NewFrame(packet)
+	if err != nil {
+		return false, nil
+	}
+	version, _, _ := ipFrame.VersionTrafficAndFlow()
+	payloadLength := int(ipFrame.PayloadLength())
+	if version != 6 || payloadLength+40 > len(ipFrame.RawData()) || ipFrame.NextHeader() != lneto.IPProtoTCP {
+		return false, nil
+	}
+	local := n.core.IPv6AddressLocked()
+	if !local.IsUnspecified() && netip.AddrFrom16(*ipFrame.DestinationAddr()) != local {
+		return false, nil
+	}
+	payload := ipFrame.RawData()[40 : 40+payloadLength]
+	var checksum lneto.CRC791
+	ipFrame.CRCWritePseudo(&checksum)
+	return n.ingressTCPPayloadLocked(payload, &checksum)
+}
+
+func (n *Adapter) ingressTCPPayloadLocked(payload []byte, checksum *lneto.CRC791) (bool, error) {
 	tcpFrame, err := lnetotcp.NewFrame(payload)
 	if err != nil {
 		return false, nil
@@ -479,8 +517,6 @@ func (n *Adapter) ingressLocked(frame []byte) (bool, error) {
 	if tcpFrame.SourcePort() == 0 || tcpHeaderLength < 20 || tcpHeaderLength > len(payload) {
 		return true, nil
 	}
-	var checksum lneto.CRC791
-	ipFrame.CRCWriteTCPPseudo(&checksum)
 	if checksum.PayloadSum16(payload) != 0 {
 		return true, nil
 	}
