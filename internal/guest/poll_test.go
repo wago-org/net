@@ -98,6 +98,53 @@ func TestPollPrevalidatesBudgetAndCompleteOutputs(t *testing.T) {
 	}
 }
 
+func TestPollRejectsOutputAliasingBudgetBeforeBackendWork(t *testing.T) {
+	backend := &pollNamespace{ready: nscore.ReadyReadable}
+	manager, instance := attachPollManager(t, backend, quota.DefaultLimits())
+	defer manager.Detach(instance)
+	host := pollTestHost{instance: instance, memory: bytes.Repeat([]byte{0x6d}, 128)}
+	pluginHost := plugin.NewHost(manager)
+	state, ok := manager.ForInstance(instance)
+	if !ok {
+		t.Fatal("attached state missing")
+	}
+
+	for _, test := range []struct {
+		name      string
+		eventsPtr uint32
+		resultPtr uint32
+	}{
+		{name: "event output", eventsPtr: 8, resultPtr: 64},
+		{name: "result output", eventsPtr: 32, resultPtr: 8},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			for i := range host.memory {
+				host.memory[i] = 0x6d
+			}
+			writePollBudget(host.memory, 0, 1, 1, 0, 0, 0, 0)
+			beforeMemory := append([]byte(nil), host.memory...)
+			beforeReadiness := state.Readiness().Snapshot()
+			beforeQuota, beforeClosed := state.Quotas().Snapshot()
+			readinessCalls, serviceCalls := backend.readinessCalls, backend.serviceCalls
+			if status := callPoll(pluginHost, host, test.eventsPtr, 1, 0, test.resultPtr); status != StatusInvalidArgument {
+				t.Fatalf("status = %v", status)
+			}
+			if backend.readinessCalls != readinessCalls || backend.serviceCalls != serviceCalls {
+				t.Fatalf("poll work changed: readiness=%d service=%d", backend.readinessCalls, backend.serviceCalls)
+			}
+			if after := state.Readiness().Snapshot(); after != beforeReadiness {
+				t.Fatalf("readiness state changed: before=%+v after=%+v", beforeReadiness, after)
+			}
+			if after, closed := state.Quotas().Snapshot(); after != beforeQuota || closed != beforeClosed {
+				t.Fatalf("quota state changed: before=%+v/%v after=%+v/%v", beforeQuota, beforeClosed, after, closed)
+			}
+			if !bytes.Equal(host.memory, beforeMemory) {
+				t.Fatal("invalid output alias mutated guest memory")
+			}
+		})
+	}
+}
+
 func TestPollRejectsHighBitI32AliasesBeforeStateQuotaAndPollWork(t *testing.T) {
 	backend := &pollNamespace{ready: nscore.ReadyReadable}
 	manager, instance := attachPollManager(t, backend, quota.DefaultLimits())

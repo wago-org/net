@@ -39,6 +39,7 @@ func Poll(host plugin.Host, module wago.HostModule, params, results []uint64) {
 		return
 	}
 	if !abicore.CheckRanges(memory, true,
+		abicore.Range{Ptr: budgetPtr, Length: abicore.PollBudgetV1Size},
 		abicore.Range{Ptr: eventsPtr, Length: uint32(eventBytes)},
 		abicore.Range{Ptr: resultPtr, Length: abicore.PollResultV1Size},
 	) {
