@@ -1,6 +1,7 @@
 package guest
 
 import (
+	"bytes"
 	"errors"
 	"testing"
 
@@ -9,6 +10,31 @@ import (
 )
 
 var benchmarkStatus Status
+
+type panicMemoryHost struct {
+	memory []byte
+}
+
+func (h *panicMemoryHost) Memory() []byte {
+	if h == nil {
+		panic("typed-nil Memory call")
+	}
+	return h.memory
+}
+
+func TestMemoryRejectsTypedNilHostModule(t *testing.T) {
+	var typedNil *panicMemoryHost
+	if memory := Memory(typedNil); memory != nil {
+		t.Fatalf("typed-nil memory = %v, want nil", memory)
+	}
+	if memory := Memory(nil); memory != nil {
+		t.Fatalf("nil memory = %v, want nil", memory)
+	}
+	want := []byte{1, 2, 3}
+	if memory := Memory(&panicMemoryHost{memory: want}); !bytes.Equal(memory, want) {
+		t.Fatalf("valid memory = %v, want %v", memory, want)
+	}
+}
 
 func TestFromErrorFastPathsDoNotAllocate(t *testing.T) {
 	semantic := nscore.Fail(nscore.FailureConnectionReset, errors.New("reset"))

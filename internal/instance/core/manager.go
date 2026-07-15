@@ -527,8 +527,11 @@ func (m *Manager) ForInstance(instance *wago.Instance) (*State, bool) {
 // module identity surface. HostModule-only mocks and low-level imports without
 // Runtime lifecycle attachment fail closed.
 func (m *Manager) FromHost(module wago.HostModule) (*State, bool) {
+	if m == nil || resource.IsNil(module) {
+		return nil, false
+	}
 	identity, ok := module.(wago.InstanceHostModule)
-	if !ok {
+	if !ok || resource.IsNil(identity) {
 		return nil, false
 	}
 	return m.ForInstance(identity.Instance())

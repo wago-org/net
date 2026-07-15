@@ -151,7 +151,7 @@ func FromError(err error) Status {
 
 // Memory returns the calling module's current linear memory without retaining it.
 func Memory(module wago.HostModule) []byte {
-	if module == nil {
+	if resource.IsNil(module) {
 		return nil
 	}
 	return module.Memory()

@@ -180,6 +180,28 @@ type fakePollable struct{}
 func (fakePollable) Close() error                   { return nil }
 func (fakePollable) Readiness() namespace.Readiness { return namespace.ReadyReadable }
 
+type panicInstanceHost struct {
+	instance *wago.Instance
+}
+
+func (h *panicInstanceHost) Memory() []byte {
+	if h == nil {
+		panic("typed-nil Memory call")
+	}
+	return nil
+}
+
+func (h *panicInstanceHost) Instance() *wago.Instance {
+	if h == nil {
+		panic("typed-nil Instance call")
+	}
+	return h.instance
+}
+
+type unsupportedHost struct{}
+
+func (unsupportedHost) Memory() []byte { return nil }
+
 func TestManagerReadinessIsRightSizedToResourceQuota(t *testing.T) {
 	config := DefaultConfig()
 	config.Limits.Resources = 2
@@ -234,6 +256,42 @@ func TestManagerConfigurationIsValidatedAndPolicyIsImmutable(t *testing.T) {
 	state, ok := manager.ForInstance(instance)
 	if !ok || !state.Policy().CheckEndpoint(policy.OperationUDPSend, netip.MustParseAddr("192.0.2.1"), 53) {
 		t.Fatal("compiled policy changed after caller mutation")
+	}
+	if err := manager.Detach(instance); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestManagerFromHostRejectsTypedNilAndUnsupportedModules(t *testing.T) {
+	manager := NewManager()
+	instance := new(wago.Instance)
+	if err := manager.Attach(instance); err != nil {
+		t.Fatal(err)
+	}
+	want, ok := manager.ForInstance(instance)
+	if !ok {
+		t.Fatal("attached state missing")
+	}
+
+	var typedNil *panicInstanceHost
+	if state, ok := manager.FromHost(typedNil); ok || state != nil {
+		t.Fatalf("typed-nil host resolved state=%p ok=%v", state, ok)
+	}
+	if state, ok := manager.FromHost(unsupportedHost{}); ok || state != nil {
+		t.Fatalf("unsupported host resolved state=%p ok=%v", state, ok)
+	}
+	if state, ok := manager.FromHost(&panicInstanceHost{instance: instance}); !ok || state != want {
+		t.Fatalf("valid host resolved state=%p ok=%v, want %p", state, ok, want)
+	}
+	if state, ok := manager.FromHost(nil); ok || state != nil {
+		t.Fatalf("nil host resolved state=%p ok=%v", state, ok)
+	}
+	var nilManager *Manager
+	if state, ok := nilManager.FromHost(&panicInstanceHost{instance: instance}); ok || state != nil {
+		t.Fatalf("nil manager resolved state=%p ok=%v", state, ok)
+	}
+	if state, ok := nilManager.FromHost(typedNil); ok || state != nil {
+		t.Fatalf("nil manager and typed-nil host resolved state=%p ok=%v", state, ok)
 	}
 	if err := manager.Detach(instance); err != nil {
 		t.Fatal(err)
