@@ -5,6 +5,7 @@
 package ntp
 
 import (
+	"encoding/binary"
 	"errors"
 	"net"
 	"net/netip"
@@ -458,12 +459,14 @@ func (a *Adapter) ingressLocked(frame []byte) (bool, error) {
 	}
 	headerBytes := int(headerWords) * 4
 	ipRaw := ipFrame.RawData()
-	if headerBytes > len(ipRaw) || len(ipRaw)-headerBytes < 8 {
+	if headerBytes > len(ipRaw) || len(ipRaw)-headerBytes < 4 {
 		return false, nil
 	}
-	udpFrame, _ := lnetoudp.NewFrame(ipRaw[headerBytes:])
-	sync := a.byPort[udpFrame.DestinationPort()]
-	if sync == nil || sync.state != syncWaiting || udpFrame.SourcePort() != lnetontp.ServerPort {
+	availableUDP := ipRaw[headerBytes:]
+	sourcePort := binary.BigEndian.Uint16(availableUDP[:2])
+	destinationPort := binary.BigEndian.Uint16(availableUDP[2:4])
+	sync := a.byPort[destinationPort]
+	if sync == nil || sync.state != syncWaiting || sourcePort != lnetontp.ServerPort {
 		return false, nil
 	}
 	if !validUnicastMAC(*ethernetFrame.SourceHardwareAddr()) {
@@ -483,7 +486,7 @@ func (a *Adapter) ingressLocked(frame []byte) (bool, error) {
 	if len(ipPayload) < 8 {
 		return true, nil
 	}
-	udpFrame, _ = lnetoudp.NewFrame(ipPayload)
+	udpFrame, _ := lnetoudp.NewFrame(ipPayload)
 	udpFrame.ValidateSize(&validator)
 	if validator.ErrPop() != nil {
 		return true, nil

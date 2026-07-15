@@ -291,6 +291,64 @@ func TestNTPRejectsMalformedServerResponseAndIgnoresOriginMismatch(t *testing.T)
 	}
 }
 
+func TestNTPIngressContainsTruncatedUDPOnlyAfterExactPortCorrelation(t *testing.T) {
+	clock := &manualClock{now: time.Date(2026, 7, 14, 12, 0, 0, 0, time.UTC)}
+	core, adapter, account := newTestAdapter(t, clock, Config{
+		Server: netip.MustParseAddr("192.0.2.123"), Clock: clock, MaxSyncs: 1,
+		MaxAttempts: 1, RetryServiceAttempts: 2, Precision: -20,
+	})
+	resource, _, err := adapter.TrySync()
+	if err != nil {
+		t.Fatal(err)
+	}
+	sync := resource.(*syncResource)
+	request := serviceEgress(t, core)
+	response, arrival := makeNTPResponse(t, request, 100*time.Millisecond, 20*time.Millisecond)
+	clock.now = arrival
+	ipFrame := ipv4Payload(t, response)
+	headerBytes := int(ipFrame.HeaderLength())
+	framePrefix := 14 + headerBytes
+	usageBefore, _ := account.Snapshot()
+	requestBefore, sampleBefore := sync.request, sync.clockSample
+
+	for udpBytes := 0; udpBytes < 8; udpBytes++ {
+		truncated := append([]byte(nil), response[:framePrefix+udpBytes]...)
+		core.Lock()
+		handled, ingressErr := adapter.ingressLocked(truncated)
+		core.Unlock()
+		wantHandled := udpBytes >= 4
+		if ingressErr != nil || handled != wantHandled {
+			t.Fatalf("UDP bytes %d ingress = %v, %v; want handled %v", udpBytes, handled, ingressErr, wantHandled)
+		}
+		if sync.state != syncWaiting || sync.Readiness() != 0 || sync.request != requestBefore || sync.clockSample != sampleBefore || adapter.byPort[sync.portLease.UDPPort()] != sync {
+			t.Fatalf("UDP bytes %d mutated synchronization: state=%v readiness=%v mapped=%v", udpBytes, sync.state, sync.Readiness(), adapter.byPort[sync.portLease.UDPPort()] == sync)
+		}
+		if usage, _ := account.Snapshot(); usage != usageBefore {
+			t.Fatalf("UDP bytes %d changed quota = %+v, want %+v", udpBytes, usage, usageBefore)
+		}
+
+		if udpBytes >= 4 {
+			for name, offset := range map[string]int{"source": 0, "destination": 2} {
+				foreign := append([]byte(nil), truncated...)
+				foreign[framePrefix+offset], foreign[framePrefix+offset+1] = 0, 7
+				core.Lock()
+				handled, ingressErr = adapter.ingressLocked(foreign)
+				core.Unlock()
+				if ingressErr != nil || handled {
+					t.Fatalf("foreign %s port with UDP bytes %d ingress = %v, %v", name, udpBytes, handled, ingressErr)
+				}
+			}
+		}
+	}
+
+	core.Lock()
+	handled, err := adapter.ingressLocked(response)
+	core.Unlock()
+	if err != nil || !handled || sync.state != syncPrepare || sync.Readiness() != 0 {
+		t.Fatalf("valid response after truncations = %v, %v state=%v readiness=%v", handled, err, sync.state, sync.Readiness())
+	}
+}
+
 func TestNTPMalformedTransportCannotRetireCorrelatedSynchronization(t *testing.T) {
 	for _, test := range []struct {
 		name   string
