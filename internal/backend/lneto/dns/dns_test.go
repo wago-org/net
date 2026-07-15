@@ -633,6 +633,28 @@ func TestDNSIngressDropsMalformedCorrelatedTransportAndAcceptsFollowingValidResp
 				udpFrame.SetLength(7)
 			},
 		},
+		{
+			name: "trailing IPv4 payload outside UDP datagram",
+			mutate: func(t *testing.T, frame []byte) {
+				ethernetFrame, err := ethernet.NewFrame(frame)
+				if err != nil {
+					t.Fatal(err)
+				}
+				ipFrame, err := ipv4.NewFrame(ethernetFrame.Payload())
+				if err != nil {
+					t.Fatal(err)
+				}
+				udpFrame, err := lnetoudp.NewFrame(ipFrame.Payload())
+				if err != nil {
+					t.Fatal(err)
+				}
+				udpFrame.SetLength(udpFrame.Length() - 1)
+				udpFrame.SetCRC(0)
+				var checksum lneto.CRC791
+				ipFrame.CRCWriteUDPPseudo(&checksum, udpFrame.Length())
+				udpFrame.SetCRC(lneto.NeverZeroSum(checksum.PayloadSum16(udpFrame.RawData()[:udpFrame.Length()])))
+			},
+		},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			config := dnsTestConfig(t, 47)
