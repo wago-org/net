@@ -450,17 +450,18 @@ func (n *Adapter) ingressLocked(frame []byte) (bool, error) {
 	if err != nil || *ethernetFrame.DestinationHardwareAddr() != n.core.HardwareAddressLocked() {
 		return false, nil
 	}
+	sourceHardwareAddress := *ethernetFrame.SourceHardwareAddr()
 	switch ethernetFrame.EtherTypeOrSize() {
 	case ethernet.TypeIPv4:
-		return n.ingressIPv4Locked(ethernetFrame.Payload())
+		return n.ingressIPv4Locked(ethernetFrame.Payload(), sourceHardwareAddress)
 	case ethernet.TypeIPv6:
-		return n.ingressIPv6Locked(ethernetFrame.Payload())
+		return n.ingressIPv6Locked(ethernetFrame.Payload(), sourceHardwareAddress)
 	default:
 		return false, nil
 	}
 }
 
-func (n *Adapter) ingressIPv4Locked(packet []byte) (bool, error) {
+func (n *Adapter) ingressIPv4Locked(packet []byte, sourceHardwareAddress [6]byte) (bool, error) {
 	ipFrame, err := ipv4.NewFrame(packet)
 	if err != nil {
 		return false, nil
@@ -482,10 +483,10 @@ func (n *Adapter) ingressIPv4Locked(packet []byte) (bool, error) {
 	payload := ipFrame.RawData()[headerLength:totalLength]
 	var checksum lneto.CRC791
 	ipFrame.CRCWriteTCPPseudo(&checksum)
-	return n.ingressTCPPayloadLocked(payload, &checksum)
+	return n.ingressTCPPayloadLocked(payload, &checksum, sourceHardwareAddress)
 }
 
-func (n *Adapter) ingressIPv6Locked(packet []byte) (bool, error) {
+func (n *Adapter) ingressIPv6Locked(packet []byte, sourceHardwareAddress [6]byte) (bool, error) {
 	ipFrame, err := lnetoipv6.NewFrame(packet)
 	if err != nil {
 		return false, nil
@@ -502,16 +503,19 @@ func (n *Adapter) ingressIPv6Locked(packet []byte) (bool, error) {
 	payload := ipFrame.RawData()[40 : 40+payloadLength]
 	var checksum lneto.CRC791
 	ipFrame.CRCWritePseudo(&checksum)
-	return n.ingressTCPPayloadLocked(payload, &checksum)
+	return n.ingressTCPPayloadLocked(payload, &checksum, sourceHardwareAddress)
 }
 
-func (n *Adapter) ingressTCPPayloadLocked(payload []byte, checksum *lneto.CRC791) (bool, error) {
+func (n *Adapter) ingressTCPPayloadLocked(payload []byte, checksum *lneto.CRC791, sourceHardwareAddress [6]byte) (bool, error) {
 	tcpFrame, err := lnetotcp.NewFrame(payload)
 	if err != nil {
 		return false, nil
 	}
 	if _, owned := n.ports[tcpFrame.DestinationPort()]; !owned {
 		return false, nil
+	}
+	if !validUnicastMAC(sourceHardwareAddress) {
+		return true, nil
 	}
 	tcpHeaderLength := tcpFrame.HeaderLength()
 	if tcpFrame.SourcePort() == 0 || tcpHeaderLength < 20 || tcpHeaderLength > len(payload) {
@@ -1040,6 +1044,10 @@ func (s *tcpStream) detachFromPoolLocked() {
 	if s.owner != nil {
 		removeTCPStream(s.owner, s)
 	}
+}
+
+func validUnicastMAC(mac [6]byte) bool {
+	return mac != ([6]byte{}) && mac != ethernet.BroadcastAddr() && mac[0]&1 == 0
 }
 
 func (n *Adapter) allocateTCPPortLocked() (uint16, bool) {
