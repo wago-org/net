@@ -301,6 +301,68 @@ func TestBindingsRejectHighBitI32AliasesBeforeBackendCalls(t *testing.T) {
 	}
 }
 
+func TestBindingsPreserveFullWidthNamespaceAndSocketHandles(t *testing.T) {
+	local := nscore.Endpoint{Address: netip.MustParseAddr("0.0.0.0"), Port: 53000}
+	remote := nscore.Endpoint{Address: netip.MustParseAddr("192.0.2.53"), Port: 53}
+	socket := &fakeSocket{
+		local: local, sendProgress: nscore.ProgressDone,
+		receiveResult: udpns.DatagramResult{},
+	}
+	created := &fakeSocket{local: local, sendProgress: nscore.ProgressDone}
+	backend := &fakeNamespace{socket: created, progress: nscore.ProgressDone}
+	manager, instance := attachManager(t, backend)
+	defer manager.Detach(instance)
+	host := testHost{instance: instance, memory: bytes.Repeat([]byte{0x71}, 512)}
+	bindings := Bindings(plugin.NewHost(manager))
+	state, ok := manager.ForInstance(instance)
+	if !ok {
+		t.Fatal("attached state missing")
+	}
+	namespaceHandle := state.NamespaceHandle()
+	socketHandle, err := state.Resources().Add(resource.KindUDPSocket, socket)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !abicore.EncodeEndpointV1(host.memory, 0, local) || !abicore.EncodeEndpointV1(host.memory, 96, remote) {
+		t.Fatal("encode endpoints")
+	}
+	copy(host.memory[64:70], "packet")
+
+	const high = uint64(1) << 63
+	handleBefore := append([]byte(nil), host.memory[48:56]...)
+	if status := callBinding(t, bindingByName(t, bindings, "bind"), host, uint64(namespaceHandle)|high, 0, 48); status != guest.StatusBadHandle || backend.calls != 0 || !bytes.Equal(host.memory[48:56], handleBefore) {
+		t.Fatalf("high namespace bind = %v calls=%d", status, backend.calls)
+	}
+	if status := callBinding(t, bindingByName(t, bindings, "send"), host, uint64(socketHandle)|high, 64, 6, 96); status != guest.StatusBadHandle || socket.sendCalls != 0 {
+		t.Fatalf("high socket send = %v calls=%d", status, socket.sendCalls)
+	}
+	payloadBefore := append([]byte(nil), host.memory[160:176]...)
+	resultBefore := append([]byte(nil), host.memory[192:192+udpabi.ReceiveResultV1Size]...)
+	if status := callBinding(t, bindingByName(t, bindings, "receive"), host, uint64(socketHandle)|high, 160, 16, 192); status != guest.StatusBadHandle || socket.receiveCalls != 0 || !bytes.Equal(host.memory[160:176], payloadBefore) || !bytes.Equal(host.memory[192:192+udpabi.ReceiveResultV1Size], resultBefore) {
+		t.Fatalf("high socket receive = %v calls=%d", status, socket.receiveCalls)
+	}
+	if status := callBinding(t, bindingByName(t, bindings, "close"), host, uint64(socketHandle)|high); status != guest.StatusBadHandle || socket.closeCalls != 0 {
+		t.Fatalf("high socket close = %v calls=%d", status, socket.closeCalls)
+	}
+
+	if status := callBinding(t, bindingByName(t, bindings, "bind"), host, uint64(namespaceHandle), 0, 48); status != guest.StatusOK || backend.calls != 1 {
+		t.Fatalf("exact namespace bind = %v calls=%d", status, backend.calls)
+	}
+	createdHandle := resource.Handle(binary.LittleEndian.Uint64(host.memory[48:56]))
+	if status := callBinding(t, bindingByName(t, bindings, "send"), host, uint64(socketHandle), 64, 6, 96); status != guest.StatusOK || socket.sendCalls != 1 || string(socket.sent) != "packet" || socket.remote != remote {
+		t.Fatalf("exact socket send = %v calls=%d payload=%q remote=%+v", status, socket.sendCalls, socket.sent, socket.remote)
+	}
+	if status := callBinding(t, bindingByName(t, bindings, "receive"), host, uint64(socketHandle), 160, 16, 192); status != guest.StatusAgain || socket.receiveCalls != 1 || !bytes.Equal(host.memory[160:176], payloadBefore) || !bytes.Equal(host.memory[192:192+udpabi.ReceiveResultV1Size], resultBefore) {
+		t.Fatalf("exact socket receive = %v calls=%d", status, socket.receiveCalls)
+	}
+	if status := callBinding(t, bindingByName(t, bindings, "close"), host, uint64(socketHandle)); status != guest.StatusOK || socket.closeCalls != 1 {
+		t.Fatalf("exact socket close = %v calls=%d", status, socket.closeCalls)
+	}
+	if status := callBinding(t, bindingByName(t, bindings, "close"), host, uint64(createdHandle)); status != guest.StatusOK || created.closeCalls != 1 {
+		t.Fatalf("created socket close = %v calls=%d", status, created.closeCalls)
+	}
+}
+
 func TestBindingsPrevalidateOutputsBeforeInstanceAndHandleLookup(t *testing.T) {
 	manager := instancecore.NewManager()
 	instance := new(wago.Instance)
