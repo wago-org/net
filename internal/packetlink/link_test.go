@@ -285,6 +285,53 @@ func TestLinkRejectsInvalidConfigQueueAndFill(t *testing.T) {
 	}
 }
 
+func TestLinkCloseWaitsForReservedFillAndScrubsCommittedBytes(t *testing.T) {
+	link := newTestLink(t, Config{MaxFrameBytes: 8, IngressFrames: 1, EgressFrames: 1})
+	entered := make(chan struct{})
+	release := make(chan struct{})
+	type fillResult struct {
+		result FrameResult
+		err    error
+	}
+	fillDone := make(chan fillResult, 1)
+	go func() {
+		result, err := link.TryFill(Egress, func(dst []byte) (int, error) {
+			copy(dst, "retained")
+			close(entered)
+			<-release
+			return len(dst), nil
+		})
+		fillDone <- fillResult{result: result, err: err}
+	}()
+	<-entered
+
+	closeStarted := make(chan struct{})
+	closeDone := make(chan error, 1)
+	go func() {
+		close(closeStarted)
+		closeDone <- link.Close()
+	}()
+	<-closeStarted
+	close(release)
+
+	filled := <-fillDone
+	if filled.err != nil || filled.result != (FrameResult{Copied: 8, FrameBytes: 8, Ready: true}) {
+		t.Fatalf("reserved fill = %+v, %v", filled.result, filled.err)
+	}
+	if err := <-closeDone; err != nil {
+		t.Fatal(err)
+	}
+	if snapshot := link.Snapshot(); snapshot != (Snapshot{MaxFrameBytes: 8, IngressCapacity: 1, EgressCapacity: 1, Closed: true}) {
+		t.Fatalf("closed snapshot = %+v", snapshot)
+	}
+	if !allZero(link.egress.storage) || !allZeroInts(link.egress.lengths) {
+		t.Fatalf("close retained filled slot: storage=%x lengths=%v", link.egress.storage, link.egress.lengths)
+	}
+	if _, err := link.TryDequeue(Egress, make([]byte, 8)); !errors.Is(err, ErrClosed) {
+		t.Fatalf("closed dequeue = %v", err)
+	}
+}
+
 func TestLinkCloseClearsQueuesAndRacesSafely(t *testing.T) {
 	link := newTestLink(t, Config{MaxFrameBytes: 64, IngressFrames: 8, EgressFrames: 8})
 	for i := 0; i < 8; i++ {
@@ -373,6 +420,15 @@ func FuzzLinkFrameOwnership(f *testing.F) {
 			t.Fatalf("copied %d bytes %v, want %v", result.Copied, dst[:wantCopied], original[:wantCopied])
 		}
 	})
+}
+
+func allZeroInts(data []int) bool {
+	for _, value := range data {
+		if value != 0 {
+			return false
+		}
+	}
+	return true
 }
 
 func allZero(data []byte) bool {
