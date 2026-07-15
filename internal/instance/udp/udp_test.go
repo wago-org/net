@@ -179,9 +179,27 @@ func TestReceiveCommitsOnlyValidReadyPayloads(t *testing.T) {
 		t.Fatalf("would-block receive = %+v, %v, dst=%x", result, err, dst)
 	}
 
-	socket.result = namespace.DatagramResult{Ready: true, Copied: len(dst) + 1, DatagramBytes: len(dst) + 1, Source: remote}
-	if result, err := Receive(state, handle, dst); failureOf(t, err) != namespace.FailureIO || result != (namespace.DatagramResult{}) || string(dst) != string(wantUnchanged) {
-		t.Fatalf("malformed receive = %+v, %v, dst=%x", result, err, dst)
+	for name, malformed := range map[string]namespace.DatagramResult{
+		"copied beyond buffer":   {Ready: true, Copied: len(dst) + 1, DatagramBytes: len(dst) + 1, Source: remote},
+		"copied beyond datagram": {Ready: true, Copied: 4, DatagramBytes: 3, Source: remote},
+		"negative copied":        {Ready: true, Copied: -1, DatagramBytes: 1, Source: remote},
+		"negative datagram":      {Ready: true, DatagramBytes: -1, Source: remote},
+		"oversize datagram":      {Ready: true, DatagramBytes: udpns.MaxDatagramPayloadBytes + 1, Source: remote, Truncated: true},
+		"missing truncation":     {Ready: true, Copied: 3, DatagramBytes: 4, Source: remote},
+		"spurious truncation":    {Ready: true, Copied: 3, DatagramBytes: 3, Source: remote, Truncated: true},
+		"ready without source":   {Ready: true},
+		"blocked with copied":    {Copied: 1},
+		"blocked with size":      {DatagramBytes: 1},
+		"blocked with source":    {Source: remote},
+		"blocked truncated":      {Truncated: true},
+	} {
+		t.Run("malformed/"+name, func(t *testing.T) {
+			before := append([]byte(nil), dst...)
+			socket.result = malformed
+			if result, err := Receive(state, handle, dst); failureOf(t, err) != namespace.FailureIO || result != (namespace.DatagramResult{}) || string(dst) != string(before) {
+				t.Fatalf("receive = %+v, %v, dst=%x", result, err, dst)
+			}
+		})
 	}
 
 	socket.result = namespace.DatagramResult{Ready: true, Copied: 3, DatagramBytes: 3, Source: remote}

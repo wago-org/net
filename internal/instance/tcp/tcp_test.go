@@ -196,7 +196,12 @@ func TestReadCommitsOnlyValidatedReadyBytes(t *testing.T) {
 		{name: "error", result: nscore.IOResult{Bytes: 7, State: nscore.IOReady}, err: backendFailure},
 		{name: "would block", result: nscore.IOResult{State: nscore.IOWouldBlock}},
 		{name: "EOF", result: nscore.IOResult{State: nscore.IOEOF}},
-		{name: "malformed", result: nscore.IOResult{Bytes: 33, State: nscore.IOReady}},
+		{name: "ready beyond buffer", result: nscore.IOResult{Bytes: 33, State: nscore.IOReady}},
+		{name: "ready without bytes", result: nscore.IOResult{State: nscore.IOReady}},
+		{name: "would block with bytes", result: nscore.IOResult{Bytes: 1, State: nscore.IOWouldBlock}},
+		{name: "EOF with bytes", result: nscore.IOResult{Bytes: 1, State: nscore.IOEOF}},
+		{name: "negative bytes", result: nscore.IOResult{Bytes: -1, State: nscore.IOReady}},
+		{name: "unknown state", result: nscore.IOResult{Bytes: 1, State: nscore.IOState(99)}},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			dst := make([]byte, 32)
@@ -212,7 +217,7 @@ func TestReadCommitsOnlyValidatedReadyBytes(t *testing.T) {
 				}
 				return
 			}
-			if test.name == "malformed" {
+			if test.name != "would block" && test.name != "EOF" {
 				if result != (nscore.IOResult{}) || failureOf(t, err) != nscore.FailureIO || string(dst) != string(before) {
 					t.Fatalf("Read = %+v, %v, dst=%x", result, err, dst)
 				}
