@@ -3,6 +3,7 @@ package dhcpv6
 import (
 	"bytes"
 	"encoding/binary"
+	"errors"
 	"net/netip"
 	"testing"
 
@@ -35,14 +36,20 @@ func (*fakeBase) TryService(nscore.ServiceBudget) (nscore.ServiceReport, nscore.
 }
 
 type fakeNamespace struct {
-	lease           *fakeLease
-	progress        nscore.Progress
-	calls           int
-	operationsCalls int
+	lease                *fakeLease
+	progress             nscore.Progress
+	failure              error
+	operations           dhcpns.Operations
+	operationsConfigured bool
+	calls                int
+	operationsCalls      int
 }
 
 func (n *fakeNamespace) Operations() dhcpns.Operations {
 	n.operationsCalls++
+	if n.operationsConfigured {
+		return n.operations
+	}
 	return dhcpns.SupportedOperations
 }
 func (n *fakeNamespace) TryAcquire() (nscore.Resource, nscore.Progress, error) {
@@ -51,7 +58,7 @@ func (n *fakeNamespace) TryAcquire() (nscore.Resource, nscore.Progress, error) {
 	if progress == 0 {
 		progress = nscore.ProgressInProgress
 	}
-	return n.lease, progress, nil
+	return n.lease, progress, n.failure
 }
 
 type fakeLease struct {
@@ -125,6 +132,67 @@ func TestResultBindingChecksMemoryAndEncodesReadyConfiguration(t *testing.T) {
 	if ready.status != guest.StatusOK || binary.LittleEndian.Uint32(host.memory[:4]) != configuration.TransactionID ||
 		host.memory[dhcpabi.ConfigurationV1Size-1] != 0 {
 		t.Fatalf("ready result = %v xid=%x", ready.status, binary.LittleEndian.Uint32(host.memory[:4]))
+	}
+}
+
+func TestBindingsPreserveFixedOutputsOnBackendAndOperationFailures(t *testing.T) {
+	lease := &fakeLease{result: dhcpns.ResultWouldBlock}
+	backend := &fakeNamespace{lease: lease}
+	manager, instance := attachManager(t, backend)
+	defer manager.Detach(instance)
+	host := testHost{instance: instance, memory: bytes.Repeat([]byte{0xa5}, 4096)}
+	bindings := Bindings(plugin.NewHost(manager))
+	state, ok := manager.ForInstance(instance)
+	if !ok {
+		t.Fatal("attached state missing")
+	}
+	namespaceHandle := state.NamespaceHandle()
+
+	operationsPtr := uint64(256)
+	operationsBefore := append([]byte(nil), host.memory[operationsPtr:operationsPtr+uint64(dhcpabi.OperationsV1Size)]...)
+	backend.operationsConfigured = true
+	backend.operations = dhcpns.SupportedOperations | dhcpns.Operations(1<<31)
+	if status := callBinding(t, bindingByName(t, bindings, "operations"), host, uint64(namespaceHandle), operationsPtr).status; status != guest.StatusIO || !bytes.Equal(host.memory[operationsPtr:operationsPtr+uint64(dhcpabi.OperationsV1Size)], operationsBefore) {
+		t.Fatalf("malformed operations = %v", status)
+	}
+	backend.operations = 0
+	if status := callBinding(t, bindingByName(t, bindings, "operations"), host, uint64(namespaceHandle), operationsPtr).status; status != guest.StatusNotSupported || !bytes.Equal(host.memory[operationsPtr:operationsPtr+uint64(dhcpabi.OperationsV1Size)], operationsBefore) {
+		t.Fatalf("unsupported operations = %v", status)
+	}
+	backend.operations = dhcpns.SupportedOperations
+	if status := callBinding(t, bindingByName(t, bindings, "operations"), host, uint64(namespaceHandle), operationsPtr).status; status != guest.StatusOK || binary.LittleEndian.Uint32(host.memory[operationsPtr:operationsPtr+4]) != uint32(dhcpns.SupportedOperations) {
+		t.Fatalf("supported operations = %v", status)
+	}
+
+	startPtr := uint64(320)
+	startBefore := append([]byte(nil), host.memory[startPtr:startPtr+8]...)
+	callsBefore := backend.calls
+	if status := callBinding(t, bindingByName(t, bindings, "start"), host, uint64(namespaceHandle), uint64(dhcpns.OperationRenew), startPtr).status; status != guest.StatusNotSupported || backend.calls != callsBefore || !bytes.Equal(host.memory[startPtr:startPtr+8], startBefore) {
+		t.Fatalf("unsupported start = %v calls=%d", status, backend.calls)
+	}
+	failed := &fakeLease{}
+	backend.lease = failed
+	backend.failure = nscore.Fail(nscore.FailureTemporary, errors.New("start failed"))
+	if status := callBinding(t, bindingByName(t, bindings, "start"), host, uint64(namespaceHandle), uint64(dhcpns.OperationAcquire), startPtr).status; status != guest.StatusTemporaryFailure || failed.closeCalls != 1 || !bytes.Equal(host.memory[startPtr:startPtr+8], startBefore) {
+		t.Fatalf("failed start = %v closes=%d", status, failed.closeCalls)
+	}
+
+	backend.failure = nil
+	backend.lease = lease
+	if status := callBinding(t, bindingByName(t, bindings, "start"), host, uint64(namespaceHandle), uint64(dhcpns.OperationAcquire), startPtr).status; status != guest.StatusInProgress {
+		t.Fatalf("valid start = %v", status)
+	}
+	leaseHandle := binary.LittleEndian.Uint64(host.memory[startPtr : startPtr+8])
+	resultPtr := uint64(512)
+	resultBefore := append([]byte(nil), host.memory[resultPtr:resultPtr+uint64(dhcpabi.ConfigurationV1Size)]...)
+	lease.failure = nscore.Fail(nscore.FailureCanceled, errors.New("result canceled"))
+	if status := callBinding(t, bindingByName(t, bindings, "result"), host, leaseHandle, resultPtr).status; status != guest.StatusCanceled || !bytes.Equal(host.memory[resultPtr:resultPtr+uint64(dhcpabi.ConfigurationV1Size)], resultBefore) {
+		t.Fatalf("failed result = %v", status)
+	}
+	lease.failure = nil
+	lease.result = 99
+	if status := callBinding(t, bindingByName(t, bindings, "result"), host, leaseHandle, resultPtr).status; status != guest.StatusIO || !bytes.Equal(host.memory[resultPtr:resultPtr+uint64(dhcpabi.ConfigurationV1Size)], resultBefore) {
+		t.Fatalf("malformed result = %v", status)
 	}
 }
 
