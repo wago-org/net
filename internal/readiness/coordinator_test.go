@@ -472,6 +472,54 @@ func TestServiceFailuresPreserveCursorsForDeterministicRetry(t *testing.T) {
 	}
 }
 
+func TestInvalidReadinessAfterServicePreservesCursorsForDeterministicRetry(t *testing.T) {
+	table := newTable(t)
+	coordinator := newCoordinator(t, table, Config{MaxRegistrations: 2})
+	first := new(testService)
+	first.ready = namespace.Readiness(1 << 31)
+	second := &testService{work: true}
+	firstHandle := addAndRegister(t, table, coordinator, resource.KindNamespace, first)
+	secondHandle := addAndRegister(t, table, coordinator, resource.KindNamespace, second)
+	budget := Budget{
+		Scans: 2, Events: 2, ServiceAttempts: 1,
+		Service: namespace.ServiceBudget{Packets: 1, Bytes: 64, Operations: 1},
+	}
+	events := make([]Event, 2)
+
+	for attempt := int32(1); attempt <= 2; attempt++ {
+		report, progress, err := coordinator.TryPoll(events, budget)
+		if failure, ok := namespace.FailureOf(err); !ok || failure != namespace.FailureIO || !errors.Is(err, ErrInvalidRegistration) || progress != namespace.ProgressWouldBlock || report != (Report{Scanned: 1, ServiceAttempts: 1}) {
+			t.Fatalf("invalid readiness poll %d = %+v, %v, %v", attempt, report, progress, err)
+		}
+		if first.attempts.Load() != attempt || second.attempts.Load() != 0 {
+			t.Fatalf("invalid readiness attempts %d = %d/%d", attempt, first.attempts.Load(), second.attempts.Load())
+		}
+		coordinator.mu.Lock()
+		cursor, serviceCursor := coordinator.cursor, coordinator.serviceCursor
+		coordinator.mu.Unlock()
+		if cursor != 0 || serviceCursor != 0 {
+			t.Fatalf("invalid readiness cursors %d = %d/%d", attempt, cursor, serviceCursor)
+		}
+	}
+
+	first.mu.Lock()
+	first.ready = 0
+	first.mu.Unlock()
+	first.work = true
+	report, progress, err := coordinator.TryPoll(events, budget)
+	if err != nil || progress != namespace.ProgressDone || report != (Report{Scanned: 2, Events: 1, ServiceAttempts: 1, ServiceCompleted: 1}) || events[0] != (Event{Handle: firstHandle, Readiness: namespace.ReadyReadable}) {
+		t.Fatalf("recovered first poll = %+v, %v, %v, events=%+v", report, progress, err, events)
+	}
+	clear(events)
+	report, progress, err = coordinator.TryPoll(events, budget)
+	if err != nil || progress != namespace.ProgressDone || report != (Report{Scanned: 2, Events: 2, ServiceAttempts: 1, ServiceCompleted: 1}) || events[0] != (Event{Handle: firstHandle, Readiness: namespace.ReadyReadable}) || events[1] != (Event{Handle: secondHandle, Readiness: namespace.ReadyReadable}) {
+		t.Fatalf("recovered rotation poll = %+v, %v, %v, events=%+v", report, progress, err, events)
+	}
+	if first.attempts.Load() != 3 || second.attempts.Load() != 1 {
+		t.Fatalf("recovered attempts = %d/%d", first.attempts.Load(), second.attempts.Load())
+	}
+}
+
 func TestCoordinatorRejectsInvalidBackendServiceResults(t *testing.T) {
 	table := newTable(t)
 	coordinator := newCoordinator(t, table, Config{MaxRegistrations: 1})

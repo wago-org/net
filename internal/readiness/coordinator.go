@@ -214,7 +214,8 @@ func (c *Coordinator) TryPoll(events []Event, budget Budget) (Report, nscore.Pro
 			continue
 		}
 
-		if report.ServiceAttempts < budget.ServiceAttempts && c.cursor == c.serviceCursor {
+		advanceService := report.ServiceAttempts < budget.ServiceAttempts && c.cursor == c.serviceCursor
+		if advanceService {
 			if service, ok := value.(serviceable); ok {
 				report.ServiceAttempts++
 				serviceReport, progress, serviceErr := service.TryService(budget.Service)
@@ -228,12 +229,14 @@ func (c *Coordinator) TryPoll(events []Event, budget Budget) (Report, nscore.Pro
 					report.ServiceCompleted++
 				}
 			}
-			c.advanceServiceCursor()
 		}
 
 		ready := pollable.Readiness()
 		if !ready.Valid() {
 			return report, pollProgress(report), nscore.Fail(nscore.FailureIO, ErrInvalidRegistration)
+		}
+		if advanceService {
+			c.advanceServiceCursor()
 		}
 		c.advanceCursor()
 		if ready != 0 {
