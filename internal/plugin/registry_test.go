@@ -2,6 +2,7 @@ package plugin
 
 import (
 	"errors"
+	"runtime"
 	"testing"
 
 	instancecore "github.com/wago-org/net/internal/instance/core"
@@ -158,6 +159,31 @@ func TestHostFacadeResolvesOnlyExactAttachedInstances(t *testing.T) {
 	}
 }
 
+func TestHostFacadeExactAttachedLookupDoesNotAllocate(t *testing.T) {
+	if runtime.Compiler == "tinygo" {
+		return
+	}
+	manager := instancecore.NewManager()
+	instance := new(wago.Instance)
+	if err := manager.Attach(instance); err != nil {
+		t.Fatal(err)
+	}
+	defer manager.Detach(instance)
+	host := NewHost(manager)
+	var module wago.HostModule = exactHostModule{instance: instance}
+	var state *instancecore.State
+	var found bool
+	allocs := testing.AllocsPerRun(1000, func() {
+		state, found = host.State(module)
+	})
+	if allocs != 0 {
+		t.Fatalf("Host.State allocations = %v, want 0", allocs)
+	}
+	if !found || state == nil {
+		t.Fatal("exact attached instance did not resolve")
+	}
+}
+
 func TestModuleInstallForwardsExactHostFacade(t *testing.T) {
 	manager := instancecore.NewManager()
 	host := NewHost(manager)
@@ -171,6 +197,40 @@ func TestModuleInstallForwardsExactHostFacade(t *testing.T) {
 	module.Install(new(wago.Registry), host)
 	if !called {
 		t.Fatal("module installer was not called")
+	}
+}
+
+func BenchmarkHostStateAttached(b *testing.B) {
+	manager := instancecore.NewManager()
+	instance := new(wago.Instance)
+	if err := manager.Attach(instance); err != nil {
+		b.Fatal(err)
+	}
+	defer manager.Detach(instance)
+	host := NewHost(manager)
+	var module wago.HostModule = exactHostModule{instance: instance}
+	var state *instancecore.State
+	var found bool
+	b.ReportAllocs()
+	for b.Loop() {
+		state, found = host.State(module)
+	}
+	if !found || state == nil {
+		b.Fatal("exact attached instance did not resolve")
+	}
+}
+
+func BenchmarkHostStateUnattached(b *testing.B) {
+	host := NewHost(instancecore.NewManager())
+	var module wago.HostModule = exactHostModule{instance: new(wago.Instance)}
+	var state *instancecore.State
+	var found bool
+	b.ReportAllocs()
+	for b.Loop() {
+		state, found = host.State(module)
+	}
+	if found || state != nil {
+		b.Fatal("unattached instance resolved")
 	}
 }
 

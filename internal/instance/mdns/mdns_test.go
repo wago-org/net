@@ -3,6 +3,7 @@ package mdns
 import (
 	"errors"
 	"net/netip"
+	"runtime"
 	"testing"
 
 	instancecore "github.com/wago-org/net/internal/instance/core"
@@ -297,6 +298,49 @@ func TestInstanceMDNSReadinessRegistrationFailureRollsBackResource(t *testing.T)
 	}
 }
 
+func TestInstanceMDNSSteadyStateOperationsDoNotAllocate(t *testing.T) {
+	if runtime.Compiler == "tinygo" {
+		return
+	}
+	query := &fakeQuery{
+		record: mdnsns.Record{
+			Name: "host.local", Type: mdnsns.RecordA, TTLSeconds: 120,
+			Address: netip.MustParseAddr("192.0.2.10"),
+		},
+		next: mdnsns.NextReady,
+	}
+	announcement := &fakeAnnouncement{next: mdnsns.NextReady}
+	backend := &fakeNamespace{
+		query: query, queryProgress: nscore.ProgressInProgress,
+		announcement: announcement, announceProgress: nscore.ProgressInProgress,
+	}
+	state, manager, instance := attachState(t, backend, 8)
+	defer manager.Detach(instance)
+	queryHandle, _, err := Query(state, state.NamespaceHandle(), mdnsns.Request{Name: "host.local", Types: mdnsns.RecordsA})
+	if err != nil {
+		t.Fatal(err)
+	}
+	announcementHandle, _, err := Announce(state, state.NamespaceHandle(), 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, test := range []struct {
+		name string
+		call func()
+	}{
+		{name: "next", call: func() { _, _, _ = Next(state, queryHandle) }},
+		{name: "cancel query", call: func() { query.canceled = false; _ = CancelQuery(state, queryHandle) }},
+		{name: "finish announcement", call: func() { _, _ = FinishAnnouncement(state, announcementHandle) }},
+		{name: "cancel announcement", call: func() { announcement.canceled = false; _ = CancelAnnouncement(state, announcementHandle) }},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			if allocs := testing.AllocsPerRun(1000, test.call); allocs != 0 {
+				t.Fatalf("allocations = %v, want 0", allocs)
+			}
+		})
+	}
+}
+
 func TestInstanceMDNSCancelIsKindAndGenerationSafe(t *testing.T) {
 	query := new(fakeQuery)
 	announcement := new(fakeAnnouncement)
@@ -349,6 +393,65 @@ func TestInstanceMDNSCancelIsKindAndGenerationSafe(t *testing.T) {
 	if query.canceled {
 		t.Fatal("closed stale query was canceled")
 	}
+}
+
+func BenchmarkInstanceMDNSOperations(b *testing.B) {
+	query := &fakeQuery{
+		record: mdnsns.Record{
+			Name: "host.local", Type: mdnsns.RecordA, TTLSeconds: 120,
+			Address: netip.MustParseAddr("192.0.2.10"),
+		},
+		next: mdnsns.NextReady,
+	}
+	announcement := &fakeAnnouncement{next: mdnsns.NextReady}
+	backend := &fakeNamespace{
+		query: query, queryProgress: nscore.ProgressInProgress,
+		announcement: announcement, announceProgress: nscore.ProgressInProgress,
+	}
+	state, manager, instance := attachState(b, backend, 8)
+	defer manager.Detach(instance)
+	queryHandle, _, err := Query(state, state.NamespaceHandle(), mdnsns.Request{Name: "host.local", Types: mdnsns.RecordsA})
+	if err != nil {
+		b.Fatal(err)
+	}
+	announcementHandle, _, err := Announce(state, state.NamespaceHandle(), 0)
+	if err != nil {
+		b.Fatal(err)
+	}
+	b.Run("Next", func(b *testing.B) {
+		b.ReportAllocs()
+		for b.Loop() {
+			if _, next, err := Next(state, queryHandle); err != nil || next != mdnsns.NextReady {
+				b.Fatalf("Next = %v, %v", next, err)
+			}
+		}
+	})
+	b.Run("CancelQuery", func(b *testing.B) {
+		b.ReportAllocs()
+		for b.Loop() {
+			query.canceled = false
+			if err := CancelQuery(state, queryHandle); err != nil {
+				b.Fatal(err)
+			}
+		}
+	})
+	b.Run("FinishAnnouncement", func(b *testing.B) {
+		b.ReportAllocs()
+		for b.Loop() {
+			if next, err := FinishAnnouncement(state, announcementHandle); err != nil || next != mdnsns.NextReady {
+				b.Fatalf("FinishAnnouncement = %v, %v", next, err)
+			}
+		}
+	})
+	b.Run("CancelAnnouncement", func(b *testing.B) {
+		b.ReportAllocs()
+		for b.Loop() {
+			announcement.canceled = false
+			if err := CancelAnnouncement(state, announcementHandle); err != nil {
+				b.Fatal(err)
+			}
+		}
+	})
 }
 
 func attachState(t testing.TB, backend mdnsns.Namespace, maxRegistrations int) (*instancecore.State, *instancecore.Manager, *wago.Instance) {

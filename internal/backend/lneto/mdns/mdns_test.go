@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net"
 	"net/netip"
+	"runtime"
 	"testing"
 
 	lneto "github.com/soypat/lneto"
@@ -327,6 +328,71 @@ func TestMDNSCancelRetiresWorkBeforeTerminalReadinessAndIgnoresLateResponses(t *
 		t.Fatalf("replacement query after exact close = %v", err)
 	}
 	if err := replacement.Close(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestMDNSCanceledTerminalAndIdempotentCloseDoNotAllocate(t *testing.T) {
+	if runtime.Compiler == "tinygo" {
+		return
+	}
+	service := testService("device", "192.0.2.11")
+	core, adapter, _ := newTestAdapter(t, Config{
+		Services: []mdnsns.Service{service}, MaxServices: 1, MaxQueries: 1, MaxAnnouncements: 1,
+		MaxRecords: 8, MaxPacketBytes: 1200, MaxQueuedResponses: 1, MaxQuestionsPerPacket: 4,
+		MaxRecordsPerPacket: 16, MaxAttempts: 2, RetryServiceAttempts: 2,
+	}, testPolicy())
+	queryResource, _, err := adapter.TryQuery(mdnsns.Request{Name: "peer.local", Types: mdnsns.RecordsA})
+	if err != nil {
+		t.Fatal(err)
+	}
+	announcementResource, _, err := adapter.TryAnnounce(0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	query := queryResource.(*query)
+	announcement := announcementResource.(*announcement)
+	if err := query.Cancel(); err != nil {
+		t.Fatal(err)
+	}
+	if err := announcement.Cancel(); err != nil {
+		t.Fatal(err)
+	}
+	for _, test := range []struct {
+		name string
+		call func()
+	}{
+		{name: "query readiness", call: func() { _ = query.Readiness() }},
+		{name: "query terminal result", call: func() { _, _, _ = query.TryNext() }},
+		{name: "announcement readiness", call: func() { _ = announcement.Readiness() }},
+		{name: "announcement terminal result", call: func() { _, _ = announcement.TryFinish() }},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			if allocs := testing.AllocsPerRun(1000, test.call); allocs != 0 {
+				t.Fatalf("allocations = %v, want 0", allocs)
+			}
+		})
+	}
+	if err := query.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := announcement.Close(); err != nil {
+		t.Fatal(err)
+	}
+	for _, test := range []struct {
+		name string
+		call func()
+	}{
+		{name: "query repeated close", call: func() { _ = query.Close() }},
+		{name: "announcement repeated close", call: func() { _ = announcement.Close() }},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			if allocs := testing.AllocsPerRun(1000, test.call); allocs != 0 {
+				t.Fatalf("allocations = %v, want 0", allocs)
+			}
+		})
+	}
+	if err := core.Close(); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -1670,6 +1736,76 @@ func resourceOfType(t testing.TB, service mdnsns.Service, typ lnetodns.Type) lne
 func resourceWithHeader(t testing.TB, source lnetodns.Resource, name lnetodns.Name, typ lnetodns.Type, class lnetodns.Class, ttl uint32) lnetodns.Resource {
 	t.Helper()
 	return lnetodns.NewResource(name, typ, class, ttl, append([]byte(nil), source.RawData()...))
+}
+
+func BenchmarkMDNSCancelClose(b *testing.B) {
+	service := testService("device", "192.0.2.11")
+	_, adapter, _ := newTestAdapter(b, Config{
+		Services: []mdnsns.Service{service}, MaxServices: 1, MaxQueries: 1, MaxAnnouncements: 1,
+		MaxRecords: 8, MaxPacketBytes: 1200, MaxQueuedResponses: 1, MaxQuestionsPerPacket: 4,
+		MaxRecordsPerPacket: 16, MaxAttempts: 2, RetryServiceAttempts: 2,
+	}, testPolicy())
+	b.Run("Query", func(b *testing.B) {
+		b.ReportAllocs()
+		for b.Loop() {
+			value, _, err := adapter.TryQuery(mdnsns.Request{Name: "peer.local", Types: mdnsns.RecordsA})
+			if err != nil {
+				b.Fatal(err)
+			}
+			query := value.(*query)
+			if err := query.Cancel(); err != nil {
+				b.Fatal(err)
+			}
+			if err := query.Close(); err != nil {
+				b.Fatal(err)
+			}
+		}
+	})
+	b.Run("Announcement", func(b *testing.B) {
+		b.ReportAllocs()
+		for b.Loop() {
+			value, _, err := adapter.TryAnnounce(0)
+			if err != nil {
+				b.Fatal(err)
+			}
+			announcement := value.(*announcement)
+			if err := announcement.Cancel(); err != nil {
+				b.Fatal(err)
+			}
+			if err := announcement.Close(); err != nil {
+				b.Fatal(err)
+			}
+		}
+	})
+}
+
+func BenchmarkMDNSCanceledTerminal(b *testing.B) {
+	core, adapter, _ := newTestAdapter(b, queryOnlyConfig(), testPolicy())
+	value, _, err := adapter.TryQuery(mdnsns.Request{Name: "peer.local", Types: mdnsns.RecordsA})
+	if err != nil {
+		b.Fatal(err)
+	}
+	query := value.(*query)
+	if err := query.Cancel(); err != nil {
+		b.Fatal(err)
+	}
+	defer core.Close()
+	b.Run("Readiness", func(b *testing.B) {
+		b.ReportAllocs()
+		for b.Loop() {
+			if got := query.Readiness(); got != nscore.ReadyError {
+				b.Fatalf("Readiness = %v", got)
+			}
+		}
+	})
+	b.Run("TryNext", func(b *testing.B) {
+		b.ReportAllocs()
+		for b.Loop() {
+			if _, _, err := query.TryNext(); failureOf(b, err) != nscore.FailureCanceled {
+				b.Fatalf("TryNext = %v", err)
+			}
+		}
+	})
 }
 
 func BenchmarkIngressQueryResponse(b *testing.B) {
