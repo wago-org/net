@@ -687,6 +687,9 @@ func (a *Adapter) clientLeaseLocked(r *leaseResource) (dhcpns.Lease, bool) {
 }
 
 func inspectPacket(frame lnetodhcp.Frame) (lnetodhcp.MessageType, netip.Addr, int, bool) {
+	if !completeOptionEnvelope(frame.OptionsPayload()) {
+		return 0, netip.Addr{}, 0, false
+	}
 	var message lnetodhcp.MessageType
 	var server netip.Addr
 	var dnsCount int
@@ -734,6 +737,30 @@ func inspectPacket(frame lnetodhcp.Frame) (lnetodhcp.MessageType, netip.Addr, in
 		return nil
 	})
 	return message, server, dnsCount, err == nil && messageSeen && message != 0
+}
+
+func completeOptionEnvelope(options []byte) bool {
+	if len(options) == 0 {
+		return false
+	}
+	for offset := 0; offset < len(options); {
+		switch lnetodhcp.OptNum(options[offset]) {
+		case lnetodhcp.OptEnd:
+			return true
+		case lnetodhcp.OptWordAligned:
+			offset++
+			continue
+		}
+		if offset+1 >= len(options) {
+			return false
+		}
+		next := offset + 2 + int(options[offset+1])
+		if next > len(options) {
+			return false
+		}
+		offset = next
+	}
+	return true
 }
 
 func containsInvalidAdvertisedIPv4(data []byte) bool {

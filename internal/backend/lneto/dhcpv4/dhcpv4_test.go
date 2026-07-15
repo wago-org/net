@@ -289,6 +289,27 @@ func TestClientDropsMalformedLeaseOptionShapesBeforePinnedMutation(t *testing.T)
 	}
 }
 
+func TestClientDropsTruncatedFinalOptionBeforePinnedMutation(t *testing.T) {
+	clientCore, client := newClient(t, false)
+	serverCore, _ := newServer(t, 1)
+	resource, progress, err := client.TryAcquire(dhcpns.Request{})
+	if err != nil || progress != nscore.ProgressInProgress {
+		t.Fatalf("acquire = %T, %v, %v", resource, progress, err)
+	}
+	lease := resource.(*leaseResource)
+	transferOne(t, clientCore, serverCore)
+	offer := serviceEgress(t, serverCore)
+
+	serviceIngress(t, clientCore, truncateDHCPEndToOption(t, offer))
+	if lease.state != leaseWaitOffer || lease.wait != client.config.ResponseServiceAttempts || lease.Readiness() != 0 {
+		t.Fatalf("truncated final option mutated lease: state=%v wait=%d readiness=%v", lease.state, lease.wait, lease.Readiness())
+	}
+	serviceIngress(t, clientCore, offer)
+	if lease.state != leaseRequest || lease.wait != 0 {
+		t.Fatalf("valid offer after truncated option = state:%v wait:%d", lease.state, lease.wait)
+	}
+}
+
 func TestPacketInspectionPreservesValidMultiAddressOptionsAndDirectedBroadcast(t *testing.T) {
 	clientCore, client := newClient(t, false)
 	serverCore, _ := newServer(t, 1)
@@ -1099,6 +1120,58 @@ func shortenUDPDatagram(t testing.TB, frame []byte, bytes uint16) []byte {
 
 func appendLinkPadding(frame []byte) []byte {
 	return append(append([]byte(nil), frame...), 0xa5, 0x5a, 0xc3)
+}
+
+func truncateDHCPEndToOption(t testing.TB, frame []byte) []byte {
+	t.Helper()
+	frame = append([]byte(nil), frame...)
+	eth, err := ethernet.NewFrame(frame)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ip, err := ipv4.NewFrame(eth.Payload())
+	if err != nil {
+		t.Fatal(err)
+	}
+	udp, err := lnetoudp.NewFrame(ip.Payload())
+	if err != nil {
+		t.Fatal(err)
+	}
+	dhcp, err := lnetodhcp.NewFrame(udp.Payload())
+	if err != nil {
+		t.Fatal(err)
+	}
+	options := dhcp.OptionsPayload()
+	end := -1
+	for offset := 0; offset < len(options); {
+		switch lnetodhcp.OptNum(options[offset]) {
+		case lnetodhcp.OptWordAligned:
+			offset++
+		case lnetodhcp.OptEnd:
+			end = offset
+			offset = len(options)
+		default:
+			if offset+1 >= len(options) {
+				t.Fatal("fixture has truncated DHCP option")
+			}
+			offset += 2 + int(options[offset+1])
+		}
+	}
+	if end < 0 {
+		t.Fatal("fixture has no DHCP end option")
+	}
+	options[end] = byte(lnetodhcp.OptParameterRequestList)
+	payloadBytes := lnetodhcp.OptionsOffset + end + 1
+	udpLength := uint16(8 + payloadBytes)
+	udp.SetLength(udpLength)
+	ip.SetTotalLength(uint16(ip.HeaderLength()) + udpLength)
+	ip.SetCRC(0)
+	ip.SetCRC(ip.CalculateHeaderCRC())
+	udp.SetCRC(0)
+	var checksum lneto.CRC791
+	ip.CRCWriteUDPPseudo(&checksum, udpLength)
+	udp.SetCRC(lneto.NeverZeroSum(checksum.PayloadSum16(udp.RawData()[:udpLength])))
+	return frame[:14+int(ip.TotalLength())]
 }
 
 func rewriteDHCPMessageType(t testing.TB, frame []byte, message lnetodhcp.MessageType) []byte {
