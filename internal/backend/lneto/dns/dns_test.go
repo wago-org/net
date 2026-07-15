@@ -745,11 +745,20 @@ func TestDNSTerminalCompletionRetiresTransportAndIgnoresLateResponses(t *testing
 	if reused.localPort != localPort {
 		t.Fatalf("reused local port = %d, want %d", reused.localPort, localPort)
 	}
+	serviceDNSIngressFrame(t, ns, buildDNSResponseFrameWithRecords(t, config, txid, localPort, request.Name, []namespace.DNSRecord{{
+		Name: "example.com", Type: namespace.DNSRecordA, TTLSeconds: 1, Address: netip.MustParseAddr("192.0.2.7"),
+	}}))
+	if reused.state != dnsQueryPending || reused.Readiness() != 0 || len(reused.records) != 0 || ns.adapter.byPort[localPort] != reused {
+		t.Fatalf("late reused-port response mutated fresh query: state=%v readiness=%v records=%d mapped=%v", reused.state, reused.Readiness(), len(reused.records), ns.adapter.byPort[localPort] == reused)
+	}
 	if err := query.Close(); err != nil {
 		t.Fatal(err)
 	}
 	if err := query.Close(); err != nil {
 		t.Fatalf("second close = %v", err)
+	}
+	if ns.adapter.byPort[localPort] != reused {
+		t.Fatalf("stale close disturbed fresh query: mapped=%p", ns.adapter.byPort[localPort])
 	}
 	if err := reused.Close(); err != nil {
 		t.Fatal(err)
