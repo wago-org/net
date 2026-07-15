@@ -239,6 +239,11 @@ func TestNeighborResultsClearInvalidBackendOutputs(t *testing.T) {
 	}
 
 	resolution.failure = nil
+	resolution.next = icmpns.NextWouldBlock
+	if got, next, err := NeighborResult(state, handle); err != nil || got != (icmpns.Neighbor{}) || next != icmpns.NextWouldBlock {
+		t.Fatalf("would-block resolution output = %+v, %v, %v", got, next, err)
+	}
+	resolution.next = icmpns.NextReady
 	resolution.neighbor = icmpns.Neighbor{}
 	if got, next, err := NeighborResult(state, handle); failureOf(err) != nscore.FailureIO || got != (icmpns.Neighbor{}) || next != 0 {
 		t.Fatalf("invalid resolution output = %+v, %v, %v", got, next, err)

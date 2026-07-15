@@ -153,11 +153,15 @@ func NeighborResult(state *core.State, handle resource.Handle) (result icmpns.Ne
 			result, next = icmpns.Neighbor{}, 0
 			return err
 		}
-		if next == icmpns.NextReady && !result.Valid() {
-			result, next = icmpns.Neighbor{}, 0
-			return nscore.Fail(nscore.FailureIO, core.ErrInvalidBackendResult)
-		}
-		if next != icmpns.NextReady && next != icmpns.NextWouldBlock {
+		switch next {
+		case icmpns.NextReady:
+			if !result.Valid() {
+				result, next = icmpns.Neighbor{}, 0
+				return nscore.Fail(nscore.FailureIO, core.ErrInvalidBackendResult)
+			}
+		case icmpns.NextWouldBlock:
+			result = icmpns.Neighbor{}
+		default:
 			result, next = icmpns.Neighbor{}, 0
 			return nscore.Fail(nscore.FailureIO, core.ErrInvalidBackendResult)
 		}
