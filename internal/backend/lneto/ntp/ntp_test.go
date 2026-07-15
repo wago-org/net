@@ -435,6 +435,129 @@ func TestNTPMalformedTransportCannotRetireCorrelatedSynchronization(t *testing.T
 	}
 }
 
+func FuzzNTPOwnedResponseLifecycle(f *testing.F) {
+	f.Add(false, false, []byte(nil))
+	f.Add(true, false, make([]byte, lnetontp.SizeHeader))
+	f.Add(true, true, make([]byte, lnetontp.SizeHeader-1))
+	f.Add(true, true, make([]byte, lnetontp.SizeHeader+1))
+	f.Fuzz(func(t *testing.T, exactPorts, exactOrigin bool, payload []byte) {
+		if len(payload) > 96 {
+			payload = payload[:96]
+		}
+		clock := &manualClock{now: time.Date(2026, 7, 14, 12, 0, 0, 0, time.UTC)}
+		core, adapter, account := newTestAdapter(t, clock, Config{
+			Server: netip.MustParseAddr("192.0.2.123"), Clock: clock, MaxSyncs: 1,
+			MaxAttempts: 1, RetryServiceAttempts: 2, Precision: -20,
+		})
+		resource, progress, err := adapter.TrySync()
+		if err != nil || progress != nscore.ProgressInProgress {
+			t.Fatalf("TrySync = %T, %v, %v", resource, progress, err)
+		}
+		sync := resource.(*syncResource)
+		request := serviceEgress(t, core)
+		response, arrival := makeNTPResponse(t, request, 100*time.Millisecond, 20*time.Millisecond)
+		clock.now = arrival
+		port := sync.portLease.UDPPort()
+
+		frame := make([]byte, 14+20+8+len(payload))
+		copy(frame[:14+20+8], response[:14+20+8])
+		copy(frame[14+20+8:], payload)
+		ipFrame := ipv4Payload(t, frame)
+		ipFrame.SetTotalLength(uint16(20 + 8 + len(payload)))
+		ipFrame.SetCRC(0)
+		ipFrame.SetCRC(ipFrame.CalculateHeaderCRC())
+		udpFrame := udpPayload(t, frame)
+		udpFrame.SetLength(uint16(8 + len(payload)))
+		if !exactPorts {
+			udpFrame.SetDestinationPort(port + 1)
+		}
+		if len(payload) >= lnetontp.SizeHeader {
+			ntpFrame, err := lnetontp.NewFrame(udpFrame.Payload())
+			if err != nil {
+				t.Fatal(err)
+			}
+			origin := lnetontp.TimestampFromUint64(1)
+			if exactOrigin {
+				origin = ntpPayload(t, request).TransmitTime()
+			}
+			ntpFrame.SetOriginTime(origin)
+		}
+		rechecksumUDP(t, frame)
+
+		before := append([]byte(nil), frame...)
+		requestBefore, clockBefore, callsBefore := sync.request, sync.clockSample, clock.calls
+		core.Lock()
+		handled, ingressErr := adapter.ingressLocked(frame)
+		core.Unlock()
+		if ingressErr != nil || handled != exactPorts {
+			t.Fatalf("ingress = handled %v, err %v; want handled %v", handled, ingressErr, exactPorts)
+		}
+		if !bytes.Equal(frame, before) {
+			t.Fatal("ingress mutated caller-owned frame")
+		}
+		if sync.request != requestBefore {
+			t.Fatal("ingress mutated retained request identity")
+		}
+		if !exactPorts || len(payload) < lnetontp.SizeHeader || !exactOrigin {
+			if sync.state != syncWaiting || sync.Readiness() != 0 || sync.clockSample != clockBefore || clock.calls != callsBefore || sync.sample != (ntpns.Sample{}) {
+				t.Fatalf("uncorrelated response mutated sync: state=%v readiness=%v clock_changed=%v calls=%d/%d sample=%+v", sync.state, sync.Readiness(), sync.clockSample != clockBefore, clock.calls, callsBefore, sync.sample)
+			}
+			if adapter.byPort[port] != sync || sync.portLease.UDPPort() != port {
+				t.Fatalf("uncorrelated response retired transport: mapped=%p port=%d", adapter.byPort[port], sync.portLease.UDPPort())
+			}
+			if usage, closed := account.Snapshot(); closed || usage != (quota.Usage{Resources: 1, NTPResources: 1, NTPWork: 1}) {
+				t.Fatalf("uncorrelated quota = %+v, closed=%v", usage, closed)
+			}
+		} else if len(payload) > lnetontp.SizeHeader {
+			if sync.state != syncFailed || sync.Readiness() != nscore.ReadyError || sync.portLease.UDPPort() != 0 || adapter.byPort[port] != nil {
+				t.Fatalf("oversized owned response lifecycle: state=%v readiness=%v port=%d mapped=%p", sync.state, sync.Readiness(), sync.portLease.UDPPort(), adapter.byPort[port])
+			}
+			if _, _, resultErr := sync.TryResult(); failureOf(t, resultErr) != nscore.FailureMessageTooLarge {
+				t.Fatalf("oversized owned response result = %v", resultErr)
+			}
+			if usage, closed := account.Snapshot(); closed || usage != (quota.Usage{Resources: 1, NTPResources: 1}) {
+				t.Fatalf("oversized terminal quota = %+v, closed=%v", usage, closed)
+			}
+		} else {
+			switch sync.state {
+			case syncWaiting, syncPrepare:
+				if sync.Readiness() != 0 || sync.portLease.UDPPort() != port || adapter.byPort[port] != sync {
+					t.Fatalf("live exact response lifecycle: state=%v readiness=%v port=%d mapped=%p", sync.state, sync.Readiness(), sync.portLease.UDPPort(), adapter.byPort[port])
+				}
+				if usage, closed := account.Snapshot(); closed || usage != (quota.Usage{Resources: 1, NTPResources: 1, NTPWork: 1}) {
+					t.Fatalf("live exact response quota = %+v, closed=%v", usage, closed)
+				}
+			case syncFailed:
+				if sync.Readiness() != nscore.ReadyError || sync.portLease.UDPPort() != 0 || adapter.byPort[port] != nil {
+					t.Fatalf("failed exact response lifecycle: readiness=%v port=%d mapped=%p", sync.Readiness(), sync.portLease.UDPPort(), adapter.byPort[port])
+				}
+				if usage, closed := account.Snapshot(); closed || usage != (quota.Usage{Resources: 1, NTPResources: 1}) {
+					t.Fatalf("failed exact response quota = %+v, closed=%v", usage, closed)
+				}
+			default:
+				t.Fatalf("exact first response reached invalid state %v", sync.state)
+			}
+		}
+
+		if err := sync.Close(); err != nil {
+			t.Fatal(err)
+		}
+		if sync.state != syncClosed || sync.Readiness() != nscore.ReadyClosed || sync.portLease.UDPPort() != 0 || adapter.byPort[port] != nil {
+			t.Fatalf("close lifecycle: state=%v readiness=%v port=%d mapped=%p", sync.state, sync.Readiness(), sync.portLease.UDPPort(), adapter.byPort[port])
+		}
+		if usage, closed := account.Snapshot(); usage != (quota.Usage{}) || closed {
+			t.Fatalf("close quota = %+v, closed=%v", usage, closed)
+		}
+		core.Lock()
+		handled, ingressErr = adapter.ingressLocked(frame)
+		leases := core.UDPPortLeaseCountLocked()
+		core.Unlock()
+		if ingressErr != nil || handled || leases != 0 {
+			t.Fatalf("late response after close = handled %v, err %v, leases %d", handled, ingressErr, leases)
+		}
+	})
+}
+
 func TestNTPIngressAcceptsIPv4OptionsAndIgnoresLinkPadding(t *testing.T) {
 	clock := &manualClock{now: time.Date(2026, 7, 14, 12, 0, 0, 0, time.UTC)}
 	core, adapter, _ := newTestAdapter(t, clock, Config{
