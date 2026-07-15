@@ -18,6 +18,7 @@ import (
 
 type fakeNamespace struct {
 	closed   atomic.Int32
+	closeErr error
 	socket   namespace.UDPSocket
 	listener namespace.TCPListener
 	stream   namespace.TCPStream
@@ -26,7 +27,7 @@ type fakeNamespace struct {
 
 func (n *fakeNamespace) Close() error {
 	n.closed.Add(1)
-	return nil
+	return n.closeErr
 }
 
 func (n *fakeNamespace) Readiness() namespace.Readiness { return namespace.ReadyWritable }
@@ -593,6 +594,99 @@ func TestConfiguredNamespacesAreQuotaOwnedIsolatedAndGenerationSafe(t *testing.T
 	}
 	if created[1].closed.Load() != 1 {
 		t.Fatalf("second backend close count = %d", created[1].closed.Load())
+	}
+}
+
+func TestNamespaceCloseErrorClearsRetiredHandleAndOwnership(t *testing.T) {
+	closeErr := errors.New("backend close failed")
+	backend := &fakeNamespace{closeErr: closeErr}
+	config := DefaultConfig()
+	config.Limits.Resources = 1
+	config.NamespaceFactory = func(*policy.Policy, *quota.Account) (nscore.Namespace, error) {
+		return backend, nil
+	}
+	manager, err := NewManagerConfigured(config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	instance := new(wago.Instance)
+	if err := manager.Attach(instance); err != nil {
+		t.Fatal(err)
+	}
+	state, ok := manager.ForInstance(instance)
+	if !ok {
+		t.Fatal("attached state missing")
+	}
+	handle := state.NamespaceHandle()
+	if err := state.CloseHandle(handle, resource.KindNamespace); !errors.Is(err, closeErr) {
+		t.Fatalf("CloseHandle error = %v, want backend close error", err)
+	}
+	if state.NamespaceHandle() != 0 {
+		t.Fatalf("namespace handle = %v, want zero", state.NamespaceHandle())
+	}
+	if _, err := state.Resources().Lookup(handle, resource.KindNamespace); !errors.Is(err, resource.ErrBadHandle) {
+		t.Fatalf("retired namespace lookup = %v, want ErrBadHandle", err)
+	}
+	if snapshot := state.Readiness().Snapshot(); snapshot.Registrations != 0 {
+		t.Fatalf("readiness after close = %+v", snapshot)
+	}
+	if usage, closed := state.Quotas().Snapshot(); closed || usage != (quota.Usage{}) {
+		t.Fatalf("quota after close usage=%+v closed=%v", usage, closed)
+	}
+	if backend.closed.Load() != 1 {
+		t.Fatalf("backend close count = %d, want 1", backend.closed.Load())
+	}
+	if err := state.CloseHandle(handle, resource.KindNamespace); !errors.Is(err, resource.ErrBadHandle) {
+		t.Fatalf("repeated CloseHandle error = %v, want ErrBadHandle", err)
+	}
+	if backend.closed.Load() != 1 {
+		t.Fatalf("repeated backend close count = %d, want 1", backend.closed.Load())
+	}
+	if err := manager.Detach(instance); err != nil {
+		t.Fatalf("Detach error = %v", err)
+	}
+}
+
+func TestWrongKindClosePreservesNamespaceHandle(t *testing.T) {
+	backend := new(fakeNamespace)
+	config := DefaultConfig()
+	config.Limits.Resources = 1
+	config.NamespaceFactory = func(*policy.Policy, *quota.Account) (nscore.Namespace, error) {
+		return backend, nil
+	}
+	manager, err := NewManagerConfigured(config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	instance := new(wago.Instance)
+	if err := manager.Attach(instance); err != nil {
+		t.Fatal(err)
+	}
+	state, ok := manager.ForInstance(instance)
+	if !ok {
+		t.Fatal("attached state missing")
+	}
+	handle := state.NamespaceHandle()
+	if err := state.CloseHandle(handle, resource.KindUDPSocket); !errors.Is(err, resource.ErrBadHandle) {
+		t.Fatalf("wrong-kind CloseHandle error = %v, want ErrBadHandle", err)
+	}
+	if state.NamespaceHandle() != handle {
+		t.Fatalf("namespace handle = %v, want %v", state.NamespaceHandle(), handle)
+	}
+	if state.Resources().Len() != 1 || state.Readiness().Snapshot().Registrations != 1 {
+		t.Fatalf("wrong-kind close mutated ownership: resources=%d readiness=%+v", state.Resources().Len(), state.Readiness().Snapshot())
+	}
+	if usage, closed := state.Quotas().Snapshot(); closed || usage.Resources != 1 {
+		t.Fatalf("wrong-kind close quota usage=%+v closed=%v", usage, closed)
+	}
+	if backend.closed.Load() != 0 {
+		t.Fatalf("wrong-kind backend close count = %d, want 0", backend.closed.Load())
+	}
+	if err := manager.Detach(instance); err != nil {
+		t.Fatal(err)
+	}
+	if backend.closed.Load() != 1 {
+		t.Fatalf("detach backend close count = %d, want 1", backend.closed.Load())
 	}
 }
 

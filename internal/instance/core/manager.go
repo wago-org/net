@@ -445,8 +445,15 @@ func (s *State) CloseHandle(handle resource.Handle, kind resource.Kind) error {
 	}
 	s.readiness.Unregister(handle)
 	err := s.resources.CloseHandle(handle, kind)
-	if err == nil && kind == resource.KindNamespace && handle == s.namespace {
-		s.namespace = 0
+	if kind == resource.KindNamespace && handle == s.namespace {
+		retired := err == nil
+		if !retired {
+			_, lookupErr := s.resources.Lookup(handle, kind)
+			retired = errors.Is(lookupErr, resource.ErrBadHandle)
+		}
+		if retired {
+			s.namespace = 0
+		}
 	}
 	return err
 }
