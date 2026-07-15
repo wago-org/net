@@ -498,6 +498,57 @@ func TestMaximumByteBudgetServicesIngressPortably(t *testing.T) {
 	}
 }
 
+func TestIngressParticipantErrorConsumesPacketAndLeavesOppositeDirectionServiceable(t *testing.T) {
+	ns := newTestNamespace(t, 37)
+	ingressErr := errors.New("ingress participant failed")
+	ingressCalls, egressCalls := 0, 0
+	if err := ns.Install(Participant{
+		Ingress: func(frame []byte) (bool, error) {
+			ingressCalls++
+			if len(frame) != 1 || frame[0] != 0x37 {
+				t.Fatalf("ingress frame = %x", frame)
+			}
+			return true, ingressErr
+		},
+		HasEgress: func() bool { return true },
+		Egress: func(frame []byte) (int, bool, error) {
+			egressCalls++
+			frame[0] = 0x73
+			return 1, true, nil
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := ns.Link().TryEnqueue(packetlink.Ingress, []byte{0x37}); err != nil {
+		t.Fatal(err)
+	}
+	ns.Lock()
+	ns.SetNextIngressLocked(true)
+	ns.Unlock()
+	budget := nscore.ServiceBudget{Packets: 1, Bytes: uint32(ns.Link().MaxFrameBytes()), Operations: 1}
+
+	report, progress, err := ns.TryService(budget)
+	if !errors.Is(err, ingressErr) || failureOf(err) != nscore.FailureIO || progress != nscore.ProgressDone || report != (nscore.ServiceReport{Packets: 1, Bytes: 1, Operations: 1}) {
+		t.Fatalf("failing ingress service = %+v, %v, %v", report, progress, err)
+	}
+	if ingressCalls != 1 || egressCalls != 0 {
+		t.Fatalf("callbacks after ingress error = ingress:%d egress:%d", ingressCalls, egressCalls)
+	}
+	if snapshot := ns.Link().Snapshot(); snapshot.IngressFrames != 0 || snapshot.EgressFrames != 0 {
+		t.Fatalf("queues after ingress error = %+v", snapshot)
+	}
+
+	report, progress, err = ns.TryService(budget)
+	if err != nil || progress != nscore.ProgressDone || report != (nscore.ServiceReport{Packets: 1, Bytes: 1, Operations: 1}) || ingressCalls != 1 || egressCalls != 1 {
+		t.Fatalf("opposite-direction retry = %+v, %v, %v ingress:%d egress:%d", report, progress, err, ingressCalls, egressCalls)
+	}
+	var frame [1]byte
+	result, err := ns.Link().TryDequeue(packetlink.Egress, frame[:])
+	if err != nil || !result.Ready || result.FrameBytes != 1 || frame[0] != 0x73 {
+		t.Fatalf("egress after ingress error = %+v, %v, frame=%x", result, err, frame)
+	}
+}
+
 func TestPacketServiceBudgetEdgesPreserveQueuedWorkAndAlternate(t *testing.T) {
 	t.Run("single operation calls alternate continuously ready directions", func(t *testing.T) {
 		ns := newTestNamespace(t, 36)
