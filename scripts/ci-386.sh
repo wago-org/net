@@ -2,28 +2,49 @@
 set -euo pipefail
 
 root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
+# shellcheck source=scripts/lib/ci-dependency-env.sh
+source "$root/scripts/lib/ci-dependency-env.sh"
+ci_select_dependency_workspace "$root"
 cd "$root"
 
 mapfile -t neutral_packages < <(
-  go list -json ./... | python3 -c '
+  go list -test -json ./... | python3 -c '
 import json
 import sys
 
 source = sys.stdin.read()
 decoder = json.JSONDecoder()
 offset = 0
+packages = []
 while offset < len(source):
     while offset < len(source) and source[offset].isspace():
         offset += 1
     if offset == len(source):
         break
     package, offset = decoder.raw_decode(source, offset)
-    dependencies = package.get("Deps", [])
+    packages.append(package)
+
+def depends_on_wago(package):
+    return any(
+        dep == "github.com/wago-org/wago" or dep.startswith("github.com/wago-org/wago/")
+        for dep in package.get("Deps", [])
+    )
+
+wago_test_packages = {
+    package["ForTest"]
+    for package in packages
+    if package.get("ForTest") and depends_on_wago(package)
+}
+for package in packages:
     import_path = package["ImportPath"]
+    if package.get("ForTest") or import_path.endswith(".test"):
+        continue
+    if not import_path.startswith("github.com/wago-org/net"):
+        continue
     if import_path == "github.com/wago-org/net/internal/dependencytest":
         # These meta-tests spawn `go list` for Wago-dependent fixture graphs.
         continue
-    if not any(dep == "github.com/wago-org/wago" or dep.startswith("github.com/wago-org/wago/") for dep in dependencies):
+    if not depends_on_wago(package) and import_path not in wago_test_packages:
         print(import_path)
 '
 )

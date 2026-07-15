@@ -2,6 +2,9 @@
 set -euo pipefail
 
 root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
+# shellcheck source=scripts/lib/ci-dependency-env.sh
+source "$root/scripts/lib/ci-dependency-env.sh"
+ci_select_dependency_workspace "$root"
 cd "$root"
 
 readonly checkptr_flag='all=-d=checkptr=2'
