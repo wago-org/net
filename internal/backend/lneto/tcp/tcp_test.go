@@ -594,6 +594,99 @@ func TestIPv4TCPHandshakeAcceptsOptionsAndLinkPadding(t *testing.T) {
 	}
 }
 
+func TestUnownedMalformedIPv4TCPFallsThroughWithoutListenerMutation(t *testing.T) {
+	clientCore, client := newTestAdapter(t, 53, 0, 1)
+	serverCore, server := newTestAdapter(t, 54, 1, 0)
+	setGateways(clientCore, [6]byte{0x02, 0, 0, 0, 0, 54})
+	setGateways(serverCore, [6]byte{0x02, 0, 0, 0, 0, 53})
+	endpoint := nscore.Endpoint{Address: netip.MustParseAddr("192.0.2.54"), Port: 4254}
+	listenerValue, progress, err := server.TryListen(endpoint)
+	if err != nil || progress != nscore.ProgressDone {
+		t.Fatalf("listen = %T, %v, %v", listenerValue, progress, err)
+	}
+	listener := listenerValue.(*tcpListener)
+	clientValue, progress, err := client.TryConnect(endpoint)
+	if err != nil || progress != nscore.ProgressInProgress {
+		t.Fatalf("connect = %T, %v, %v", clientValue, progress, err)
+	}
+	clientStream := clientValue.(*tcpStream)
+	validSYN := nextTCPFrame(t, clientCore)
+	usageBefore, closedBefore := server.quotas.Snapshot()
+
+	for _, test := range []struct {
+		name   string
+		mutate func(ipv4.Frame, lnetotcp.Frame)
+	}{
+		{name: "unowned bad checksum", mutate: func(_ ipv4.Frame, tcpFrame lnetotcp.Frame) {
+			tcpFrame.SetDestinationPort(endpoint.Port + 1)
+			tcpFrame.SetCRC(tcpFrame.CRC() ^ 1)
+		}},
+		{name: "unowned invalid header length", mutate: func(_ ipv4.Frame, tcpFrame lnetotcp.Frame) {
+			tcpFrame.SetDestinationPort(endpoint.Port + 1)
+			_, flags := tcpFrame.OffsetAndFlags()
+			tcpFrame.SetOffsetAndFlags(4, flags)
+		}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			malformed := append([]byte(nil), validSYN...)
+			ethernetFrame, err := ethernet.NewFrame(malformed)
+			if err != nil {
+				t.Fatal(err)
+			}
+			ipFrame, err := ipv4.NewFrame(ethernetFrame.Payload())
+			if err != nil {
+				t.Fatal(err)
+			}
+			tcpFrame, err := lnetotcp.NewFrame(ipFrame.Payload())
+			if err != nil {
+				t.Fatal(err)
+			}
+			test.mutate(ipFrame, tcpFrame)
+			serverCore.Lock()
+			handled, ingressErr := server.ingressLocked(malformed)
+			serverCore.Unlock()
+			if ingressErr != nil || handled {
+				t.Fatalf("unowned malformed ingress = handled %v, err %v", handled, ingressErr)
+			}
+		})
+	}
+
+	short := append([]byte(nil), validSYN...)
+	ethernetFrame, err := ethernet.NewFrame(short)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ipFrame, err := ipv4.NewFrame(ethernetFrame.Payload())
+	if err != nil {
+		t.Fatal(err)
+	}
+	ipFrame.SetTotalLength(uint16(ipFrame.HeaderLength() + 2))
+	ipFrame.SetCRC(0)
+	ipFrame.SetCRC(ipFrame.CalculateHeaderCRC())
+	serverCore.Lock()
+	handled, ingressErr := server.ingressLocked(short)
+	serverCore.Unlock()
+	if ingressErr != nil || handled {
+		t.Fatalf("uncorrelatable short ingress = handled %v, err %v", handled, ingressErr)
+	}
+	if ready := listener.Readiness(); ready != 0 {
+		t.Fatalf("unowned malformed listener readiness = %v", ready)
+	}
+	if usage, closed := server.quotas.Snapshot(); closed != closedBefore || usage != usageBefore {
+		t.Fatalf("unowned malformed quota = %+v, closed=%v; want %+v, closed=%v", usage, closed, usageBefore, closedBefore)
+	}
+
+	serviceTCPIngressFrame(t, serverCore, validSYN)
+	serviceTCPIngressFrame(t, clientCore, nextTCPFrame(t, serverCore))
+	serviceTCPIngressFrame(t, serverCore, nextTCPFrame(t, clientCore))
+	if progress, err := clientStream.TryFinishConnect(); err != nil || progress != nscore.ProgressDone {
+		t.Fatalf("finish after unowned malformed traffic = %v, %v", progress, err)
+	}
+	if ready := listener.Readiness(); ready != nscore.ReadyAccept {
+		t.Fatalf("valid retry listener readiness = %v", ready)
+	}
+}
+
 func TestCorrelatedMalformedIPv4TCPIsHandledDropAndListenerRemainsRetryable(t *testing.T) {
 	clientCore, client := newTestAdapter(t, 49, 0, 1)
 	serverCore, server := newTestAdapter(t, 50, 1, 0)
