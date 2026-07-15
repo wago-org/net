@@ -562,6 +562,38 @@ func TestFragmentedIPv4SYNIsHandledDropAndListenerRemainsRetryable(t *testing.T)
 	}
 }
 
+func TestIPv4TCPHandshakeAcceptsOptionsAndLinkPadding(t *testing.T) {
+	clientCore, client := newTestAdapter(t, 51, 0, 1)
+	serverCore, server := newTestAdapter(t, 52, 1, 0)
+	setGateways(clientCore, [6]byte{0x02, 0, 0, 0, 0, 52})
+	setGateways(serverCore, [6]byte{0x02, 0, 0, 0, 0, 51})
+	endpoint := nscore.Endpoint{Address: netip.MustParseAddr("192.0.2.52"), Port: 4252}
+	listenerValue, progress, err := server.TryListen(endpoint)
+	if err != nil || progress != nscore.ProgressDone {
+		t.Fatalf("listen = %T, %v, %v", listenerValue, progress, err)
+	}
+	listener := listenerValue.(*tcpListener)
+	clientValue, progress, err := client.TryConnect(endpoint)
+	if err != nil || progress != nscore.ProgressInProgress {
+		t.Fatalf("connect = %T, %v, %v", clientValue, progress, err)
+	}
+	clientStream := clientValue.(*tcpStream)
+
+	serviceTCPIngressFrame(t, serverCore, addIPv4OptionsAndLinkPadding(t, nextTCPFrame(t, clientCore)))
+	serviceTCPIngressFrame(t, clientCore, addIPv4OptionsAndLinkPadding(t, nextTCPFrame(t, serverCore)))
+	serviceTCPIngressFrame(t, serverCore, addIPv4OptionsAndLinkPadding(t, nextTCPFrame(t, clientCore)))
+	if progress, err := clientStream.TryFinishConnect(); err != nil || progress != nscore.ProgressDone {
+		t.Fatalf("finish connect = %v, %v", progress, err)
+	}
+	if ready := listener.Readiness(); ready != nscore.ReadyAccept {
+		t.Fatalf("listener readiness = %v", ready)
+	}
+	accepted, progress, err := listener.TryAccept()
+	if err != nil || progress != nscore.ProgressDone || accepted == nil {
+		t.Fatalf("accept = %T, %v, %v", accepted, progress, err)
+	}
+}
+
 func TestCorrelatedMalformedIPv4TCPIsHandledDropAndListenerRemainsRetryable(t *testing.T) {
 	clientCore, client := newTestAdapter(t, 49, 0, 1)
 	serverCore, server := newTestAdapter(t, 50, 1, 0)
@@ -1395,6 +1427,36 @@ func tryTransferTCP(t testing.TB, from, to *lnetocore.Namespace) bool {
 		t.Fatalf("optional ingress = %+v, %v, %v", report, progress, err)
 	}
 	return true
+}
+
+func addIPv4OptionsAndLinkPadding(t testing.TB, frame []byte) []byte {
+	t.Helper()
+	eth, err := ethernet.NewFrame(frame)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ip, err := ipv4.NewFrame(eth.Payload())
+	if err != nil {
+		t.Fatal(err)
+	}
+	version, ihl := ip.VersionAndIHL()
+	if version != 4 || ihl != 5 {
+		t.Fatalf("fixture IPv4 header = version:%d IHL:%d", version, ihl)
+	}
+	result := make([]byte, len(frame)+4+3)
+	copy(result[:34], frame[:34])
+	copy(result[34:38], []byte{1, 1, 0, 0})
+	copy(result[38:], frame[34:])
+	ip, err = ipv4.NewFrame(result[14:])
+	if err != nil {
+		t.Fatal(err)
+	}
+	ip.SetVersionAndIHL(4, 6)
+	ip.SetTotalLength(ip.TotalLength() + 4)
+	ip.SetCRC(0)
+	ip.SetCRC(ip.CalculateHeaderCRC())
+	copy(result[len(result)-3:], []byte{0xa5, 0x5a, 0xc3})
+	return result
 }
 
 func nextTCPFrame(t testing.TB, from *lnetocore.Namespace) []byte {
