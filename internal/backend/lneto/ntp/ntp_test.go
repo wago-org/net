@@ -377,6 +377,40 @@ func TestNTPMalformedTransportCannotRetireCorrelatedSynchronization(t *testing.T
 	}
 }
 
+func TestNTPIngressAcceptsIPv4OptionsAndIgnoresLinkPadding(t *testing.T) {
+	clock := &manualClock{now: time.Date(2026, 7, 14, 12, 0, 0, 0, time.UTC)}
+	core, adapter, _ := newTestAdapter(t, clock, Config{
+		Server: netip.MustParseAddr("192.0.2.123"), Clock: clock, MaxSyncs: 1,
+		MaxAttempts: 1, RetryServiceAttempts: 2, Precision: -20,
+	})
+	resource, _, err := adapter.TrySync()
+	if err != nil {
+		t.Fatal(err)
+	}
+	sync := resource.(*syncResource)
+	request1 := serviceEgress(t, core)
+	response1, arrival1 := makeNTPResponse(t, request1, 100*time.Millisecond, 20*time.Millisecond)
+	response1 = addIPv4Options(t, response1, [4]byte{1, 1, 0, 0})
+	response1 = append(response1, 0xa5, 0x5a, 0xc3)
+	clock.now = arrival1
+	serviceIngress(t, core, response1)
+	if sync.state != syncPrepare || sync.Readiness() != 0 || sync.attempts != 0 || sync.retry != 0 {
+		t.Fatalf("first response with options/padding = state %v readiness %v attempts %d retry %d", sync.state, sync.Readiness(), sync.attempts, sync.retry)
+	}
+
+	clock.now = arrival1.Add(100 * time.Millisecond)
+	request2 := serviceEgress(t, core)
+	response2, arrival2 := makeNTPResponse(t, request2, 100*time.Millisecond, 20*time.Millisecond)
+	clock.now = arrival2
+	serviceIngress(t, core, response2)
+	if sync.Readiness() != nscore.ReadyNTPResult {
+		t.Fatalf("second response readiness = %v", sync.Readiness())
+	}
+	if sample, next, err := sync.TryResult(); err != nil || next != ntpns.NextReady || !sample.Valid() {
+		t.Fatalf("result after option-bearing first response = %+v, %v, %v", sample, next, err)
+	}
+}
+
 func TestNTPMalformedTerminalRetiresTransportBeforeCloseAndStaleCloseCannotAffectFreshSync(t *testing.T) {
 	clock := &manualClock{now: time.Date(2026, 7, 14, 12, 0, 0, 0, time.UTC)}
 	core, adapter, account := newTestAdapter(t, clock, Config{
@@ -692,6 +726,47 @@ func makeNTPResponse(t testing.TB, request []byte, serverOffset, roundTrip time.
 	ipFrame.SetCRC(ipFrame.CalculateHeaderCRC())
 	rechecksumUDP(t, frame)
 	return frame, clientSend.Add(roundTrip)
+}
+
+func addIPv4Options(t testing.TB, frame []byte, options [4]byte) []byte {
+	t.Helper()
+	if ip := ipv4Payload(t, frame); ip.HeaderLength() != 20 {
+		t.Fatalf("test frame IPv4 header length = %d", ip.HeaderLength())
+	}
+	withOptions := make([]byte, len(frame)+len(options))
+	copy(withOptions[:14+20], frame[:14+20])
+	copy(withOptions[14+20:14+24], options[:])
+	copy(withOptions[14+24:], frame[14+20:])
+	ethernetFrame, err := ethernet.NewFrame(withOptions)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ipFrame, err := ipv4.NewFrame(ethernetFrame.Payload())
+	if err != nil {
+		t.Fatal(err)
+	}
+	ipFrame.SetVersionAndIHL(4, 6)
+	ipFrame.SetTotalLength(ipFrame.TotalLength() + uint16(len(options)))
+	ipFrame.SetCRC(0)
+	ipFrame.SetCRC(ipv4HeaderChecksum(ipFrame.RawData()[:24]))
+	udpFrame, err := lnetoudp.NewFrame(ipFrame.RawData()[24:int(ipFrame.TotalLength())])
+	if err != nil {
+		t.Fatal(err)
+	}
+	udpFrame.SetCRC(0)
+	var checksum lneto.CRC791
+	ipFrame.CRCWriteUDPPseudo(&checksum, udpFrame.Length())
+	udpFrame.SetCRC(lneto.NeverZeroSum(checksum.PayloadSum16(udpFrame.RawData()[:udpFrame.Length()])))
+	return withOptions
+}
+
+func ipv4HeaderChecksum(header []byte) uint16 {
+	var sum uint32
+	for offset := 0; offset < len(header); offset += 2 {
+		sum += uint32(header[offset])<<8 | uint32(header[offset+1])
+		sum = (sum & 0xffff) + (sum >> 16)
+	}
+	return ^uint16(sum)
 }
 
 func ipv4Payload(t testing.TB, frame []byte) ipv4.Frame {
