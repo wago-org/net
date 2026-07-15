@@ -301,6 +301,66 @@ func TestBindingsConnectStreamIOAtomicStatusesAndLifecycle(t *testing.T) {
 	}
 }
 
+func TestConnectBindingInvalidRegisteredEndpointRollsBackAtomically(t *testing.T) {
+	local := nscore.Endpoint{Address: netip.MustParseAddr("192.0.2.10"), Port: 41000}
+	remote := nscore.Endpoint{Address: netip.MustParseAddr("2001:db8::20"), Port: 443}
+	for _, test := range []struct {
+		name     string
+		progress nscore.Progress
+		local    nscore.Endpoint
+		remote   nscore.Endpoint
+		status   guest.Status
+	}{
+		{name: "invalid local after done", progress: nscore.ProgressDone, remote: remote, status: guest.StatusOK},
+		{name: "invalid remote after in-progress", progress: nscore.ProgressInProgress, local: local, status: guest.StatusInProgress},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			invalid := &fakeStream{local: test.local, remote: test.remote}
+			backend := &fakeNamespace{stream: invalid, connectProgress: test.progress}
+			manager, instance := attachManager(t, backend)
+			defer manager.Detach(instance)
+			host := testHost{instance: instance, memory: bytes.Repeat([]byte{0x6e}, 256)}
+			bindings := Bindings(plugin.NewHost(manager))
+			state, ok := manager.ForInstance(instance)
+			if !ok {
+				t.Fatal("attached state missing")
+			}
+			if !abicore.EncodeEndpointV1(host.memory, 0, remote) {
+				t.Fatal("encode remote endpoint")
+			}
+			resourcesBefore := state.Resources().Len()
+			readinessBefore := state.Readiness().Snapshot()
+			before := append([]byte(nil), host.memory...)
+
+			if status := callBinding(t, bindingByName(t, bindings, "connect"), host, uint64(state.NamespaceHandle()), 0, 64); status != guest.StatusIO {
+				t.Fatalf("invalid endpoint connect = %v", status)
+			}
+			if backend.connectCalls != 1 || invalid.closeCalls != 1 || state.Resources().Len() != resourcesBefore || state.Readiness().Snapshot() != readinessBefore {
+				t.Fatalf("invalid endpoint lifecycle: connects=%d closes=%d resources=%d readiness=%+v", backend.connectCalls, invalid.closeCalls, state.Resources().Len(), state.Readiness().Snapshot())
+			}
+			if !bytes.Equal(host.memory, before) {
+				t.Fatal("invalid endpoint connect mutated guest memory")
+			}
+
+			fresh := &fakeStream{local: local, remote: remote}
+			backend.stream = fresh
+			if status := callBinding(t, bindingByName(t, bindings, "connect"), host, uint64(state.NamespaceHandle()), 0, 64); status != test.status {
+				t.Fatalf("fresh connect = %v, want %v", status, test.status)
+			}
+			freshHandle := resource.Handle(binary.LittleEndian.Uint64(host.memory[64:72]))
+			if freshHandle == 0 || backend.connectCalls != 2 || state.Resources().Len() != resourcesBefore+1 || state.Readiness().Snapshot().Registrations != readinessBefore.Registrations+1 {
+				t.Fatalf("fresh lifecycle: handle=%v connects=%d resources=%d readiness=%+v", freshHandle, backend.connectCalls, state.Resources().Len(), state.Readiness().Snapshot())
+			}
+			if status := callBinding(t, bindingByName(t, bindings, "close_stream"), host, uint64(freshHandle)); status != guest.StatusOK || fresh.closeCalls != 1 {
+				t.Fatalf("fresh close = %v, calls=%d", status, fresh.closeCalls)
+			}
+			if state.Resources().Len() != resourcesBefore || state.Readiness().Snapshot() != readinessBefore {
+				t.Fatalf("fresh cleanup: resources=%d readiness=%+v", state.Resources().Len(), state.Readiness().Snapshot())
+			}
+		})
+	}
+}
+
 func TestBindingsRejectHighBitI32AliasesBeforeBackendCalls(t *testing.T) {
 	local := nscore.Endpoint{Address: netip.MustParseAddr("0.0.0.0"), Port: 8080}
 	remote := nscore.Endpoint{Address: netip.MustParseAddr("192.0.2.44"), Port: 443}
