@@ -17,16 +17,23 @@ import (
 )
 
 type fakeNamespace struct {
-	closed   atomic.Int32
-	closeErr error
-	socket   namespace.UDPSocket
-	listener namespace.TCPListener
-	stream   namespace.TCPStream
-	query    namespace.DNSQuery
+	closed       atomic.Int32
+	closeErr     error
+	closeStarted chan struct{}
+	closeRelease <-chan struct{}
+	socket       namespace.UDPSocket
+	listener     namespace.TCPListener
+	stream       namespace.TCPStream
+	query        namespace.DNSQuery
 }
 
 func (n *fakeNamespace) Close() error {
-	n.closed.Add(1)
+	if n.closed.Add(1) == 1 && n.closeStarted != nil {
+		close(n.closeStarted)
+	}
+	if n.closeRelease != nil {
+		<-n.closeRelease
+	}
 	return n.closeErr
 }
 
@@ -498,6 +505,114 @@ func TestDifferentInstancesAttachConcurrently(t *testing.T) {
 		if err := manager.Detach(instance); err != nil {
 			t.Fatal(err)
 		}
+	}
+}
+
+func TestDetachCoordinatesWaitersReattachmentAndUnrelatedInstances(t *testing.T) {
+	closeErr := errors.New("backend close failed")
+	closeStarted := make(chan struct{})
+	closeRelease := make(chan struct{})
+	firstBackend := &fakeNamespace{closeErr: closeErr, closeStarted: closeStarted, closeRelease: closeRelease}
+	secondBackend := new(fakeNamespace)
+	thirdBackend := new(fakeNamespace)
+	factoryCalls := make(chan int, 3)
+	var calls atomic.Int32
+	config := DefaultConfig()
+	config.NamespaceFactory = func(*policy.Policy, *quota.Account) (nscore.Namespace, error) {
+		call := int(calls.Add(1))
+		factoryCalls <- call
+		switch call {
+		case 1:
+			return firstBackend, nil
+		case 2:
+			return secondBackend, nil
+		case 3:
+			return thirdBackend, nil
+		default:
+			return nil, errors.New("unexpected namespace factory call")
+		}
+	}
+	manager, err := NewManagerConfigured(config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	instance := new(wago.Instance)
+	if err := manager.Attach(instance); err != nil {
+		t.Fatal(err)
+	}
+	if call := <-factoryCalls; call != 1 {
+		t.Fatalf("initial factory call = %d, want 1", call)
+	}
+	oldState, ok := manager.ForInstance(instance)
+	if !ok {
+		t.Fatal("initial state missing")
+	}
+
+	firstDetach := make(chan error, 1)
+	go func() { firstDetach <- manager.Detach(instance) }()
+	<-closeStarted
+	if _, ok := manager.ForInstance(instance); ok {
+		t.Fatal("state remained published during teardown")
+	}
+
+	secondDetach := make(chan error, 1)
+	go func() { secondDetach <- manager.Detach(instance) }()
+	reattachDone := make(chan error, 1)
+	go func() { reattachDone <- manager.Attach(instance) }()
+	select {
+	case err := <-secondDetach:
+		t.Fatalf("second Detach returned before shared teardown completed: %v", err)
+	case call := <-factoryCalls:
+		t.Fatalf("same-instance reattachment reached factory before teardown: call %d", call)
+	case <-time.After(20 * time.Millisecond):
+	}
+
+	otherInstance := new(wago.Instance)
+	if err := manager.Attach(otherInstance); err != nil {
+		t.Fatalf("unrelated Attach error = %v", err)
+	}
+	if call := <-factoryCalls; call != 2 {
+		t.Fatalf("unrelated factory call = %d, want 2", call)
+	}
+	if _, ok := manager.ForInstance(otherInstance); !ok {
+		t.Fatal("unrelated instance did not publish while teardown was blocked")
+	}
+
+	close(closeRelease)
+	if err := <-firstDetach; !errors.Is(err, closeErr) {
+		t.Fatalf("first Detach error = %v, want %v", err, closeErr)
+	}
+	if err := <-secondDetach; !errors.Is(err, closeErr) {
+		t.Fatalf("second Detach error = %v, want %v", err, closeErr)
+	}
+	if call := <-factoryCalls; call != 3 {
+		t.Fatalf("reattachment factory call = %d, want 3", call)
+	}
+	if err := <-reattachDone; err != nil {
+		t.Fatalf("reattachment error = %v", err)
+	}
+	newState, ok := manager.ForInstance(instance)
+	if !ok || newState == oldState {
+		t.Fatalf("reattached state = %p ok=%v, old=%p", newState, ok, oldState)
+	}
+	if firstBackend.closed.Load() != 1 {
+		t.Fatalf("first backend close count = %d, want 1", firstBackend.closed.Load())
+	}
+	manager.mu.RLock()
+	_, attaching := manager.attaching[instance]
+	_, detaching := manager.detaching[instance]
+	manager.mu.RUnlock()
+	if attaching || detaching {
+		t.Fatalf("completed lifecycle retained records attaching=%v detaching=%v", attaching, detaching)
+	}
+	if err := manager.Detach(instance); err != nil {
+		t.Fatalf("detach reattached instance: %v", err)
+	}
+	if err := manager.Detach(otherInstance); err != nil {
+		t.Fatalf("detach unrelated instance: %v", err)
+	}
+	if thirdBackend.closed.Load() != 1 || secondBackend.closed.Load() != 1 {
+		t.Fatalf("replacement backend closes = reattached:%d unrelated:%d", thirdBackend.closed.Load(), secondBackend.closed.Load())
 	}
 }
 

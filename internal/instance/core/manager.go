@@ -154,6 +154,7 @@ type Manager struct {
 	mu        sync.RWMutex
 	states    map[*wago.Instance]*State
 	attaching map[*wago.Instance]*attachmentAttempt
+	detaching map[*wago.Instance]*detachmentAttempt
 
 	policy           *policy.Policy
 	limits           quota.Limits
@@ -163,6 +164,11 @@ type Manager struct {
 
 type attachmentAttempt struct {
 	done chan struct{}
+}
+
+type detachmentAttempt struct {
+	done chan struct{}
+	err  error
 }
 
 // NewManager creates an empty extension-local manager with finite defaults and
@@ -189,6 +195,7 @@ func NewManagerConfigured(config Config) (*Manager, error) {
 	return &Manager{
 		states:           make(map[*wago.Instance]*State),
 		attaching:        make(map[*wago.Instance]*attachmentAttempt),
+		detaching:        make(map[*wago.Instance]*detachmentAttempt),
 		policy:           compiled,
 		limits:           config.Limits,
 		readiness:        config.Readiness,
@@ -272,20 +279,30 @@ func (m *Manager) Attach(instance *wago.Instance) error {
 }
 
 func (m *Manager) beginAttachment(instance *wago.Instance) (*attachmentAttempt, error) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	if _, exists := m.states[instance]; exists {
-		return nil, ErrAlreadyAttached
+	for {
+		m.mu.Lock()
+		if _, exists := m.states[instance]; exists {
+			m.mu.Unlock()
+			return nil, ErrAlreadyAttached
+		}
+		if _, exists := m.attaching[instance]; exists {
+			m.mu.Unlock()
+			return nil, ErrAlreadyAttached
+		}
+		if attempt := m.detaching[instance]; attempt != nil {
+			done := attempt.done
+			m.mu.Unlock()
+			<-done
+			continue
+		}
+		if m.attaching == nil {
+			m.attaching = make(map[*wago.Instance]*attachmentAttempt)
+		}
+		attempt := &attachmentAttempt{done: make(chan struct{})}
+		m.attaching[instance] = attempt
+		m.mu.Unlock()
+		return attempt, nil
 	}
-	if _, exists := m.attaching[instance]; exists {
-		return nil, ErrAlreadyAttached
-	}
-	if m.attaching == nil {
-		m.attaching = make(map[*wago.Instance]*attachmentAttempt)
-	}
-	attempt := &attachmentAttempt{done: make(chan struct{})}
-	m.attaching[instance] = attempt
-	return attempt, nil
 }
 
 func (m *Manager) finishAttachment(instance *wago.Instance, attempt *attachmentAttempt) {
@@ -502,14 +519,42 @@ func (m *Manager) Detach(instance *wago.Instance) error {
 			<-done
 			continue
 		}
+		if attempt := m.detaching[instance]; attempt != nil {
+			done := attempt.done
+			m.mu.Unlock()
+			<-done
+			return attempt.err
+		}
 		state := m.states[instance]
-		delete(m.states, instance)
-		m.mu.Unlock()
 		if state == nil {
+			m.mu.Unlock()
 			return nil
 		}
-		return state.Close()
+		delete(m.states, instance)
+		if m.detaching == nil {
+			m.detaching = make(map[*wago.Instance]*detachmentAttempt)
+		}
+		attempt := &detachmentAttempt{done: make(chan struct{})}
+		m.detaching[instance] = attempt
+		m.mu.Unlock()
+
+		return m.closeDetachedState(instance, attempt, state)
 	}
+}
+
+func (m *Manager) closeDetachedState(instance *wago.Instance, attempt *detachmentAttempt, state *State) (closeErr error) {
+	defer func() { m.finishDetachment(instance, attempt, closeErr) }()
+	return state.Close()
+}
+
+func (m *Manager) finishDetachment(instance *wago.Instance, attempt *detachmentAttempt, closeErr error) {
+	m.mu.Lock()
+	attempt.err = closeErr
+	if m.detaching[instance] == attempt {
+		delete(m.detaching, instance)
+	}
+	close(attempt.done)
+	m.mu.Unlock()
 }
 
 // ForInstance returns state only for the exact attached instance pointer.
