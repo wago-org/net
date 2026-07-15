@@ -68,6 +68,26 @@ type closeOnly struct{}
 
 func (closeOnly) Close() error { return nil }
 
+func TestReportValidForRejectsImpossiblePerScanRelationships(t *testing.T) {
+	budget := Budget{
+		Scans: 2, Events: 2, ServiceAttempts: 2,
+		Service: namespace.ServiceBudget{Packets: 1, Bytes: 64, Operations: 1},
+	}
+	if report := (Report{Scanned: 1, Events: 1, ServiceAttempts: 1, ServiceCompleted: 1}); !report.ValidFor(budget) {
+		t.Fatalf("valid same-scan event and service rejected: %+v", report)
+	}
+	for _, report := range []Report{
+		{Scanned: 1, Events: 2},
+		{Scanned: 1, Events: 1, StaleRegistrations: 1},
+		{Scanned: 1, ServiceAttempts: 2},
+		{Scanned: 1, ServiceAttempts: 1, StaleRegistrations: 1},
+	} {
+		if report.ValidFor(budget) {
+			t.Fatalf("impossible per-scan report accepted: %+v", report)
+		}
+	}
+}
+
 func TestCoordinatorLevelTriggeredSnapshotsAndBoundedOutput(t *testing.T) {
 	table := newTable(t)
 	coordinator := newCoordinator(t, table, Config{MaxRegistrations: 3})

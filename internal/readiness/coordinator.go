@@ -70,7 +70,8 @@ type Report struct {
 func (r Report) ValidFor(b Budget) bool {
 	return b.Valid() && r.Scanned <= b.Scans && r.Events <= b.Events &&
 		r.ServiceAttempts <= b.ServiceAttempts && r.ServiceCompleted <= r.ServiceAttempts &&
-		r.StaleRegistrations <= r.Scanned
+		uint64(r.Events)+uint64(r.StaleRegistrations) <= uint64(r.Scanned) &&
+		uint64(r.ServiceAttempts)+uint64(r.StaleRegistrations) <= uint64(r.Scanned)
 }
 
 // Snapshot is immutable coordinator state.

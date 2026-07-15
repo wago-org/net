@@ -95,7 +95,7 @@ func TestPollV1Codecs(t *testing.T) {
 }
 
 func TestPollV1RejectedEncodingDoesNotMutate(t *testing.T) {
-	memory := bytes.Repeat([]byte{0x5a}, 32)
+	memory := bytes.Repeat([]byte{0x5a}, 64)
 	before := append([]byte(nil), memory...)
 	if EncodePollEventsV1(memory, 0, []readiness.Event{{Handle: 0, Readiness: namespace.ReadyReadable}}) {
 		t.Fatal("invalid event encoded")
@@ -103,12 +103,19 @@ func TestPollV1RejectedEncodingDoesNotMutate(t *testing.T) {
 	if !bytes.Equal(memory, before) {
 		t.Fatal("invalid event partially mutated memory")
 	}
-	budget := readiness.Budget{Scans: 1, Events: 1}
-	if EncodePollResultV1(memory, 16, readiness.Report{Events: 2}, budget) {
-		t.Fatal("invalid report encoded")
-	}
-	if !bytes.Equal(memory, before) {
-		t.Fatal("invalid report partially mutated memory")
+	budget := readiness.Budget{Scans: 2, Events: 2, ServiceAttempts: 1, Service: namespace.ServiceBudget{Packets: 1, Bytes: 64, Operations: 1}}
+	for _, report := range []readiness.Report{
+		{Scanned: 2, Events: 3},
+		{Scanned: 1, Events: 2},
+		{Scanned: 1, Events: 1, StaleRegistrations: 1},
+		{Scanned: 1, ServiceAttempts: 1, StaleRegistrations: 1},
+	} {
+		if EncodePollResultV1(memory, 32, report, budget) {
+			t.Fatalf("invalid report encoded: %+v", report)
+		}
+		if !bytes.Equal(memory, before) {
+			t.Fatalf("invalid report partially mutated memory: %+v", report)
+		}
 	}
 }
 
