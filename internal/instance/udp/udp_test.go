@@ -107,6 +107,52 @@ func TestOperationsAndRegistrationRollback(t *testing.T) {
 	}
 }
 
+func TestBindRejectsMalformedSuccessfulResources(t *testing.T) {
+	local := namespace.Endpoint{Address: netip.MustParseAddr("192.0.2.1"), Port: 4200}
+	var typedNil *fakeSocket
+	for _, test := range []struct {
+		name     string
+		resource nscore.Resource
+		progress namespace.Progress
+	}{
+		{name: "wrong type", resource: new(fakeResource), progress: namespace.ProgressDone},
+		{name: "invalid progress", resource: new(fakeSocket), progress: 99},
+		{name: "dirty would block", resource: new(fakeSocket), progress: namespace.ProgressWouldBlock},
+		{name: "typed nil", resource: typedNil, progress: namespace.ProgressDone},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			backend := &fakeNamespace{socket: test.resource, progress: test.progress}
+			state, manager, instance := attachState(t, backend, 4)
+			defer manager.Detach(instance)
+			resourcesBefore := state.Resources().Len()
+			readinessBefore := state.Readiness().Snapshot()
+			if handle, progress, err := Bind(state, state.NamespaceHandle(), local); handle != 0 || progress != 0 || failureOf(t, err) != namespace.FailureIO {
+				t.Fatalf("Bind = %v, %v, %v", handle, progress, err)
+			}
+			if state.Resources().Len() != resourcesBefore || state.Readiness().Snapshot() != readinessBefore {
+				t.Fatalf("malformed bind published state: resources=%d readiness=%+v", state.Resources().Len(), state.Readiness().Snapshot())
+			}
+			switch value := test.resource.(type) {
+			case *fakeResource:
+				if value.closed.Load() != 1 {
+					t.Fatalf("wrong resource closes = %d", value.closed.Load())
+				}
+			case *fakeSocket:
+				if value != nil && value.closed.Load() != 1 {
+					t.Fatalf("socket closes = %d", value.closed.Load())
+				}
+			}
+		})
+	}
+}
+
+type fakeResource struct{ closed atomic.Int32 }
+
+func (r *fakeResource) Close() error { r.closed.Add(1); return nil }
+func (*fakeResource) Readiness() namespace.Readiness {
+	return namespace.ReadyWritable
+}
+
 func TestBindAndSendErrorsCloseResourcesAndCanonicalizeProgress(t *testing.T) {
 	local := namespace.Endpoint{Address: netip.MustParseAddr("192.0.2.1"), Port: 4200}
 	remote := namespace.Endpoint{Address: netip.MustParseAddr("192.0.2.2"), Port: 53}
@@ -151,6 +197,10 @@ func TestBindAndSendErrorsCloseResourcesAndCanonicalizeProgress(t *testing.T) {
 	socket.sendProgress, socket.sendFailure = namespace.ProgressWouldBlock, nil
 	if progress, err := Send(state, handle, nil, remote); err != nil || progress != namespace.ProgressWouldBlock {
 		t.Fatalf("would-block send = %v, %v", progress, err)
+	}
+	socket.sendProgress = 99
+	if progress, err := Send(state, handle, nil, remote); progress != 0 || failureOf(t, err) != namespace.FailureIO {
+		t.Fatalf("malformed send = %v, %v", progress, err)
 	}
 }
 
