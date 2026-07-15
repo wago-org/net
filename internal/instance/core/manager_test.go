@@ -557,6 +557,12 @@ func TestPanickingAttachmentRollsBackAndAllowsRetry(t *testing.T) {
 	if manager.Len() != 0 {
 		t.Fatal("panicking attachment published state")
 	}
+	manager.mu.RLock()
+	_, retained := manager.attaching[instance]
+	manager.mu.RUnlock()
+	if retained {
+		t.Fatal("panicking attachment retained lifecycle record")
+	}
 	usage, closed := failedAccount.Snapshot()
 	if !closed || usage != (quota.Usage{}) {
 		t.Fatalf("panic rollback usage=%+v closed=%v", usage, closed)
@@ -569,6 +575,40 @@ func TestPanickingAttachmentRollsBackAndAllowsRetry(t *testing.T) {
 	}
 	if backend.closed.Load() != 1 {
 		t.Fatalf("retry backend close count = %d, want 1", backend.closed.Load())
+	}
+}
+
+func TestLifecycleAttemptCompletionIsIdempotent(t *testing.T) {
+	manager := NewManager()
+	instance := new(wago.Instance)
+
+	attachment, err := manager.beginAttachment(instance)
+	if err != nil {
+		t.Fatal(err)
+	}
+	manager.finishAttachment(instance, attachment)
+	manager.finishAttachment(instance, attachment)
+	select {
+	case <-attachment.done:
+	default:
+		t.Fatal("attachment completion did not close waiter channel")
+	}
+
+	firstErr := errors.New("first teardown result")
+	secondErr := errors.New("duplicate teardown result")
+	detachment := &detachmentAttempt{done: make(chan struct{})}
+	manager.mu.Lock()
+	manager.detaching[instance] = detachment
+	manager.mu.Unlock()
+	manager.finishDetachment(instance, detachment, firstErr)
+	manager.finishDetachment(instance, detachment, secondErr)
+	select {
+	case <-detachment.done:
+	default:
+		t.Fatal("detachment completion did not close waiter channel")
+	}
+	if !errors.Is(detachment.err, firstErr) {
+		t.Fatalf("detachment result = %v, want first result %v", detachment.err, firstErr)
 	}
 }
 
@@ -592,7 +632,7 @@ func TestAttachmentCompletionRetiresRecordAcrossRollbackClosePanic(t *testing.T)
 	var recovered any
 	func() {
 		defer func() { recovered = recover() }()
-		manager.completeAttachment(instance, attempt, state, false, originalPanic)
+		manager.completeAttachment(instance, attempt, state, false, originalPanic, true)
 	}()
 	if recovered != originalPanic {
 		t.Fatalf("recovered panic = %v, want original %v", recovered, originalPanic)
@@ -630,7 +670,7 @@ func TestAttachmentCompletionRetiresRecordAcrossRollbackClosePanic(t *testing.T)
 	recovered = nil
 	func() {
 		defer func() { recovered = recover() }()
-		manager.completeAttachment(cleanupOnlyInstance, cleanupOnlyAttempt, cleanupOnlyState, false, nil)
+		manager.completeAttachment(cleanupOnlyInstance, cleanupOnlyAttempt, cleanupOnlyState, false, nil, false)
 	}()
 	if recovered != cleanupPanic {
 		t.Fatalf("cleanup-only panic = %v, want %v", recovered, cleanupPanic)

@@ -265,27 +265,52 @@ func (m *Manager) Attach(instance *wago.Instance) error {
 	if err != nil {
 		return err
 	}
-	var state *State
-	published := false
-	defer func() {
-		m.completeAttachment(instance, attempt, state, published, recover())
-	}()
+	result := attachmentResult{}
+	m.runAttachment(instance, &result)
+	m.completeAttachment(instance, attempt, result.state, result.published, result.panicValue, result.panicked)
+	return result.err
+}
 
+type attachmentResult struct {
+	state      *State
+	published  bool
+	err        error
+	panicValue any
+	panicked   bool
+}
+
+// runAttachment converts a construction panic into data so lifecycle cleanup
+// can finish before Attach re-panics from an ordinary call frame. In particular,
+// this avoids relying on a recover-and-repanic cycle inside the same deferred
+// function, which is not portable across all supported Go toolchains.
+func (m *Manager) runAttachment(instance *wago.Instance, result *attachmentResult) {
+	completed := false
+	defer func() {
+		if !completed {
+			result.panicValue = recover()
+			result.panicked = true
+		}
+	}()
+	result.err = m.attachState(instance, &result.state, &result.published)
+	completed = true
+}
+
+func (m *Manager) attachState(instance *wago.Instance, state **State, published *bool) error {
 	table, err := resource.NewTable()
 	if err != nil {
 		return fmt.Errorf("create resource table: %w", err)
 	}
-	state = &State{resources: table}
+	*state = &State{resources: table}
 	poller, err := readiness.New(table, m.readiness)
 	if err != nil {
 		return fmt.Errorf("create readiness coordinator: %w", err)
 	}
-	state.readiness = poller
-	state.quotas = quota.NewAccount(m.limits)
-	state.policy = m.policy
-	state.pollEvents = make([]readiness.Event, m.readiness.MaxRegistrations)
+	(*state).readiness = poller
+	(*state).quotas = quota.NewAccount(m.limits)
+	(*state).policy = m.policy
+	(*state).pollEvents = make([]readiness.Event, m.readiness.MaxRegistrations)
 	if m.namespaceFactory != nil {
-		if _, err := state.createNamespace(m.namespaceFactory); err != nil {
+		if _, err := (*state).createNamespace(m.namespaceFactory); err != nil {
 			return fmt.Errorf("create instance namespace: %w", err)
 		}
 	}
@@ -294,8 +319,8 @@ func (m *Manager) Attach(instance *wago.Instance) error {
 	if m.states == nil {
 		m.states = make(map[*wago.Instance]*State)
 	}
-	m.states[instance] = state
-	published = true
+	m.states[instance] = *state
+	*published = true
 	m.mu.Unlock()
 	return nil
 }
@@ -330,13 +355,13 @@ func (m *Manager) beginAttachment(instance *wago.Instance) (*attachmentAttempt, 
 // completeAttachment retires the lifecycle record before re-propagating a
 // panic. A construction panic takes precedence over a rollback-close panic;
 // when construction returned normally, the rollback panic remains visible.
-func (m *Manager) completeAttachment(instance *wago.Instance, attempt *attachmentAttempt, state *State, published bool, originalPanic any) {
+func (m *Manager) completeAttachment(instance *wago.Instance, attempt *attachmentAttempt, state *State, published bool, originalPanic any, originalPanicked bool) {
 	var cleanupPanic any
 	if !published && state != nil {
 		cleanupPanic = closeUnpublishedState(state)
 	}
 	m.finishAttachment(instance, attempt)
-	if originalPanic != nil {
+	if originalPanicked {
 		panic(originalPanic)
 	}
 	if cleanupPanic != nil {
@@ -360,8 +385,8 @@ func (m *Manager) finishAttachment(instance *wago.Instance, attempt *attachmentA
 	m.mu.Lock()
 	if m.attaching[instance] == attempt {
 		delete(m.attaching, instance)
+		close(attempt.done)
 	}
-	close(attempt.done)
 	m.mu.Unlock()
 }
 
@@ -594,32 +619,45 @@ func (m *Manager) Detach(instance *wago.Instance) error {
 	}
 }
 
-func (m *Manager) closeDetachedState(instance *wago.Instance, attempt *detachmentAttempt, state *State) (closeErr error) {
+func (m *Manager) closeDetachedState(instance *wago.Instance, attempt *detachmentAttempt, state *State) error {
+	result := detachmentResult{}
+	runDetachedClose(state, &result)
+	waiterErr := result.err
+	if result.panicked {
+		waiterErr = ErrTeardownPanicked
+	}
+	m.finishDetachment(instance, attempt, waiterErr)
+	if result.panicked {
+		panic(result.panicValue)
+	}
+	return result.err
+}
+
+type detachmentResult struct {
+	err        error
+	panicValue any
+	panicked   bool
+}
+
+func runDetachedClose(state *State, result *detachmentResult) {
 	completed := false
 	defer func() {
-		panicValue := any(nil)
-		panicked := !completed
-		if panicked {
-			panicValue = recover()
-			closeErr = ErrTeardownPanicked
-		}
-		m.finishDetachment(instance, attempt, closeErr)
-		if panicked {
-			panic(panicValue)
+		if !completed {
+			result.panicValue = recover()
+			result.panicked = true
 		}
 	}()
-	closeErr = state.Close()
+	result.err = state.Close()
 	completed = true
-	return closeErr
 }
 
 func (m *Manager) finishDetachment(instance *wago.Instance, attempt *detachmentAttempt, closeErr error) {
 	m.mu.Lock()
-	attempt.err = closeErr
 	if m.detaching[instance] == attempt {
+		attempt.err = closeErr
 		delete(m.detaching, instance)
+		close(attempt.done)
 	}
-	close(attempt.done)
 	m.mu.Unlock()
 }
 
