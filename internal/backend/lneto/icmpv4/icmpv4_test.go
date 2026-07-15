@@ -3,6 +3,7 @@ package icmpv4
 import (
 	"bytes"
 	"errors"
+	"fmt"
 	"net/netip"
 	"testing"
 
@@ -663,6 +664,74 @@ func TestICMPv4ReplyAcceptsIPv4OptionsAndLinkPadding(t *testing.T) {
 	result, next, err := exchange.TryResult(payload[:])
 	if err != nil || next != icmpns.NextReady || result.PayloadBytes != len(payload) || string(payload[:]) != "live" {
 		t.Fatalf("optioned padded result = %+v, %v, %v payload=%q", result, next, err, payload[:])
+	}
+}
+
+func TestICMPv4IngressOwnershipUsesDeclaredIPv4PayloadEnvelope(t *testing.T) {
+	const fullICMPBytes = 12
+	for declaredICMPBytes := 0; declaredICMPBytes <= fullICMPBytes; declaredICMPBytes++ {
+		t.Run(fmt.Sprintf("declared=%d", declaredICMPBytes), func(t *testing.T) {
+			core, adapter, account := newTestAdapter(t, Config{MaxEchoes: 1, MaxPayloadBytes: 16, MaxAttempts: 2, RetryServiceAttempts: 2})
+			resource, _, err := adapter.TryEcho(icmpns.Request{Destination: netip.MustParseAddr("192.0.2.99"), Payload: []byte("live")})
+			if err != nil {
+				t.Fatal(err)
+			}
+			exchange := resource.(*echo)
+			request := serviceEgress(t, core)
+			validReply := makeEchoReply(t, request, nil)
+			shortened := append([]byte(nil), validReply...)
+			ethernetFrame, err := ethernet.NewFrame(shortened)
+			if err != nil {
+				t.Fatal(err)
+			}
+			ipFrame, err := ipv4.NewFrame(ethernetFrame.Payload())
+			if err != nil {
+				t.Fatal(err)
+			}
+			ipFrame.SetTotalLength(uint16(20 + declaredICMPBytes))
+			ipFrame.SetCRC(0)
+			ipFrame.SetCRC(ipFrame.CalculateHeaderCRC())
+			if declaredICMPBytes >= 8 {
+				icmpFrame, err := lnetoicmp.NewFrame(ipFrame.Payload())
+				if err != nil {
+					t.Fatal(err)
+				}
+				icmpFrame.SetCRC(0)
+				var checksum lneto.CRC791
+				icmpFrame.SetCRC(checksum.PayloadSum16((lnetoicmp.FrameEcho{Frame: icmpFrame}).RawData()))
+			}
+
+			usageBefore, _ := account.Snapshot()
+			core.Lock()
+			handled, ingressErr := adapter.ingressLocked(shortened)
+			state := exchange.state
+			core.Unlock()
+			if ingressErr != nil {
+				t.Fatalf("shortened ingress error = %v", ingressErr)
+			}
+			switch {
+			case declaredICMPBytes < 8:
+				if handled || state != echoWaiting || exchange.Readiness() != 0 {
+					t.Fatalf("uncorrelatable shortened reply = handled:%v state:%v readiness:%v", handled, state, exchange.Readiness())
+				}
+				if usage, _ := account.Snapshot(); usage != usageBefore {
+					t.Fatalf("uncorrelatable shortened reply changed quota = %+v, want %+v", usage, usageBefore)
+				}
+				serviceIngress(t, core, validReply)
+				if exchange.Readiness() != nscore.ReadyICMPv4Reply {
+					t.Fatalf("following valid reply readiness = %v", exchange.Readiness())
+				}
+			case declaredICMPBytes < fullICMPBytes:
+				if !handled || state != echoFailed || exchange.Readiness() != nscore.ReadyError {
+					t.Fatalf("correlated truncated reply = handled:%v state:%v readiness:%v", handled, state, exchange.Readiness())
+				}
+				if _, _, err := exchange.TryResult(nil); failureOf(t, err) != nscore.FailureIO {
+					t.Fatalf("correlated truncated result = %v", err)
+				}
+			case !handled || state != echoDone || exchange.Readiness() != nscore.ReadyICMPv4Reply:
+				t.Fatalf("complete declared reply = handled:%v state:%v readiness:%v", handled, state, exchange.Readiness())
+			}
+		})
 	}
 }
 
