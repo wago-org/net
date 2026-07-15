@@ -678,12 +678,11 @@ func (a *Adapter) clientLeaseLocked(r *leaseResource) (dhcpns.Lease, bool) {
 	if broadcast, ok := r.client.BroadcastAddr(); ok && broadcast != ([4]byte{}) {
 		lease.BroadcastAddr = netip.AddrFrom4(broadcast)
 	}
-	dns := r.client.AppendDNSServers(nil)
+	dns := r.client.AppendDNSServers(lease.DNSServers[:0])
 	if len(dns) > int(a.config.MaxDNSServers) {
 		return dhcpns.Lease{}, false
 	}
 	lease.DNSCount = uint8(len(dns))
-	copy(lease.DNSServers[:], dns)
 	return lease, lease.Valid()
 }
 
