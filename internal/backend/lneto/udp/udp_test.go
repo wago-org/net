@@ -424,6 +424,55 @@ func TestSocketTrySendRejectsLoopbackWithoutQueueMutation(t *testing.T) {
 	}
 }
 
+func TestSocketEgressUsesDestinationClassHardwareAddress(t *testing.T) {
+	policyConfig := policy.Config{
+		Rules: []policy.Rule{{
+			Action: policy.ActionAllow, Transports: []policy.Transport{policy.TransportUDP},
+			Directions: []policy.Direction{policy.DirectionInbound, policy.DirectionOutbound},
+		}},
+		MulticastTransports: []policy.Transport{policy.TransportUDP},
+		BroadcastTransports: []policy.Transport{policy.TransportUDP},
+	}
+	for index, test := range []struct {
+		name        string
+		address     netip.Addr
+		destination [6]byte
+	}{
+		{name: "unicast via gateway", address: netip.MustParseAddr("198.51.100.9")},
+		{name: "multicast mapping", address: netip.MustParseAddr("239.255.0.1"), destination: [6]byte{0x01, 0x00, 0x5e, 0x7f, 0x00, 0x01}},
+		{name: "limited broadcast", address: netip.AddrFrom4([4]byte{255, 255, 255, 255}), destination: ethernet.BroadcastAddr()},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			id := byte(64 + index)
+			common, adapter, _ := newTestAdapterWithConfigAndPolicy(t, id, Config{
+				MaxSockets: 1, ReceiveBytes: 32, TransmitBytes: 32,
+				ReceiveDatagrams: 1, TransmitDatagrams: 1, MaxPayloadBytes: 32,
+			}, policyConfig)
+			local := nscore.Endpoint{Address: netip.AddrFrom4([4]byte{192, 0, 2, id}), Port: uint16(4064 + index)}
+			socket := bindTestSocket(t, adapter, local)
+			if progress, err := socket.TrySend([]byte("wire"), nscore.Endpoint{Address: test.address, Port: 53}); err != nil || progress != nscore.ProgressDone {
+				t.Fatalf("send = %v, %v", progress, err)
+			}
+			frame := serviceUDPFrame(t, common)
+			eth, err := ethernet.NewFrame(frame)
+			if err != nil {
+				t.Fatal(err)
+			}
+			want := test.destination
+			if want == ([6]byte{}) {
+				want = adapter.gatewayHardwareAddress
+			}
+			if got := *eth.DestinationHardwareAddr(); got != want {
+				t.Fatalf("destination hardware address = %x, want %x", got, want)
+			}
+			ipFrame, _ := decodeUDPFrame(t, frame)
+			if got := netip.AddrFrom4(*ipFrame.DestinationAddr()); got != test.address {
+				t.Fatalf("destination IP address = %v, want %v", got, test.address)
+			}
+		})
+	}
+}
+
 func TestSocketCloseDropsQueuedDatagramsAndReusesBackingWithoutStaleRevival(t *testing.T) {
 	_, adapter, account := newTestAdapter(t, 89)
 	local := nscore.Endpoint{Address: netip.MustParseAddr("192.0.2.89"), Port: 4089}

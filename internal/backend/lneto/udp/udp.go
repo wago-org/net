@@ -560,7 +560,7 @@ func (n *Adapter) egressLocked(dst []byte) (int, error) {
 	frame := dst[:frameBytes]
 	clear(frame)
 	ethernetFrame, _ := ethernet.NewFrame(frame)
-	*ethernetFrame.DestinationHardwareAddr() = n.gatewayHardwareAddress
+	*ethernetFrame.DestinationHardwareAddr() = destinationHardwareAddress(remote.Address, n.gatewayHardwareAddress)
 	*ethernetFrame.SourceHardwareAddr() = n.hardwareAddress
 	ethernetFrame.SetEtherType(ethernet.TypeIPv4)
 	ipFrame, _ := ipv4.NewFrame(frame[14:])
@@ -589,6 +589,17 @@ func (n *Adapter) egressLocked(dst []byte) (int, error) {
 		n.cursor = 0
 	}
 	return frameBytes, nil
+}
+
+func destinationHardwareAddress(address netip.Addr, gateway [6]byte) [6]byte {
+	address4 := address.As4()
+	if address4 == [4]byte{255, 255, 255, 255} {
+		return ethernet.BroadcastAddr()
+	}
+	if address.IsMulticast() {
+		return [6]byte{0x01, 0x00, 0x5e, address4[1] & 0x7f, address4[2], address4[3]}
+	}
+	return gateway
 }
 
 func validUnicastMAC(mac [6]byte) bool {
