@@ -499,6 +499,60 @@ func TestMaximumByteBudgetServicesIngressPortably(t *testing.T) {
 }
 
 func TestPacketServiceBudgetEdgesPreserveQueuedWorkAndAlternate(t *testing.T) {
+	t.Run("single operation calls alternate continuously ready directions", func(t *testing.T) {
+		ns := newTestNamespace(t, 36)
+		ingressCalls, egressCalls := 0, 0
+		if err := ns.Install(Participant{
+			Ingress: func(frame []byte) (bool, error) {
+				ingressCalls++
+				if len(frame) != 1 || frame[0] != byte(ingressCalls) {
+					t.Fatalf("ingress %d = %x", ingressCalls, frame)
+				}
+				return true, nil
+			},
+			HasEgress: func() bool { return true },
+			Egress: func(frame []byte) (int, bool, error) {
+				egressCalls++
+				frame[0] = byte(0x80 + egressCalls)
+				return 1, true, nil
+			},
+		}); err != nil {
+			t.Fatal(err)
+		}
+		for i := 1; i <= 4; i++ {
+			if err := ns.Link().TryEnqueue(packetlink.Ingress, []byte{byte(i)}); err != nil {
+				t.Fatal(err)
+			}
+		}
+		ns.Lock()
+		ns.SetNextIngressLocked(true)
+		ns.Unlock()
+		budget := nscore.ServiceBudget{Packets: 1, Bytes: uint32(ns.Link().MaxFrameBytes()), Operations: 1}
+		var egressFrame [1]byte
+		for call := 0; call < 6; call++ {
+			report, progress, err := ns.TryService(budget)
+			if err != nil || progress != nscore.ProgressDone || report != (nscore.ServiceReport{Packets: 1, Bytes: 1, Operations: 1}) {
+				t.Fatalf("service %d = %+v, %v, %v", call, report, progress, err)
+			}
+			if call%2 == 0 {
+				if snapshot := ns.Link().Snapshot(); snapshot.EgressFrames != 0 {
+					t.Fatalf("ingress call %d queued egress = %+v", call, snapshot)
+				}
+				continue
+			}
+			result, err := ns.Link().TryDequeue(packetlink.Egress, egressFrame[:])
+			if err != nil || !result.Ready || result.FrameBytes != 1 || egressFrame[0] != byte(0x80+egressCalls) {
+				t.Fatalf("egress call %d = %+v, %v, frame=%x", call, result, err, egressFrame)
+			}
+		}
+		if ingressCalls != 3 || egressCalls != 3 {
+			t.Fatalf("direction calls = ingress %d, egress %d", ingressCalls, egressCalls)
+		}
+		if snapshot := ns.Link().Snapshot(); snapshot.IngressFrames != 1 || snapshot.IngressBytes != 1 || snapshot.EgressFrames != 0 {
+			t.Fatalf("remaining queues = %+v", snapshot)
+		}
+	})
+
 	t.Run("queue full egress falls through to ingress", func(t *testing.T) {
 		ns := newTestNamespace(t, 31)
 		producerCalls := 0
