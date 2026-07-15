@@ -700,6 +700,7 @@ func (a *Adapter) ingressLocked(frame []byte) (bool, error) {
 		return true, nil
 	}
 	a.decode.Reset()
+	defer a.decode.Reset()
 	_, incomplete, err := a.decode.Decode(payload)
 	if err != nil || incomplete || !normalizeCompressedResourceNames(payload, &a.decode) {
 		return true, nil

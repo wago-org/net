@@ -323,6 +323,50 @@ func TestMDNSQueryAcceptsCompressedNameResourceData(t *testing.T) {
 	}
 }
 
+func TestMDNSIngressResetsDecodeScratchAfterMalformedAndValidResponses(t *testing.T) {
+	core, adapter, _ := newTestAdapter(t, queryOnlyConfig(), testPolicy())
+	resource, _, err := adapter.TryQuery(mdnsns.Request{Name: "peer.local", Types: mdnsns.RecordsA})
+	if err != nil {
+		t.Fatal(err)
+	}
+	query := resource.(*query)
+	_ = serviceEgress(t, core)
+
+	answer := resourceOfType(t, testService("peer", "192.0.2.22"), lnetodns.TypeA)
+	message := lnetodns.Message{Answers: []lnetodns.Resource{answer, answer}}
+	payload, err := message.AppendTo(make([]byte, 0, 1200), 0, lnetodns.HeaderFlags(1<<15|1<<10))
+	if err != nil {
+		t.Fatal(err)
+	}
+	malformed := payload[:len(payload)-1]
+	serviceIngress(t, core, wrapMDNSFrame(t, malformed, [6]byte{2, 0, 0, 0, 0, 22}, netip.MustParseAddr("192.0.2.22")))
+	if query.state != stateWaiting || len(query.records) != 0 || query.Readiness() != 0 {
+		t.Fatalf("malformed response mutated query: state=%v records=%d readiness=%v", query.state, len(query.records), query.Readiness())
+	}
+	assertMDNSDecodeScratchReset(t, &adapter.decode)
+
+	valid, err := buildServicePacket(testService("peer", "192.0.2.22"), lnetodns.TypeA, 1200)
+	if err != nil {
+		t.Fatal(err)
+	}
+	serviceIngress(t, core, wrapMDNSFrame(t, valid, [6]byte{2, 0, 0, 0, 0, 22}, netip.MustParseAddr("192.0.2.22")))
+	if query.Readiness() != nscore.ReadyMDNSResult {
+		t.Fatalf("valid response readiness = %v", query.Readiness())
+	}
+	record, next, err := query.TryNext()
+	if err != nil || next != mdnsns.NextReady || record.Name != "peer.local" || record.Address != netip.MustParseAddr("192.0.2.22") {
+		t.Fatalf("valid retained record = %+v, %v, %v", record, next, err)
+	}
+	assertMDNSDecodeScratchReset(t, &adapter.decode)
+}
+
+func assertMDNSDecodeScratchReset(t testing.TB, message *lnetodns.Message) {
+	t.Helper()
+	if len(message.Questions) != 0 || len(message.Answers) != 0 || len(message.Authorities) != 0 || len(message.Additionals) != 0 {
+		t.Fatalf("decode scratch lengths not reset: %#v", message)
+	}
+}
+
 func TestMDNSRejectsMalformedOrIrrelevantResponses(t *testing.T) {
 	core, adapter, _ := newTestAdapter(t, queryOnlyConfig(), testPolicy())
 	resource, _, err := adapter.TryQuery(mdnsns.Request{Name: "peer.local", Types: mdnsns.RecordsA})
