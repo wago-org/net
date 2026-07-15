@@ -50,6 +50,30 @@ func TestServerRequiresExplicitFinitePoolAndCopiesConfig(t *testing.T) {
 	if err := Register(wagonet.New(), WithServer(server)); err != ErrInvalidServer {
 		t.Fatalf("zero pool error = %v", err)
 	}
+
+	base := Server{
+		Address: netip.MustParseAddr("192.0.2.1"), Gateway: netip.MustParseAddr("192.0.2.1"), DNS: netip.MustParseAddr("192.0.2.53"),
+		Subnet: netip.MustParsePrefix("192.0.2.0/24"), LeaseSeconds: 3600, MaxClients: 2,
+	}
+	for _, test := range []struct {
+		name   string
+		mutate func(*Server)
+	}{
+		{name: "server network", mutate: func(server *Server) { server.Address = netip.MustParseAddr("192.0.2.0") }},
+		{name: "server broadcast", mutate: func(server *Server) { server.Address = netip.MustParseAddr("192.0.2.255") }},
+		{name: "gateway network", mutate: func(server *Server) { server.Gateway = netip.MustParseAddr("192.0.2.0") }},
+		{name: "gateway broadcast", mutate: func(server *Server) { server.Gateway = netip.MustParseAddr("192.0.2.255") }},
+		{name: "DNS network", mutate: func(server *Server) { server.DNS = netip.MustParseAddr("192.0.2.0") }},
+		{name: "DNS broadcast", mutate: func(server *Server) { server.DNS = netip.MustParseAddr("192.0.2.255") }},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			invalid := base
+			test.mutate(&invalid)
+			if err := Register(wagonet.New(), WithServer(invalid)); err != ErrInvalidConfig {
+				t.Fatalf("non-host server configuration error = %v", err)
+			}
+		})
+	}
 }
 
 func TestZeroConfigTruthfullyDisablesBackendOperations(t *testing.T) {

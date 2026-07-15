@@ -185,7 +185,40 @@ func ValidConfig(config Config, mtu int, compiled *policy.Policy, account *quota
 func serverConfigured(config ServerConfig) bool { return config != (ServerConfig{}) }
 
 func validServer(config ServerConfig) bool {
-	return validIPv4(config.ServerAddr) && config.Subnet.IsValid() && config.Subnet.Addr().Is4() && config.Subnet.Contains(config.ServerAddr) && config.LeaseSeconds > 0 && config.MaxClients > 0 && validOptionalAdvertisedIPv4(config.Gateway) && validOptionalAdvertisedIPv4(config.DNS)
+	if !config.Subnet.IsValid() || !config.Subnet.Addr().Is4() || config.Subnet.Addr().Is4In6() {
+		return false
+	}
+	subnet := config.Subnet.Masked()
+	return validIPv4(config.ServerAddr) && usableSubnetHost(config.ServerAddr, subnet) && config.LeaseSeconds > 0 && config.MaxClients > 0 &&
+		validOptionalAdvertisedIPv4(config.Gateway) && usableOptionalSubnetHost(config.Gateway, subnet) &&
+		validOptionalAdvertisedIPv4(config.DNS) && usableOptionalSubnetHost(config.DNS, subnet)
+}
+
+func usableOptionalSubnetHost(address netip.Addr, subnet netip.Prefix) bool {
+	return !address.IsValid() || !subnet.Contains(address) || usableSubnetHost(address, subnet)
+}
+
+func usableSubnetHost(address netip.Addr, subnet netip.Prefix) bool {
+	if !subnet.Contains(address) {
+		return false
+	}
+	bits := subnet.Bits()
+	if bits >= 31 {
+		return true
+	}
+	if address == subnet.Addr() {
+		return false
+	}
+	broadcast := subnet.Addr().As4()
+	full, partial := bits/8, bits%8
+	if partial != 0 {
+		broadcast[full] |= byte(0xff >> partial)
+		full++
+	}
+	for index := full; index < len(broadcast); index++ {
+		broadcast[index] = 0xff
+	}
+	return address != netip.AddrFrom4(broadcast)
 }
 
 func validIPv4(address netip.Addr) bool {

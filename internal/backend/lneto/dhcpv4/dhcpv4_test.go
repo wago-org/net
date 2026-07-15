@@ -721,6 +721,33 @@ func TestServerClientBoundAndPoolAreFinite(t *testing.T) {
 	}
 }
 
+func TestServerRejectsSubnetNetworkAndBroadcastIdentities(t *testing.T) {
+	base := defaultConfig()
+	base.Server = ServerConfig{
+		ServerAddr: netip.MustParseAddr("192.0.2.1"), Gateway: netip.MustParseAddr("192.0.2.1"), DNS: netip.MustParseAddr("192.0.2.53"),
+		Subnet: netip.MustParsePrefix("192.0.2.0/24"), LeaseSeconds: 3600, MaxClients: 1,
+	}
+	for _, test := range []struct {
+		name   string
+		mutate func(*ServerConfig)
+	}{
+		{name: "server network", mutate: func(server *ServerConfig) { server.ServerAddr = netip.MustParseAddr("192.0.2.0") }},
+		{name: "server broadcast", mutate: func(server *ServerConfig) { server.ServerAddr = netip.MustParseAddr("192.0.2.255") }},
+		{name: "gateway network", mutate: func(server *ServerConfig) { server.Gateway = netip.MustParseAddr("192.0.2.0") }},
+		{name: "gateway broadcast", mutate: func(server *ServerConfig) { server.Gateway = netip.MustParseAddr("192.0.2.255") }},
+		{name: "DNS network", mutate: func(server *ServerConfig) { server.DNS = netip.MustParseAddr("192.0.2.0") }},
+		{name: "DNS broadcast", mutate: func(server *ServerConfig) { server.DNS = netip.MustParseAddr("192.0.2.255") }},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			config := base
+			test.mutate(&config.Server)
+			if ValidConfig(config, 1500, new(policy.Policy), quota.NewAccount(quota.DefaultLimits()), true) {
+				t.Fatalf("accepted non-host server configuration: %+v", config.Server)
+			}
+		})
+	}
+}
+
 func TestServerRejectsInvalidAdvertisementsBeforeOwnership(t *testing.T) {
 	for addressName, address := range map[string]netip.Addr{
 		"loopback":          netip.MustParseAddr("127.0.0.1"),
