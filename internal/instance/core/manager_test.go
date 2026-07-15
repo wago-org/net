@@ -19,6 +19,7 @@ import (
 type fakeNamespace struct {
 	closed       atomic.Int32
 	closeErr     error
+	closePanic   any
 	closeStarted chan struct{}
 	closeRelease <-chan struct{}
 	socket       namespace.UDPSocket
@@ -33,6 +34,9 @@ func (n *fakeNamespace) Close() error {
 	}
 	if n.closeRelease != nil {
 		<-n.closeRelease
+	}
+	if n.closePanic != nil {
+		panic(n.closePanic)
 	}
 	return n.closeErr
 }
@@ -566,6 +570,106 @@ func TestPanickingAttachmentRollsBackAndAllowsRetry(t *testing.T) {
 	if backend.closed.Load() != 1 {
 		t.Fatalf("retry backend close count = %d, want 1", backend.closed.Load())
 	}
+}
+
+func TestAttachmentCompletionRetiresRecordAcrossRollbackClosePanic(t *testing.T) {
+	manager := NewManager()
+	instance := new(wago.Instance)
+	attempt, err := manager.beginAttachment(instance)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cleanupPanic := errors.New("backend close panic")
+	backend := &fakeNamespace{closePanic: cleanupPanic}
+	state, account := newRollbackAttachmentState(t, manager, backend)
+	originalPanic := errors.New("namespace construction panic")
+
+	waiterDone := make(chan struct{})
+	go func() {
+		<-attempt.done
+		close(waiterDone)
+	}()
+	var recovered any
+	func() {
+		defer func() { recovered = recover() }()
+		manager.completeAttachment(instance, attempt, state, false, originalPanic)
+	}()
+	if recovered != originalPanic {
+		t.Fatalf("recovered panic = %v, want original %v", recovered, originalPanic)
+	}
+	<-waiterDone
+	if backend.closed.Load() != 1 {
+		t.Fatalf("rollback backend close count = %d, want 1", backend.closed.Load())
+	}
+	if usage, closed := account.Snapshot(); !closed || usage != (quota.Usage{}) {
+		t.Fatalf("rollback quota usage=%+v closed=%v", usage, closed)
+	}
+	if manager.Len() != 0 {
+		t.Fatalf("manager length = %d, want zero", manager.Len())
+	}
+	manager.mu.RLock()
+	_, retained := manager.attaching[instance]
+	manager.mu.RUnlock()
+	if retained {
+		t.Fatal("rollback panic retained attachment record")
+	}
+	if err := manager.Attach(instance); err != nil {
+		t.Fatalf("retry Attach after rollback panic: %v", err)
+	}
+	if err := manager.Detach(instance); err != nil {
+		t.Fatalf("retry Detach after rollback panic: %v", err)
+	}
+
+	cleanupOnlyInstance := new(wago.Instance)
+	cleanupOnlyAttempt, err := manager.beginAttachment(cleanupOnlyInstance)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cleanupOnlyBackend := &fakeNamespace{closePanic: cleanupPanic}
+	cleanupOnlyState, cleanupOnlyAccount := newRollbackAttachmentState(t, manager, cleanupOnlyBackend)
+	recovered = nil
+	func() {
+		defer func() { recovered = recover() }()
+		manager.completeAttachment(cleanupOnlyInstance, cleanupOnlyAttempt, cleanupOnlyState, false, nil)
+	}()
+	if recovered != cleanupPanic {
+		t.Fatalf("cleanup-only panic = %v, want %v", recovered, cleanupPanic)
+	}
+	if usage, closed := cleanupOnlyAccount.Snapshot(); !closed || usage != (quota.Usage{}) {
+		t.Fatalf("cleanup-only quota usage=%+v closed=%v", usage, closed)
+	}
+	manager.mu.RLock()
+	_, retained = manager.attaching[cleanupOnlyInstance]
+	manager.mu.RUnlock()
+	if retained {
+		t.Fatal("cleanup-only panic retained attachment record")
+	}
+}
+
+func newRollbackAttachmentState(t testing.TB, manager *Manager, backend nscore.Namespace) (*State, *quota.Account) {
+	t.Helper()
+	table, err := resource.NewTable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	poller, err := readiness.New(table, manager.readiness)
+	if err != nil {
+		t.Fatal(err)
+	}
+	account := quota.NewAccount(manager.limits)
+	state := &State{
+		resources:  table,
+		readiness:  poller,
+		quotas:     account,
+		policy:     manager.policy,
+		pollEvents: make([]readiness.Event, manager.readiness.MaxRegistrations),
+	}
+	if _, err := state.createNamespace(func(*policy.Policy, *quota.Account) (nscore.Namespace, error) {
+		return backend, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	return state, account
 }
 
 func TestDifferentInstancesAttachConcurrently(t *testing.T) {

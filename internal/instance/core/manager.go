@@ -243,10 +243,7 @@ func (m *Manager) Attach(instance *wago.Instance) error {
 	var state *State
 	published := false
 	defer func() {
-		if !published && state != nil {
-			_ = state.Close()
-		}
-		m.finishAttachment(instance, attempt)
+		m.completeAttachment(instance, attempt, state, published, recover())
 	}()
 
 	table, err := resource.NewTable()
@@ -303,6 +300,35 @@ func (m *Manager) beginAttachment(instance *wago.Instance) (*attachmentAttempt, 
 		m.mu.Unlock()
 		return attempt, nil
 	}
+}
+
+// completeAttachment retires the lifecycle record before re-propagating a
+// panic. A construction panic takes precedence over a rollback-close panic;
+// when construction returned normally, the rollback panic remains visible.
+func (m *Manager) completeAttachment(instance *wago.Instance, attempt *attachmentAttempt, state *State, published bool, originalPanic any) {
+	var cleanupPanic any
+	if !published && state != nil {
+		cleanupPanic = closeUnpublishedState(state)
+	}
+	m.finishAttachment(instance, attempt)
+	if originalPanic != nil {
+		panic(originalPanic)
+	}
+	if cleanupPanic != nil {
+		panic(cleanupPanic)
+	}
+}
+
+// closeUnpublishedState contains only enough recovery to finish attachment
+// bookkeeping. It always closes the private quota account, then returns the
+// panic payload for completeAttachment to re-propagate.
+func closeUnpublishedState(state *State) (panicValue any) {
+	defer func() { panicValue = recover() }()
+	if state.quotas != nil {
+		defer state.quotas.Close()
+	}
+	_ = state.Close()
+	return nil
 }
 
 func (m *Manager) finishAttachment(instance *wago.Instance, attempt *attachmentAttempt) {
