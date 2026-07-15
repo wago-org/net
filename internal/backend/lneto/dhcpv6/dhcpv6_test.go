@@ -924,6 +924,79 @@ func FuzzDHCPv6WireReply(f *testing.F) {
 	})
 }
 
+func FuzzDHCPv6OwnedIngressLifecycle(f *testing.F) {
+	config := defaultConfig()
+	seedAdapterCore, seedAdapter, _ := newTestAdapter(f, config)
+	seedResource, _, err := seedAdapter.TryAcquire()
+	if err != nil {
+		f.Fatal(err)
+	}
+	seedLease := seedResource.(*leaseResource)
+	serverDUID := []byte{0, 3, 0, 1, 2, 0, 0, 0, 0, 2}
+	valid := buildServerPayload(f, lnetodhcp.MsgAdvertise, seedLease.xid, seedLease.clientDUID[:], serverDUID, seedLease.iaid, netip.MustParseAddr("2001:db8::10"), false)
+	if err := seedAdapterCore.Close(); err != nil {
+		f.Fatal(err)
+	}
+	f.Add(valid)
+	f.Add([]byte{})
+	f.Add([]byte{byte(lnetodhcp.MsgAdvertise), byte(seedLease.xid >> 16), byte(seedLease.xid >> 8), byte(seedLease.xid)})
+	f.Fuzz(func(t *testing.T, payload []byte) {
+		if len(payload) > config.MaxPacketBytes {
+			return
+		}
+		core, adapter, account := newTestAdapter(t, config)
+		resource, progress, err := adapter.TryAcquire()
+		if err != nil || progress != nscore.ProgressInProgress {
+			t.Fatalf("TryAcquire = %T, %v, %v", resource, progress, err)
+		}
+		lease := resource.(*leaseResource)
+		var scratch [1514]byte
+		if _, worked, err := adapter.egressLocked(scratch[:]); err != nil || !worked || lease.state != leaseWaitAdvertise {
+			t.Fatalf("Solicit = worked:%v err:%v state:%v", worked, err, lease.state)
+		}
+		packetBefore := append([]byte(nil), lease.packet...)
+		clientStateBefore := lease.client.State()
+		usageBefore, closedBefore := account.Snapshot()
+		serverAddr := netip.MustParseAddr("fe80::2")
+		serverMAC := [6]byte{0x02, 0, 0, 0, 0, 2}
+		frame := wrapServerFrame(t, adapter, serverAddr, serverMAC, payload)
+		if handled, err := adapter.ingressLocked(frame); err != nil || !handled {
+			t.Fatalf("owned ingress = handled:%v err:%v", handled, err)
+		}
+		if usage, closed := account.Snapshot(); usage != usageBefore || closed != closedBefore {
+			t.Fatalf("owned ingress changed quota = %+v, closed=%v; want %+v, closed=%v", usage, closed, usageBefore, closedBefore)
+		}
+		if lease.result != (dhcpns.Configuration{}) || lease.failure != nil {
+			t.Fatalf("Advertise ingress produced terminal result: result=%+v failure=%v", lease.result, lease.failure)
+		}
+		switch lease.state {
+		case leaseWaitAdvertise:
+			if !bytes.Equal(lease.packet, packetBefore) || lease.client.State() != clientStateBefore || lease.serverLen != 0 || lease.serverAddr.IsValid() || lease.serverMAC != ([6]byte{}) {
+				t.Fatalf("rejected Advertise mutated pending state: client=%v/%v server=%v/%x len=%d", lease.client.State(), clientStateBefore, lease.serverAddr, lease.serverMAC, lease.serverLen)
+			}
+		case leaseRequestPending:
+			if lease.serverAddr != serverAddr || lease.serverMAC != serverMAC || lease.serverLen == 0 || lease.attempts != 0 || lease.wait != 0 {
+				t.Fatalf("accepted Advertise correlation: server=%v/%x len=%d attempts=%d wait=%d", lease.serverAddr, lease.serverMAC, lease.serverLen, lease.attempts, lease.wait)
+			}
+			request, err := lnetodhcp.NewFrame(lease.packet)
+			if err != nil || request.MsgType() != lnetodhcp.MsgRequest || request.TransactionID() != lease.xid || request.ValidateSize() != nil {
+				t.Fatalf("accepted Advertise prepared invalid Request: frame=%v err=%v", request, err)
+			}
+		default:
+			t.Fatalf("Advertise ingress reached unexpected state %v", lease.state)
+		}
+		if err := core.Close(); err != nil {
+			t.Fatal(err)
+		}
+		if usage, closed := account.Snapshot(); usage != (quota.Usage{}) || closed {
+			t.Fatalf("namespace close quota = %+v, closed=%v", usage, closed)
+		}
+		if lease.state != leaseClosed || lease.owner != nil || lease.packet != nil || adapter.lease != nil {
+			t.Fatalf("namespace close retained fuzzed acquisition state")
+		}
+	})
+}
+
 func TestAcquireQuotaFailureRollsBackOnlyAttemptedOwnership(t *testing.T) {
 	baseLimits := quota.Limits{Resources: 4, DHCPv6Resources: 4, DHCPv6Work: 4, QueuedBytes: 1 << 20, ServiceUnits: 64}
 	for _, test := range []struct {
