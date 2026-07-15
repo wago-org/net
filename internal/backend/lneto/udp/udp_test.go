@@ -2,6 +2,7 @@ package udp
 
 import (
 	"bytes"
+	"encoding/binary"
 	"errors"
 	"net/netip"
 	"sync"
@@ -453,6 +454,92 @@ func TestUDPIngressDropsMalformedLocalDatagramsAndAcceptsFollowingValidFrame(t *
 			}
 		})
 	}
+}
+
+func FuzzUDPBoundWireIngressLifecycle(f *testing.F) {
+	f.Add(false, byte(0), uint16(20), []byte(nil))
+	f.Add(true, byte(1), uint16(24), []byte{0, 53, 0, 0})
+	f.Add(true, byte(2), uint16(28), []byte{0, 53, 0, 0, 0, 8, 0, 0})
+	f.Add(false, byte(3), ^uint16(0), bytes.Repeat([]byte{0xa5}, 32))
+	f.Fuzz(func(t *testing.T, owned bool, sourceClass byte, declaredLength uint16, raw []byte) {
+		if len(raw) > 128 {
+			raw = raw[:128]
+		}
+		wire := append([]byte(nil), raw...)
+		common, adapter, account := newTestAdapter(t, 82)
+		local := nscore.Endpoint{Address: netip.MustParseAddr("192.0.2.82"), Port: 4082}
+		socket := bindTestSocket(t, adapter, local).(*udpSocket)
+		if len(wire) >= 4 {
+			port := local.Port + 1
+			if owned {
+				port = local.Port
+			}
+			binary.BigEndian.PutUint16(wire[2:4], port)
+		}
+
+		frame := make([]byte, 14+20+len(wire))
+		ethernetFrame, err := ethernet.NewFrame(frame)
+		if err != nil {
+			t.Fatal(err)
+		}
+		*ethernetFrame.DestinationHardwareAddr() = adapter.hardwareAddress
+		switch sourceClass % 4 {
+		case 0:
+			*ethernetFrame.SourceHardwareAddr() = [6]byte{0x02, 0, 0, 0, 0, 81}
+		case 1:
+			*ethernetFrame.SourceHardwareAddr() = [6]byte{}
+		case 2:
+			*ethernetFrame.SourceHardwareAddr() = ethernet.BroadcastAddr()
+		case 3:
+			*ethernetFrame.SourceHardwareAddr() = [6]byte{0x01, 0, 0, 0, 0, 81}
+		}
+		ethernetFrame.SetEtherType(ethernet.TypeIPv4)
+		ipFrame, err := ipv4.NewFrame(frame[14:])
+		if err != nil {
+			t.Fatal(err)
+		}
+		ipFrame.SetVersionAndIHL(4, 5)
+		ipFrame.SetTotalLength(declaredLength)
+		ipFrame.SetTTL(64)
+		ipFrame.SetProtocol(lneto.IPProtoUDP)
+		*ipFrame.SourceAddr() = [4]byte{192, 0, 2, 81}
+		*ipFrame.DestinationAddr() = local.Address.As4()
+		copy(frame[34:], wire)
+		ipFrame.SetCRC(0)
+		ipFrame.SetCRC(ipFrame.CalculateHeaderCRC() ^ 1)
+
+		before := append([]byte(nil), frame...)
+		usageBefore, closedBefore := account.Snapshot()
+		common.Lock()
+		handled, ingressErr := adapter.ingressLocked(frame)
+		queued := socket.rx.count
+		common.Unlock()
+		wantHandled := len(wire) >= 4 && owned
+		if ingressErr != nil || handled != wantHandled {
+			t.Fatalf("ingress = handled %v, err %v; want handled %v", handled, ingressErr, wantHandled)
+		}
+		if !bytes.Equal(frame, before) {
+			t.Fatal("ingress mutated caller-owned frame")
+		}
+		if queued != 0 || socket.Readiness()&nscore.ReadyReadable != 0 {
+			t.Fatalf("malformed ingress queued datagram: queued=%d readiness=%v", queued, socket.Readiness())
+		}
+		if usage, closed := account.Snapshot(); usage != usageBefore || closed != closedBefore {
+			t.Fatalf("ingress quota = %+v, closed=%v; want %+v, closed=%v", usage, closed, usageBefore, closedBefore)
+		}
+		if err := socket.Close(); err != nil {
+			t.Fatal(err)
+		}
+		if usage, closed := account.Snapshot(); usage != (quota.Usage{}) || closed {
+			t.Fatalf("close quota = %+v, closed=%v", usage, closed)
+		}
+		common.Lock()
+		leases := common.UDPPortLeaseCountLocked()
+		common.Unlock()
+		if leases != 0 {
+			t.Fatalf("close retained %d UDP port leases", leases)
+		}
+	})
 }
 
 func TestSocketTrySendRejectsNonWireDestinationsWithoutQueueMutation(t *testing.T) {
