@@ -1005,6 +1005,104 @@ func TestTimeoutCancellationPortOwnershipAndDeterministicClose(t *testing.T) {
 	}
 }
 
+func TestTerminalAcquireIsolatesFreshTransactionAndSelectedServer(t *testing.T) {
+	for _, terminal := range []string{"cancel", "timeout"} {
+		t.Run(terminal, func(t *testing.T) {
+			config := defaultConfig()
+			config.MaxAttempts = 1
+			config.ResponseServiceAttempts = 1
+			_, adapter, account := newTestAdapter(t, config)
+			resource, progress, err := adapter.TryAcquire()
+			if err != nil || progress != nscore.ProgressInProgress {
+				t.Fatalf("first acquire = %T, %v, %v", resource, progress, err)
+			}
+			stale := resource.(*leaseResource)
+			staleXID := stale.xid
+			var scratch [1514]byte
+			if _, worked, err := adapter.egressLocked(scratch[:]); err != nil || !worked || stale.state != leaseWaitAdvertise {
+				t.Fatalf("first Solicit = worked:%v err:%v state:%v", worked, err, stale.state)
+			}
+			serverAddr := netip.MustParseAddr("fe80::2")
+			serverMAC := [6]byte{0x02, 0, 0, 0, 0, 2}
+			serverDUID := []byte{0, 3, 0, 1, 2, 0, 0, 0, 0, 2}
+			assigned := netip.MustParseAddr("2001:db8::10")
+			staleAdvertise := wrapServerFrame(t, adapter, serverAddr, serverMAC, buildServerPayload(t, lnetodhcp.MsgAdvertise, stale.xid, stale.clientDUID[:], serverDUID, stale.iaid, assigned, false))
+			staleReply := wrapServerFrame(t, adapter, serverAddr, serverMAC, buildServerPayload(t, lnetodhcp.MsgReply, stale.xid, stale.clientDUID[:], serverDUID, stale.iaid, assigned, true))
+			if terminal == "cancel" {
+				if err := stale.Cancel(); err != nil {
+					t.Fatal(err)
+				}
+				if _, _, err := stale.TryResult(); nscoreFailure(err) != nscore.FailureCanceled {
+					t.Fatalf("canceled result = %v", err)
+				}
+			} else {
+				if _, worked, err := adapter.egressLocked(scratch[:]); err != nil || !worked || stale.state != leaseFailed {
+					t.Fatalf("timeout service = worked:%v err:%v state:%v", worked, err, stale.state)
+				}
+				if _, _, err := stale.TryResult(); nscoreFailure(err) != nscore.FailureTimedOut {
+					t.Fatalf("timed-out result = %v", err)
+				}
+			}
+			if stale.state != leaseFailed || stale.wait != 0 || stale.Readiness() != nscore.ReadyError || adapter.lease != stale {
+				t.Fatalf("terminal state = state:%v wait:%d readiness:%v mapped:%p", stale.state, stale.wait, stale.Readiness(), adapter.lease)
+			}
+			if usage, _ := account.Snapshot(); usage != (quota.Usage{Resources: 1, DHCPv6Resources: 1, QueuedBytes: retainedBytes(config)}) {
+				t.Fatalf("terminal quota = %+v", usage)
+			}
+			if err := stale.Close(); err != nil {
+				t.Fatal(err)
+			}
+
+			resource, progress, err = adapter.TryAcquire()
+			if err != nil || progress != nscore.ProgressInProgress {
+				t.Fatalf("fresh acquire = %T, %v, %v", resource, progress, err)
+			}
+			fresh := resource.(*leaseResource)
+			if fresh.xid == 0 || fresh.xid == staleXID {
+				t.Fatalf("fresh transaction ID = %x, stale=%x", fresh.xid, staleXID)
+			}
+			if _, worked, err := adapter.egressLocked(scratch[:]); err != nil || !worked || fresh.state != leaseWaitAdvertise {
+				t.Fatalf("fresh Solicit = worked:%v err:%v state:%v", worked, err, fresh.state)
+			}
+			if handled, err := adapter.ingressLocked(staleAdvertise); err != nil || !handled {
+				t.Fatalf("stale Advertise = handled:%v err:%v", handled, err)
+			}
+			if fresh.state != leaseWaitAdvertise || fresh.serverLen != 0 || fresh.result != (dhcpns.Configuration{}) || fresh.failure != nil {
+				t.Fatalf("stale Advertise mutated fresh lease: state=%v serverLen=%d result=%+v failure=%v", fresh.state, fresh.serverLen, fresh.result, fresh.failure)
+			}
+			if err := stale.Close(); err != nil {
+				t.Fatal(err)
+			}
+			if adapter.lease != fresh {
+				t.Fatalf("stale close removed fresh lease: mapped=%p fresh=%p", adapter.lease, fresh)
+			}
+			freshAdvertise := wrapServerFrame(t, adapter, serverAddr, serverMAC, buildServerPayload(t, lnetodhcp.MsgAdvertise, fresh.xid, fresh.clientDUID[:], serverDUID, fresh.iaid, assigned, false))
+			if handled, err := adapter.ingressLocked(freshAdvertise); err != nil || !handled || fresh.state != leaseRequestPending {
+				t.Fatalf("fresh Advertise = handled:%v err:%v state:%v", handled, err, fresh.state)
+			}
+			if _, worked, err := adapter.egressLocked(scratch[:]); err != nil || !worked || fresh.state != leaseWaitReply {
+				t.Fatalf("fresh Request = worked:%v err:%v state:%v", worked, err, fresh.state)
+			}
+			if handled, err := adapter.ingressLocked(staleReply); err != nil || !handled {
+				t.Fatalf("stale Reply = handled:%v err:%v", handled, err)
+			}
+			if fresh.state != leaseWaitReply || fresh.result != (dhcpns.Configuration{}) || fresh.failure != nil {
+				t.Fatalf("stale Reply mutated fresh lease: state=%v result=%+v failure=%v", fresh.state, fresh.result, fresh.failure)
+			}
+			if usage, _ := account.Snapshot(); usage != (quota.Usage{Resources: 1, DHCPv6Resources: 1, QueuedBytes: retainedBytes(config), DHCPv6Work: 1}) {
+				t.Fatalf("fresh quota after stale traffic = %+v", usage)
+			}
+			freshReply := wrapServerFrame(t, adapter, serverAddr, serverMAC, buildServerPayload(t, lnetodhcp.MsgReply, fresh.xid, fresh.clientDUID[:], serverDUID, fresh.iaid, assigned, true))
+			if handled, err := adapter.ingressLocked(freshReply); err != nil || !handled || fresh.state != leaseBound {
+				t.Fatalf("fresh Reply = handled:%v err:%v state:%v", handled, err, fresh.state)
+			}
+			if result, state, err := fresh.TryResult(); err != nil || state != dhcpns.ResultReady || !result.Valid() {
+				t.Fatalf("fresh result = %+v, %v, %v", result, state, err)
+			}
+		})
+	}
+}
+
 func TestZeroConfigRetainsTruthfulServiceSemantics(t *testing.T) {
 	core, adapter, _ := newTestAdapter(t, Config{})
 	if operations := adapter.Operations(); operations != 0 {
