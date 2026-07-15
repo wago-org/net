@@ -11,6 +11,7 @@ import (
 	ntpns "github.com/wago-org/net/internal/namespace/ntp"
 	"github.com/wago-org/net/internal/policy"
 	"github.com/wago-org/net/internal/quota"
+	"github.com/wago-org/net/internal/readiness"
 	"github.com/wago-org/net/internal/resource"
 	wago "github.com/wago-org/wago"
 )
@@ -132,6 +133,67 @@ func TestInstanceNTPCanonicalizesFailedAndUnusedOutputs(t *testing.T) {
 	}
 }
 
+func TestInstanceNTPMalformedCreationRollsBackWithoutPublication(t *testing.T) {
+	var typedNil *fakeSync
+	for _, test := range []struct {
+		name     string
+		resource nscore.Resource
+		progress nscore.Progress
+	}{
+		{name: "wrong resource type", resource: &fakeBase{}, progress: nscore.ProgressDone},
+		{name: "would-block progress", resource: new(fakeSync), progress: nscore.ProgressWouldBlock},
+		{name: "unknown progress", resource: new(fakeSync), progress: nscore.Progress(99)},
+		{name: "typed nil resource", resource: typedNil, progress: nscore.ProgressDone},
+		{name: "missing resource", progress: nscore.ProgressDone},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			adapter := &fakeNamespace{next: test.resource, progress: test.progress}
+			state, cleanup := newTestState(t, adapter, instancecore.DefaultConfig().Readiness)
+			defer cleanup()
+			resourcesBefore := state.Resources().Len()
+			readinessBefore := state.Readiness().Snapshot()
+
+			handle, progress, err := Sync(state, state.NamespaceHandle())
+			if handle != 0 || progress != 0 || failureOf(err) != nscore.FailureIO {
+				t.Fatalf("malformed Sync = %v, %v, %v", handle, progress, err)
+			}
+			if state.Resources().Len() != resourcesBefore || state.Readiness().Snapshot() != readinessBefore {
+				t.Fatalf("malformed Sync published state: resources=%d readiness=%+v", state.Resources().Len(), state.Readiness().Snapshot())
+			}
+			switch resource := test.resource.(type) {
+			case *fakeBase:
+				if !resource.closed {
+					t.Fatal("wrong-type resource was not closed")
+				}
+			case *fakeSync:
+				if resource != nil && resource.closeCalls != 1 {
+					t.Fatalf("invalid-progress close calls = %d", resource.closeCalls)
+				}
+			}
+		})
+	}
+}
+
+func TestInstanceNTPReadinessRegistrationFailureRollsBackResource(t *testing.T) {
+	synchronization := new(fakeSync)
+	adapter := &fakeNamespace{next: synchronization, progress: nscore.ProgressInProgress}
+	state, cleanup := newTestState(t, adapter, readiness.Config{MaxRegistrations: 1})
+	defer cleanup()
+	resourcesBefore := state.Resources().Len()
+	readinessBefore := state.Readiness().Snapshot()
+
+	handle, progress, err := Sync(state, state.NamespaceHandle())
+	if handle != 0 || progress != 0 || !errors.Is(err, readiness.ErrLimit) {
+		t.Fatalf("registration-failed Sync = %v, %v, %v", handle, progress, err)
+	}
+	if synchronization.closeCalls != 1 || state.Resources().Len() != resourcesBefore || state.Readiness().Snapshot() != readinessBefore {
+		t.Fatalf("registration rollback = closes=%d resources=%d readiness=%+v", synchronization.closeCalls, state.Resources().Len(), state.Readiness().Snapshot())
+	}
+	if _, err := state.Resources().Lookup(state.NamespaceHandle(), resource.KindNamespace); err != nil {
+		t.Fatalf("registration rollback removed namespace: %v", err)
+	}
+}
+
 func TestInstanceNTPExactKindLifecycle(t *testing.T) {
 	sample := ntpns.Sample{
 		Server: netip.MustParseAddr("192.0.2.123"), CorrectedTime: time.Date(2026, 7, 13, 22, 0, 0, 0, time.UTC),
@@ -174,6 +236,28 @@ func TestInstanceNTPExactKindLifecycle(t *testing.T) {
 	if _, _, err := Result(state, handle); !errors.Is(err, resource.ErrBadHandle) {
 		t.Fatalf("stale result = %v", err)
 	}
+}
+
+func newTestState(t testing.TB, backend ntpns.Namespace, readinessConfig readiness.Config) (*instancecore.State, func()) {
+	t.Helper()
+	manager, err := instancecore.NewManagerConfigured(instancecore.Config{
+		Limits: quota.DefaultLimits(), Readiness: readinessConfig,
+		NamespaceFactory: func(*policy.Policy, *quota.Account) (nscore.Namespace, error) {
+			return nscore.ComposeNamespace(&fakeBase{}, nscore.Service{Key: ntpns.ServiceKey, Value: backend})
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	instance := new(wago.Instance)
+	if err := manager.Attach(instance); err != nil {
+		t.Fatal(err)
+	}
+	state, ok := manager.ForInstance(instance)
+	if !ok {
+		t.Fatal("attached state missing")
+	}
+	return state, func() { _ = manager.Detach(instance) }
 }
 
 func failureOf(err error) nscore.Failure {
