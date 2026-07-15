@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/binary"
 	"errors"
+	"fmt"
 	"net"
 	"net/netip"
 	"testing"
@@ -680,6 +681,83 @@ func TestMDNSIngressDropsInvalidIPv4LengthsWithoutMutatingOperations(t *testing.
 				core.Unlock()
 				if queued != 1 {
 					t.Fatalf("valid question after malformed length queued %d responses", queued)
+				}
+			})
+		}
+	}
+}
+
+func TestMDNSIngressContainsTruncatedUDPOnlyAfterExactPortCorrelation(t *testing.T) {
+	for available := 0; available < 8; available++ {
+		cases := []struct {
+			name        string
+			sourcePort  uint16
+			destPort    uint16
+			wantHandled bool
+		}{{name: "uncorrelatable"}}
+		if available >= 4 {
+			cases = []struct {
+				name        string
+				sourcePort  uint16
+				destPort    uint16
+				wantHandled bool
+			}{
+				{name: "foreign", sourcePort: Port, destPort: 9999},
+				{name: "owned", sourcePort: Port, destPort: Port, wantHandled: true},
+			}
+		}
+		for _, test := range cases {
+			t.Run(fmt.Sprintf("bytes=%d/%s", available, test.name), func(t *testing.T) {
+				service := testService("device", "192.0.2.11")
+				core, adapter, _ := newTestAdapter(t, Config{
+					Services: []mdnsns.Service{service}, MaxServices: 1, MaxQueries: 1, MaxAnnouncements: 1,
+					MaxRecords: 8, MaxPacketBytes: 1200, MaxQueuedResponses: 1, MaxQuestionsPerPacket: 4,
+					MaxRecordsPerPacket: 16, MaxAttempts: 2, RetryServiceAttempts: 2,
+				}, testPolicy())
+				resource, _, err := adapter.TryQuery(mdnsns.Request{Name: "peer.local", Types: mdnsns.RecordsA})
+				if err != nil {
+					t.Fatal(err)
+				}
+				query := resource.(*query)
+				_ = serviceEgress(t, core)
+
+				frame := make([]byte, 14+20+available)
+				eth, _ := ethernet.NewFrame(frame)
+				*eth.DestinationHardwareAddr() = multicastMAC
+				*eth.SourceHardwareAddr() = [6]byte{2, 0, 0, 0, 0, 22}
+				eth.SetEtherType(ethernet.TypeIPv4)
+				ip, _ := ipv4.NewFrame(frame[14:])
+				ip.SetVersionAndIHL(4, 5)
+				ip.SetTotalLength(uint16(20 + available))
+				ip.SetTTL(255)
+				ip.SetProtocol(lneto.IPProtoUDP)
+				*ip.SourceAddr() = [4]byte{192, 0, 2, 22}
+				*ip.DestinationAddr() = multicastAddress.As4()
+				if available >= 4 {
+					binary.BigEndian.PutUint16(frame[34:36], test.sourcePort)
+					binary.BigEndian.PutUint16(frame[36:38], test.destPort)
+				}
+				ip.SetCRC(ip.CalculateHeaderCRC())
+
+				core.Lock()
+				handled, ingressErr := adapter.ingressLocked(frame)
+				state, records, queued := query.state, len(query.records), adapter.responseCount
+				decode := adapter.decode
+				core.Unlock()
+				if ingressErr != nil || handled != test.wantHandled || state != stateWaiting || records != 0 || queued != 0 || query.Readiness() != 0 {
+					t.Fatalf("truncated ingress = handled:%v err:%v state:%v records:%d queued:%d readiness:%v", handled, ingressErr, state, records, queued, query.Readiness())
+				}
+				if len(decode.Questions) != 0 || len(decode.Answers) != 0 || len(decode.Authorities) != 0 || len(decode.Additionals) != 0 {
+					t.Fatalf("truncated ingress mutated decode scratch: %#v", decode)
+				}
+
+				response, err := buildServicePacket(testService("peer", "192.0.2.22"), lnetodns.TypeA, 1200)
+				if err != nil {
+					t.Fatal(err)
+				}
+				serviceIngress(t, core, wrapMDNSFrame(t, response, [6]byte{2, 0, 0, 0, 0, 22}, netip.MustParseAddr("192.0.2.22")))
+				if query.Readiness() != nscore.ReadyMDNSResult {
+					t.Fatalf("valid response after truncated UDP readiness = %v", query.Readiness())
 				}
 			})
 		}

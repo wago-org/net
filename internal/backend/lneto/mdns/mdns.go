@@ -743,12 +743,15 @@ func (a *Adapter) validateFrame(frame []byte) ([]byte, netip.Addr, bool, error) 
 		return nil, netip.Addr{}, false, nil
 	}
 	ipPayload := ip.Payload()
+	if len(ipPayload) < 4 {
+		return nil, netip.Addr{}, false, nil
+	}
+	if binary.BigEndian.Uint16(ipPayload[:2]) != Port || binary.BigEndian.Uint16(ipPayload[2:4]) != Port {
+		return nil, netip.Addr{}, false, nil
+	}
 	udp, err := lnetoudp.NewFrame(ipPayload)
 	if err != nil {
 		return nil, netip.Addr{}, true, err
-	}
-	if udp.SourcePort() != Port || udp.DestinationPort() != Port {
-		return nil, netip.Addr{}, false, nil
 	}
 	if !validUnicastMAC(*eth.SourceHardwareAddr()) {
 		return nil, netip.Addr{}, true, lneto.ErrInvalidAddr
