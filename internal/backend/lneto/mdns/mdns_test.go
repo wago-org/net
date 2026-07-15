@@ -2,6 +2,7 @@ package mdns
 
 import (
 	"bytes"
+	"encoding/binary"
 	"errors"
 	"net"
 	"net/netip"
@@ -259,6 +260,65 @@ func TestMDNSQueryAcceptsRecordsFromEveryResponseSection(t *testing.T) {
 	}
 	if record, next, err := q.TryNext(); err != nil || next != mdnsns.NextEOF || record != (mdnsns.Record{}) {
 		t.Fatalf("query EOF = %+v, %v, %v", record, next, err)
+	}
+}
+
+func TestMDNSQueryAcceptsCompressedNameResourceData(t *testing.T) {
+	for _, test := range []struct {
+		name       string
+		types      mdnsns.RecordTypes
+		typ        lnetodns.Type
+		data       []byte
+		wantType   mdnsns.RecordType
+		wantPort   uint16
+		wantTarget string
+	}{
+		{name: "PTR", types: mdnsns.RecordsPTR, typ: lnetodns.TypePTR, data: []byte{0xc0, 0x0c}, wantType: mdnsns.RecordPTR, wantTarget: "_demo._tcp.local"},
+		{name: "SRV", types: mdnsns.RecordsSRV, typ: lnetodns.TypeSRV, data: []byte{0, 0, 0, 0, 0x1f, 0x90, 0xc0, 0x0c}, wantType: mdnsns.RecordSRV, wantPort: 8080, wantTarget: "_demo._tcp.local"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			core, adapter, _ := newTestAdapter(t, queryOnlyConfig(), testPolicy())
+			request := mdnsns.Request{Name: "_demo._tcp.local", Types: test.types}
+			resource, _, err := adapter.TryQuery(request)
+			if err != nil {
+				t.Fatal(err)
+			}
+			q := resource.(*query)
+			queryPacket := serviceEgress(t, core)
+			eth, err := ethernet.NewFrame(queryPacket)
+			if err != nil {
+				t.Fatal(err)
+			}
+			ip, err := ipv4.NewFrame(eth.Payload())
+			if err != nil {
+				t.Fatal(err)
+			}
+			udp, err := lnetoudp.NewFrame(ip.Payload())
+			if err != nil {
+				t.Fatal(err)
+			}
+			payload := append([]byte(nil), udp.Payload()...)
+			binary.BigEndian.PutUint16(payload[2:4], uint16(1<<15|1<<10))
+			binary.BigEndian.PutUint16(payload[6:8], 1)
+			answer := []byte{
+				0xc0, 0x0c,
+				0x00, byte(test.typ),
+				0x00, byte(lnetodns.ClassINET),
+				0x00, 0x00, 0x00, 0x78,
+				0x00, byte(len(test.data)),
+			}
+			payload = append(payload, answer...)
+			payload = append(payload, test.data...)
+
+			serviceIngress(t, core, wrapMDNSFrame(t, payload, [6]byte{2, 0, 0, 0, 0, 45}, netip.MustParseAddr("192.0.2.45")))
+			if q.Readiness() != nscore.ReadyMDNSResult {
+				t.Fatalf("compressed %s readiness = %v", test.name, q.Readiness())
+			}
+			record, next, err := q.TryNext()
+			if err != nil || next != mdnsns.NextReady || record.Type != test.wantType || record.Name != request.Name || record.Target != test.wantTarget || record.Port != test.wantPort {
+				t.Fatalf("compressed %s result = %+v, %v, %v", test.name, record, next, err)
+			}
+		})
 	}
 }
 

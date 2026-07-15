@@ -701,7 +701,7 @@ func (a *Adapter) ingressLocked(frame []byte) (bool, error) {
 	}
 	a.decode.Reset()
 	_, incomplete, err := a.decode.Decode(payload)
-	if err != nil || incomplete {
+	if err != nil || incomplete || !normalizeCompressedResourceNames(payload, &a.decode) {
 		return true, nil
 	}
 	flags := dnsFrame.Flags()
@@ -1010,6 +1010,104 @@ func convertResource(resource lnetodns.Resource, request mdnsns.Request) (mdnsns
 		return mdnsns.Record{}, false
 	}
 	return record, record.Valid()
+}
+
+func normalizeCompressedResourceNames(payload []byte, message *lnetodns.Message) bool {
+	if len(payload) < 12 || message == nil {
+		return false
+	}
+	questionCount := int(binary.BigEndian.Uint16(payload[4:6]))
+	answerCount := int(binary.BigEndian.Uint16(payload[6:8]))
+	authorityCount := int(binary.BigEndian.Uint16(payload[8:10]))
+	additionalCount := int(binary.BigEndian.Uint16(payload[10:12]))
+	if questionCount != len(message.Questions) || answerCount != len(message.Answers) || authorityCount != len(message.Authorities) || additionalCount != len(message.Additionals) {
+		return false
+	}
+	ptr := 12
+	for range questionCount {
+		next, _, ok := wireNameEnd(payload, ptr)
+		if !ok || next+4 > len(payload) {
+			return false
+		}
+		ptr = next + 4
+	}
+	for _, resources := range [][]lnetodns.Resource{message.Answers, message.Authorities, message.Additionals} {
+		for i := range resources {
+			next, _, ok := wireNameEnd(payload, ptr)
+			if !ok || next+10 > len(payload) {
+				return false
+			}
+			length := int(binary.BigEndian.Uint16(payload[next+8 : next+10]))
+			dataStart, dataEnd := next+10, next+10+length
+			if dataEnd > len(payload) {
+				return false
+			}
+			header := resources[i].Header()
+			nameStart := dataStart
+			if header.Type == lnetodns.TypeSRV {
+				if length < 7 {
+					return false
+				}
+				nameStart += 6
+			}
+			if header.Type == lnetodns.TypePTR || header.Type == lnetodns.TypeSRV {
+				end, compressed, ok := wireNameEnd(payload, nameStart)
+				if !ok || end != dataEnd {
+					return false
+				}
+				if compressed {
+					var target lnetodns.Name
+					decodedEnd, err := target.Decode(payload, uint16(nameStart))
+					if err != nil || int(decodedEnd) != dataEnd {
+						return false
+					}
+					if header.Type == lnetodns.TypePTR {
+						resources[i].SetPTR(header.Name, header.Class, header.TTL, target)
+					} else {
+						resources[i].SetSRV(header.Name, header.Class, header.TTL,
+							binary.BigEndian.Uint16(payload[dataStart:dataStart+2]),
+							binary.BigEndian.Uint16(payload[dataStart+2:dataStart+4]),
+							binary.BigEndian.Uint16(payload[dataStart+4:dataStart+6]), target)
+					}
+				}
+			}
+			ptr = dataEnd
+		}
+	}
+	return ptr == len(payload)
+}
+
+func wireNameEnd(payload []byte, ptr int) (end int, compressed bool, ok bool) {
+	if ptr < 0 || ptr >= len(payload) {
+		return 0, false, false
+	}
+	for {
+		if ptr >= len(payload) {
+			return 0, false, false
+		}
+		length := int(payload[ptr])
+		if length&0xc0 == 0xc0 {
+			if ptr+2 > len(payload) {
+				return 0, false, false
+			}
+			target := (length&0x3f)<<8 | int(payload[ptr+1])
+			if target >= ptr {
+				return 0, false, false
+			}
+			return ptr + 2, true, true
+		}
+		if length&0xc0 != 0 || length > 63 {
+			return 0, false, false
+		}
+		ptr++
+		if length == 0 {
+			return ptr, compressed, true
+		}
+		if ptr+length > len(payload) {
+			return 0, false, false
+		}
+		ptr += length
+	}
 }
 
 func decodeResourceName(data []byte, offset uint16) (string, bool) {
