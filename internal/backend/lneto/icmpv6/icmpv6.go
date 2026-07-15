@@ -962,6 +962,9 @@ func (a *Adapter) destinationMACLocked(address netip.Addr) ([6]byte, bool) {
 	if entry := a.neighbors[address]; entry != nil && entry.complete {
 		return entry.mac, true
 	}
+	if address.IsLinkLocalUnicast() {
+		return [6]byte{}, false
+	}
 	return a.gatewayHardwareAddress, validUnicastMAC(a.gatewayHardwareAddress)
 }
 

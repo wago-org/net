@@ -18,6 +18,34 @@ import (
 	"github.com/wago-org/net/internal/quota"
 )
 
+func TestLinkLocalEchoRequiresResolvedNeighborInsteadOfGateway(t *testing.T) {
+	core, adapter := newTestAdapter(t, 8, "fe80::8")
+	defer core.Close()
+	target := netip.MustParseAddr("fe80::99")
+	request := icmpns.EchoRequest{Destination: target, ScopeID: adapter.scopeID, Payload: []byte("on-link")}
+	before, _ := adapter.quotas.Snapshot()
+	if resource, progress, err := adapter.TryEcho(request); resource != nil || progress != 0 || nscoreFailure(err) != nscore.FailureInvalidState {
+		t.Fatalf("unresolved link-local echo = %T, %v, %v", resource, progress, err)
+	}
+	if usage, _ := adapter.quotas.Snapshot(); usage != before || len(adapter.echoes) != 0 || len(adapter.byIdentity) != 0 {
+		t.Fatalf("unresolved link-local echo retained state: usage=%+v before=%+v echoes=%d identities=%d", usage, before, len(adapter.echoes), len(adapter.byIdentity))
+	}
+
+	neighborMAC := [6]byte{0x02, 0, 0, 0, 0, 99}
+	if err := adapter.SeedNeighbor(icmpns.Neighbor{Address: target, ScopeID: adapter.scopeID, MAC: neighborMAC}); err != nil {
+		t.Fatal(err)
+	}
+	resource, progress, err := adapter.TryEcho(request)
+	if err != nil || progress != nscore.ProgressInProgress || resource == nil {
+		t.Fatalf("resolved link-local echo = %T, %v, %v", resource, progress, err)
+	}
+	frame := make([]byte, core.Link().MaxFrameBytes())
+	written, worked, err := adapter.egressLocked(frame)
+	if err != nil || !worked || written == 0 || [6]byte(frame[:6]) != neighborMAC {
+		t.Fatalf("resolved link-local egress = %d, %v, %v destination=%x", written, worked, err, frame[:6])
+	}
+}
+
 func TestEchoRequiresAUsableGatewayOrResolvedNeighbor(t *testing.T) {
 	target := netip.MustParseAddr("2001:db8::99")
 	neighborMAC := [6]byte{0x02, 0, 0, 0, 0, 99}
