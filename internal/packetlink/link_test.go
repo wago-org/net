@@ -104,6 +104,74 @@ func TestLinkFillCommitsAtomicallyAndRollsBackFailures(t *testing.T) {
 	}
 }
 
+func TestWrappedFillRollbackPreservesCommittedFramesAndReusableTail(t *testing.T) {
+	fillFailure := errors.New("fill failed")
+	for _, test := range []struct {
+		name string
+		fill func([]byte) (int, error)
+		want error
+	}{
+		{name: "callback error", fill: func(dst []byte) (int, error) {
+			copy(dst, "bad!")
+			return 4, fillFailure
+		}, want: fillFailure},
+		{name: "negative length", fill: func(dst []byte) (int, error) {
+			copy(dst, "bad!")
+			return -1, nil
+		}, want: ErrInvalidFill},
+		{name: "oversize length", fill: func(dst []byte) (int, error) {
+			copy(dst, "bad!")
+			return len(dst) + 1, nil
+		}, want: ErrFrameTooLarge},
+		{name: "zero length", fill: func(dst []byte) (int, error) {
+			copy(dst, "bad!")
+			return 0, nil
+		}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			link := newTestLink(t, Config{MaxFrameBytes: 4, IngressFrames: 1, EgressFrames: 3})
+			for _, frame := range []string{"old!", "keep", "safe"} {
+				if err := link.TryEnqueue(Egress, []byte(frame)); err != nil {
+					t.Fatal(err)
+				}
+			}
+			var discarded [4]byte
+			if result, err := link.TryDequeue(Egress, discarded[:]); err != nil || result.FrameBytes != 4 || string(discarded[:]) != "old!" {
+				t.Fatalf("initial dequeue = %+v, %v, %q", result, err, discarded)
+			}
+
+			result, err := link.TryFill(Egress, test.fill)
+			if test.want == nil {
+				if err != nil || result != (FrameResult{}) {
+					t.Fatalf("rollback fill = %+v, %v", result, err)
+				}
+			} else if !errors.Is(err, test.want) || result != (FrameResult{}) {
+				t.Fatalf("rollback fill = %+v, %v; want %v", result, err, test.want)
+			}
+			if snapshot := link.Snapshot(); snapshot.EgressFrames != 2 || snapshot.EgressBytes != 8 {
+				t.Fatalf("rollback queue state = %+v", snapshot)
+			}
+			if !allZero(link.egress.slot(0, link.maxFrameBytes)) {
+				t.Fatalf("rollback retained wrapped-tail bytes: %x", link.egress.slot(0, link.maxFrameBytes))
+			}
+
+			result, err = link.TryFill(Egress, func(dst []byte) (int, error) {
+				copy(dst, "new!")
+				return 4, nil
+			})
+			if err != nil || result != (FrameResult{Copied: 4, FrameBytes: 4, Ready: true}) {
+				t.Fatalf("reused wrapped tail = %+v, %v", result, err)
+			}
+			for _, want := range []string{"keep", "safe", "new!"} {
+				var frame [4]byte
+				if result, err = link.TryDequeue(Egress, frame[:]); err != nil || result.FrameBytes != 4 || string(frame[:]) != want {
+					t.Fatalf("dequeue %q = %+v, %v, %q", want, result, err, frame)
+				}
+			}
+		})
+	}
+}
+
 func TestFillSliceCannotAppendIntoAdjacentCommittedFrame(t *testing.T) {
 	link := newTestLink(t, Config{MaxFrameBytes: 4, IngressFrames: 1, EgressFrames: 2})
 	if err := link.TryEnqueue(Egress, []byte("old!")); err != nil {
