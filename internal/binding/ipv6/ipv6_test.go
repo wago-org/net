@@ -137,6 +137,36 @@ func TestConfigurationPreservesOutputForMissingAndMalformedServices(t *testing.T
 	}
 }
 
+func TestBindingsPreserveFullWidthNamespaceHandle(t *testing.T) {
+	backend := &fakeNamespace{configuration: validConfiguration()}
+	manager, instance := attachManager(t, backend)
+	defer manager.Detach(instance)
+	host := testHost{instance: instance, memory: bytes.Repeat([]byte{0x6d}, 256)}
+	bindings := Bindings(plugin.NewHost(manager))
+	state, ok := manager.ForInstance(instance)
+	if !ok {
+		t.Fatal("attached state missing")
+	}
+	namespaceHandle := state.NamespaceHandle()
+	const high = uint64(1) << 63
+
+	output := host.memory[64 : 64+ipv6abi.ConfigurationV1Size]
+	before := append([]byte(nil), output...)
+	if status := callBinding(t, bindingByName(t, bindings, "configuration"), host, uint64(namespaceHandle)|high, 64); status != guest.StatusBadHandle || backend.calls != 0 || !bytes.Equal(output, before) {
+		t.Fatalf("aliased namespace configuration = %v, calls=%d, output mutated=%v", status, backend.calls, !bytes.Equal(output, before))
+	}
+	if status := callBinding(t, bindingByName(t, bindings, "configuration"), host, uint64(namespaceHandle), 64); status != guest.StatusOK || backend.calls != 1 || bytes.Equal(output, before) {
+		t.Fatalf("exact namespace configuration = %v, calls=%d, output unchanged=%v", status, backend.calls, bytes.Equal(output, before))
+	}
+	if err := state.CloseHandle(namespaceHandle, resource.KindNamespace); err != nil {
+		t.Fatal(err)
+	}
+	exact := append([]byte(nil), output...)
+	if status := callBinding(t, bindingByName(t, bindings, "configuration"), host, uint64(namespaceHandle), 64); status != guest.StatusBadHandle || backend.calls != 1 || !bytes.Equal(output, exact) {
+		t.Fatalf("stale exact namespace configuration = %v, calls=%d, output mutated=%v", status, backend.calls, !bytes.Equal(output, exact))
+	}
+}
+
 func TestBindingsRejectHighBitI32AliasesBeforeStateAndBackendWork(t *testing.T) {
 	backend := &fakeNamespace{configuration: validConfiguration()}
 	manager, instance := attachManager(t, backend)
