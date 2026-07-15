@@ -545,6 +545,58 @@ func TestBindingsListenAcceptAtomicStatusesAndLifecycle(t *testing.T) {
 	}
 }
 
+func TestAcceptBindingInvalidProgressClosesStreamAndPreservesOutput(t *testing.T) {
+	local := nscore.Endpoint{Address: netip.MustParseAddr("0.0.0.0"), Port: 8080}
+	remote := nscore.Endpoint{Address: netip.MustParseAddr("192.0.2.44"), Port: 52000}
+	invalid := &fakeStream{local: local, remote: remote}
+	listener := &fakeListener{local: local, stream: invalid, progress: nscore.Progress(99)}
+	backend := &fakeNamespace{listener: listener, listenProgress: nscore.ProgressDone}
+	manager, instance := attachManager(t, backend)
+	defer manager.Detach(instance)
+	host := testHost{instance: instance, memory: bytes.Repeat([]byte{0x6d}, 256)}
+	bindings := Bindings(plugin.NewHost(manager))
+	state, ok := manager.ForInstance(instance)
+	if !ok {
+		t.Fatal("attached state missing")
+	}
+	if !abicore.EncodeEndpointV1(host.memory, 0, local) {
+		t.Fatal("encode local endpoint")
+	}
+	if status := callBinding(t, bindingByName(t, bindings, "listen"), host, uint64(state.NamespaceHandle()), 0, 32); status != guest.StatusOK {
+		t.Fatalf("listen = %v", status)
+	}
+	listenerHandle := resource.Handle(binary.LittleEndian.Uint64(host.memory[32:40]))
+	resourcesBefore := state.Resources().Len()
+	readinessBefore := state.Readiness().Snapshot()
+	before := append([]byte(nil), host.memory...)
+
+	if status := callBinding(t, bindingByName(t, bindings, "accept"), host, uint64(listenerHandle), 64); status != guest.StatusIO {
+		t.Fatalf("invalid progress accept = %v", status)
+	}
+	if listener.accepts != 1 || invalid.closeCalls != 1 || state.Resources().Len() != resourcesBefore || state.Readiness().Snapshot() != readinessBefore {
+		t.Fatalf("invalid progress lifecycle: accepts=%d closes=%d resources=%d readiness=%+v", listener.accepts, invalid.closeCalls, state.Resources().Len(), state.Readiness().Snapshot())
+	}
+	if !bytes.Equal(host.memory, before) {
+		t.Fatal("invalid progress mutated guest memory")
+	}
+
+	fresh := &fakeStream{local: local, remote: remote}
+	listener.stream, listener.progress = fresh, nscore.ProgressDone
+	if status := callBinding(t, bindingByName(t, bindings, "accept"), host, uint64(listenerHandle), 64); status != guest.StatusOK {
+		t.Fatalf("fresh accept = %v", status)
+	}
+	freshHandle := resource.Handle(binary.LittleEndian.Uint64(host.memory[64:72]))
+	if freshHandle == 0 || state.Resources().Len() != resourcesBefore+1 || state.Readiness().Snapshot().Registrations != readinessBefore.Registrations+1 {
+		t.Fatalf("fresh accept lifecycle: handle=%v resources=%d readiness=%+v", freshHandle, state.Resources().Len(), state.Readiness().Snapshot())
+	}
+	if status := callBinding(t, bindingByName(t, bindings, "close_stream"), host, uint64(freshHandle)); status != guest.StatusOK || fresh.closeCalls != 1 {
+		t.Fatalf("fresh close = %v, calls=%d", status, fresh.closeCalls)
+	}
+	if status := callBinding(t, bindingByName(t, bindings, "close_listener"), host, uint64(listenerHandle)); status != guest.StatusOK || listener.closeCalls != 1 {
+		t.Fatalf("listener close = %v, calls=%d", status, listener.closeCalls)
+	}
+}
+
 func TestBindingsPrevalidateOutputsBeforeInstanceAndHandleLookup(t *testing.T) {
 	manager := instancecore.NewManager()
 	instance := new(wago.Instance)
