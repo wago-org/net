@@ -18,10 +18,10 @@ import (
 )
 
 type fakeNamespace struct {
-	listener        tcpns.Listener
+	listener        nscore.Resource
 	listenProgress  nscore.Progress
 	listenFailure   error
-	stream          tcpns.Stream
+	stream          nscore.Resource
 	connectProgress nscore.Progress
 	connectFailure  error
 }
@@ -49,7 +49,7 @@ func (*fakeNamespace) TryService(nscore.ServiceBudget) (nscore.ServiceReport, ns
 type fakeListener struct {
 	closed         atomic.Int32
 	local          nscore.Endpoint
-	accepted       tcpns.Stream
+	accepted       nscore.Resource
 	acceptProgress nscore.Progress
 	acceptFailure  error
 }
@@ -330,6 +330,89 @@ func TestCreationErrorsCloseResourcesAndDoNotPublish(t *testing.T) {
 	}
 }
 
+func TestMalformedSuccessfulCreationsCloseResourcesAndDoNotPublish(t *testing.T) {
+	local := nscore.Endpoint{Address: netip.MustParseAddr("192.0.2.1"), Port: 4302}
+	remote := nscore.Endpoint{Address: netip.MustParseAddr("192.0.2.2"), Port: 4303}
+	for _, test := range []struct {
+		name      string
+		operation string
+		resource  nscore.Resource
+		progress  nscore.Progress
+		create    func(*core.State, *fakeNamespace, resource.Handle) (resource.Handle, nscore.Progress, error)
+	}{
+		{name: "listen wrong type", operation: "listen", resource: &fakeStream{local: local, remote: remote}, progress: nscore.ProgressDone, create: func(state *core.State, _ *fakeNamespace, _ resource.Handle) (resource.Handle, nscore.Progress, error) {
+			return Listen(state, state.NamespaceHandle(), local)
+		}},
+		{name: "listen invalid progress", operation: "listen", resource: &fakeListener{local: local}, progress: nscore.ProgressInProgress, create: func(state *core.State, _ *fakeNamespace, _ resource.Handle) (resource.Handle, nscore.Progress, error) {
+			return Listen(state, state.NamespaceHandle(), local)
+		}},
+		{name: "connect wrong type", operation: "connect", resource: &fakeListener{local: local}, progress: nscore.ProgressDone, create: func(state *core.State, _ *fakeNamespace, _ resource.Handle) (resource.Handle, nscore.Progress, error) {
+			return Connect(state, state.NamespaceHandle(), remote)
+		}},
+		{name: "connect invalid progress", operation: "connect", resource: &fakeStream{local: local, remote: remote}, progress: nscore.ProgressWouldBlock, create: func(state *core.State, _ *fakeNamespace, _ resource.Handle) (resource.Handle, nscore.Progress, error) {
+			return Connect(state, state.NamespaceHandle(), remote)
+		}},
+		{name: "accept wrong type", operation: "accept", resource: &fakeListener{local: local}, progress: nscore.ProgressDone, create: func(state *core.State, _ *fakeNamespace, listener resource.Handle) (resource.Handle, nscore.Progress, error) {
+			return Accept(state, listener)
+		}},
+		{name: "accept invalid progress", operation: "accept", resource: &fakeStream{local: local, remote: remote}, progress: nscore.ProgressInProgress, create: func(state *core.State, _ *fakeNamespace, listener resource.Handle) (resource.Handle, nscore.Progress, error) {
+			return Accept(state, listener)
+		}},
+		{name: "accept dirty would block", operation: "accept", resource: &fakeStream{local: local, remote: remote}, progress: nscore.ProgressWouldBlock, create: func(state *core.State, _ *fakeNamespace, listener resource.Handle) (resource.Handle, nscore.Progress, error) {
+			return Accept(state, listener)
+		}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			backend := new(fakeNamespace)
+			var listenerHandle resource.Handle
+			if test.operation == "accept" {
+				listener := &fakeListener{local: local, accepted: test.resource, acceptProgress: test.progress}
+				backend.listener = listener
+				state, manager, instance := attachState(t, backend, 3)
+				defer manager.Detach(instance)
+				var err error
+				listenerHandle, _, err = Listen(state, state.NamespaceHandle(), local)
+				if err != nil {
+					t.Fatal(err)
+				}
+				assertMalformedCreation(t, state, backend, listenerHandle, test.resource, test.create)
+				return
+			}
+			if test.operation == "listen" {
+				backend.listener, backend.listenProgress = test.resource, test.progress
+			} else {
+				backend.stream, backend.connectProgress = test.resource, test.progress
+			}
+			state, manager, instance := attachState(t, backend, 3)
+			defer manager.Detach(instance)
+			assertMalformedCreation(t, state, backend, 0, test.resource, test.create)
+		})
+	}
+}
+
+func assertMalformedCreation(t testing.TB, state *core.State, backend *fakeNamespace, listener resource.Handle, returned nscore.Resource, create func(*core.State, *fakeNamespace, resource.Handle) (resource.Handle, nscore.Progress, error)) {
+	t.Helper()
+	resourcesBefore := state.Resources().Len()
+	readinessBefore := state.Readiness().Snapshot()
+	handle, progress, err := create(state, backend, listener)
+	if handle != 0 || progress != 0 || failureOf(t, err) != nscore.FailureIO {
+		t.Fatalf("creation = %v, %v, %v", handle, progress, err)
+	}
+	if state.Resources().Len() != resourcesBefore || state.Readiness().Snapshot() != readinessBefore {
+		t.Fatalf("malformed creation published state: resources=%d readiness=%+v", state.Resources().Len(), state.Readiness().Snapshot())
+	}
+	switch value := returned.(type) {
+	case *fakeListener:
+		if value.closed.Load() != 1 {
+			t.Fatalf("listener closes = %d", value.closed.Load())
+		}
+	case *fakeStream:
+		if value.closed.Load() != 1 {
+			t.Fatalf("stream closes = %d", value.closed.Load())
+		}
+	}
+}
+
 func TestOperationErrorsCanonicalizeBackendOutputs(t *testing.T) {
 	local := nscore.Endpoint{Address: netip.MustParseAddr("192.0.2.1"), Port: 4302}
 	remote := nscore.Endpoint{Address: netip.MustParseAddr("192.0.2.2"), Port: 4303}
@@ -353,6 +436,19 @@ func TestOperationErrorsCanonicalizeBackendOutputs(t *testing.T) {
 	stream.shutdownProgress, stream.shutdownFailure = nscore.ProgressDone, backendFailure
 	if progress, err := ShutdownWrite(state, handle); progress != 0 || failureOf(t, err) != nscore.FailureConnectionReset {
 		t.Fatalf("failed ShutdownWrite = %v, %v", progress, err)
+	}
+
+	stream.finishProgress, stream.finishFailure = 99, nil
+	if progress, err := FinishConnect(state, handle); progress != 0 || failureOf(t, err) != nscore.FailureIO {
+		t.Fatalf("malformed FinishConnect = %v, %v", progress, err)
+	}
+	stream.writeResult, stream.writeFailure = nscore.IOResult{Bytes: 1, State: nscore.IOWouldBlock}, nil
+	if result, err := Write(state, handle, []byte("payload")); result != (nscore.IOResult{}) || failureOf(t, err) != nscore.FailureIO {
+		t.Fatalf("malformed Write = %+v, %v", result, err)
+	}
+	stream.shutdownProgress, stream.shutdownFailure = 99, nil
+	if progress, err := ShutdownWrite(state, handle); progress != 0 || failureOf(t, err) != nscore.FailureIO {
+		t.Fatalf("malformed ShutdownWrite = %v, %v", progress, err)
 	}
 }
 
@@ -379,6 +475,38 @@ func TestTypedNilBackendResourcesFailClosed(t *testing.T) {
 	}
 	if handle, progress, err := Accept(state, listenerHandle); handle != 0 || progress != 0 || !errors.Is(err, core.ErrInvalidBackendResult) {
 		t.Fatalf("typed nil Accept = %v, %v, %v", handle, progress, err)
+	}
+}
+
+func TestStreamRegistrationRollbackClosesResources(t *testing.T) {
+	local := nscore.Endpoint{Address: netip.MustParseAddr("192.0.2.1"), Port: 4302}
+	remote := nscore.Endpoint{Address: netip.MustParseAddr("192.0.2.2"), Port: 4303}
+
+	stream := &fakeStream{local: local, remote: remote}
+	state, manager, instance := attachState(t, &fakeNamespace{stream: stream}, 1)
+	if handle, progress, err := Connect(state, state.NamespaceHandle(), remote); handle != 0 || progress != 0 || !errors.Is(err, readiness.ErrLimit) || stream.closed.Load() != 1 {
+		t.Fatalf("Connect rollback = %v, %v, %v, closes=%d", handle, progress, err, stream.closed.Load())
+	}
+	if state.Resources().Len() != 1 || state.Readiness().Snapshot().Registrations != 1 {
+		t.Fatalf("Connect rollback retained state: resources=%d readiness=%+v", state.Resources().Len(), state.Readiness().Snapshot())
+	}
+	if err := manager.Detach(instance); err != nil {
+		t.Fatal(err)
+	}
+
+	accepted := &fakeStream{local: local, remote: remote}
+	listener := &fakeListener{local: local, accepted: accepted}
+	state, manager, instance = attachState(t, &fakeNamespace{listener: listener}, 2)
+	defer manager.Detach(instance)
+	listenerHandle, _, err := Listen(state, state.NamespaceHandle(), local)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if handle, progress, err := Accept(state, listenerHandle); handle != 0 || progress != 0 || !errors.Is(err, readiness.ErrLimit) || accepted.closed.Load() != 1 {
+		t.Fatalf("Accept rollback = %v, %v, %v, closes=%d", handle, progress, err, accepted.closed.Load())
+	}
+	if state.Resources().Len() != 2 || state.Readiness().Snapshot().Registrations != 2 {
+		t.Fatalf("Accept rollback retained state: resources=%d readiness=%+v", state.Resources().Len(), state.Readiness().Snapshot())
 	}
 }
 
