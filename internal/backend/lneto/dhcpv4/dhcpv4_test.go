@@ -95,6 +95,7 @@ func TestBoundLeaseCloseRollsBackIdentityAndAllowsFreshAcquisition(t *testing.T)
 
 func TestClientRejectsInvalidUnicastRequestBeforeQuotaOwnership(t *testing.T) {
 	for name, address := range map[string]netip.Addr{
+		"unspecified":       netip.IPv4Unspecified(),
 		"loopback":          netip.MustParseAddr("127.0.0.1"),
 		"limited broadcast": limitedBroadcast,
 	} {
