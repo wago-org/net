@@ -543,6 +543,78 @@ func TestNTPMalformedTerminalRetiresTransportBeforeCloseAndStaleCloseCannotAffec
 	}
 }
 
+func TestNTPStaleResponsesAndCloseCannotMutateForcedPortReuseAfterCompletion(t *testing.T) {
+	clock := &manualClock{now: time.Date(2026, 7, 14, 12, 0, 0, 0, time.UTC)}
+	core, adapter, account := newTestAdapter(t, clock, Config{
+		Server: netip.MustParseAddr("192.0.2.123"), Clock: clock, MaxSyncs: 2,
+		MaxAttempts: 1, RetryServiceAttempts: 2, Precision: -20,
+	})
+	resource, _, err := adapter.TrySync()
+	if err != nil {
+		t.Fatal(err)
+	}
+	completed := resource.(*syncResource)
+	completedRequest1 := serviceEgress(t, core)
+	completedPort := completed.portLease.UDPPort()
+	completedResponse1, arrival1 := makeNTPResponse(t, completedRequest1, 100*time.Millisecond, 20*time.Millisecond)
+	clock.now = arrival1
+	serviceIngress(t, core, completedResponse1)
+	if completed.state != syncPrepare {
+		t.Fatalf("completed first exchange state = %v", completed.state)
+	}
+	clock.now = arrival1.Add(time.Second)
+	completedRequest2 := serviceEgress(t, core)
+	completedResponse2, arrival2 := makeNTPResponse(t, completedRequest2, 100*time.Millisecond, 20*time.Millisecond)
+	clock.now = arrival2
+	serviceIngress(t, core, completedResponse2)
+	if completed.state != syncDone || completed.Readiness() != nscore.ReadyNTPResult || completed.portLease.UDPPort() != 0 || adapter.byPort[completedPort] != nil {
+		t.Fatalf("completed transport = state %v readiness %v port %d mapped %p", completed.state, completed.Readiness(), completed.portLease.UDPPort(), adapter.byPort[completedPort])
+	}
+
+	adapter.nextPort = completedPort
+	clock.now = arrival2.Add(time.Second)
+	resource, _, err = adapter.TrySync()
+	if err != nil {
+		t.Fatal(err)
+	}
+	fresh := resource.(*syncResource)
+	if fresh.portLease.UDPPort() != completedPort || adapter.byPort[completedPort] != fresh {
+		t.Fatalf("forced completion port reuse = port %d mapped %p, want %d/%p", fresh.portLease.UDPPort(), adapter.byPort[completedPort], completedPort, fresh)
+	}
+	freshRequest1 := serviceEgress(t, core)
+	beforeRequest, beforeClockSample, beforeCalls := fresh.request, fresh.clockSample, clock.calls
+	core.Lock()
+	handled, ingressErr := adapter.ingressLocked(completedResponse2)
+	core.Unlock()
+	if ingressErr != nil || !handled {
+		t.Fatalf("completed stale response on reused port = handled %v, err %v", handled, ingressErr)
+	}
+	if fresh.state != syncWaiting || fresh.Readiness() != 0 || fresh.request != beforeRequest || fresh.clockSample != beforeClockSample || clock.calls != beforeCalls {
+		t.Fatalf("completed stale response mutated fresh sync: state=%v readiness=%v request_changed=%v clock_changed=%v calls=%d/%d", fresh.state, fresh.Readiness(), fresh.request != beforeRequest, fresh.clockSample != beforeClockSample, clock.calls, beforeCalls)
+	}
+	if err := completed.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if adapter.byPort[completedPort] != fresh || fresh.portLease.UDPPort() != completedPort {
+		t.Fatalf("completed stale close affected fresh transport: mapped=%p port=%d", adapter.byPort[completedPort], fresh.portLease.UDPPort())
+	}
+	if usage, closed := account.Snapshot(); closed || usage != (quota.Usage{Resources: 1, NTPResources: 1, NTPWork: 1}) {
+		t.Fatalf("fresh quota after completed close = %+v, closed=%v", usage, closed)
+	}
+
+	freshResponse1, freshArrival1 := makeNTPResponse(t, freshRequest1, 100*time.Millisecond, 20*time.Millisecond)
+	clock.now = freshArrival1
+	serviceIngress(t, core, freshResponse1)
+	clock.now = freshArrival1.Add(time.Second)
+	freshRequest2 := serviceEgress(t, core)
+	freshResponse2, freshArrival2 := makeNTPResponse(t, freshRequest2, 100*time.Millisecond, 20*time.Millisecond)
+	clock.now = freshArrival2
+	serviceIngress(t, core, freshResponse2)
+	if sample, next, err := fresh.TryResult(); err != nil || next != ntpns.NextReady || !sample.Valid() {
+		t.Fatalf("fresh result after completed reuse = %+v, %v, %v", sample, next, err)
+	}
+}
+
 func TestNTPStaleResponsesCannotMutateForcedPortReuseAfterTerminalFailure(t *testing.T) {
 	for _, terminalize := range []struct {
 		name string
