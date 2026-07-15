@@ -60,11 +60,11 @@ func (c Configuration) Prefix() netip.Prefix {
 // configured single-interface pinned stack. Flow labels are not implemented.
 func (c Configuration) SupportsEndpoint(endpoint nscore.Endpoint) bool {
 	if !c.Valid() || !endpoint.Valid() || !endpoint.Address.Is6() || endpoint.Address.Is4In6() || endpoint.Address.IsUnspecified() ||
-		endpoint.Address.IsMulticast() || endpoint.FlowInfo != 0 {
+		endpoint.Address.IsLoopback() || endpoint.Address.IsMulticast() || endpoint.FlowInfo != 0 {
 		return false
 	}
 	if endpoint.Address.IsLinkLocalUnicast() {
-		return endpoint.ScopeID == c.ScopeID
+		return endpoint.ScopeID != 0 && endpoint.ScopeID == c.ScopeID
 	}
 	return endpoint.ScopeID == 0
 }

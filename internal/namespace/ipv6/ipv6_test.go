@@ -63,6 +63,7 @@ func TestSupportsEndpointRequiresExactScopeAndZeroFlow(t *testing.T) {
 	for _, endpoint := range []nscore.Endpoint{
 		{Address: netip.MustParseAddr("fe80::2"), Port: 443},
 		{Address: netip.MustParseAddr("fe80::2"), Port: 443, ScopeID: 8},
+		{Address: netip.IPv6Loopback(), Port: 443},
 		{Address: netip.MustParseAddr("2001:db8::2"), Port: 443, FlowInfo: 1},
 		{Address: netip.MustParseAddr("ff02::1"), Port: 443, ScopeID: 9},
 		{Address: netip.MustParseAddr("192.0.2.1"), Port: 443},
@@ -70,5 +71,12 @@ func TestSupportsEndpointRequiresExactScopeAndZeroFlow(t *testing.T) {
 		if configuration.SupportsEndpoint(endpoint) {
 			t.Fatalf("unsupported endpoint accepted: %+v", endpoint)
 		}
+	}
+
+	global := configuration
+	global.Address = netip.MustParseAddr("2001:db8::1")
+	global.ScopeID = 0
+	if global.SupportsEndpoint(nscore.Endpoint{Address: netip.MustParseAddr("fe80::2"), Port: 443}) {
+		t.Fatal("global configuration accepted unscoped link-local endpoint")
 	}
 }
