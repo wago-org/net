@@ -26,7 +26,13 @@ func TestEchoRequestV1CheckedIndirectPayload(t *testing.T) {
 		t.Fatalf("decoded request = %+v, %v", request, ok)
 	}
 	if CheckEchoV1(memory, 16, 20) {
-		t.Fatal("overlapping handle output accepted")
+		t.Fatal("handle output overlapping request accepted")
+	}
+	if CheckEchoV1(memory, 16, 128) {
+		t.Fatal("handle output overlapping indirect payload accepted")
+	}
+	if !CheckEchoV1(memory, 16, 132) {
+		t.Fatal("handle output adjacent to indirect payload rejected")
 	}
 	binary.LittleEndian.PutUint32(memory[48:52], 16)
 	if CheckEchoV1(memory, 16, 80) {

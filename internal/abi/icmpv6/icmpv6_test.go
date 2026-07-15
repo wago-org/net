@@ -22,7 +22,13 @@ func TestEchoRequestAndResultCheckedAtomic(t *testing.T) {
 		t.Fatalf("request = %+v %v", request, ok)
 	}
 	if CheckEchoV1(memory, 16, 20) {
-		t.Fatal("overlapping output accepted")
+		t.Fatal("handle output overlapping request accepted")
+	}
+	if CheckEchoV1(memory, 16, 160) {
+		t.Fatal("handle output overlapping indirect payload accepted")
+	}
+	if !CheckEchoV1(memory, 16, 165) {
+		t.Fatal("handle output adjacent to indirect payload rejected")
 	}
 	result := icmpns.EchoResult{Source: endpoint.Address, ScopeID: 9, Identifier: 3, Sequence: 4, Copied: 3, PayloadBytes: 5}
 	before := bytes.Repeat([]byte{0xa5}, int(EchoResultV1Size))
