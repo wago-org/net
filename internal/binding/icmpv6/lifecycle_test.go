@@ -146,6 +146,10 @@ func TestBindingsEchoAtomicStatusesAndLifecycle(t *testing.T) {
 	if status := callLifecycleBinding(t, bindingByName(t, bindings, "operations"), host, uint64(namespaceHandle), 900); status != guest.StatusIO || !bytes.Equal(host.memory[900:904], operationsBefore) {
 		t.Fatalf("malformed operations = %v", status)
 	}
+	backend.operations = 0
+	if status := callLifecycleBinding(t, bindingByName(t, bindings, "operations"), host, uint64(namespaceHandle), 900); status != guest.StatusNotSupported || !bytes.Equal(host.memory[900:904], operationsBefore) {
+		t.Fatalf("empty operations = %v", status)
+	}
 	backend.operations = icmpns.SupportedOperations
 	if status := callLifecycleBinding(t, bindingByName(t, bindings, "operations"), host, uint64(namespaceHandle), 900); status != guest.StatusOK || binary.LittleEndian.Uint32(host.memory[900:904]) != uint32(icmpns.SupportedOperations) {
 		t.Fatalf("operations = %v bytes=%x", status, host.memory[900:904])
