@@ -67,7 +67,10 @@ The gate performs, in order:
    target, including wire parsers, ABI layouts, guest memory, resource handles,
    exact-instance lifecycle, and protocol operation models (`FUZZTIME=3s` by
    default, with the complete package/target manifest and per-target logs retained);
-4. guest UDP/TCP poll and fixed UDP queue benchmarks with `-benchmem`;
+4. deterministic discovery of every current Go benchmark, followed by one
+   bounded run per package/target with `-benchmem`, `100ms`, `count=1`, and
+   `cpu=1`; zero discovered targets, any failed target, or incomplete evidence
+   fails the gate after all discovered targets have been attempted;
 5. TinyGo tests and a `linux/arm64` standard-Go package cross-build;
 6. a separately cross-compiled `linux/arm64` test binary and bounded execution
    smoke when a native arm64 or `qemu-aarch64` runner is available; set
@@ -76,10 +79,12 @@ The gate performs, in order:
    execution artifact;
 7. source-boundary checks proving lneto imports remain in
    `internal/backend/lneto` and forbidden blocking/backoff APIs remain absent;
-8. standard-Go and TinyGo custom CLI builds for `register`, `tcp/register`,
-   `udp/register`, and `dns/register`; byte-for-byte inspection comparison via
-   production `plugin inspect` or current `pkg inspect`; and exact aggregate or
-   one-protocol capability/import counts. Historical packed
+8. standard-Go and TinyGo custom CLI builds for the explicit all-protocol
+   `register` bundle and all eleven granular bundles (`tcp`, `udp`, `dns`,
+   `icmpv4`, `ntp`, `mdns`, `dhcpv4`, `linklocal4`, `ipv6`, `icmpv6`, and
+   `dhcpv6`); byte-for-byte inspection comparison via production `plugin inspect`
+   or current `pkg inspect`; and exact policy-defined capability/import counts.
+   Historical packed
    review subjects that predate granular packages retain the aggregate-only
    inspection path and legacy artifact names;
 9. Wago `src/wago` plus facade tests, and focused lifecycle/worker/class race
@@ -102,6 +107,26 @@ The gate performs, in order:
     retained evidence artifact and the manifest itself; and
 16. standalone semantic verification and deterministic export of a compressed
     downstream review bundle.
+
+### Current repository validation on July 15, 2026
+
+The current branch passed standard Go, shuffled Go, race/shuffle, vet, source
+boundaries, checkptr, accepted-diagnostic linux/386 coverage, TinyGo, focused
+lifecycle race repetitions, and custom CLI inspection. Discovery found **40 fuzz
+targets in 30 packages**, **168 benchmarks in 49 packages**, and **12 custom CLI
+bundles** (eleven granular plus the explicit all-protocol bundle). Every fuzz
+target passed a one-second smoke run; every benchmark passed once with `100ms`,
+`count=1`, `cpu=1`, and `-benchmem`; and every Go/TinyGo bundle inspection was
+byte-identical under its policy entry.
+
+This is not a claim that the complete strict release signoff passed. The exact
+strict attempt stopped during prerequisite cleanliness checks because the
+pre-existing external production worktree `.wago/wago-production-97e6f91` has
+`M src/wago/bottomref_test.go`. The release process must not clean, reset,
+overwrite, or bypass that worktree with `ALLOW_DIRTY=1`; rerun only after its
+owner makes the exact pinned worktree clean. Hosted release automation remains
+disabled, and publication/adoption/readiness blockers remain external to this
+repository validation.
 
 ### Protocol-submodule validation on July 11, 2026
 
@@ -257,12 +282,17 @@ A passing gate writes `provenance.json` using schema
 - every named test, race, vet, tidy, fuzz, benchmark, source-boundary, TinyGo,
   cross-build, arm64-execution, inspection, audit-repository, and clean-tree
   result from `checks.tsv`;
+- positive discovered benchmark target/package counts, the exact
+  `100ms`/`count=1`/`cpu=1`/`benchmem=true` settings, and the canonical benchmark
+  check detail;
 - the byte-identical Go/TinyGo inspection hash, exact capability list, total
   import count, and imports grouped by module;
 - the cross-build target separately from the arm64 execution status, runner, and
   compiled smoke-binary checksum;
 - sorted paths, sizes, kinds, and SHA-256 hashes for all retained logs, generated
-  inspection inputs/binaries, source-object packs/inventories, and status files;
+  inspection inputs/binaries, source-object packs/inventories, and status files,
+  including `benchmark/targets.tsv`, `benchmark/detail.txt`, and exactly one
+  nonempty package-grouped `benchmark/logs/.../<target>.log` per manifest row;
   and
 - narrowly accepted exceptions and truthful skipped-execution limitations.
 
@@ -593,14 +623,42 @@ been attempted. Set `FUZZ_LOG_DIR` to retain `targets.tsv` and one log per targe
 Scheduled and manually dispatched GitHub CI runs this one-second matrix; release
 signoff uses the same runner with its selected `FUZZTIME` and retains the logs.
 
+## Bounded benchmark smoke
+
+Run the complete current benchmark surface without a hand-written target list:
+
+```sh
+BENCH_LOG_DIR="$PWD/.wago/benchmark-smoke" scripts/benchmark-smoke.sh
+```
+
+The runner uses the exact selected dependency workspace, discovers targets with
+`go test -json -list '^Benchmark' ./...`, sorts and deduplicates package/target
+pairs into `targets.tsv`, fails when discovery is empty, and attempts every
+target even when an earlier target fails. Each target receives one bounded
+`-benchmem` run with defaults `BENCHTIME=100ms`, `BENCHCOUNT=1`, and
+`BENCHCPU=1`. `detail.txt` records the canonical positive target/package counts
+and settings, while `logs/<package>/<target>.log` retains each nonempty result.
+Release provenance rejects unsorted or empty manifests, missing/empty/extra logs,
+settings drift, detail drift, and artifact-inventory tampering. Scheduled and
+manual CI invoke this same script and retain the evidence directory.
+
 ## CI tiers
 
-Use the same script rather than maintaining a second command matrix:
+The hosted workflow is intentionally smaller than strict release signoff while
+external release prerequisites remain unavailable:
 
-- **Pull request:** `RUN_WASI=0 FUZZTIME=1s scripts/release-signoff.sh` on native
-  `linux/amd64` with Go 1.24.4 and TinyGo 0.41.1.
-- **Nightly:** `RUN_WASI=1 FUZZTIME=30s scripts/release-signoff.sh`, retaining the
-  `.wago/release-signoff` logs as artifacts.
+- **Pull request and push:** run ordinary, shuffled, race, vet, source-boundary,
+  checkptr, and accepted-diagnostic linux/386 coverage on native `linux/amd64`
+  with Go 1.24.4.
+- **Nightly/manual evidence:** run `FUZZTIME=1s scripts/fuzz-smoke.sh` and
+  `BENCH_LOG_DIR="$RUNNER_TEMP/benchmark-smoke" scripts/benchmark-smoke.sh` in
+  hosted CI, retaining the discovered benchmark manifest, canonical detail, and
+  per-target logs. The full local release profile remains
+  `RUN_WASI=1 FUZZTIME=30s scripts/release-signoff.sh` once all external pinned
+  prerequisites are clean and fetchable.
+- **Strict local release:** run `RUN_WASI=1 scripts/release-signoff.sh` only with
+  exact clean pinned worktrees; do not use `ALLOW_DIRTY=1` to turn a prerequisite
+  failure into a release result.
 - **Release candidate:** the default gate, plus repeated benchmarks on an idle
   pinned runner, the release tag/commit recorded beside `revisions.txt`, an
   externally signed canonical statement, and a passing

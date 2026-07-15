@@ -2,12 +2,17 @@
 
 `.github/workflows/ci.yml` runs on pull requests, pushes to `main`, manual
 dispatches, and a weekly schedule. The workflow uses Go 1.24.4 with the Go module
-and build caches enabled and has three bounded jobs:
+and build caches enabled and has five bounded jobs:
 
 - **quality** runs the ordinary suite, one shuffled suite, `go vet`, and the
   backend/source-boundary guard;
 - **race** runs the complete suite with the race detector and shuffle, with five
   repetitions only for scheduled or manually requested deep checks;
+- **fuzz-smoke** runs all targets discovered by `scripts/fuzz-smoke.sh` on weekly
+  schedules and manual dispatches;
+- **benchmark-smoke** runs all targets discovered by
+  `scripts/benchmark-smoke.sh` on weekly schedules and manual dispatches, then
+  retains `targets.tsv`, `detail.txt`, and every package-grouped target log;
 - **portability** runs strict pointer instrumentation and the strongest truthful
   linux/386 coverage currently possible.
 
@@ -16,7 +21,26 @@ The module intentionally develops against exact local Wago and lneto worktrees.
 `.audit/lneto` replacements at the pinned reviewed revisions when they are not
 already present. Existing worktrees at those exact revisions are preserved,
 including local uncommitted audit changes; CI fetches detached exact commits
-rather than compiling a moving branch.
+rather than compiling a moving branch. The fuzz and benchmark runners call the
+same workspace-selection helper, so fresh hosted runners, local exact `.audit`
+worktrees, and release-generated workspaces select pinned dependencies rather
+than ambient `go.work` state.
+
+## Discovered benchmark evidence
+
+Run the scheduled/manual benchmark command locally with a new evidence path:
+
+```sh
+BENCH_LOG_DIR="$PWD/.wago/benchmark-smoke" scripts/benchmark-smoke.sh
+```
+
+The runner fails on zero discovery, sorts and deduplicates the `targets.tsv`
+manifest, attempts every target, and defaults to one `100ms`, `cpu=1`,
+`-benchmem` run per target. `detail.txt` records positive target/package counts
+plus the exact settings, and `logs/<package>/<target>.log` records each result.
+The workflow uploads the whole `benchmark-smoke` directory even when a target
+fails, while release signoff records the same detail in `checks.tsv` and requires
+the complete nonempty log set during standalone provenance verification.
 
 ## Checkptr strategy
 

@@ -126,6 +126,10 @@ shared composition avoids per-selected-protocol heap growth while preserving a
 map-backed overflow path for future larger compositions. This preserves one
 namespace handle, one lifecycle lock, one readiness/service owner, and one
 teardown path without forcing omitted protocol facets into the dependency graph.
+Namespace, base, and service resolution fails closed on typed-nil direct values,
+typed-nil carriers, and typed-nil carrier results before invoking another method.
+Nested ownership/composition unwrapping is bounded, so malformed carrier cycles
+or excessive depth cannot turn resolution into unbounded recursion.
 
 `internal/packetlink` owns fixed ingress and egress frame slots. Enqueue copies
 caller data, dequeue has explicit truncation and byte-budget rollback semantics,
@@ -318,7 +322,15 @@ before polling shutdown, reverse-creation resource cleanup, and quota shutdown.
 That unpublish-before-close step is intentional: new manager lookups fail closed
 immediately, while any in-flight `State.WithLock` or `State.Poll` call still
 holds the per-state lifecycle mutex until its callback returns and teardown can
-proceed. The extension also calls `Registry.RequireReinstantiation`, so class
+proceed. Teardown removes ownership first, attempts readiness, every resource,
+and quota cleanup despite errors or panics, clears instance scratch/handles, and
+retires each lifecycle record exactly once. The initiating caller re-panics only
+after those invariants are restored; concurrent detach waiters receive the
+stable `ErrTeardownPanicked` result, same-instance reattachment waits for record
+retirement, and unrelated instances continue independently. Panic capture and
+re-propagation occur in separate ordinary call frames so the same policy works
+under both standard Go and TinyGo. The extension also calls
+`Registry.RequireReinstantiation`, so class
 resets that would reuse a physical instance are engine-downgraded to the same
 deterministic close-and-recreate path. Failed later setup and class replacement
 use that close path as well. No process-global instance map is used. The low-level
@@ -354,14 +366,17 @@ and the next lease receives fresh parent and worker identities.
 
 `scripts/release-signoff.sh` is the single reproducible local/CI entry point. It
 pins the merged Wago branch and the lneto/WASI audits, runs standard Go, race,
-bounded fuzz, benchmarks, TinyGo, a distinct package cross-build, optional
+discovered bounded fuzz, every benchmark discovered by
+`scripts/benchmark-smoke.sh`, TinyGo, a distinct package cross-build, optional
 bounded native/QEMU arm64 execution, custom CLI inspection, source-boundary and
 plugin-plan compatibility and reviewed-upstream WASI audits, companion
 repository tests, and final clean checks. It then exports deterministic non-thin
 Git packs containing the exact plugin subject and pinned Wago/lneto/WASI commit
 and source-tree objects, including both ordered Wago parents, before emitting a
 timestamp-free deterministic provenance manifest with exact revisions/trees/
-toolchains, named check outcomes, inspection facts, accepted exceptions,
+toolchains, named check outcomes, inspection facts, positive benchmark
+package/target counts, exact `100ms`/`count=1`/`cpu=1`/`benchmem` settings,
+accepted exceptions,
 truthful skipped-execution limitations, and sorted SHA-256 evidence. A standalone
 semantic verifier rejects policy, evidence, pack inventory, tree, or parent-order
 drift without rerunning the gate, and a normalized deterministic tar.gz exports

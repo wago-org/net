@@ -1295,6 +1295,43 @@ func TestReleaseSignoffBenchmarkCheckMatchesProvenancePolicy(t *testing.T) {
 	if count := strings.Count(signoff, "record_check "+releaseBenchmarkCheck+" pass"); count != 1 {
 		t.Fatalf("release benchmark check records = %d, want 1", count)
 	}
+
+	policyFiles := []struct {
+		path     string
+		required []string
+	}{
+		{path: "../../.github/workflows/ci.yml", required: []string{
+			"name: Discovered benchmark smoke",
+			"BENCH_LOG_DIR=\"$RUNNER_TEMP/benchmark-smoke\" scripts/benchmark-smoke.sh",
+			"path: ${{ runner.temp }}/benchmark-smoke",
+		}},
+		{path: "../../docs/release-signoff.md", required: []string{
+			"scripts/benchmark-smoke.sh", "benchmark/targets.tsv", "benchmark/detail.txt",
+			"100ms", "count=1", "cpu=1", "benchmem",
+		}},
+		{path: "../../docs/ci.md", required: []string{
+			"scripts/benchmark-smoke.sh", "benchmark-smoke", "targets.tsv", "detail.txt",
+		}},
+		{path: "../../docs/architecture.md", required: []string{
+			"scripts/benchmark-smoke.sh", "ErrTeardownPanicked", "typed-nil",
+		}},
+		{path: "../../agent-todo.md", required: []string{
+			"40 discovered fuzz targets", "168 discovered benchmarks", "12 custom CLI bundles",
+			".wago/wago-production-97e6f91", "src/wago/bottomref_test.go",
+		}},
+	}
+	for _, file := range policyFiles {
+		data, err := os.ReadFile(file.path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		contents := string(data)
+		for _, required := range file.required {
+			if !strings.Contains(contents, required) {
+				t.Fatalf("%s does not document %q", file.path, required)
+			}
+		}
+	}
 }
 
 func validReviewFixture(t *testing.T) (string, VerifyOptions) {

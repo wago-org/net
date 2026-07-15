@@ -71,6 +71,27 @@ jobs:
       - name: Run every discovered fuzz target
         run: FUZZTIME=1s scripts/fuzz-smoke.sh
 
+  benchmark-smoke:
+    name: Discovered benchmark smoke
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.24.4"
+          cache: true
+      - name: Prepare exact dependency worktrees
+        run: scripts/ci-prepare-dependencies.sh
+      - name: Run every discovered benchmark
+        run: BENCH_LOG_DIR="$RUNNER_TEMP/benchmark-smoke" scripts/benchmark-smoke.sh
+      - name: Retain benchmark manifest, detail, and logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: benchmark-smoke
+          path: ${{ runner.temp }}/benchmark-smoke
+
   portability:
     name: Checkptr and 386
     runs-on: ubuntu-latest
