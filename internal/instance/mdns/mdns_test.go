@@ -395,6 +395,192 @@ func TestInstanceMDNSCancelIsKindAndGenerationSafe(t *testing.T) {
 	}
 }
 
+func FuzzInstanceMDNSHandleStateMachine(f *testing.F) {
+	f.Add([]byte{0, 1, 2, 3, 4, 5, 6, 7, 8, 9})
+	f.Add([]byte{0, 4, 0, 6, 2, 1, 5, 1, 7, 3})
+	f.Fuzz(func(t *testing.T, operations []byte) {
+		if len(operations) > 64 {
+			operations = operations[:64]
+		}
+		backend := new(fakeNamespace)
+		state, manager, instance := attachState(t, backend, 8)
+		defer manager.Detach(instance)
+		baselineResources := state.Resources().Len()
+		baselineRegistrations := state.Readiness().Snapshot().Registrations
+		var queryHandle, announcementHandle resource.Handle
+		var staleQuery, staleAnnouncement resource.Handle
+		var query *fakeQuery
+		var announcement *fakeAnnouncement
+		var queries []*fakeQuery
+		var announcements []*fakeAnnouncement
+
+		assertInstanceMDNSHandleModel(t, state, baselineResources, baselineRegistrations, queryHandle, announcementHandle, staleQuery, staleAnnouncement, query, announcement)
+		for index, operation := range operations {
+			switch operation % 12 {
+			case 0:
+				if queryHandle == 0 {
+					query = &fakeQuery{
+						record: mdnsns.Record{Name: "host.local", Type: mdnsns.RecordA, TTLSeconds: 120, Address: netip.MustParseAddr("192.0.2.10")},
+						next:   mdnsns.NextReady,
+					}
+					backend.query, backend.queryProgress = query, nscore.ProgressInProgress
+					var err error
+					queryHandle, _, err = Query(state, state.NamespaceHandle(), mdnsns.Request{Name: "host.local", Types: mdnsns.RecordsA})
+					if err != nil {
+						t.Fatalf("operation %d query create = %v", index, err)
+					}
+					if queryHandle == staleQuery {
+						t.Fatalf("operation %d query reused stale generation %v", index, queryHandle)
+					}
+					queries = append(queries, query)
+				}
+			case 1:
+				if announcementHandle == 0 {
+					announcement = &fakeAnnouncement{next: mdnsns.NextReady}
+					backend.announcement, backend.announceProgress = announcement, nscore.ProgressInProgress
+					var err error
+					announcementHandle, _, err = Announce(state, state.NamespaceHandle(), 0)
+					if err != nil {
+						t.Fatalf("operation %d announcement create = %v", index, err)
+					}
+					if announcementHandle == staleAnnouncement {
+						t.Fatalf("operation %d announcement reused stale generation %v", index, announcementHandle)
+					}
+					announcements = append(announcements, announcement)
+				}
+			case 2:
+				if queryHandle != 0 {
+					if err := CancelQuery(state, queryHandle); err != nil || !query.canceled {
+						t.Fatalf("operation %d query cancel = %v canceled=%v", index, err, query.canceled)
+					}
+				}
+			case 3:
+				if announcementHandle != 0 {
+					if err := CancelAnnouncement(state, announcementHandle); err != nil || !announcement.canceled {
+						t.Fatalf("operation %d announcement cancel = %v canceled=%v", index, err, announcement.canceled)
+					}
+				}
+			case 4:
+				if queryHandle != 0 {
+					if err := state.CloseHandle(queryHandle, resource.KindMDNSQuery); err != nil {
+						t.Fatalf("operation %d query close = %v", index, err)
+					}
+					staleQuery, queryHandle, query = queryHandle, 0, nil
+				}
+			case 5:
+				if announcementHandle != 0 {
+					if err := state.CloseHandle(announcementHandle, resource.KindMDNSAnnouncement); err != nil {
+						t.Fatalf("operation %d announcement close = %v", index, err)
+					}
+					staleAnnouncement, announcementHandle, announcement = announcementHandle, 0, nil
+				}
+			case 6:
+				if staleQuery != 0 {
+					if err := CancelQuery(state, staleQuery); !errors.Is(err, resource.ErrBadHandle) {
+						t.Fatalf("operation %d stale query cancel = %v", index, err)
+					}
+				}
+			case 7:
+				if staleAnnouncement != 0 {
+					if err := CancelAnnouncement(state, staleAnnouncement); !errors.Is(err, resource.ErrBadHandle) {
+						t.Fatalf("operation %d stale announcement cancel = %v", index, err)
+					}
+				}
+			case 8:
+				if queryHandle != 0 {
+					if err := CancelAnnouncement(state, queryHandle); !errors.Is(err, resource.ErrBadHandle) {
+						t.Fatalf("operation %d wrong-kind announcement cancel = %v", index, err)
+					}
+				}
+			case 9:
+				if announcementHandle != 0 {
+					if err := CancelQuery(state, announcementHandle); !errors.Is(err, resource.ErrBadHandle) {
+						t.Fatalf("operation %d wrong-kind query cancel = %v", index, err)
+					}
+				}
+			case 10:
+				if queryHandle != 0 {
+					if record, next, err := Next(state, queryHandle); err != nil || next != mdnsns.NextReady || !record.Valid() {
+						t.Fatalf("operation %d query next = %+v %v %v", index, record, next, err)
+					}
+				}
+			case 11:
+				if announcementHandle != 0 {
+					if next, err := FinishAnnouncement(state, announcementHandle); err != nil || next != mdnsns.NextReady {
+						t.Fatalf("operation %d announcement finish = %v %v", index, next, err)
+					}
+				}
+			}
+			assertInstanceMDNSHandleModel(t, state, baselineResources, baselineRegistrations, queryHandle, announcementHandle, staleQuery, staleAnnouncement, query, announcement)
+		}
+		if queryHandle != 0 {
+			if err := state.CloseHandle(queryHandle, resource.KindMDNSQuery); err != nil {
+				t.Fatal(err)
+			}
+			queryHandle, query = 0, nil
+		}
+		if announcementHandle != 0 {
+			if err := state.CloseHandle(announcementHandle, resource.KindMDNSAnnouncement); err != nil {
+				t.Fatal(err)
+			}
+			announcementHandle, announcement = 0, nil
+		}
+		assertInstanceMDNSHandleModel(t, state, baselineResources, baselineRegistrations, queryHandle, announcementHandle, staleQuery, staleAnnouncement, query, announcement)
+		for index, query := range queries {
+			if query.closeCalls != 1 {
+				t.Fatalf("query %d close calls = %d, want 1", index, query.closeCalls)
+			}
+		}
+		for index, announcement := range announcements {
+			if announcement.closeCalls != 1 {
+				t.Fatalf("announcement %d close calls = %d, want 1", index, announcement.closeCalls)
+			}
+		}
+	})
+}
+
+func assertInstanceMDNSHandleModel(t testing.TB, state *instancecore.State, baselineResources, baselineRegistrations int, queryHandle, announcementHandle, staleQuery, staleAnnouncement resource.Handle, query *fakeQuery, announcement *fakeAnnouncement) {
+	t.Helper()
+	active := 0
+	if queryHandle != 0 {
+		active++
+		value, err := state.Resources().Lookup(queryHandle, resource.KindMDNSQuery)
+		if err != nil || value != query {
+			t.Fatalf("active query lookup = %T %v", value, err)
+		}
+		if _, err := state.Resources().Lookup(queryHandle, resource.KindMDNSAnnouncement); !errors.Is(err, resource.ErrBadHandle) {
+			t.Fatalf("active query wrong-kind lookup = %v", err)
+		}
+	}
+	if announcementHandle != 0 {
+		active++
+		value, err := state.Resources().Lookup(announcementHandle, resource.KindMDNSAnnouncement)
+		if err != nil || value != announcement {
+			t.Fatalf("active announcement lookup = %T %v", value, err)
+		}
+		if _, err := state.Resources().Lookup(announcementHandle, resource.KindMDNSQuery); !errors.Is(err, resource.ErrBadHandle) {
+			t.Fatalf("active announcement wrong-kind lookup = %v", err)
+		}
+	}
+	for name, handle := range map[string]resource.Handle{"query": staleQuery, "announcement": staleAnnouncement} {
+		if handle == 0 {
+			continue
+		}
+		if _, err := state.Resources().Lookup(handle, resource.KindMDNSQuery); !errors.Is(err, resource.ErrBadHandle) {
+			t.Fatalf("stale %s query-kind lookup = %v", name, err)
+		}
+		if _, err := state.Resources().Lookup(handle, resource.KindMDNSAnnouncement); !errors.Is(err, resource.ErrBadHandle) {
+			t.Fatalf("stale %s announcement-kind lookup = %v", name, err)
+		}
+	}
+	if got := state.Resources().Len(); got != baselineResources+active {
+		t.Fatalf("resource count = %d, want %d", got, baselineResources+active)
+	}
+	if got := state.Readiness().Snapshot().Registrations; got != baselineRegistrations+active {
+		t.Fatalf("readiness registrations = %d, want %d", got, baselineRegistrations+active)
+	}
+}
+
 func BenchmarkInstanceMDNSOperations(b *testing.B) {
 	query := &fakeQuery{
 		record: mdnsns.Record{

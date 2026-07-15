@@ -903,6 +903,188 @@ func TestOutputScratchIsZeroedReusedAndReleased(t *testing.T) {
 	}
 }
 
+type fuzzManagerResource struct{ closed atomic.Int32 }
+
+func (r *fuzzManagerResource) Close() error {
+	r.closed.Add(1)
+	return nil
+}
+
+func (r *fuzzManagerResource) Readiness() nscore.Readiness { return nscore.ReadyReadable }
+
+func FuzzManagerExactInstanceLifecycle(f *testing.F) {
+	f.Add([]byte{0, 1, 2, 3, 4, 5, 6, 7})
+	f.Add([]byte{0, 5, 3, 8, 1, 6, 0, 5})
+	f.Fuzz(func(t *testing.T, operations []byte) {
+		if len(operations) > 64 {
+			operations = operations[:64]
+		}
+		manager := NewManager()
+		instances := [2]*wago.Instance{new(wago.Instance), new(wago.Instance)}
+		states := [2]*State{}
+		handles := [2]resource.Handle{}
+		resources := [2]*fuzzManagerResource{}
+		seen := make(map[*State]struct{})
+		var allResources []*fuzzManagerResource
+		var staleHandles [2][]resource.Handle
+
+		assertManagerLifecycleModel(t, manager, instances, states, handles, resources, staleHandles)
+		for index, operation := range operations {
+			slot := int(operation>>7) & 1
+			switch operation % 5 {
+			case 0:
+				err := manager.Attach(instances[slot])
+				if states[slot] != nil {
+					if !errors.Is(err, ErrAlreadyAttached) {
+						t.Fatalf("operation %d duplicate attach = %v", index, err)
+					}
+					break
+				}
+				if err != nil {
+					t.Fatalf("operation %d attach = %v", index, err)
+				}
+				state, ok := manager.ForInstance(instances[slot])
+				if !ok || state == nil {
+					t.Fatalf("operation %d attached state missing", index)
+				}
+				if _, reused := seen[state]; reused {
+					t.Fatalf("operation %d reused detached State pointer %p", index, state)
+				}
+				seen[state] = struct{}{}
+				value := new(fuzzManagerResource)
+				handle, err := state.Resources().Add(resource.KindPollable, value)
+				if err != nil {
+					t.Fatalf("operation %d add resource = %v", index, err)
+				}
+				if err := state.Readiness().Register(handle, resource.KindPollable); err != nil {
+					t.Fatalf("operation %d register resource = %v", index, err)
+				}
+				for _, stale := range staleHandles[slot] {
+					if handle == stale {
+						t.Fatalf("operation %d reused stale handle %v", index, handle)
+					}
+				}
+				states[slot], handles[slot], resources[slot] = state, handle, value
+				allResources = append(allResources, value)
+			case 1:
+				state, value, handle := states[slot], resources[slot], handles[slot]
+				if err := manager.Detach(instances[slot]); err != nil {
+					t.Fatalf("operation %d detach = %v", index, err)
+				}
+				if state != nil {
+					if value.closed.Load() != 1 {
+						t.Fatalf("operation %d detached resource closes = %d", index, value.closed.Load())
+					}
+					if err := state.WithLock(func(LockedState) error { return nil }); failureOfManagerError(err) != nscore.FailureClosed {
+						t.Fatalf("operation %d detached state remained usable: %v", index, err)
+					}
+					staleHandles[slot] = append(staleHandles[slot], handle)
+					states[slot], handles[slot], resources[slot] = nil, 0, nil
+				}
+			case 2:
+				got, ok := manager.ForInstance(instances[slot])
+				if ok != (states[slot] != nil) || got != states[slot] {
+					t.Fatalf("operation %d lookup = %p %v, want %p", index, got, ok, states[slot])
+				}
+			case 3:
+				if states[slot] != nil {
+					if err := states[slot].CloseHandle(handles[slot], resource.KindPollable); err != nil {
+						t.Fatalf("operation %d close handle = %v", index, err)
+					}
+					if resources[slot].closed.Load() != 1 {
+						t.Fatalf("operation %d handle closes = %d", index, resources[slot].closed.Load())
+					}
+					staleHandles[slot] = append(staleHandles[slot], handles[slot])
+					value := new(fuzzManagerResource)
+					handle, err := states[slot].Resources().Add(resource.KindPollable, value)
+					if err != nil {
+						t.Fatalf("operation %d replacement add = %v", index, err)
+					}
+					if err := states[slot].Readiness().Register(handle, resource.KindPollable); err != nil {
+						t.Fatalf("operation %d replacement register = %v", index, err)
+					}
+					for _, stale := range staleHandles[slot] {
+						if handle == stale {
+							t.Fatalf("operation %d replacement reused stale handle %v", index, handle)
+						}
+					}
+					handles[slot], resources[slot] = handle, value
+					allResources = append(allResources, value)
+				}
+			case 4:
+				if got, ok := manager.ForInstance(new(wago.Instance)); ok || got != nil {
+					t.Fatalf("operation %d non-exact instance resolved %p", index, got)
+				}
+			}
+			assertManagerLifecycleModel(t, manager, instances, states, handles, resources, staleHandles)
+		}
+		for slot := range instances {
+			if err := manager.Detach(instances[slot]); err != nil {
+				t.Fatal(err)
+			}
+			states[slot], handles[slot], resources[slot] = nil, 0, nil
+		}
+		assertManagerLifecycleModel(t, manager, instances, states, handles, resources, staleHandles)
+		for index, value := range allResources {
+			if value.closed.Load() != 1 {
+				t.Fatalf("resource %d close calls = %d, want 1", index, value.closed.Load())
+			}
+		}
+	})
+}
+
+func assertManagerLifecycleModel(t testing.TB, manager *Manager, instances [2]*wago.Instance, states [2]*State, handles [2]resource.Handle, resources [2]*fuzzManagerResource, staleHandles [2][]resource.Handle) {
+	t.Helper()
+	wantLen := 0
+	for slot := range instances {
+		state, ok := manager.ForInstance(instances[slot])
+		if states[slot] == nil {
+			if ok || state != nil || handles[slot] != 0 || resources[slot] != nil {
+				t.Fatalf("slot %d detached model = state:%p lookup:%p/%v handle:%v resource:%p", slot, states[slot], state, ok, handles[slot], resources[slot])
+			}
+			continue
+		}
+		wantLen++
+		if !ok || state != states[slot] {
+			t.Fatalf("slot %d exact lookup = %p/%v, want %p", slot, state, ok, states[slot])
+		}
+		if resources[slot] == nil || resources[slot].closed.Load() != 0 {
+			t.Fatalf("slot %d live resource = %p closes=%d", slot, resources[slot], resources[slot].closed.Load())
+		}
+		value, err := state.Resources().Lookup(handles[slot], resource.KindPollable)
+		if err != nil || value != resources[slot] {
+			t.Fatalf("slot %d live handle lookup = %T %v", slot, value, err)
+		}
+		if registrations := state.Readiness().Snapshot().Registrations; registrations != 1 {
+			t.Fatalf("slot %d readiness registrations = %d", slot, registrations)
+		}
+		for _, stale := range staleHandles[slot] {
+			if _, err := state.Resources().Lookup(stale, resource.KindPollable); !errors.Is(err, resource.ErrBadHandle) {
+				t.Fatalf("slot %d stale handle %v lookup = %v", slot, stale, err)
+			}
+		}
+	}
+	if manager.Len() != wantLen {
+		t.Fatalf("manager length = %d, want %d", manager.Len(), wantLen)
+	}
+	if states[0] != nil && states[1] != nil {
+		if states[0] == states[1] {
+			t.Fatal("two exact instances shared one State")
+		}
+		for slot := range states {
+			other := 1 - slot
+			if _, err := states[other].Resources().Lookup(handles[slot], resource.KindPollable); !errors.Is(err, resource.ErrBadHandle) {
+				t.Fatalf("slot %d handle resolved in slot %d: %v", slot, other, err)
+			}
+		}
+	}
+}
+
+func failureOfManagerError(err error) nscore.Failure {
+	failure, _ := nscore.FailureOf(err)
+	return failure
+}
+
 func TestNamespaceCreationRollsBackEveryOwnedStage(t *testing.T) {
 	t.Run("quota denial skips backend", func(t *testing.T) {
 		config := DefaultConfig()

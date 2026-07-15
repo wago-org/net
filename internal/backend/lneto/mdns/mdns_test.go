@@ -677,6 +677,203 @@ func FuzzMDNSWireIngress(f *testing.F) {
 	})
 }
 
+func FuzzMDNSOperationStateMachine(f *testing.F) {
+	f.Add([]byte{0, 1, 2, 3, 4, 5, 6, 7})
+	f.Add([]byte{2, 2, 0, 3, 6, 3, 4, 7, 5})
+	f.Add([]byte{6, 7, 0, 1, 2, 3})
+	f.Fuzz(func(t *testing.T, operations []byte) {
+		if len(operations) > 64 {
+			operations = operations[:64]
+		}
+		service := testService("device", "192.0.2.11")
+		config := Config{
+			Services: []mdnsns.Service{service}, MaxServices: 1, MaxQueries: 1, MaxAnnouncements: 1,
+			MaxRecords: 8, MaxPacketBytes: 1200, MaxQueuedResponses: 1, MaxQuestionsPerPacket: 4,
+			MaxRecordsPerPacket: 16, MaxAttempts: 2, RetryServiceAttempts: 2,
+		}
+		core, adapter, account := newTestAdapter(t, config, testPolicy())
+		baseline, _ := account.Snapshot()
+		queryResource, _, err := adapter.TryQuery(mdnsns.Request{Name: "peer.local", Types: mdnsns.RecordsA})
+		if err != nil {
+			t.Fatal(err)
+		}
+		announcementResource, _, err := adapter.TryAnnounce(0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		query := queryResource.(*query)
+		announcement := announcementResource.(*announcement)
+		payload, err := buildServicePacket(testService("peer", "192.0.2.22"), lnetodns.TypeA, config.MaxPacketBytes)
+		if err != nil {
+			t.Fatal(err)
+		}
+		lateFrame := wrapMDNSFrame(t, payload, [6]byte{2, 0, 0, 0, 0, 22}, netip.MustParseAddr("192.0.2.22"))
+		egress := make([]byte, core.Link().MaxFrameBytes())
+
+		assertMDNSOperationModel(t, adapter, account, baseline, config, query, announcement)
+		for index, operation := range operations {
+			switch operation % 10 {
+			case 0:
+				_ = query.Cancel()
+			case 1:
+				_ = announcement.Cancel()
+			case 2:
+				before := mdnsQueryFingerprintOf(query)
+				core.Lock()
+				handled, ingressErr := adapter.ingressLocked(lateFrame)
+				core.Unlock()
+				if ingressErr != nil || !handled {
+					t.Fatalf("operation %d late ingress = handled:%v err:%v", index, handled, ingressErr)
+				}
+				if before.terminal() && before != mdnsQueryFingerprintOf(query) {
+					t.Fatalf("operation %d late ingress mutated terminal query: before=%+v after=%+v", index, before, mdnsQueryFingerprintOf(query))
+				}
+			case 3:
+				core.Lock()
+				_, _, egressErr := adapter.egressLocked(egress)
+				core.Unlock()
+				if egressErr != nil {
+					t.Fatalf("operation %d egress = %v", index, egressErr)
+				}
+			case 4:
+				_, _, _ = query.TryNext()
+			case 5:
+				_, _ = announcement.TryFinish()
+			case 6:
+				if err := query.Close(); err != nil {
+					t.Fatalf("operation %d query close = %v", index, err)
+				}
+			case 7:
+				if err := announcement.Close(); err != nil {
+					t.Fatalf("operation %d announcement close = %v", index, err)
+				}
+			case 8:
+				_ = query.Readiness()
+			case 9:
+				_ = announcement.Readiness()
+			}
+			assertMDNSOperationModel(t, adapter, account, baseline, config, query, announcement)
+		}
+		if err := query.Close(); err != nil {
+			t.Fatal(err)
+		}
+		if err := announcement.Close(); err != nil {
+			t.Fatal(err)
+		}
+		assertMDNSOperationModel(t, adapter, account, baseline, config, query, announcement)
+		if err := core.Close(); err != nil {
+			t.Fatal(err)
+		}
+	})
+}
+
+type mdnsQueryFingerprint struct {
+	state    operationState
+	attempts uint16
+	retry    uint16
+	failure  error
+	records  int
+	cursor   int
+}
+
+func mdnsQueryFingerprintOf(query *query) mdnsQueryFingerprint {
+	return mdnsQueryFingerprint{
+		state: query.state, attempts: query.attempts, retry: query.retry,
+		failure: query.failure, records: len(query.records), cursor: query.cursor,
+	}
+}
+
+func (fingerprint mdnsQueryFingerprint) terminal() bool {
+	return fingerprint.state == stateDone || fingerprint.state == stateFailed || fingerprint.state == stateClosed
+}
+
+func assertMDNSOperationModel(t testing.TB, adapter *Adapter, account *quota.Account, baseline quota.Usage, config Config, query *query, announcement *announcement) {
+	t.Helper()
+	want := baseline
+	queryLive := query.state != stateClosed
+	announcementLive := announcement.state != stateClosed
+	if queryLive {
+		want.Resources++
+		want.MDNSResources++
+		want.QueuedBytes += queryRetainedBytes(config)
+	}
+	if announcementLive {
+		want.Resources++
+		want.MDNSResources++
+		want.QueuedBytes += uint64(config.MaxPacketBytes)
+	}
+	if query.state == statePending || query.state == stateWaiting {
+		want.MDNSWork++
+	}
+	if announcement.state == statePending || announcement.state == stateWaiting {
+		want.MDNSWork++
+	}
+	if usage, closed := account.Snapshot(); closed || usage != want {
+		t.Fatalf("operation quota = %+v closed=%v, want %+v", usage, closed, want)
+	}
+	if containsMDNSQuery(adapter.queries, query) != queryLive || containsMDNSAnnouncement(adapter.announcements, announcement) != announcementLive {
+		t.Fatalf("adapter ownership = query:%v/%v announcement:%v/%v", containsMDNSQuery(adapter.queries, query), queryLive, containsMDNSAnnouncement(adapter.announcements, announcement), announcementLive)
+	}
+	switch query.state {
+	case statePending, stateWaiting:
+		if query.Readiness() != 0 || query.failure != nil || len(query.records) != 0 {
+			t.Fatalf("active query = state:%v readiness:%v failure:%v records:%d", query.state, query.Readiness(), query.failure, len(query.records))
+		}
+	case stateDone:
+		if query.Readiness() != nscore.ReadyMDNSResult || query.failure != nil || len(query.records) == 0 {
+			t.Fatalf("done query = readiness:%v failure:%v records:%d", query.Readiness(), query.failure, len(query.records))
+		}
+	case stateFailed:
+		if query.Readiness() != nscore.ReadyError || query.failure == nil || len(query.records) != 0 {
+			t.Fatalf("failed query = readiness:%v failure:%v records:%d", query.Readiness(), query.failure, len(query.records))
+		}
+	case stateClosed:
+		if query.Readiness() != nscore.ReadyClosed || query.packet != nil || query.records != nil || query.failure != nil || query.request != (mdnsns.Request{}) {
+			t.Fatalf("closed query retained state: packet=%d records=%d failure=%v request=%+v", len(query.packet), len(query.records), query.failure, query.request)
+		}
+	default:
+		t.Fatalf("invalid query state %v", query.state)
+	}
+	switch announcement.state {
+	case statePending, stateWaiting:
+		if announcement.Readiness() != 0 || announcement.failure != nil {
+			t.Fatalf("active announcement = state:%v readiness:%v failure:%v", announcement.state, announcement.Readiness(), announcement.failure)
+		}
+	case stateDone:
+		if announcement.Readiness() != nscore.ReadyMDNSAnnouncement || announcement.failure != nil {
+			t.Fatalf("done announcement = readiness:%v failure:%v", announcement.Readiness(), announcement.failure)
+		}
+	case stateFailed:
+		if announcement.Readiness() != nscore.ReadyError || announcement.failure == nil {
+			t.Fatalf("failed announcement = readiness:%v failure:%v", announcement.Readiness(), announcement.failure)
+		}
+	case stateClosed:
+		if announcement.Readiness() != nscore.ReadyClosed || announcement.packet != nil || announcement.failure != nil {
+			t.Fatalf("closed announcement retained state: packet=%d failure=%v", len(announcement.packet), announcement.failure)
+		}
+	default:
+		t.Fatalf("invalid announcement state %v", announcement.state)
+	}
+}
+
+func containsMDNSQuery(queries []*query, target *query) bool {
+	for _, query := range queries {
+		if query == target {
+			return true
+		}
+	}
+	return false
+}
+
+func containsMDNSAnnouncement(announcements []*announcement, target *announcement) bool {
+	for _, announcement := range announcements {
+		if announcement == target {
+			return true
+		}
+	}
+	return false
+}
+
 func TestMDNSRejectsMalformedOrIrrelevantResponses(t *testing.T) {
 	core, adapter, _ := newTestAdapter(t, queryOnlyConfig(), testPolicy())
 	resource, _, err := adapter.TryQuery(mdnsns.Request{Name: "peer.local", Types: mdnsns.RecordsA})
