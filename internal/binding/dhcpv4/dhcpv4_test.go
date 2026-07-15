@@ -222,6 +222,65 @@ func TestBindingsRejectHighBitI32AliasesBeforeStateAndBackendWork(t *testing.T) 
 	}
 }
 
+func TestBindingsPreserveFullWidthNamespaceAndLeaseHandles(t *testing.T) {
+	lease := &fakeLease{result: dhcpns.ResultWouldBlock}
+	backend := &fakeNamespace{lease: lease, progress: nscore.ProgressInProgress}
+	manager, instance := attachManager(t, backend)
+	defer manager.Detach(instance)
+	host := testHost{instance: instance, memory: bytes.Repeat([]byte{0x7b}, 1024)}
+	bindings := Bindings(plugin.NewHost(manager))
+	state, ok := manager.ForInstance(instance)
+	if !ok {
+		t.Fatal("attached state missing")
+	}
+	namespaceHandle := state.NamespaceHandle()
+	if !dhcpabi.EncodeRequestV1(host.memory, 0, dhcpns.Request{}) {
+		t.Fatal("encode request")
+	}
+	leaseHandle, err := state.Resources().Add(resource.KindDHCPv4Lease, lease)
+	if err != nil {
+		t.Fatal(err)
+	}
+	const high = uint64(1) << 63
+
+	outPtr := uint64(256)
+	outBefore := append([]byte(nil), host.memory[outPtr:outPtr+8]...)
+	if status := callBinding(t, bindingByName(t, bindings, "acquire"), host, uint64(namespaceHandle)|high, 0, outPtr); status != guest.StatusBadHandle || backend.calls != 0 || !bytes.Equal(host.memory[outPtr:outPtr+8], outBefore) {
+		t.Fatalf("high namespace acquire = %v calls=%d", status, backend.calls)
+	}
+
+	resultPtr := uint64(400)
+	resultBefore := append([]byte(nil), host.memory[resultPtr:resultPtr+uint64(dhcpabi.LeaseV1Size)]...)
+	if status := callBinding(t, bindingByName(t, bindings, "result"), host, uint64(leaseHandle)|high, resultPtr); status != guest.StatusBadHandle || lease.resultCalls != 0 || !bytes.Equal(host.memory[resultPtr:resultPtr+uint64(dhcpabi.LeaseV1Size)], resultBefore) {
+		t.Fatalf("high lease result = %v calls=%d", status, lease.resultCalls)
+	}
+	if status := callBinding(t, bindingByName(t, bindings, "cancel"), host, uint64(leaseHandle)|high); status != guest.StatusBadHandle || lease.canceled {
+		t.Fatalf("high lease cancel = %v canceled=%v", status, lease.canceled)
+	}
+	if status := callBinding(t, bindingByName(t, bindings, "release"), host, uint64(leaseHandle)|high); status != guest.StatusBadHandle || lease.released {
+		t.Fatalf("high lease release = %v released=%v", status, lease.released)
+	}
+	if status := callBinding(t, bindingByName(t, bindings, "close"), host, uint64(leaseHandle)|high); status != guest.StatusBadHandle || lease.closed {
+		t.Fatalf("high lease close = %v closed=%v", status, lease.closed)
+	}
+
+	if status := callBinding(t, bindingByName(t, bindings, "acquire"), host, uint64(namespaceHandle), 0, outPtr); status != guest.StatusInProgress || backend.calls != 1 {
+		t.Fatalf("exact namespace acquire = %v calls=%d", status, backend.calls)
+	}
+	if status := callBinding(t, bindingByName(t, bindings, "result"), host, uint64(leaseHandle), resultPtr); status != guest.StatusAgain || lease.resultCalls != 1 {
+		t.Fatalf("exact lease result = %v calls=%d", status, lease.resultCalls)
+	}
+	if status := callBinding(t, bindingByName(t, bindings, "cancel"), host, uint64(leaseHandle)); status != guest.StatusOK || !lease.canceled {
+		t.Fatalf("exact lease cancel = %v canceled=%v", status, lease.canceled)
+	}
+	if status := callBinding(t, bindingByName(t, bindings, "release"), host, uint64(leaseHandle)); status != guest.StatusOK || !lease.released {
+		t.Fatalf("exact lease release = %v released=%v", status, lease.released)
+	}
+	if status := callBinding(t, bindingByName(t, bindings, "close"), host, uint64(leaseHandle)); status != guest.StatusOK || !lease.closed {
+		t.Fatalf("exact lease close = %v closed=%v", status, lease.closed)
+	}
+}
+
 func TestBindingsPrevalidateOutputsBeforeInstanceAndHandleLookup(t *testing.T) {
 	manager := instancecore.NewManager()
 	instance := new(wago.Instance)
