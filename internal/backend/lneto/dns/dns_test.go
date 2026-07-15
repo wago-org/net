@@ -1060,6 +1060,61 @@ func TestDNSResponseRejectsCNAMEConflictLoopAndMalformedWire(t *testing.T) {
 	}
 }
 
+func TestDNSParserClearsSharedScratchAfterEnvelopeFailureAndSuccess(t *testing.T) {
+	request := namespace.DNSRequest{Name: "example.com", Types: namespace.DNSRecordsA}
+	name := lnetodns.MustNewName(request.Name)
+	alias := lnetodns.MustNewName("alias.example.com")
+	aliasData, err := alias.AppendTo(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	payload, err := (&lnetodns.Message{
+		Questions: []lnetodns.Question{{Name: name, Type: lnetodns.TypeA, Class: lnetodns.ClassINET}},
+		Answers: []lnetodns.Resource{
+			lnetodns.NewResource(name, lnetodns.TypeCNAME, lnetodns.ClassINET, 60, aliasData),
+			lnetodns.NewResource(alias, lnetodns.TypeA, lnetodns.ClassINET, 60, []byte{192, 0, 2, 44}),
+		},
+	}).AppendTo(nil, 31, lnetodns.HeaderFlags(1<<15))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	recordStorage := []namespace.DNSRecord{
+		{Name: "sentinel-0.example", Type: namespace.DNSRecordA, TTLSeconds: 1, Address: netip.MustParseAddr("192.0.2.1")},
+		{Name: "sentinel-1.example", Type: namespace.DNSRecordA, TTLSeconds: 1, Address: netip.MustParseAddr("192.0.2.2")},
+		{},
+		{},
+	}
+	recordsBefore := append([]namespace.DNSRecord(nil), recordStorage...)
+	candidates := make([]namespace.DNSRecord, len(payload)/11)
+	names := make([]string, 2*len(candidates))
+	malformed := append(append([]byte(nil), payload...), 0)
+
+	if records, response, failure, err := parseDNSResponseInto(recordStorage[:0], candidates, names, malformed, 31, request, len(recordStorage)); !response || failure != namespace.FailureIO || err == nil || len(records) != 0 {
+		t.Fatalf("malformed parse = records:%+v response:%v failure:%v err:%v", records, response, failure, err)
+	}
+	if !reflect.DeepEqual(recordStorage, recordsBefore) {
+		t.Fatalf("malformed parse staged partial output: got %+v want %+v", recordStorage, recordsBefore)
+	}
+	if !reflect.DeepEqual(candidates, make([]namespace.DNSRecord, len(candidates))) {
+		t.Fatalf("malformed parse retained candidate scratch: %+v", candidates)
+	}
+	if !reflect.DeepEqual(names, make([]string, len(names))) {
+		t.Fatalf("malformed parse retained name scratch: %+v", names)
+	}
+
+	records, response, failure, err := parseDNSResponseInto(recordStorage[:0], candidates, names, payload, 31, request, len(recordStorage))
+	if err != nil || !response || failure != 0 || len(records) != 2 || records[0].Type != namespace.DNSRecordCNAME || records[0].CanonicalName != "alias.example.com" || records[1].Address != netip.MustParseAddr("192.0.2.44") {
+		t.Fatalf("valid parse = records:%+v response:%v failure:%v err:%v", records, response, failure, err)
+	}
+	if !reflect.DeepEqual(candidates, make([]namespace.DNSRecord, len(candidates))) {
+		t.Fatalf("valid parse retained candidate scratch: %+v", candidates)
+	}
+	if !reflect.DeepEqual(names, make([]string, len(names))) {
+		t.Fatalf("valid parse retained name scratch: %+v", names)
+	}
+}
+
 func FuzzDNSWireResponse(f *testing.F) {
 	request := namespace.DNSRequest{Name: "example.com", Types: namespace.DNSRecordsA | namespace.DNSRecordsAAAA}
 	name := lnetodns.MustNewName(request.Name)
