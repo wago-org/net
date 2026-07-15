@@ -13,8 +13,7 @@ type IPv4IdentityLease struct {
 // and shared namespace identity. Only one dynamic contributor may be active.
 func (n *Namespace) TryApplyIPv4IdentityLocked(lease *IPv4IdentityLease, address netip.Addr, subnet netip.Prefix) bool {
 	if n == nil || n.closed || n.stack == nil || lease == nil || lease.active || n.ipv4IdentityLease != nil ||
-		!address.Is4() || address.Is4In6() || address.IsUnspecified() || address.IsMulticast() || address.Zone() != "" ||
-		!subnet.IsValid() || !subnet.Addr().Is4() || !subnet.Contains(address) {
+		!validDynamicIPv4Identity(address, subnet) {
 		return false
 	}
 	address4 := address.As4()
@@ -23,6 +22,7 @@ func (n *Namespace) TryApplyIPv4IdentityLocked(lease *IPv4IdentityLease, address
 	}
 	n.stack.SetSubnet4(address4, uint8(subnet.Bits()))
 	n.ipv4Address = address
+	n.ipv4Subnet = subnet.Masked()
 	lease.owner = n
 	lease.active = true
 	n.ipv4IdentityLease = lease
@@ -42,7 +42,7 @@ func (lease *IPv4IdentityLease) ReleaseLocked() bool {
 		return false
 	}
 	static := n.staticIPv4Address
-	if !static.Is4() || static.Is4In6() {
+	if !validIPv4Identity(static, true) {
 		return false
 	}
 	static4 := static.As4()
@@ -51,6 +51,7 @@ func (lease *IPv4IdentityLease) ReleaseLocked() bool {
 	}
 	n.stack.SetSubnet4(static4, 32)
 	n.ipv4Address = static
+	n.ipv4Subnet = netip.PrefixFrom(static, 32)
 	n.ipv4IdentityLease = nil
 	lease.owner = nil
 	lease.active = false

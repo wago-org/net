@@ -86,6 +86,7 @@ type Namespace struct {
 	randSeed               int64
 	nextIPv4ID             uint16
 	ipv4Address            netip.Addr
+	ipv4Subnet             netip.Prefix
 	staticIPv4Address      netip.Addr
 	ipv4IdentityLease      *IPv4IdentityLease
 	ipv6Address            netip.Addr
@@ -152,6 +153,7 @@ func New(config Config) (*Namespace, error) {
 		randSeed:               config.RandSeed,
 		nextIPv4ID:             uint16(config.RandSeed),
 		ipv4Address:            config.IPv4Address,
+		ipv4Subnet:             netip.PrefixFrom(config.IPv4Address, 32),
 		staticIPv4Address:      config.IPv4Address,
 		ipv6Address:            config.IPv6Address,
 		ipv6PrefixBits:         config.IPv6PrefixBits,
@@ -223,6 +225,7 @@ func (n *Namespace) StackLocked() *xnet.StackAsync         { return n.stack }
 func (n *Namespace) PolicyLocked() *policy.Policy          { return n.policy }
 func (n *Namespace) QuotasLocked() *quota.Account          { return n.quotas }
 func (n *Namespace) IPv4AddressLocked() netip.Addr         { return n.ipv4Address }
+func (n *Namespace) IPv4SubnetLocked() netip.Prefix        { return n.ipv4Subnet }
 func (n *Namespace) IPv6AddressLocked() netip.Addr         { return n.ipv6Address }
 func (n *Namespace) IPv6PrefixBitsLocked() uint8           { return n.ipv6PrefixBits }
 func (n *Namespace) IPv6ScopeIDLocked() uint32             { return n.ipv6ScopeID }
@@ -470,7 +473,7 @@ func (n *Namespace) tryEgress(remainingBytes uint32) (bool, bool, int, error) {
 }
 
 func validConfig(config Config) bool {
-	if config.Hostname == "" || config.RandSeed == 0 || !validUnicastHardwareAddress(config.HardwareAddress) || !validIPv4Identity(config.IPv4Address) {
+	if config.Hostname == "" || config.RandSeed == 0 || !validUnicastHardwareAddress(config.HardwareAddress) || !validIPv4Identity(config.IPv4Address, true) {
 		return false
 	}
 	ipv6Configured := config.IPv6Address.IsValid() || config.IPv6PrefixBits != 0 || config.IPv6ScopeID != 0
@@ -488,9 +491,19 @@ func validUnicastHardwareAddress(address [6]byte) bool {
 	return address != ([6]byte{}) && address[0]&1 == 0
 }
 
-func validIPv4Identity(address netip.Addr) bool {
-	return address.Is4() && !address.Is4In6() && address.Zone() == "" &&
-		(address.IsUnspecified() || (!address.IsLoopback() && !address.IsMulticast() && address != netip.AddrFrom4([4]byte{255, 255, 255, 255})))
+func validIPv4Identity(address netip.Addr, allowUnspecified bool) bool {
+	if !address.Is4() || address.Is4In6() || address.Zone() != "" {
+		return false
+	}
+	if address.IsUnspecified() {
+		return allowUnspecified
+	}
+	return !address.IsLoopback() && !address.IsMulticast() && address != netip.AddrFrom4([4]byte{255, 255, 255, 255})
+}
+
+func validDynamicIPv4Identity(address netip.Addr, subnet netip.Prefix) bool {
+	return validIPv4Identity(address, false) && subnet.IsValid() && subnet.Addr().Is4() && !subnet.Addr().Is4In6() &&
+		subnet.Addr().Zone() == "" && subnet.Contains(address)
 }
 
 func validIPv6Config(address netip.Addr, prefixBits uint8, scopeID uint32) bool {
