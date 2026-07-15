@@ -36,6 +36,7 @@ func (*fakeBase) TryService(nscore.ServiceBudget) (nscore.ServiceReport, nscore.
 
 type fakeNamespace struct {
 	lease           *fakeLease
+	progress        nscore.Progress
 	calls           int
 	operationsCalls int
 }
@@ -46,7 +47,11 @@ func (n *fakeNamespace) Operations() dhcpns.Operations {
 }
 func (n *fakeNamespace) TryAcquire() (nscore.Resource, nscore.Progress, error) {
 	n.calls++
-	return n.lease, nscore.ProgressInProgress, nil
+	progress := n.progress
+	if progress == 0 {
+		progress = nscore.ProgressInProgress
+	}
+	return n.lease, progress, nil
 }
 
 type fakeLease struct {
@@ -220,6 +225,45 @@ func TestBindingsPreserveFullWidthNamespaceAndLeaseHandles(t *testing.T) {
 	}
 	if status := callBinding(t, bindingByName(t, bindings, "close"), host, uint64(leaseHandle)).status; status != guest.StatusOK || lease.closeCalls != 1 {
 		t.Fatalf("exact lease close = %v calls=%d", status, lease.closeCalls)
+	}
+}
+
+func TestStartBindingInvalidProgressClosesResourceAndPreservesOutput(t *testing.T) {
+	invalid := &fakeLease{}
+	backend := &fakeNamespace{lease: invalid, progress: 99}
+	manager, instance := attachManager(t, backend)
+	defer manager.Detach(instance)
+	host := testHost{instance: instance, memory: bytes.Repeat([]byte{0x3c}, 4096)}
+	bindings := Bindings(plugin.NewHost(manager))
+	state, ok := manager.ForInstance(instance)
+	if !ok {
+		t.Fatal("attached state missing")
+	}
+	resourcesBefore := state.Resources().Len()
+	readinessBefore := state.Readiness().Snapshot()
+	before := append([]byte(nil), host.memory...)
+
+	if status := callBinding(t, bindingByName(t, bindings, "start"), host, uint64(state.NamespaceHandle()), uint64(dhcpns.OperationAcquire), 320).status; status != guest.StatusIO {
+		t.Fatalf("invalid progress start = %v", status)
+	}
+	if backend.calls != 1 || invalid.closeCalls != 1 || state.Resources().Len() != resourcesBefore || state.Readiness().Snapshot() != readinessBefore {
+		t.Fatalf("invalid progress lifecycle: calls=%d closes=%d resources=%d readiness=%+v", backend.calls, invalid.closeCalls, state.Resources().Len(), state.Readiness().Snapshot())
+	}
+	if !bytes.Equal(host.memory, before) {
+		t.Fatal("invalid progress mutated guest memory")
+	}
+
+	fresh := &fakeLease{result: dhcpns.ResultWouldBlock}
+	backend.lease, backend.progress = fresh, nscore.ProgressInProgress
+	if status := callBinding(t, bindingByName(t, bindings, "start"), host, uint64(state.NamespaceHandle()), uint64(dhcpns.OperationAcquire), 320).status; status != guest.StatusInProgress {
+		t.Fatalf("fresh start = %v", status)
+	}
+	freshHandle := resource.Handle(binary.LittleEndian.Uint64(host.memory[320:328]))
+	if freshHandle == 0 || state.Resources().Len() != resourcesBefore+1 || state.Readiness().Snapshot().Registrations != readinessBefore.Registrations+1 {
+		t.Fatalf("fresh lifecycle: handle=%v resources=%d readiness=%+v", freshHandle, state.Resources().Len(), state.Readiness().Snapshot())
+	}
+	if status := callBinding(t, bindingByName(t, bindings, "close"), host, uint64(freshHandle)).status; status != guest.StatusOK || fresh.closeCalls != 1 {
+		t.Fatalf("fresh close = %v calls=%d", status, fresh.closeCalls)
 	}
 }
 
