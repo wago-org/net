@@ -1193,6 +1193,36 @@ func TestVerifyRejectsTamperedEvidenceAndWrongSubject(t *testing.T) {
 	}
 }
 
+func TestVerifyRejectsTamperedOrMissingBenchmarkEvidence(t *testing.T) {
+	dir, opts := validReviewFixture(t)
+	if _, err := Verify(dir, opts); err != nil {
+		t.Fatalf("current valid benchmark evidence: %v", err)
+	}
+	targetsPath := filepath.Join(dir, "benchmark", "targets.tsv")
+	targets, err := os.ReadFile(targetsPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tampered := bytes.Replace(targets, []byte("BenchmarkComposeNamespace"), []byte("BenchmarkTamperedNamespace"), 1)
+	if reflect.DeepEqual(tampered, targets) {
+		t.Fatal("benchmark target tamper did not change manifest")
+	}
+	if err := os.WriteFile(targetsPath, tampered, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Verify(dir, opts); err == nil {
+		t.Fatal("tampered benchmark target manifest unexpectedly accepted")
+	}
+
+	dir, opts = validReviewFixture(t)
+	if err := os.Remove(filepath.Join(dir, "benchmark", "logs", "github.com/wago-org/net/internal/resource", "BenchmarkTableLookup.log")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Verify(dir, opts); err == nil {
+		t.Fatal("missing benchmark log unexpectedly accepted")
+	}
+}
+
 func TestVerifyRejectsNoncanonicalOrPolicyDriftedManifest(t *testing.T) {
 	dir, opts := validReviewFixture(t)
 	path := filepath.Join(dir, "provenance.json")
@@ -1239,21 +1269,32 @@ func TestVerifyRejectsNoncanonicalOrPolicyDriftedManifest(t *testing.T) {
 }
 
 func TestReleaseSignoffBenchmarkCheckMatchesProvenancePolicy(t *testing.T) {
-	data, err := os.ReadFile("../../scripts/release-signoff.sh")
+	signoffData, err := os.ReadFile("../../scripts/release-signoff.sh")
 	if err != nil {
 		t.Fatal(err)
 	}
-	script := string(data)
+	runnerData, err := os.ReadFile("../../scripts/benchmark-smoke.sh")
+	if err != nil {
+		t.Fatal(err)
+	}
+	signoff := string(signoffData)
+	runner := string(runnerData)
 	for _, required := range []string{
-		"-bench '^Benchmark'",
-		"-benchmem",
-		"record_check " + releaseBenchmarkCheck + " pass",
+		"BENCH_LOG_DIR=\"$out/benchmark\"",
+		"scripts/benchmark-smoke.sh",
+		"benchmark_detail=$(cat \"$out/benchmark/detail.txt\")",
+		"record_check " + releaseBenchmarkCheck + " pass \"$benchmark_detail\"",
 	} {
-		if !strings.Contains(script, required) {
+		if !strings.Contains(signoff, required) {
 			t.Fatalf("release signoff does not record %q", required)
 		}
 	}
-	if count := strings.Count(script, "record_check "+releaseBenchmarkCheck+" pass"); count != 1 {
+	for _, required := range []string{"-list '^Benchmark'", "-bench \"^${target}$\"", "-benchmem", "-benchtime=\"$benchtime\"", "-count=\"$count\"", "-cpu=\"$cpu\""} {
+		if !strings.Contains(runner, required) {
+			t.Fatalf("benchmark runner does not enforce %q", required)
+		}
+	}
+	if count := strings.Count(signoff, "record_check "+releaseBenchmarkCheck+" pass"); count != 1 {
 		t.Fatalf("release benchmark check records = %d, want 1", count)
 	}
 }
@@ -1263,6 +1304,10 @@ func validReviewFixture(t *testing.T) (string, VerifyOptions) {
 	dir := t.TempDir()
 	repositories := newSourceObjectFixture(t)
 	subject := repositories.net.Revision
+	benchmarks := writeBenchmarkEvidence(t, dir, [][2]string{
+		{"github.com/wago-org/net/internal/namespace/core", "BenchmarkComposeNamespace"},
+		{"github.com/wago-org/net/internal/resource", "BenchmarkTableLookup"},
+	})
 	checks := []Check{
 		{Name: "pinned-revisions", Status: "pass"},
 		{Name: "initial-clean-trees", Status: "pass"},
@@ -1277,7 +1322,7 @@ func validReviewFixture(t *testing.T) (string, VerifyOptions) {
 		{Name: "go-list", Status: "pass"},
 		{Name: "go-mod-tidy", Status: "pass"},
 		{Name: "fuzz-smoke", Status: "pass"},
-		{Name: releaseBenchmarkCheck, Status: "pass", Detail: "all runtime benchmarks; benchmem; 100ms; count=1; cpu=1"},
+		{Name: releaseBenchmarkCheck, Status: "pass", Detail: benchmarkDetail(benchmarks)},
 		{Name: "tinygo-test", Status: "pass"},
 		{Name: "cross-build", Status: "pass"},
 		{Name: "arm64-execution", Status: "skipped-no-runner"},
@@ -1339,6 +1384,7 @@ func validReviewFixture(t *testing.T) (string, VerifyOptions) {
 		},
 		Toolchains: Toolchains{Go: "go version go1.24.4 linux/amd64", TinyGo: "tinygo version 0.41.1 linux/amd64"},
 		Inspection: inspection,
+		Benchmarks: benchmarks,
 		Targets: Targets{
 			CrossBuild:     TargetResult{GOOS: "linux", GOARCH: "arm64", Status: "pass"},
 			Arm64Execution: TargetResult{GOOS: "linux", GOARCH: "arm64", Status: "skipped-no-runner", Runner: "none", BinarySHA256: binaryHash},

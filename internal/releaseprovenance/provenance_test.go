@@ -6,6 +6,8 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"sort"
+	"strings"
 	"testing"
 )
 
@@ -94,12 +96,76 @@ func TestInspectionEvidenceRejectsStaleAggregateAndRequiresEveryBundle(t *testin
 	}
 }
 
+func TestReadBenchmarkEvidenceRequiresCanonicalNonEmptyCompleteLogs(t *testing.T) {
+	pairs := [][2]string{
+		{"github.com/wago-org/net/internal/resource", "BenchmarkTableLookup"},
+		{"github.com/wago-org/net/internal/namespace/core", "BenchmarkComposeNamespace"},
+	}
+	dir := t.TempDir()
+	facts := writeBenchmarkEvidence(t, dir, pairs)
+	checks := []Check{{Name: releaseBenchmarkCheck, Status: "pass", Detail: benchmarkDetail(facts)}}
+	got, err := readBenchmarkEvidence(dir, checks)
+	if err != nil {
+		t.Fatalf("current benchmark evidence: %v", err)
+	}
+	if got != facts {
+		t.Fatalf("benchmark facts = %+v, want %+v", got, facts)
+	}
+
+	writeTestFile(t, filepath.Join(dir, "benchmark", "detail.txt"), "targets=99 packages=99 benchtime=100ms count=1 cpu=1 benchmem=true\n")
+	if _, err := readBenchmarkEvidence(dir, checks); err == nil {
+		t.Fatal("tampered benchmark detail unexpectedly accepted")
+	}
+
+	dir = t.TempDir()
+	facts = writeBenchmarkEvidence(t, dir, pairs)
+	checks[0].Detail = benchmarkDetail(facts)
+	if err := os.Remove(filepath.Join(dir, "benchmark", "logs", pairs[0][0], pairs[0][1]+".log")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := readBenchmarkEvidence(dir, checks); err == nil {
+		t.Fatal("missing per-target benchmark log unexpectedly accepted")
+	}
+
+	dir = t.TempDir()
+	writeTestFile(t, filepath.Join(dir, "benchmark", "targets.tsv"), "")
+	if _, err := readBenchmarkEvidence(dir, checks); err == nil {
+		t.Fatal("empty benchmark target manifest unexpectedly accepted")
+	}
+}
+
 func TestReadChecksRejectsMalformedInput(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "checks.tsv")
 	writeTestFile(t, path, "missing-status\n")
 	if _, err := readChecks(path); err == nil {
 		t.Fatal("malformed checks unexpectedly accepted")
 	}
+}
+
+func writeBenchmarkEvidence(t testing.TB, dir string, pairs [][2]string) BenchmarkEvidence {
+	t.Helper()
+	pairs = append([][2]string(nil), pairs...)
+	sort.Slice(pairs, func(i, j int) bool {
+		if pairs[i][0] != pairs[j][0] {
+			return pairs[i][0] < pairs[j][0]
+		}
+		return pairs[i][1] < pairs[j][1]
+	})
+	packages := make(map[string]struct{})
+	var targets strings.Builder
+	for _, pair := range pairs {
+		packages[pair[0]] = struct{}{}
+		targets.WriteString(pair[0] + "\t" + pair[1] + "\n")
+		writeTestFile(t, filepath.Join(dir, "benchmark", "logs", pair[0], pair[1]+".log"),
+			pair[1]+"-1\t1\t100 ns/op\t8 B/op\t1 allocs/op\n")
+	}
+	writeTestFile(t, filepath.Join(dir, "benchmark", "targets.tsv"), targets.String())
+	facts := BenchmarkEvidence{
+		TargetCount: len(pairs), PackageCount: len(packages), Benchtime: releaseBenchmarkBenchtime,
+		Count: releaseBenchmarkCount, CPU: releaseBenchmarkCPU, Benchmem: true,
+	}
+	writeTestFile(t, filepath.Join(dir, "benchmark", "detail.txt"), benchmarkDetail(facts)+"\n")
+	return facts
 }
 
 func writeTestFile(t testing.TB, path, contents string) {

@@ -279,6 +279,13 @@ func verifyDirectory(root string, opts VerifyOptions) (*Verification, error) {
 	if !reflect.DeepEqual(inspection, manifest.Inspection) {
 		return nil, fmt.Errorf("release provenance: inspection evidence does not match manifest facts")
 	}
+	benchmarks, err := readBenchmarkEvidence(root, checks)
+	if err != nil {
+		return nil, err
+	}
+	if benchmarks != manifest.Benchmarks {
+		return nil, fmt.Errorf("release provenance: benchmark evidence does not match manifest facts")
+	}
 	var arm64 TargetResult
 	if err := readArm64(root, &arm64); err != nil {
 		return nil, err
@@ -358,6 +365,12 @@ func validateManifest(manifest *Manifest, opts VerifyOptions) error {
 		!reflect.DeepEqual(manifest.Inspection.ImportsByModule, aggregate.Imports) {
 		return fmt.Errorf("release provenance: inspection facts do not match the complete advertised networking surface")
 	}
+	benchmarks := manifest.Benchmarks
+	if benchmarks.TargetCount <= 0 || benchmarks.PackageCount <= 0 || benchmarks.PackageCount > benchmarks.TargetCount ||
+		benchmarks.Benchtime != releaseBenchmarkBenchtime || benchmarks.Count != releaseBenchmarkCount ||
+		benchmarks.CPU != releaseBenchmarkCPU || !benchmarks.Benchmem {
+		return fmt.Errorf("release provenance: benchmark facts do not prove the required non-empty bounded run")
+	}
 	if manifest.Targets.CrossBuild != (TargetResult{GOOS: "linux", GOARCH: "arm64", Status: "pass"}) {
 		return fmt.Errorf("release provenance: cross-build target is not the required linux/arm64 pass")
 	}
@@ -381,7 +394,7 @@ func validateManifest(manifest *Manifest, opts VerifyOptions) error {
 	default:
 		return fmt.Errorf("release provenance: invalid arm64 execution status %q", arm64.Status)
 	}
-	if err := validateChecks(manifest.Checks, arm64.Status); err != nil {
+	if err := validateChecks(manifest.Checks, arm64.Status, benchmarks); err != nil {
 		return err
 	}
 	if err := validateArtifacts(manifest.Artifacts); err != nil {
@@ -437,7 +450,7 @@ func expectedReviewSourceRepositories(opts VerifyOptions) []Repository {
 
 const releaseBenchmarkCheck = "benchmark-runtime"
 
-func validateChecks(checks []Check, arm64Status string) error {
+func validateChecks(checks []Check, arm64Status string, benchmarks BenchmarkEvidence) error {
 	requiredPass := []string{
 		"pinned-revisions", "initial-clean-trees", "wago-plugin-plan-compat", "current-plugin-topology-audit", "wasi-preview1-fix-review",
 		"go-test-workspace", "go-test-module", "go-test-race", "go-vet", "go-list", "go-mod-tidy",
@@ -474,6 +487,9 @@ func validateChecks(checks []Check, arm64Status string) error {
 		if seen[name].Status != "pass" {
 			return fmt.Errorf("release provenance: required check %q is %q, want pass", name, seen[name].Status)
 		}
+	}
+	if benchmark := seen[releaseBenchmarkCheck]; benchmark.Status != "pass" || benchmark.Detail != benchmarkDetail(benchmarks) {
+		return fmt.Errorf("release provenance: benchmark check does not match benchmark facts")
 	}
 	if seen["arm64-execution"].Status != arm64Status {
 		return fmt.Errorf("release provenance: arm64 check does not match target status")

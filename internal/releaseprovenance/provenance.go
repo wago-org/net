@@ -14,6 +14,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"reflect"
+	"regexp"
 	"sort"
 	"strings"
 
@@ -43,6 +44,7 @@ type Manifest struct {
 	Publication    PublicationStatus `json:"publication"`
 	Toolchains     Toolchains        `json:"toolchains"`
 	Inspection     Inspection        `json:"inspection"`
+	Benchmarks     BenchmarkEvidence `json:"benchmarks"`
 	Targets        Targets           `json:"targets"`
 	Checks         []Check           `json:"checks"`
 	Artifacts      []Artifact        `json:"artifacts"`
@@ -77,6 +79,15 @@ type Inspection struct {
 	Capabilities    []string       `json:"capabilities"`
 	ImportCount     int            `json:"importCount"`
 	ImportsByModule map[string]int `json:"importsByModule"`
+}
+
+type BenchmarkEvidence struct {
+	TargetCount  int    `json:"targetCount"`
+	PackageCount int    `json:"packageCount"`
+	Benchtime    string `json:"benchtime"`
+	Count        int    `json:"count"`
+	CPU          int    `json:"cpu"`
+	Benchmem     bool   `json:"benchmem"`
 }
 
 type Targets struct {
@@ -154,6 +165,10 @@ func Generate(cfg Config) (*Manifest, error) {
 		return nil, err
 	}
 	if err := readInspection(cfg.OutputDir, &manifest.Inspection); err != nil {
+		return nil, err
+	}
+	manifest.Benchmarks, err = readBenchmarkEvidence(cfg.OutputDir, checks)
+	if err != nil {
 		return nil, err
 	}
 	if manifest.Targets.CrossBuild.Status != "pass" {
@@ -381,6 +396,112 @@ func readBundleInspection(directory, key string) (Inspection, error) {
 	return inspection, nil
 }
 
+const (
+	releaseBenchmarkBenchtime = "100ms"
+	releaseBenchmarkCount     = 1
+	releaseBenchmarkCPU       = 1
+)
+
+var (
+	benchmarkPackagePattern = regexp.MustCompile(`^github\.com/wago-org/net(?:/[A-Za-z0-9_.-]+)*$`)
+	benchmarkNamePattern    = regexp.MustCompile(`^Benchmark[A-Za-z0-9_]+$`)
+)
+
+func readBenchmarkEvidence(out string, checks []Check) (BenchmarkEvidence, error) {
+	targetData, err := os.ReadFile(filepath.Join(out, "benchmark", "targets.tsv"))
+	if err != nil {
+		return BenchmarkEvidence{}, err
+	}
+	if len(targetData) == 0 || targetData[len(targetData)-1] != '\n' {
+		return BenchmarkEvidence{}, fmt.Errorf("release provenance: benchmark target manifest is empty or noncanonical")
+	}
+	packages := make(map[string]struct{})
+	expectedLogs := make(map[string]string)
+	previous := ""
+	scanner := bufio.NewScanner(bytes.NewReader(targetData))
+	for scanner.Scan() {
+		line := scanner.Text()
+		fields := strings.Split(line, "\t")
+		if len(fields) != 2 || !benchmarkPackagePattern.MatchString(fields[0]) || !benchmarkNamePattern.MatchString(fields[1]) || line <= previous {
+			return BenchmarkEvidence{}, fmt.Errorf("release provenance: invalid or unsorted benchmark target %q", line)
+		}
+		previous = line
+		packages[fields[0]] = struct{}{}
+		logPath := filepath.ToSlash(filepath.Join("benchmark", "logs", fields[0], fields[1]+".log"))
+		expectedLogs[logPath] = fields[1]
+	}
+	if err := scanner.Err(); err != nil {
+		return BenchmarkEvidence{}, err
+	}
+	if len(expectedLogs) == 0 {
+		return BenchmarkEvidence{}, fmt.Errorf("release provenance: benchmark target manifest is empty")
+	}
+	facts := BenchmarkEvidence{
+		TargetCount: len(expectedLogs), PackageCount: len(packages), Benchtime: releaseBenchmarkBenchtime,
+		Count: releaseBenchmarkCount, CPU: releaseBenchmarkCPU, Benchmem: true,
+	}
+	detail := benchmarkDetail(facts)
+	detailData, err := os.ReadFile(filepath.Join(out, "benchmark", "detail.txt"))
+	if err != nil {
+		return BenchmarkEvidence{}, err
+	}
+	if string(detailData) != detail+"\n" {
+		return BenchmarkEvidence{}, fmt.Errorf("release provenance: benchmark detail does not match discovered targets and required settings")
+	}
+	benchmarkCheck := Check{}
+	for _, check := range checks {
+		if check.Name == releaseBenchmarkCheck {
+			benchmarkCheck = check
+			break
+		}
+	}
+	if benchmarkCheck.Status != "pass" || benchmarkCheck.Detail != detail {
+		return BenchmarkEvidence{}, fmt.Errorf("release provenance: benchmark check does not match archived evidence")
+	}
+	seenLogs := make(map[string]struct{}, len(expectedLogs))
+	logsRoot := filepath.Join(out, "benchmark", "logs")
+	if err := filepath.WalkDir(logsRoot, func(path string, entry fs.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		if entry.IsDir() {
+			return nil
+		}
+		if !entry.Type().IsRegular() {
+			return fmt.Errorf("release provenance: benchmark log %s is not a regular file", path)
+		}
+		rel, err := filepath.Rel(out, path)
+		if err != nil {
+			return err
+		}
+		rel = filepath.ToSlash(rel)
+		target, expected := expectedLogs[rel]
+		if !expected {
+			return fmt.Errorf("release provenance: unexpected benchmark log %q", rel)
+		}
+		data, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		if len(data) == 0 || !bytes.Contains(data, []byte(target)) || !bytes.Contains(data, []byte("B/op")) || !bytes.Contains(data, []byte("allocs/op")) {
+			return fmt.Errorf("release provenance: benchmark log %q lacks benchmark or benchmem output", rel)
+		}
+		seenLogs[rel] = struct{}{}
+		return nil
+	}); err != nil {
+		return BenchmarkEvidence{}, err
+	}
+	if len(seenLogs) != len(expectedLogs) {
+		return BenchmarkEvidence{}, fmt.Errorf("release provenance: benchmark logs are incomplete")
+	}
+	return facts, nil
+}
+
+func benchmarkDetail(benchmark BenchmarkEvidence) string {
+	return fmt.Sprintf("targets=%d packages=%d benchtime=%s count=%d cpu=%d benchmem=%t",
+		benchmark.TargetCount, benchmark.PackageCount, benchmark.Benchtime, benchmark.Count, benchmark.CPU, benchmark.Benchmem)
+}
+
 func readArm64(out string, dst *TargetResult) error {
 	dst.GOOS, dst.GOARCH = "linux", "arm64"
 	status, err := readKeyValue(filepath.Join(out, "arm64", "status.txt"), "status")
@@ -464,7 +585,7 @@ func artifactKind(path string) string {
 	switch {
 	case strings.HasPrefix(path, "fuzz-") || strings.HasPrefix(path, "fuzz/"):
 		return "fuzz"
-	case strings.HasPrefix(path, "bench-"):
+	case strings.HasPrefix(path, "bench-") || strings.HasPrefix(path, "benchmark-") || strings.HasPrefix(path, "benchmark/"):
 		return "benchmark"
 	case strings.HasPrefix(path, "custom-cli/inspection-"):
 		return "inspection"

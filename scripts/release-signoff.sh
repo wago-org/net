@@ -190,9 +190,11 @@ GOWORK="$release_work" FUZZTIME="$fuzztime" FUZZ_LOG_DIR="$out/fuzz" \
   "$root/scripts/fuzz-smoke.sh" | tee "$out/fuzz-smoke.txt"
 record_check fuzz-smoke pass "all discovered targets; $fuzztime each"
 
-log "benchmarks"
-GOMAXPROCS=1 GOWORK="$release_work" go test ./... -run '^$' -bench '^Benchmark' -benchmem -benchtime=100ms -count=1 -cpu=1 | tee "$out/bench-runtime.txt"
-record_check benchmark-runtime pass 'all runtime benchmarks; benchmem; 100ms; count=1; cpu=1'
+log "discovered benchmarks"
+GOWORK="$release_work" BENCH_LOG_DIR="$out/benchmark" \
+  "$root/scripts/benchmark-smoke.sh" | tee "$out/benchmark-smoke.txt"
+benchmark_detail=$(cat "$out/benchmark/detail.txt")
+record_check benchmark-runtime pass "$benchmark_detail"
 
 log "TinyGo and cross-compile"
 GOWORK=off GOFLAGS="$release_goflags" tinygo test ./...
