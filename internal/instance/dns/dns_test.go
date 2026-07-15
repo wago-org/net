@@ -18,7 +18,7 @@ import (
 )
 
 type fakeNamespace struct {
-	query    namespace.DNSQuery
+	query    nscore.Resource
 	progress namespace.Progress
 	failure  error
 }
@@ -84,6 +84,11 @@ func (q *fakeQuery) TryNext() (namespace.DNSRecord, namespace.DNSNext, error) {
 	q.records = q.records[1:]
 	return record, namespace.DNSNextReady, nil
 }
+
+type fakeResource struct{ closed atomic.Int32 }
+
+func (r *fakeResource) Close() error                 { r.closed.Add(1); return nil }
+func (*fakeResource) Readiness() namespace.Readiness { return 0 }
 
 func TestOperationsPreserveReadinessCancellationAndGenerationSafety(t *testing.T) {
 	record := namespace.DNSRecord{Name: "example.com", Type: namespace.DNSRecordA, TTLSeconds: 60, Address: netip.MustParseAddr("192.0.2.10")}
@@ -166,6 +171,46 @@ func TestFailedAndUnusedOutputsAreCanonical(t *testing.T) {
 			}
 			if err != nil || next != test.next || record != (namespace.DNSRecord{}) {
 				t.Fatalf("Next = %+v, %v, %v", record, next, err)
+			}
+		})
+	}
+}
+
+func TestMalformedSuccessfulResolveRollsBackWithoutPublication(t *testing.T) {
+	var typedNil *fakeQuery
+	for _, test := range []struct {
+		name     string
+		resource nscore.Resource
+		progress namespace.Progress
+	}{
+		{name: "wrong resource type", resource: new(fakeResource), progress: namespace.ProgressDone},
+		{name: "would-block progress", resource: new(fakeQuery), progress: namespace.ProgressWouldBlock},
+		{name: "unknown progress", resource: new(fakeQuery), progress: namespace.Progress(99)},
+		{name: "typed nil resource", resource: typedNil, progress: namespace.ProgressDone},
+		{name: "missing resource", progress: namespace.ProgressDone},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			state, manager, instance := attachState(t, &fakeNamespace{query: test.resource, progress: test.progress}, 2)
+			defer manager.Detach(instance)
+			resourcesBefore := state.Resources().Len()
+			readinessBefore := state.Readiness().Snapshot()
+
+			handle, progress, err := Resolve(state, state.NamespaceHandle(), namespace.DNSRequest{Name: "example.com", Types: namespace.DNSRecordsA})
+			if handle != 0 || progress != 0 || failureOf(t, err) != namespace.FailureIO {
+				t.Fatalf("malformed Resolve = %v, %v, %v", handle, progress, err)
+			}
+			if state.Resources().Len() != resourcesBefore || state.Readiness().Snapshot() != readinessBefore {
+				t.Fatalf("malformed Resolve published state: resources=%d readiness=%+v", state.Resources().Len(), state.Readiness().Snapshot())
+			}
+			switch resource := test.resource.(type) {
+			case *fakeResource:
+				if resource.closed.Load() != 1 {
+					t.Fatalf("wrong-type close count = %d", resource.closed.Load())
+				}
+			case *fakeQuery:
+				if resource != nil && resource.closed.Load() != 1 {
+					t.Fatalf("invalid-progress close count = %d", resource.closed.Load())
+				}
 			}
 		})
 	}

@@ -15,9 +15,9 @@ import (
 	wago "github.com/wago-org/wago"
 )
 
-type fakeBase struct{}
+type fakeBase struct{ closeCalls int }
 
-func (*fakeBase) Close() error                { return nil }
+func (b *fakeBase) Close() error              { b.closeCalls++; return nil }
 func (*fakeBase) Readiness() nscore.Readiness { return 0 }
 func (*fakeBase) TryService(nscore.ServiceBudget) (nscore.ServiceReport, nscore.Progress, error) {
 	return nscore.ServiceReport{}, nscore.ProgressWouldBlock, nil
@@ -221,24 +221,79 @@ func TestInstanceMDNSCanonicalizesFailedAndUnusedOutputs(t *testing.T) {
 	}
 }
 
-func TestInstanceMDNSCreationRollbackClosesResources(t *testing.T) {
-	query := &fakeQuery{}
-	backend := &fakeNamespace{query: query, queryProgress: 99}
-	state, manager, instance := attachState(t, backend, 4)
-	if handle, progress, err := Query(state, state.NamespaceHandle(), mdnsns.Request{Name: "host.local", Types: mdnsns.RecordsA}); handle != 0 || progress != 0 || failureOf(err) != nscore.FailureIO || !query.closed {
-		t.Fatalf("invalid query = %v, %v, %v, closed=%v", handle, progress, err, query.closed)
-	}
-	_ = manager.Detach(instance)
+func TestInstanceMDNSMalformedSuccessfulCreationRollsBackWithoutPublication(t *testing.T) {
+	var typedNilQuery *fakeQuery
+	var typedNilAnnouncement *fakeAnnouncement
+	for _, test := range []struct {
+		name         string
+		resource     nscore.Resource
+		progress     nscore.Progress
+		announcement bool
+	}{
+		{name: "query wrong resource type", resource: new(fakeAnnouncement), progress: nscore.ProgressDone},
+		{name: "query would-block progress", resource: new(fakeQuery), progress: nscore.ProgressWouldBlock},
+		{name: "query unknown progress", resource: new(fakeQuery), progress: nscore.Progress(99)},
+		{name: "query typed nil resource", resource: typedNilQuery, progress: nscore.ProgressDone},
+		{name: "query missing resource", progress: nscore.ProgressDone},
+		{name: "announcement wrong resource type", resource: new(fakeQuery), progress: nscore.ProgressDone, announcement: true},
+		{name: "announcement would-block progress", resource: new(fakeAnnouncement), progress: nscore.ProgressWouldBlock, announcement: true},
+		{name: "announcement unknown progress", resource: new(fakeAnnouncement), progress: nscore.Progress(99), announcement: true},
+		{name: "announcement typed nil resource", resource: typedNilAnnouncement, progress: nscore.ProgressDone, announcement: true},
+		{name: "announcement missing resource", progress: nscore.ProgressDone, announcement: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			backend := new(fakeNamespace)
+			if test.announcement {
+				backend.announcement, backend.announceProgress = test.resource, test.progress
+			} else {
+				backend.query, backend.queryProgress = test.resource, test.progress
+			}
+			state, manager, instance := attachState(t, backend, 4)
+			defer manager.Detach(instance)
+			resourcesBefore := state.Resources().Len()
+			readinessBefore := state.Readiness().Snapshot()
 
-	announcement := &fakeAnnouncement{}
-	backend = &fakeNamespace{announcement: announcement, announceProgress: nscore.ProgressInProgress}
-	state, manager, instance = attachState(t, backend, 1)
-	defer manager.Detach(instance)
-	if handle, progress, err := Announce(state, state.NamespaceHandle(), 0); handle != 0 || progress != 0 || !errors.Is(err, readiness.ErrLimit) || !announcement.closed {
-		t.Fatalf("announcement rollback = %v, %v, %v, closed=%v", handle, progress, err, announcement.closed)
+			var handle resource.Handle
+			var progress nscore.Progress
+			var err error
+			if test.announcement {
+				handle, progress, err = Announce(state, state.NamespaceHandle(), 0)
+			} else {
+				handle, progress, err = Query(state, state.NamespaceHandle(), mdnsns.Request{Name: "host.local", Types: mdnsns.RecordsA})
+			}
+			if handle != 0 || progress != 0 || failureOf(err) != nscore.FailureIO {
+				t.Fatalf("malformed creation = %v, %v, %v", handle, progress, err)
+			}
+			if state.Resources().Len() != resourcesBefore || state.Readiness().Snapshot() != readinessBefore {
+				t.Fatalf("malformed creation published state: resources=%d readiness=%+v", state.Resources().Len(), state.Readiness().Snapshot())
+			}
+			switch created := test.resource.(type) {
+			case *fakeQuery:
+				if created != nil && created.closeCalls != 1 {
+					t.Fatalf("query close calls = %d", created.closeCalls)
+				}
+			case *fakeAnnouncement:
+				if created != nil && created.closeCalls != 1 {
+					t.Fatalf("announcement close calls = %d", created.closeCalls)
+				}
+			}
+		})
 	}
-	if state.Resources().Len() != 1 || state.Readiness().Snapshot().Registrations != 1 {
-		t.Fatalf("rollback retained state: resources=%d readiness=%+v", state.Resources().Len(), state.Readiness().Snapshot())
+}
+
+func TestInstanceMDNSReadinessRegistrationFailureRollsBackResource(t *testing.T) {
+	announcement := new(fakeAnnouncement)
+	backend := &fakeNamespace{announcement: announcement, announceProgress: nscore.ProgressInProgress}
+	state, manager, instance := attachState(t, backend, 1)
+	defer manager.Detach(instance)
+	resourcesBefore := state.Resources().Len()
+	readinessBefore := state.Readiness().Snapshot()
+
+	if handle, progress, err := Announce(state, state.NamespaceHandle(), 0); handle != 0 || progress != 0 || !errors.Is(err, readiness.ErrLimit) {
+		t.Fatalf("announcement rollback = %v, %v, %v", handle, progress, err)
+	}
+	if announcement.closeCalls != 1 || state.Resources().Len() != resourcesBefore || state.Readiness().Snapshot() != readinessBefore {
+		t.Fatalf("rollback retained state: closes=%d resources=%d readiness=%+v", announcement.closeCalls, state.Resources().Len(), state.Readiness().Snapshot())
 	}
 }
 
