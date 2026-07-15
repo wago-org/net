@@ -407,6 +407,86 @@ func TestBindingsAnnouncementHandlesPreserveKindGenerationAndFullI64Identity(t *
 	}
 }
 
+func TestBindingsNamespaceAndQueryHandlesPreserveFullI64Identity(t *testing.T) {
+	backend := &fakeNamespace{}
+	manager, instance := attachManager(t, backend)
+	defer manager.Detach(instance)
+	host := testHost{instance: instance, memory: bytes.Repeat([]byte{0x3c}, 1200)}
+	bindings := Bindings(plugin.NewHost(manager))
+	state, ok := manager.ForInstance(instance)
+	if !ok {
+		t.Fatal("attached state missing")
+	}
+	namespaceHandle := state.NamespaceHandle()
+	if !mdnsabi.EncodeQueryV1(host.memory, 0, mdnsns.Request{Name: "_demo._udp.local", Types: mdnsns.RecordsPTR}) {
+		t.Fatal("encode query")
+	}
+	if !mdnsabi.EncodeAnnouncementV1(host.memory, 300, 0) {
+		t.Fatal("encode announcement")
+	}
+	wideNamespace := uint64(namespaceHandle) | uint64(1)<<48
+	for _, test := range []struct {
+		binding string
+		params  []uint64
+	}{
+		{binding: "query", params: []uint64{wideNamespace, 0, 1100}},
+		{binding: "announce", params: []uint64{wideNamespace, 300, 1100}},
+	} {
+		before := append([]byte(nil), host.memory[1100:1108]...)
+		queryCalls, announcementCalls := backend.queryCalls, backend.announcementCalls
+		if status := callBinding(t, bindingByName(t, bindings, test.binding), host, test.params...); status != guest.StatusBadHandle {
+			t.Fatalf("%s wide namespace status = %v", test.binding, status)
+		}
+		if backend.queryCalls != queryCalls || backend.announcementCalls != announcementCalls {
+			t.Fatalf("%s wide namespace reached backend: query=%d announcement=%d", test.binding, backend.queryCalls, backend.announcementCalls)
+		}
+		if !bytes.Equal(host.memory[1100:1108], before) {
+			t.Fatalf("%s wide namespace mutated output", test.binding)
+		}
+	}
+
+	old := &fakeQuery{next: mdnsns.NextWouldBlock}
+	oldHandle, err := state.Resources().Add(resource.KindMDNSQuery, old)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if status := callBinding(t, bindingByName(t, bindings, "close_query"), host, uint64(oldHandle)); status != guest.StatusOK || old.closeCalls != 1 {
+		t.Fatalf("close old query = %v, calls=%d", status, old.closeCalls)
+	}
+	fresh := &fakeQuery{next: mdnsns.NextWouldBlock}
+	freshHandle, err := state.Resources().Add(resource.KindMDNSQuery, fresh)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if freshHandle == oldHandle || uint16(freshHandle) != uint16(oldHandle) {
+		t.Fatalf("generation-safe query slot reuse = old %v, fresh %v", oldHandle, freshHandle)
+	}
+	wideQuery := uint64(freshHandle) | uint64(1)<<48
+	for _, handle := range []uint64{uint64(oldHandle), wideQuery} {
+		if status := callBinding(t, bindingByName(t, bindings, "next"), host, handle, 0); status != guest.StatusBadHandle {
+			t.Fatalf("next alias %#x status = %v", handle, status)
+		}
+		if status := callBinding(t, bindingByName(t, bindings, "cancel_query"), host, handle); status != guest.StatusBadHandle {
+			t.Fatalf("cancel alias %#x status = %v", handle, status)
+		}
+		if status := callBinding(t, bindingByName(t, bindings, "close_query"), host, handle); status != guest.StatusBadHandle {
+			t.Fatalf("close alias %#x status = %v", handle, status)
+		}
+	}
+	if fresh.nextCalls != 0 || fresh.cancelCalls != 0 || fresh.closeCalls != 0 {
+		t.Fatalf("stale or wide query handle reached fresh resource: %d/%d/%d", fresh.nextCalls, fresh.cancelCalls, fresh.closeCalls)
+	}
+	if status := callBinding(t, bindingByName(t, bindings, "next"), host, uint64(freshHandle), 0); status != guest.StatusAgain || fresh.nextCalls != 1 {
+		t.Fatalf("next fresh query = %v, calls=%d", status, fresh.nextCalls)
+	}
+	if status := callBinding(t, bindingByName(t, bindings, "cancel_query"), host, uint64(freshHandle)); status != guest.StatusOK || fresh.cancelCalls != 1 {
+		t.Fatalf("cancel fresh query = %v, calls=%d", status, fresh.cancelCalls)
+	}
+	if status := callBinding(t, bindingByName(t, bindings, "close_query"), host, uint64(freshHandle)); status != guest.StatusOK || fresh.closeCalls != 1 {
+		t.Fatalf("close fresh query = %v, calls=%d", status, fresh.closeCalls)
+	}
+}
+
 func TestBindingsRejectHighBitI32AliasesBeforeStateAndBackendWork(t *testing.T) {
 	backend := &fakeNamespace{}
 	manager, instance := attachManager(t, backend)
