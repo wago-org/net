@@ -58,14 +58,19 @@ func New(common *lnetocore.Namespace, config Config) (*Adapter, error) {
 	}
 	common.Lock()
 	configuration := configurationFrom(config, uint16(common.RequiredFrameBytesLocked()-14))
+	compiled, account := common.PolicyLocked(), common.QuotasLocked()
 	if common.ClosedLocked() || !common.IPv6EnabledLocked() || common.IPv6AddressLocked() != config.Address ||
 		common.IPv6PrefixBitsLocked() != config.PrefixBits || common.IPv6ScopeIDLocked() != config.ScopeID ||
-		!configuration.Valid() || !common.PolicyLocked().CheckAddress(policy.OperationIPv6Enable, config.Address) {
+		!configuration.Valid() || compiled == nil || account == nil {
+		common.Unlock()
+		return nil, nscore.Fail(nscore.FailureInvalidArgument, lneto.ErrInvalidConfig)
+	}
+	if !compiled.CheckAddress(policy.OperationIPv6Enable, config.Address) {
 		common.Unlock()
 		return nil, nscore.Fail(nscore.FailureAccessDenied, errPolicyDenied)
 	}
 	adapter := &Adapter{core: common, configuration: configuration}
-	if err := common.QuotasLocked().AcquireResource(&adapter.retained, quota.ResourceIPv6, 1); err != nil {
+	if err := account.AcquireResource(&adapter.retained, quota.ResourceIPv6, 1); err != nil {
 		common.Unlock()
 		return nil, lnetocore.MapError(err)
 	}
