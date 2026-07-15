@@ -252,6 +252,68 @@ func TestBindingsRejectHighBitI32AliasesBeforeStateAndBackendWork(t *testing.T) 
 	}
 }
 
+func TestBindingsPreserveFullWidthNamespaceAndEchoHandles(t *testing.T) {
+	echo := &fakeEcho{next: icmpns.NextWouldBlock}
+	backend := &fakeNamespace{next: echo, progress: nscore.ProgressInProgress}
+	manager, instance := attachManager(t, backend)
+	defer manager.Detach(instance)
+	host := testHost{instance: instance, memory: bytes.Repeat([]byte{0x7b}, 1024)}
+	bindings := Bindings(plugin.NewHost(manager))
+	state, ok := manager.ForInstance(instance)
+	if !ok {
+		t.Fatal("attached state missing")
+	}
+	namespaceHandle := state.NamespaceHandle()
+	copy(host.memory[128:132], "ping")
+	if !icmpabi.EncodeEchoRequestV1(host.memory, 0, nscore.Endpoint{Address: netip.MustParseAddr("192.0.2.9")}, 128, 4) {
+		t.Fatal("encode request")
+	}
+	echoHandle, err := state.Resources().Add(resource.KindICMPv4Echo, echo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	const high = uint64(1) << 63
+
+	handlePtr := uint64(80)
+	handleBefore := append([]byte(nil), host.memory[handlePtr:handlePtr+8]...)
+	if status := callBinding(t, bindingByName(t, bindings, "echo"), host, uint64(namespaceHandle)|high, 0, handlePtr); status != guest.StatusBadHandle || backend.calls != 0 || !bytes.Equal(host.memory[handlePtr:handlePtr+8], handleBefore) {
+		t.Fatalf("high namespace echo = %v calls=%d", status, backend.calls)
+	}
+
+	payloadPtr, payloadLen, resultPtr := uint64(256), uint64(16), uint64(320)
+	payloadBefore := append([]byte(nil), host.memory[payloadPtr:payloadPtr+payloadLen]...)
+	resultBefore := append([]byte(nil), host.memory[resultPtr:resultPtr+uint64(icmpabi.EchoResultV1Size)]...)
+	if status := callBinding(t, bindingByName(t, bindings, "result"), host, uint64(echoHandle)|high, payloadPtr, payloadLen, resultPtr); status != guest.StatusBadHandle || echo.resultCalls != 0 || !bytes.Equal(host.memory[payloadPtr:payloadPtr+payloadLen], payloadBefore) || !bytes.Equal(host.memory[resultPtr:resultPtr+uint64(icmpabi.EchoResultV1Size)], resultBefore) {
+		t.Fatalf("high echo result = %v calls=%d", status, echo.resultCalls)
+	}
+	if status := callBinding(t, bindingByName(t, bindings, "cancel"), host, uint64(echoHandle)|high); status != guest.StatusBadHandle || echo.cancelCalls != 0 {
+		t.Fatalf("high echo cancel = %v calls=%d", status, echo.cancelCalls)
+	}
+	if status := callBinding(t, bindingByName(t, bindings, "close"), host, uint64(echoHandle)|high); status != guest.StatusBadHandle || echo.closeCalls != 0 {
+		t.Fatalf("high echo close = %v calls=%d", status, echo.closeCalls)
+	}
+
+	if status := callBinding(t, bindingByName(t, bindings, "echo"), host, uint64(namespaceHandle), 0, handlePtr); status != guest.StatusInProgress || backend.calls != 1 {
+		t.Fatalf("exact namespace echo = %v calls=%d", status, backend.calls)
+	}
+	createdHandle := resource.Handle(binary.LittleEndian.Uint64(host.memory[handlePtr : handlePtr+8]))
+	if createdHandle == 0 {
+		t.Fatal("exact namespace echo returned zero handle")
+	}
+	if status := callBinding(t, bindingByName(t, bindings, "result"), host, uint64(echoHandle), payloadPtr, payloadLen, resultPtr); status != guest.StatusAgain || echo.resultCalls != 1 {
+		t.Fatalf("exact echo result = %v calls=%d", status, echo.resultCalls)
+	}
+	if status := callBinding(t, bindingByName(t, bindings, "cancel"), host, uint64(echoHandle)); status != guest.StatusOK || echo.cancelCalls != 1 {
+		t.Fatalf("exact echo cancel = %v calls=%d", status, echo.cancelCalls)
+	}
+	if status := callBinding(t, bindingByName(t, bindings, "close"), host, uint64(echoHandle)); status != guest.StatusOK || echo.closeCalls != 1 {
+		t.Fatalf("exact echo close = %v calls=%d", status, echo.closeCalls)
+	}
+	if status := callBinding(t, bindingByName(t, bindings, "close"), host, uint64(createdHandle)); status != guest.StatusOK || echo.closeCalls != 2 {
+		t.Fatalf("created echo close = %v calls=%d", status, echo.closeCalls)
+	}
+}
+
 func TestResultRejectsRangesBeforeHandleLookup(t *testing.T) {
 	manager := instancecore.NewManager()
 	instance := new(wago.Instance)
