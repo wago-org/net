@@ -818,6 +818,130 @@ func TestDetachCoordinatesWaitersReattachmentAndUnrelatedInstances(t *testing.T)
 	}
 }
 
+func TestDetachPanicRestoresInvariantsAndCoordinatesWaiters(t *testing.T) {
+	panicValue := errors.New("backend close panic")
+	closeStarted := make(chan struct{})
+	closeRelease := make(chan struct{})
+	firstBackend := &fakeNamespace{closePanic: panicValue, closeStarted: closeStarted, closeRelease: closeRelease}
+	secondBackend := new(fakeNamespace)
+	thirdBackend := new(fakeNamespace)
+	factoryCalls := make(chan int, 3)
+	var calls atomic.Int32
+	config := DefaultConfig()
+	config.NamespaceFactory = func(*policy.Policy, *quota.Account) (nscore.Namespace, error) {
+		call := int(calls.Add(1))
+		factoryCalls <- call
+		switch call {
+		case 1:
+			return firstBackend, nil
+		case 2:
+			return secondBackend, nil
+		case 3:
+			return thirdBackend, nil
+		default:
+			return nil, errors.New("unexpected namespace factory call")
+		}
+	}
+	manager, err := NewManagerConfigured(config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	instance := new(wago.Instance)
+	if err := manager.Attach(instance); err != nil {
+		t.Fatal(err)
+	}
+	if call := <-factoryCalls; call != 1 {
+		t.Fatalf("initial factory call = %d, want 1", call)
+	}
+	oldState, ok := manager.ForInstance(instance)
+	if !ok {
+		t.Fatal("initial state missing")
+	}
+	oldState.outputScratch = []byte{1, 2, 3}
+
+	type detachResult struct {
+		err        error
+		panicValue any
+	}
+	firstDetach := make(chan detachResult, 1)
+	go func() {
+		result := detachResult{}
+		func() {
+			defer func() { result.panicValue = recover() }()
+			result.err = manager.Detach(instance)
+		}()
+		firstDetach <- result
+	}()
+	<-closeStarted
+	if _, ok := manager.ForInstance(instance); ok {
+		t.Fatal("state remained published during panicking teardown")
+	}
+
+	secondDetach := make(chan error, 1)
+	go func() { secondDetach <- manager.Detach(instance) }()
+	reattachDone := make(chan error, 1)
+	go func() { reattachDone <- manager.Attach(instance) }()
+	select {
+	case err := <-secondDetach:
+		t.Fatalf("waiter returned before panicking teardown completed: %v", err)
+	case call := <-factoryCalls:
+		t.Fatalf("reattachment reached factory before panicking teardown completed: call %d", call)
+	case <-time.After(20 * time.Millisecond):
+	}
+
+	otherInstance := new(wago.Instance)
+	if err := manager.Attach(otherInstance); err != nil {
+		t.Fatalf("unrelated Attach during teardown: %v", err)
+	}
+	if call := <-factoryCalls; call != 2 {
+		t.Fatalf("unrelated factory call = %d, want 2", call)
+	}
+
+	close(closeRelease)
+	if result := <-firstDetach; result.err != nil || result.panicValue != panicValue {
+		t.Fatalf("initiating Detach result = err %v panic %v, want nil and %v", result.err, result.panicValue, panicValue)
+	}
+	if err := <-secondDetach; !errors.Is(err, ErrTeardownPanicked) {
+		t.Fatalf("waiting Detach error = %v, want ErrTeardownPanicked", err)
+	}
+	if call := <-factoryCalls; call != 3 {
+		t.Fatalf("reattachment factory call = %d, want 3", call)
+	}
+	if err := <-reattachDone; err != nil {
+		t.Fatalf("reattachment error = %v", err)
+	}
+	if firstBackend.closed.Load() != 1 {
+		t.Fatalf("panicking backend close count = %d, want 1", firstBackend.closed.Load())
+	}
+	if oldState.Resources().Len() != 0 {
+		t.Fatalf("old state live resources = %d, want 0", oldState.Resources().Len())
+	}
+	if snapshot := oldState.Readiness().Snapshot(); !snapshot.Closed || snapshot.Registrations != 0 {
+		t.Fatalf("old readiness after panic = %+v", snapshot)
+	}
+	if usage, closed := oldState.Quotas().Snapshot(); !closed || usage != (quota.Usage{}) {
+		t.Fatalf("old quota after panic usage=%+v closed=%v", usage, closed)
+	}
+	if oldState.NamespaceHandle() != 0 || oldState.pollEvents != nil || oldState.outputScratch != nil {
+		t.Fatalf("old state retained teardown scratch namespace=%v poll=%v output=%v", oldState.NamespaceHandle(), oldState.pollEvents, oldState.outputScratch)
+	}
+	manager.mu.RLock()
+	_, retained := manager.detaching[instance]
+	manager.mu.RUnlock()
+	if retained {
+		t.Fatal("panicking teardown retained detachment record")
+	}
+	if err := manager.Detach(instance); err != nil {
+		t.Fatalf("detach reattached instance: %v", err)
+	}
+	if err := manager.Detach(otherInstance); err != nil {
+		t.Fatalf("detach unrelated instance: %v", err)
+	}
+	if thirdBackend.closed.Load() != 1 || secondBackend.closed.Load() != 1 {
+		t.Fatalf("replacement backend closes = reattached:%d unrelated:%d", thirdBackend.closed.Load(), secondBackend.closed.Load())
+	}
+}
+
 func TestDetachUnpublishesBeforeSerializedTeardownCompletes(t *testing.T) {
 	manager := NewManager()
 	instance := new(wago.Instance)
@@ -1019,6 +1143,55 @@ func TestNamespaceCloseErrorClearsRetiredHandleAndOwnership(t *testing.T) {
 	}
 	if err := manager.Detach(instance); err != nil {
 		t.Fatalf("Detach error = %v", err)
+	}
+}
+
+func TestNamespaceClosePanicRetiresHandleAndReleasesOwnership(t *testing.T) {
+	panicValue := errors.New("namespace close panic")
+	backend := &fakeNamespace{closePanic: panicValue}
+	config := DefaultConfig()
+	config.Limits.Resources = 1
+	config.NamespaceFactory = func(*policy.Policy, *quota.Account) (nscore.Namespace, error) {
+		return backend, nil
+	}
+	manager, err := NewManagerConfigured(config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	instance := new(wago.Instance)
+	if err := manager.Attach(instance); err != nil {
+		t.Fatal(err)
+	}
+	state, ok := manager.ForInstance(instance)
+	if !ok {
+		t.Fatal("attached state missing")
+	}
+	handle := state.NamespaceHandle()
+	var recovered any
+	func() {
+		defer func() { recovered = recover() }()
+		_ = state.CloseHandle(handle, resource.KindNamespace)
+	}()
+	if recovered != panicValue {
+		t.Fatalf("CloseHandle panic = %v, want %v", recovered, panicValue)
+	}
+	if state.NamespaceHandle() != 0 {
+		t.Fatalf("namespace handle after panic = %v, want zero", state.NamespaceHandle())
+	}
+	if _, err := state.Resources().Lookup(handle, resource.KindNamespace); !errors.Is(err, resource.ErrBadHandle) {
+		t.Fatalf("retired namespace lookup = %v, want ErrBadHandle", err)
+	}
+	if snapshot := state.Readiness().Snapshot(); snapshot.Registrations != 0 || snapshot.Closed {
+		t.Fatalf("readiness after handle panic = %+v", snapshot)
+	}
+	if usage, closed := state.Quotas().Snapshot(); closed || usage != (quota.Usage{}) {
+		t.Fatalf("quota after handle panic usage=%+v closed=%v", usage, closed)
+	}
+	if backend.closed.Load() != 1 {
+		t.Fatalf("backend close count = %d, want 1", backend.closed.Load())
+	}
+	if err := manager.Detach(instance); err != nil {
+		t.Fatalf("Detach after retired panicking handle: %v", err)
 	}
 }
 

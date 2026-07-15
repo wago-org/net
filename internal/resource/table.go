@@ -199,7 +199,9 @@ func (t *Table) Len() int {
 
 // Close deterministically closes all live resources in reverse creation order.
 // It is idempotent. Cleanup is O(live), not O(handle-space), and does not
-// allocate close scratch proportional to the live resource count.
+// allocate close scratch proportional to the live resource count. A panicking
+// resource does not strand later resources: Close finishes retiring and
+// attempting every live resource, then re-propagates the first panic.
 func (t *Table) Close() error {
 	if t == nil {
 		return nil
@@ -211,19 +213,42 @@ func (t *Table) Close() error {
 	}
 	t.closed = true
 	var errs []error
+	var firstPanic any
+	panicked := false
 	for t.liveHead != noSlot {
 		index := t.liveHead
 		s := &t.slots[index]
 		r := s.resource
 		t.removeLocked(index, s)
 		t.mu.Unlock()
-		if err := r.Close(); err != nil {
+		err, panicValue, closePanicked := closeResource(r)
+		if err != nil {
 			errs = append(errs, err)
+		}
+		if closePanicked && !panicked {
+			firstPanic = panicValue
+			panicked = true
 		}
 		t.mu.Lock()
 	}
 	t.mu.Unlock()
+	if panicked {
+		panic(firstPanic)
+	}
 	return errors.Join(errs...)
+}
+
+func closeResource(resource Resource) (err error, panicValue any, panicked bool) {
+	completed := false
+	defer func() {
+		if !completed {
+			panicValue = recover()
+			panicked = true
+		}
+	}()
+	err = resource.Close()
+	completed = true
+	return err, nil, false
 }
 
 func (t *Table) lookupLocked(handle Handle, kind Kind) (uint32, *slot, error) {

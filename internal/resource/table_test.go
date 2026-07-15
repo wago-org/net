@@ -10,10 +10,11 @@ import (
 )
 
 type testResource struct {
-	id     int
-	closed atomic.Int32
-	events *[]int
-	err    error
+	id         int
+	closed     atomic.Int32
+	events     *[]int
+	err        error
+	panicValue any
 }
 
 func (r *testResource) Close() error {
@@ -22,6 +23,9 @@ func (r *testResource) Close() error {
 	}
 	if r.events != nil {
 		*r.events = append(*r.events, r.id)
+	}
+	if r.panicValue != nil {
+		panic(r.panicValue)
 	}
 	return r.err
 }
@@ -277,6 +281,45 @@ func TestTableCloseIsDeterministicIdempotentAndJoinsErrors(t *testing.T) {
 	for i, resource := range resources {
 		if resource.closed.Load() != 1 {
 			t.Fatalf("resource %d close count = %d", i, resource.closed.Load())
+		}
+	}
+}
+
+func TestTableCloseRetiresEveryResourceBeforeRepropagatingPanic(t *testing.T) {
+	table := newTable(t)
+	var events []int
+	firstPanic := errors.New("third close panic")
+	secondPanic := errors.New("first close panic")
+	resources := []*testResource{
+		{id: 1, events: &events, panicValue: secondPanic},
+		{id: 2, events: &events, err: errors.New("second close error")},
+		{id: 3, events: &events, panicValue: firstPanic},
+	}
+	for _, resource := range resources {
+		if _, err := table.Add(KindNamespace, resource); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var recovered any
+	func() {
+		defer func() { recovered = recover() }()
+		_ = table.Close()
+	}()
+	if recovered != firstPanic {
+		t.Fatalf("recovered panic = %v, want first %v", recovered, firstPanic)
+	}
+	if !reflect.DeepEqual(events, []int{3, 2, 1}) {
+		t.Fatalf("close order = %v, want [3 2 1]", events)
+	}
+	if table.Len() != 0 {
+		t.Fatalf("live resources after panic = %d, want 0", table.Len())
+	}
+	if err := table.Close(); err != nil {
+		t.Fatalf("idempotent Close after panic = %v", err)
+	}
+	for i, resource := range resources {
+		if resource.closed.Load() != 1 {
+			t.Fatalf("resource %d close count = %d, want 1", i, resource.closed.Load())
 		}
 	}
 }

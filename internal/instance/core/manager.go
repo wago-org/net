@@ -19,6 +19,7 @@ var (
 	ErrAlreadyAttached      = errors.New("net: instance state already attached")
 	ErrInvalidConfig        = errors.New("net: invalid instance manager config")
 	ErrInvalidBackendResult = errors.New("net: invalid backend result")
+	ErrTeardownPanicked     = errors.New("net: instance teardown panicked")
 )
 
 // NamespaceFactory constructs one backend namespace for one exact instance.
@@ -105,7 +106,8 @@ func (s *State) NamespaceHandle() resource.Handle {
 
 // Close stops polling before releasing resources so no readiness lookup can
 // race teardown, then closes the ledger to discard failed-operation
-// reservations that never reached a resource owner.
+// reservations that never reached a resource owner. Teardown attempts every
+// stage and restores all state invariants before re-propagating the first panic.
 func (s *State) Close() error {
 	if s == nil {
 		return nil
@@ -118,17 +120,24 @@ func (s *State) Close() error {
 	s.closed = true
 	var errs [2]error
 	errCount := 0
-	if s.readiness != nil {
-		if err := s.readiness.Close(); err != nil {
+	var firstPanic any
+	panicked := false
+	closePart := func(close func() error) {
+		err, panicValue, closePanicked := runTeardownStep(close)
+		if err != nil {
 			errs[errCount] = err
 			errCount++
+		}
+		if closePanicked && !panicked {
+			firstPanic = panicValue
+			panicked = true
 		}
 	}
+	if s.readiness != nil {
+		closePart(s.readiness.Close)
+	}
 	if s.resources != nil {
-		if err := s.resources.Close(); err != nil {
-			errs[errCount] = err
-			errCount++
-		}
+		closePart(s.resources.Close)
 	}
 	if s.quotas != nil {
 		s.quotas.Close()
@@ -138,6 +147,9 @@ func (s *State) Close() error {
 	clear(s.outputScratch)
 	s.outputScratch = nil
 	s.namespace = 0
+	if panicked {
+		panic(firstPanic)
+	}
 	switch errCount {
 	case 0:
 		return nil
@@ -146,6 +158,19 @@ func (s *State) Close() error {
 	default:
 		return errors.Join(errs[:]...)
 	}
+}
+
+func runTeardownStep(step func() error) (err error, panicValue any, panicked bool) {
+	completed := false
+	defer func() {
+		if !completed {
+			panicValue = recover()
+			panicked = true
+		}
+	}()
+	err = step()
+	completed = true
+	return err, nil, false
 }
 
 // Manager is an extension-local attachment map. It must be owned by an
@@ -490,18 +515,15 @@ func (s *State) CloseHandle(handle resource.Handle, kind resource.Kind) error {
 		return err
 	}
 	s.readiness.Unregister(handle)
-	err := s.resources.CloseHandle(handle, kind)
 	if kind == resource.KindNamespace && handle == s.namespace {
-		retired := err == nil
-		if !retired {
+		defer func() {
 			_, lookupErr := s.resources.Lookup(handle, kind)
-			retired = errors.Is(lookupErr, resource.ErrBadHandle)
-		}
-		if retired {
-			s.namespace = 0
-		}
+			if errors.Is(lookupErr, resource.ErrBadHandle) || errors.Is(lookupErr, resource.ErrClosed) {
+				s.namespace = 0
+			}
+		}()
 	}
-	return err
+	return s.resources.CloseHandle(handle, kind)
 }
 
 type ownedNamespace struct {
@@ -520,16 +542,17 @@ func (n *ownedNamespace) Close() error {
 	if n == nil {
 		return nil
 	}
-	var err error
-	if n.Namespace != nil {
-		err = n.Namespace.Close()
-		n.Namespace = nil
+	backend := n.Namespace
+	allocation := n.allocation
+	n.Namespace = nil
+	n.allocation = nil
+	if allocation != nil {
+		defer allocation.Release()
 	}
-	if n.allocation != nil {
-		n.allocation.Release()
-		n.allocation = nil
+	if backend != nil {
+		return backend.Close()
 	}
-	return err
+	return nil
 }
 
 // Detach unpublishes state before closing it, so fresh manager lookups fail
@@ -572,8 +595,22 @@ func (m *Manager) Detach(instance *wago.Instance) error {
 }
 
 func (m *Manager) closeDetachedState(instance *wago.Instance, attempt *detachmentAttempt, state *State) (closeErr error) {
-	defer func() { m.finishDetachment(instance, attempt, closeErr) }()
-	return state.Close()
+	completed := false
+	defer func() {
+		panicValue := any(nil)
+		panicked := !completed
+		if panicked {
+			panicValue = recover()
+			closeErr = ErrTeardownPanicked
+		}
+		m.finishDetachment(instance, attempt, closeErr)
+		if panicked {
+			panic(panicValue)
+		}
+	}()
+	closeErr = state.Close()
+	completed = true
+	return closeErr
 }
 
 func (m *Manager) finishDetachment(instance *wago.Instance, attempt *detachmentAttempt, closeErr error) {
