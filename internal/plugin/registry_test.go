@@ -4,6 +4,7 @@ import (
 	"errors"
 	"testing"
 
+	instancecore "github.com/wago-org/net/internal/instance/core"
 	nscore "github.com/wago-org/net/internal/namespace/core"
 	"github.com/wago-org/net/internal/policy"
 	wago "github.com/wago-org/wago"
@@ -107,6 +108,69 @@ func TestSetRejectsInvalidBackendContributions(t *testing.T) {
 		if err := set.Add(module); !errors.Is(err, ErrInvalidBackend) {
 			t.Fatalf("invalid backend = %v", err)
 		}
+	}
+}
+
+type exactHostModule struct {
+	instance *wago.Instance
+	memory   []byte
+}
+
+func (m exactHostModule) Memory() []byte           { return m.memory }
+func (m exactHostModule) Instance() *wago.Instance { return m.instance }
+
+func TestHostFacadeResolvesOnlyExactAttachedInstances(t *testing.T) {
+	manager := instancecore.NewManager()
+	instance := new(wago.Instance)
+	if err := manager.Attach(instance); err != nil {
+		t.Fatal(err)
+	}
+	host := NewHost(manager)
+	module := exactHostModule{instance: instance}
+	state, ok := host.State(module)
+	if !ok || state == nil {
+		t.Fatal("exact attached instance did not resolve")
+	}
+	if got, attached := manager.ForInstance(instance); !attached || got != state {
+		t.Fatal("host facade returned a non-owned state")
+	}
+	for name, candidate := range map[string]Host{
+		"zero host":   {},
+		"nil manager": NewHost(nil),
+	} {
+		t.Run(name, func(t *testing.T) {
+			if got, ok := candidate.State(module); ok || got != nil {
+				t.Fatalf("State = %p, %v", got, ok)
+			}
+		})
+	}
+	if got, ok := host.State(nil); ok || got != nil {
+		t.Fatalf("nil module State = %p, %v", got, ok)
+	}
+	if got, ok := host.State(exactHostModule{instance: new(wago.Instance)}); ok || got != nil {
+		t.Fatalf("unattached instance State = %p, %v", got, ok)
+	}
+	if err := manager.Detach(instance); err != nil {
+		t.Fatal(err)
+	}
+	if got, ok := host.State(module); ok || got != nil {
+		t.Fatalf("detached instance State = %p, %v", got, ok)
+	}
+}
+
+func TestModuleInstallForwardsExactHostFacade(t *testing.T) {
+	manager := instancecore.NewManager()
+	host := NewHost(manager)
+	called := false
+	module := NewModule(ModuleICMPv4, func(registry *wago.Registry, got Host) {
+		called = true
+		if registry == nil || got.instances != manager {
+			t.Fatalf("Install host = %+v registry=%p", got, registry)
+		}
+	})
+	module.Install(new(wago.Registry), host)
+	if !called {
+		t.Fatal("module installer was not called")
 	}
 }
 
