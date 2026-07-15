@@ -397,10 +397,10 @@ func (q *query) failLocked(failure nscore.Failure, cause error) {
 	if q.state == stateDone || q.state == stateFailed || q.state == stateClosed {
 		return
 	}
-	q.state = stateFailed
-	q.failure = nscore.Fail(failure, cause)
 	q.retry = 0
 	q.releaseWorkLocked()
+	q.failure = nscore.Fail(failure, cause)
+	q.state = stateFailed
 }
 
 func (q *query) completeLocked(records []mdnsns.Record) {
@@ -409,9 +409,9 @@ func (q *query) completeLocked(records []mdnsns.Record) {
 	}
 	q.records = append(q.records[:0], records...)
 	q.cursor = 0
-	q.state = stateDone
 	q.retry = 0
 	q.releaseWorkLocked()
+	q.state = stateDone
 }
 
 func (q *query) releaseWorkLocked() {
@@ -501,19 +501,19 @@ func (a *announcement) failLocked(failure nscore.Failure, cause error) {
 	if a.state == stateDone || a.state == stateFailed || a.state == stateClosed {
 		return
 	}
-	a.state = stateFailed
-	a.failure = nscore.Fail(failure, cause)
 	a.retry = 0
 	a.releaseWorkLocked()
+	a.failure = nscore.Fail(failure, cause)
+	a.state = stateFailed
 }
 
 func (a *announcement) completeLocked() {
 	if a.state == stateDone || a.state == stateFailed || a.state == stateClosed {
 		return
 	}
-	a.state = stateDone
 	a.retry = 0
 	a.releaseWorkLocked()
+	a.state = stateDone
 }
 
 func (a *announcement) releaseWorkLocked() {

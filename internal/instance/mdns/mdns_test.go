@@ -297,6 +297,60 @@ func TestInstanceMDNSReadinessRegistrationFailureRollsBackResource(t *testing.T)
 	}
 }
 
+func TestInstanceMDNSCancelIsKindAndGenerationSafe(t *testing.T) {
+	query := new(fakeQuery)
+	announcement := new(fakeAnnouncement)
+	backend := &fakeNamespace{
+		query: query, queryProgress: nscore.ProgressInProgress,
+		announcement: announcement, announceProgress: nscore.ProgressInProgress,
+	}
+	state, manager, instance := attachState(t, backend, 8)
+	defer manager.Detach(instance)
+	queryHandle, _, err := Query(state, state.NamespaceHandle(), mdnsns.Request{Name: "host.local", Types: mdnsns.RecordsA})
+	if err != nil {
+		t.Fatal(err)
+	}
+	announcementHandle, _, err := Announce(state, state.NamespaceHandle(), 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := CancelQuery(state, announcementHandle); !errors.Is(err, resource.ErrBadHandle) || query.canceled || announcement.canceled {
+		t.Fatalf("wrong-kind query cancel = %v query=%v announcement=%v", err, query.canceled, announcement.canceled)
+	}
+	if err := CancelAnnouncement(state, queryHandle); !errors.Is(err, resource.ErrBadHandle) || query.canceled || announcement.canceled {
+		t.Fatalf("wrong-kind announcement cancel = %v query=%v announcement=%v", err, query.canceled, announcement.canceled)
+	}
+	registrations := state.Readiness().Snapshot().Registrations
+	if err := state.CloseHandle(queryHandle, resource.KindMDNSQuery); err != nil || query.closeCalls != 1 {
+		t.Fatalf("close query = %v calls=%d", err, query.closeCalls)
+	}
+	if got := state.Readiness().Snapshot().Registrations; got != registrations-1 {
+		t.Fatalf("query close readiness registrations = %d, want %d", got, registrations-1)
+	}
+
+	replacement := new(fakeQuery)
+	backend.query = replacement
+	replacementHandle, _, err := Query(state, state.NamespaceHandle(), mdnsns.Request{Name: "host.local", Types: mdnsns.RecordsA})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if replacementHandle == queryHandle {
+		t.Fatal("replacement query reused stale generation")
+	}
+	if err := CancelQuery(state, queryHandle); !errors.Is(err, resource.ErrBadHandle) || replacement.canceled {
+		t.Fatalf("stale query cancel = %v replacement canceled=%v", err, replacement.canceled)
+	}
+	if err := CancelQuery(state, replacementHandle); err != nil || !replacement.canceled {
+		t.Fatalf("replacement query cancel = %v canceled=%v", err, replacement.canceled)
+	}
+	if err := CancelAnnouncement(state, announcementHandle); err != nil || !announcement.canceled {
+		t.Fatalf("announcement cancel = %v canceled=%v", err, announcement.canceled)
+	}
+	if query.canceled {
+		t.Fatal("closed stale query was canceled")
+	}
+}
+
 func attachState(t testing.TB, backend mdnsns.Namespace, maxRegistrations int) (*instancecore.State, *instancecore.Manager, *wago.Instance) {
 	t.Helper()
 	config := instancecore.DefaultConfig()

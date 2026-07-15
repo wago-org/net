@@ -227,6 +227,110 @@ func TestMDNSDenyWinsTimeoutCancelAndCloseRelease(t *testing.T) {
 	}
 }
 
+func TestMDNSCancelRetiresWorkBeforeTerminalReadinessAndIgnoresLateResponses(t *testing.T) {
+	service := testService("device", "192.0.2.11")
+	config := Config{
+		Services: []mdnsns.Service{service}, MaxServices: 1, MaxQueries: 1, MaxAnnouncements: 1,
+		MaxRecords: 8, MaxPacketBytes: 1200, MaxQueuedResponses: 1, MaxQuestionsPerPacket: 4,
+		MaxRecordsPerPacket: 16, MaxAttempts: 2, RetryServiceAttempts: 2,
+	}
+	core, adapter, account := newTestAdapter(t, config, testPolicy())
+	baseline, _ := account.Snapshot()
+	queryResource, _, err := adapter.TryQuery(mdnsns.Request{Name: "peer.local", Types: mdnsns.RecordsA})
+	if err != nil {
+		t.Fatal(err)
+	}
+	announcementResource, _, err := adapter.TryAnnounce(0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	query := queryResource.(*query)
+	announcement := announcementResource.(*announcement)
+	_ = serviceEgress(t, core)
+	_ = serviceEgress(t, core)
+	beforeCancel, _ := account.Snapshot()
+	if beforeCancel.MDNSWork != 2 {
+		t.Fatalf("active work quota = %+v", beforeCancel)
+	}
+
+	if err := query.Cancel(); err != nil {
+		t.Fatal(err)
+	}
+	if err := announcement.Cancel(); err != nil {
+		t.Fatal(err)
+	}
+	afterCancel, _ := account.Snapshot()
+	wantAfterCancel := beforeCancel
+	wantAfterCancel.MDNSWork = 0
+	if afterCancel != wantAfterCancel {
+		t.Fatalf("cancel quota = %+v, want %+v", afterCancel, wantAfterCancel)
+	}
+	if query.Readiness() != nscore.ReadyError || announcement.Readiness() != nscore.ReadyError {
+		t.Fatalf("cancel readiness = query:%v announcement:%v", query.Readiness(), announcement.Readiness())
+	}
+	core.Lock()
+	hasWork := adapter.hasWorkLocked()
+	queryState, announcementState := query.state, announcement.state
+	core.Unlock()
+	if hasWork || queryState != stateFailed || announcementState != stateFailed {
+		t.Fatalf("canceled work remained scheduled: work=%v query=%v announcement=%v", hasWork, queryState, announcementState)
+	}
+	if err := query.Cancel(); failureOf(t, err) != nscore.FailureInvalidState {
+		t.Fatalf("second query cancel = %v", err)
+	}
+	if err := announcement.Cancel(); failureOf(t, err) != nscore.FailureInvalidState {
+		t.Fatalf("second announcement cancel = %v", err)
+	}
+
+	latePayload, err := buildServicePacket(testService("peer", "192.0.2.22"), lnetodns.TypeA, config.MaxPacketBytes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	serviceIngress(t, core, wrapMDNSFrame(t, latePayload, [6]byte{2, 0, 0, 0, 0, 22}, netip.MustParseAddr("192.0.2.22")))
+	if query.state != stateFailed || !errors.Is(query.failure, errQueryCanceled) || len(query.records) != 0 || query.cursor != 0 || query.retry != 0 ||
+		announcement.state != stateFailed || !errors.Is(announcement.failure, errAnnouncementCancel) || announcement.retry != 0 {
+		t.Fatalf("late response mutated canceled operations: query=%+v announcement=%+v", query, announcement)
+	}
+	if usage, _ := account.Snapshot(); usage != afterCancel {
+		t.Fatalf("late response changed quota = %+v, want %+v", usage, afterCancel)
+	}
+	if _, _, err := query.TryNext(); failureOf(t, err) != nscore.FailureCanceled {
+		t.Fatalf("canceled query result = %v", err)
+	}
+	if _, err := announcement.TryFinish(); failureOf(t, err) != nscore.FailureCanceled {
+		t.Fatalf("canceled announcement finish = %v", err)
+	}
+
+	if err := query.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := query.Close(); err != nil {
+		t.Fatalf("second query close = %v", err)
+	}
+	if err := announcement.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := announcement.Close(); err != nil {
+		t.Fatalf("second announcement close = %v", err)
+	}
+	if usage, _ := account.Snapshot(); usage != baseline {
+		t.Fatalf("closed operations retained quota = %+v, want %+v", usage, baseline)
+	}
+	core.Lock()
+	queries, announcements, portLeases := len(adapter.queries), len(adapter.announcements), core.UDPPortLeaseCountLocked()
+	core.Unlock()
+	if queries != 0 || announcements != 0 || portLeases != 1 {
+		t.Fatalf("close cleanup = queries:%d announcements:%d port leases:%d", queries, announcements, portLeases)
+	}
+	replacement, _, err := adapter.TryQuery(mdnsns.Request{Name: "peer.local", Types: mdnsns.RecordsA})
+	if err != nil {
+		t.Fatalf("replacement query after exact close = %v", err)
+	}
+	if err := replacement.Close(); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestMDNSQueryAcceptsRecordsFromEveryResponseSection(t *testing.T) {
 	core, adapter, _ := newTestAdapter(t, queryOnlyConfig(), testPolicy())
 	resource, _, err := adapter.TryQuery(mdnsns.Request{Name: "peer.local", Types: mdnsns.RecordsA})
