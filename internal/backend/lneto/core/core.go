@@ -353,6 +353,9 @@ func (n *Namespace) TryService(budget nscore.ServiceBudget) (nscore.ServiceRepor
 			}
 		}
 		if err != nil {
+			if !ingress && !worked && frameBytes == 0 && (errors.Is(err, lneto.ErrShortBuffer) || errors.Is(err, io.ErrShortBuffer)) {
+				n.nextIngress = false
+			}
 			progress := nscore.ProgressWouldBlock
 			if report != (nscore.ServiceReport{}) {
 				progress = nscore.ProgressDone

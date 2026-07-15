@@ -9,6 +9,7 @@ import (
 	"sync/atomic"
 	"testing"
 
+	lneto "github.com/soypat/lneto"
 	"github.com/soypat/lneto/ethernet"
 	nscore "github.com/wago-org/net/internal/namespace/core"
 	"github.com/wago-org/net/internal/packetlink"
@@ -306,6 +307,54 @@ func TestShortEgressByteBudgetFailsClosedWithoutProbingOutput(t *testing.T) {
 	}
 	if called != 1 {
 		t.Fatalf("exact budget probe count = %d, want 1", called)
+	}
+}
+
+func TestShortBufferEgressPreservesDirectionAndSourceCursorForRetry(t *testing.T) {
+	ns := newTestNamespace(t, 46)
+	firstCalls, secondCalls := 0, 0
+	if err := ns.Install(Participant{
+		EgressOrder: 10, HasEgress: func() bool { return true },
+		Egress: func(dst []byte) (int, bool, error) {
+			firstCalls++
+			if firstCalls == 1 {
+				return 0, false, lneto.ErrShortBuffer
+			}
+			dst[0] = 1
+			return 1, true, nil
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := ns.Install(Participant{
+		EgressOrder: 20, HasEgress: func() bool { return true },
+		Egress: func(dst []byte) (int, bool, error) {
+			secondCalls++
+			dst[0] = 2
+			return 1, true, nil
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	ns.Lock()
+	ns.SetNextIngressLocked(false)
+	ns.Unlock()
+	budget := nscore.ServiceBudget{Packets: 1, Bytes: uint32(ns.Link().MaxFrameBytes()), Operations: 1}
+	if report, progress, err := ns.TryService(budget); failureOf(err) != nscore.FailureMessageTooLarge || report != (nscore.ServiceReport{}) || progress != nscore.ProgressWouldBlock {
+		t.Fatalf("short-buffer egress = %+v, %v, %v", report, progress, err)
+	}
+	if firstCalls != 1 || secondCalls != 0 {
+		t.Fatalf("source calls after short buffer = %d/%d", firstCalls, secondCalls)
+	}
+	if report, progress, err := ns.TryService(budget); err != nil || report != (nscore.ServiceReport{Packets: 1, Bytes: 1, Operations: 1}) || progress != nscore.ProgressDone {
+		t.Fatalf("immediate retry egress = %+v, %v, %v", report, progress, err)
+	}
+	var frame [1]byte
+	if result, err := ns.Link().TryDequeue(packetlink.Egress, frame[:]); err != nil || !result.Ready || frame[0] != 1 {
+		t.Fatalf("retry frame = %+v, %v, data=%v", result, err, frame)
+	}
+	if firstCalls != 2 || secondCalls != 0 {
+		t.Fatalf("source calls after retry = %d/%d", firstCalls, secondCalls)
 	}
 }
 
