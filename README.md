@@ -279,10 +279,18 @@ Fast local checks:
 
 ```sh
 go test ./...
-go test -race ./...
+go test -shuffle=on -count=1 ./...
+go test -race -shuffle=on -count=1 ./...
 go vet ./...
 scripts/check-source-boundaries.sh
+scripts/ci-checkptr.sh
+scripts/ci-386.sh
 ```
+
+Hosted pull-request CI uses exact pinned dependency worktrees and separates the
+ordinary, race, pointer-instrumented, and architecture checks. See
+[`docs/ci.md`](docs/ci.md) for the explicit checkptr allocation-test treatment
+and the visible pinned-Wago linux/386 blocker.
 
 Capture the complete runtime microbenchmark suite and allocation baseline with:
 

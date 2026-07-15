@@ -369,7 +369,10 @@ only the verified review set. These packs remove moving-ref dependence for sourc
 review but do not establish publisher authenticity or claim upstream publication.
 Exact inputs, CI tiers, artifacts, bundle verification, and the narrowly accepted
 known WASI preview-1 native SIGSEGV are documented in
-`docs/release-signoff.md`. Hosted CI
-remains blocked until the merged Wago prerequisite is published at a fetchable
-immutable ref; the reviewed newer plugin-plan snapshot requires a separate
+`docs/release-signoff.md`. Baseline hosted CI fetches the exact reviewed Wago and
+lneto commits into ignored dependency worktrees and runs ordinary, shuffled,
+race, vet, checkptr, and backend-neutral linux/386 checks. Full linux/386 remains
+visibly blocked by pinned Wago's missing `runtime.HostCtrlFrameBytes`; production
+activation still depends on the stricter publication, arm64-execution, and WASI
+release gates. The reviewed newer plugin-plan snapshot requires a separate
 identity/cleanup/worker migration and is not a substitute pin.

@@ -1,0 +1,68 @@
+# Continuous integration
+
+`.github/workflows/ci.yml` runs on pull requests, pushes to `main`, manual
+dispatches, and a weekly schedule. The workflow uses Go 1.24.4 with the Go module
+and build caches enabled and has three bounded jobs:
+
+- **quality** runs the ordinary suite, one shuffled suite, `go vet`, and the
+  backend/source-boundary guard;
+- **race** runs the complete suite with the race detector and shuffle, with five
+  repetitions only for scheduled or manually requested deep checks;
+- **portability** runs strict pointer instrumentation and the strongest truthful
+  linux/386 coverage currently possible.
+
+The module intentionally develops against exact local Wago and lneto worktrees.
+`scripts/ci-prepare-dependencies.sh` creates the ignored `.audit/wago` and
+`.audit/lneto` replacements at the pinned reviewed revisions when they are not
+already present. Existing worktrees at those exact revisions are preserved,
+including local uncommitted audit changes; CI fetches detached exact commits
+rather than compiling a moving branch.
+
+## Checkptr strategy
+
+Run the hosted check locally with:
+
+```sh
+scripts/ci-checkptr.sh
+```
+
+The script first compiles and initializes every package and test binary with
+`-gcflags=all=-d=checkptr=2`. It then runs every test under the same
+instrumentation except these two allocation-only assertions:
+
+- `TestInstallNamespaceServicesAvoidsPerProtocolScratchForCommonSelections` in
+  the root package;
+- `TestNamespaceCompositionAvoidsPerServiceHeapGrowthForPlannedSuite` in
+  `internal/namespace/core`.
+
+Checkptr instrumentation intentionally adds allocations, so those tests cannot
+truthfully enforce their ordinary-build exact `testing.AllocsPerRun` budgets in
+that mode. They are named explicitly in the script and still run unchanged in
+both ordinary and shuffled CI suites. No package is omitted: the two affected
+packages are compiled under checkptr and all of their other tests execute under
+checkptr.
+
+## linux/386 strategy and blocker
+
+Run the hosted architecture check locally with:
+
+```sh
+scripts/ci-386.sh
+```
+
+The script derives every repository package whose complete dependency graph
+excludes Wago, then runs that full backend-neutral set on linux/386 with CGO
+disabled. The `internal/dependencytest` meta-package is excluded from that set
+because its tests intentionally spawn `go list` against Wago-dependent fixture
+graphs; it remains covered by the ordinary suites and the full 386 attempt. The
+script also attempts `GOARCH=386 go test ./...` every time. The complete build is
+currently blocked in pinned Wago at
+`src/core/compiler/frontend/frontend.go` because that compiler references
+`runtime.HostCtrlFrameBytes`, which Wago's runtime package does not define for
+386.
+
+The script accepts only that exact known compiler diagnostic after the
+backend-neutral tests pass. Any additional compiler diagnostic, test failure, or
+panic fails CI. If Wago gains 386 support, the same full attempt must pass and
+the script reports the blocker as resolved; the limitation therefore remains
+visible rather than becoming a permanent package skip.
