@@ -853,6 +853,72 @@ func TestUDPDatagramLengthMismatchIsContainedBeforeDHCPMutation(t *testing.T) {
 	})
 }
 
+func TestIngressContainsTruncatedUDPOnlyForEnabledDirection(t *testing.T) {
+	clientCore, client := newClient(t, false)
+	serverCore, server := newServer(t, 1)
+	combinedConfig := defaultConfig()
+	combinedConfig.Server = ServerConfig{ServerAddr: netip.MustParseAddr("192.0.2.1"), Gateway: netip.MustParseAddr("192.0.2.1"), DNS: netip.MustParseAddr("192.0.2.53"), Subnet: netip.MustParsePrefix("192.0.2.0/24"), LeaseSeconds: 3600, MaxClients: 1}
+	combinedCore, combined := newAdapter(t, combinedConfig.Server.ServerAddr, [6]byte{2, 0, 0, 0, 0, 3}, combinedConfig, policy.Merge(clientPolicy(), serverPolicy()))
+
+	for _, adapter := range []struct {
+		name string
+		core *lnetocore.Namespace
+		impl *Adapter
+		owns func(uint16, uint16) bool
+	}{
+		{name: "client only", core: clientCore, impl: client, owns: func(source, destination uint16) bool {
+			return source == dhcpns.ServerPort && destination == dhcpns.ClientPort
+		}},
+		{name: "server only", core: serverCore, impl: server, owns: func(source, destination uint16) bool {
+			return source == dhcpns.ClientPort && destination == dhcpns.ServerPort
+		}},
+		{name: "combined", core: combinedCore, impl: combined, owns: func(source, destination uint16) bool {
+			return source == dhcpns.ServerPort && destination == dhcpns.ClientPort || source == dhcpns.ClientPort && destination == dhcpns.ServerPort
+		}},
+	} {
+		t.Run(adapter.name, func(t *testing.T) {
+			for _, ports := range []struct {
+				name        string
+				source      uint16
+				destination uint16
+			}{
+				{name: "server to client", source: dhcpns.ServerPort, destination: dhcpns.ClientPort},
+				{name: "client to server", source: dhcpns.ClientPort, destination: dhcpns.ServerPort},
+				{name: "foreign", source: 1067, destination: 1068},
+			} {
+				for udpBytes := 0; udpBytes < 8; udpBytes++ {
+					name := ports.name + "/bytes=" + string(rune('0'+udpBytes))
+					t.Run(name, func(t *testing.T) {
+						frame := truncatedDHCPv4UDPFrame(t, adapter.impl.hardwareAddress, ports.source, ports.destination, udpBytes)
+						adapter.core.Lock()
+						handled, err := adapter.impl.ingressLocked(frame)
+						adapter.core.Unlock()
+						wantHandled := udpBytes >= 4 && adapter.owns(ports.source, ports.destination)
+						if err != nil || handled != wantHandled {
+							t.Fatalf("ingress = handled:%v err:%v, want handled:%v", handled, err, wantHandled)
+						}
+					})
+				}
+			}
+
+			for _, ports := range [][2]uint16{{dhcpns.ServerPort, dhcpns.ClientPort}, {dhcpns.ClientPort, dhcpns.ServerPort}} {
+				frame := truncatedDHCPv4UDPFrame(t, adapter.impl.hardwareAddress, ports[0], ports[1], 8)
+				frame[14+20+4], frame[14+20+5] = 0, 7
+				adapter.core.Lock()
+				handled, err := adapter.impl.ingressLocked(frame)
+				adapter.core.Unlock()
+				wantHandled := adapter.owns(ports[0], ports[1])
+				if err != nil || handled != wantHandled {
+					t.Fatalf("malformed complete %d->%d = handled:%v err:%v, want handled:%v", ports[0], ports[1], handled, err, wantHandled)
+				}
+			}
+			if adapter.impl.lease != nil || len(adapter.impl.serverClients) != 0 || adapter.impl.serverPending != 0 || adapter.impl.hasWorkLocked() {
+				t.Fatalf("truncated traffic mutated state: lease=%p clients=%d pending=%d work=%v", adapter.impl.lease, len(adapter.impl.serverClients), adapter.impl.serverPending, adapter.impl.hasWorkLocked())
+			}
+		})
+	}
+}
+
 func TestClientIngressDropsInvalidIPv4LengthsWithoutMutatingLease(t *testing.T) {
 	for _, test := range []struct {
 		name        string
@@ -1140,6 +1206,33 @@ func serviceIngress(t testing.TB, core *lnetocore.Namespace, frame []byte) {
 	if err != nil || progress != nscore.ProgressDone || report.Packets != 1 {
 		t.Fatalf("ingress = %+v, %v, %v", report, progress, err)
 	}
+}
+
+func truncatedDHCPv4UDPFrame(t testing.TB, destinationMAC [6]byte, sourcePort, destinationPort uint16, udpBytes int) []byte {
+	t.Helper()
+	frame := make([]byte, 14+20+udpBytes)
+	eth, err := ethernet.NewFrame(frame)
+	if err != nil {
+		t.Fatal(err)
+	}
+	*eth.DestinationHardwareAddr() = destinationMAC
+	*eth.SourceHardwareAddr() = [6]byte{2, 0, 0, 0, 0, 99}
+	eth.SetEtherType(ethernet.TypeIPv4)
+	ip, err := ipv4.NewFrame(eth.Payload())
+	if err != nil {
+		t.Fatal(err)
+	}
+	ip.SetVersionAndIHL(4, 5)
+	ip.SetTTL(64)
+	ip.SetProtocol(lneto.IPProtoUDP)
+	ip.SetTotalLength(uint16(20 + udpBytes))
+	*ip.SourceAddr() = [4]byte{192, 0, 2, 99}
+	*ip.DestinationAddr() = [4]byte{192, 0, 2, 1}
+	rawUDP := ip.RawData()[20:]
+	ports := [4]byte{byte(sourcePort >> 8), byte(sourcePort), byte(destinationPort >> 8), byte(destinationPort)}
+	copy(rawUDP, ports[:])
+	ip.SetCRC(ip.CalculateHeaderCRC())
+	return frame
 }
 
 func shortenUDPDatagram(t testing.TB, frame []byte, bytes uint16) []byte {

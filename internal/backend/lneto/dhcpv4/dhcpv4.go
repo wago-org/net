@@ -3,6 +3,7 @@
 package dhcpv4
 
 import (
+	"encoding/binary"
 	"errors"
 	"net"
 	"net/netip"
@@ -579,14 +580,20 @@ func (a *Adapter) validateFrame(frame []byte) ([]byte, netip.Addr, uint16, uint1
 	if validator.ErrPop() != nil {
 		return nil, netip.Addr{}, 0, 0, false, nil
 	}
-	udp, err := lnetoudp.NewFrame(ip.Payload())
-	if err != nil {
-		return nil, netip.Addr{}, 0, 0, false, err
-	}
-	sourcePort, destinationPort := udp.SourcePort(), udp.DestinationPort()
-	portsMatch := sourcePort == dhcpns.ServerPort && destinationPort == dhcpns.ClientPort || sourcePort == dhcpns.ClientPort && destinationPort == dhcpns.ServerPort
-	if !portsMatch {
+	rawUDP := ip.Payload()
+	if len(rawUDP) < 4 {
 		return nil, netip.Addr{}, 0, 0, false, nil
+	}
+	sourcePort := binary.BigEndian.Uint16(rawUDP[:2])
+	destinationPort := binary.BigEndian.Uint16(rawUDP[2:4])
+	clientDirection := a.config.MaxLeases != 0 && sourcePort == dhcpns.ServerPort && destinationPort == dhcpns.ClientPort
+	serverDirection := a.serverEnabled && sourcePort == dhcpns.ClientPort && destinationPort == dhcpns.ServerPort
+	if !clientDirection && !serverDirection {
+		return nil, netip.Addr{}, 0, 0, false, nil
+	}
+	udp, err := lnetoudp.NewFrame(rawUDP)
+	if err != nil {
+		return nil, netip.Addr{}, sourcePort, destinationPort, true, err
 	}
 	if !validUnicastMAC(*eth.SourceHardwareAddr()) {
 		return nil, netip.Addr{}, sourcePort, destinationPort, true, nil
