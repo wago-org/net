@@ -791,22 +791,36 @@ func (a *Adapter) acceptResponseLocked() {
 			continue
 		}
 		records := q.records[:0]
-		for _, resource := range allResources(&a.decode) {
-			record, ok := convertResource(resource, q.request)
-			if !ok || duplicateRecord(records, record) {
-				continue
-			}
-			if len(records) == int(a.config.MaxRecords) {
-				q.failLocked(nscore.FailureResourceLimit, lneto.ErrExhausted)
-				records = nil
-				break
-			}
-			records = append(records, record)
+		var ok bool
+		records, ok = appendResponseRecords(records, a.decode.Answers, q.request, int(a.config.MaxRecords))
+		if ok {
+			records, ok = appendResponseRecords(records, a.decode.Authorities, q.request, int(a.config.MaxRecords))
+		}
+		if ok {
+			records, ok = appendResponseRecords(records, a.decode.Additionals, q.request, int(a.config.MaxRecords))
+		}
+		if !ok {
+			q.failLocked(nscore.FailureResourceLimit, lneto.ErrExhausted)
+			continue
 		}
 		if len(records) != 0 {
 			q.completeLocked(records)
 		}
 	}
+}
+
+func appendResponseRecords(records []mdnsns.Record, resources []lnetodns.Resource, request mdnsns.Request, limit int) ([]mdnsns.Record, bool) {
+	for _, resource := range resources {
+		record, ok := convertResource(resource, request)
+		if !ok || duplicateRecord(records, record) {
+			continue
+		}
+		if len(records) == limit {
+			return records, false
+		}
+		records = append(records, record)
+	}
+	return records, true
 }
 
 func (a *Adapter) queueResponseLocked() {
@@ -1018,14 +1032,6 @@ func serviceType(name string) string {
 		return name
 	}
 	return rest
-}
-
-func allResources(message *lnetodns.Message) []lnetodns.Resource {
-	resources := make([]lnetodns.Resource, 0, len(message.Answers)+len(message.Authorities)+len(message.Additionals))
-	resources = append(resources, message.Answers...)
-	resources = append(resources, message.Authorities...)
-	resources = append(resources, message.Additionals...)
-	return resources
 }
 
 func duplicateRecord(records []mdnsns.Record, record mdnsns.Record) bool {

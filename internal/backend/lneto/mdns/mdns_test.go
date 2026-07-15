@@ -225,6 +225,43 @@ func TestMDNSDenyWinsTimeoutCancelAndCloseRelease(t *testing.T) {
 	}
 }
 
+func TestMDNSQueryAcceptsRecordsFromEveryResponseSection(t *testing.T) {
+	core, adapter, _ := newTestAdapter(t, queryOnlyConfig(), testPolicy())
+	resource, _, err := adapter.TryQuery(mdnsns.Request{Name: "peer.local", Types: mdnsns.RecordsA})
+	if err != nil {
+		t.Fatal(err)
+	}
+	q := resource.(*query)
+	_ = serviceEgress(t, core)
+	addresses := []string{"192.0.2.41", "192.0.2.42", "192.0.2.43"}
+	resources := make([]lnetodns.Resource, len(addresses))
+	for i, address := range addresses {
+		resources[i] = resourceOfType(t, testService("peer", address), lnetodns.TypeA)
+	}
+	message := lnetodns.Message{
+		Answers:     resources[:1],
+		Authorities: resources[1:2],
+		Additionals: resources[2:],
+	}
+	payload, err := message.AppendTo(make([]byte, 0, 1200), 0, lnetodns.HeaderFlags(1<<15|1<<10))
+	if err != nil {
+		t.Fatal(err)
+	}
+	serviceIngress(t, core, wrapMDNSFrame(t, payload, [6]byte{2, 0, 0, 0, 0, 41}, netip.MustParseAddr("192.0.2.41")))
+	if q.Readiness() != nscore.ReadyMDNSResult {
+		t.Fatalf("query readiness = %v", q.Readiness())
+	}
+	for _, address := range addresses {
+		record, next, err := q.TryNext()
+		if err != nil || next != mdnsns.NextReady || record.Address != netip.MustParseAddr(address) {
+			t.Fatalf("next record = %+v, %v, %v; want %s", record, next, err, address)
+		}
+	}
+	if record, next, err := q.TryNext(); err != nil || next != mdnsns.NextEOF || record != (mdnsns.Record{}) {
+		t.Fatalf("query EOF = %+v, %v, %v", record, next, err)
+	}
+}
+
 func TestMDNSRejectsMalformedOrIrrelevantResponses(t *testing.T) {
 	core, adapter, _ := newTestAdapter(t, queryOnlyConfig(), testPolicy())
 	resource, _, err := adapter.TryQuery(mdnsns.Request{Name: "peer.local", Types: mdnsns.RecordsA})
@@ -1101,6 +1138,34 @@ func resourceOfType(t testing.TB, service mdnsns.Service, typ lnetodns.Type) lne
 func resourceWithHeader(t testing.TB, source lnetodns.Resource, name lnetodns.Name, typ lnetodns.Type, class lnetodns.Class, ttl uint32) lnetodns.Resource {
 	t.Helper()
 	return lnetodns.NewResource(name, typ, class, ttl, append([]byte(nil), source.RawData()...))
+}
+
+func BenchmarkIngressQueryResponse(b *testing.B) {
+	core, adapter, _ := newTestAdapter(b, queryOnlyConfig(), testPolicy())
+	resource, _, err := adapter.TryQuery(mdnsns.Request{Name: "peer.local", Types: mdnsns.RecordsA})
+	if err != nil {
+		b.Fatal(err)
+	}
+	q := resource.(*query)
+	payload, err := buildServicePacket(testService("peer", "192.0.2.22"), lnetodns.TypeA, 1200)
+	if err != nil {
+		b.Fatal(err)
+	}
+	frame := wrapMDNSFrame(b, payload, [6]byte{2, 0, 0, 0, 0, 22}, netip.MustParseAddr("192.0.2.22"))
+	core.Lock()
+	defer core.Unlock()
+	b.ReportAllocs()
+	b.ResetTimer()
+	for b.Loop() {
+		q.records = q.records[:0]
+		q.cursor = 0
+		q.state = stateWaiting
+		q.attempts = 1
+		handled, err := adapter.ingressLocked(frame)
+		if err != nil || !handled || q.state != stateDone || len(q.records) != 1 {
+			b.Fatalf("ingress = handled %v, err %v, state %v, records %d", handled, err, q.state, len(q.records))
+		}
+	}
 }
 
 func BenchmarkIngressAutomaticResponse(b *testing.B) {
