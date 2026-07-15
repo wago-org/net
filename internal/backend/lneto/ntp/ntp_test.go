@@ -485,6 +485,115 @@ func TestNTPMalformedTerminalRetiresTransportBeforeCloseAndStaleCloseCannotAffec
 	}
 }
 
+func TestNTPClockFailuresRetireTransportAndReleaseWork(t *testing.T) {
+	validTime := time.Date(2026, 7, 14, 12, 0, 0, 0, time.UTC)
+	for _, test := range []struct {
+		name      string
+		clockTime func([]byte, time.Time) time.Time
+		wantCause error
+	}{
+		{
+			name: "clock moved backward",
+			clockTime: func(request []byte, _ time.Time) time.Time {
+				return ntpPayload(t, request).TransmitTime().Time().Add(-time.Nanosecond)
+			},
+			wantCause: errClockBackward,
+		},
+		{
+			name: "clock left NTP timestamp range",
+			clockTime: func(_ []byte, _ time.Time) time.Time {
+				return time.Date(1800, 1, 1, 0, 0, 0, 0, time.UTC)
+			},
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			clock := &manualClock{now: validTime}
+			core, adapter, account := newTestAdapter(t, clock, Config{
+				Server: netip.MustParseAddr("192.0.2.123"), Clock: clock, MaxSyncs: 1,
+				MaxAttempts: 1, RetryServiceAttempts: 2, Precision: -20,
+			})
+			resource, _, err := adapter.TrySync()
+			if err != nil {
+				t.Fatal(err)
+			}
+			sync := resource.(*syncResource)
+			request := serviceEgress(t, core)
+			port := sync.portLease.UDPPort()
+			response, arrival := makeNTPResponse(t, request, 100*time.Millisecond, 20*time.Millisecond)
+			clock.now = test.clockTime(request, arrival)
+			serviceIngress(t, core, response)
+
+			if sync.state != syncFailed || sync.Readiness() != nscore.ReadyError || sync.portLease.UDPPort() != 0 {
+				t.Fatalf("clock failure state = %v readiness=%v port=%d", sync.state, sync.Readiness(), sync.portLease.UDPPort())
+			}
+			_, _, resultErr := sync.TryResult()
+			if failureOf(t, resultErr) != nscore.FailureInvalidState || test.wantCause != nil && !errors.Is(resultErr, test.wantCause) {
+				t.Fatalf("clock failure result = %v", resultErr)
+			}
+			core.Lock()
+			mapped := adapter.byPort[port]
+			leases := core.UDPPortLeaseCountLocked()
+			core.Unlock()
+			if mapped != nil || leases != 0 {
+				t.Fatalf("clock failure retained transport: mapped=%p leases=%d", mapped, leases)
+			}
+			if usage, _ := account.Snapshot(); usage != (quota.Usage{Resources: 1, NTPResources: 1}) {
+				t.Fatalf("clock failure quota = %+v", usage)
+			}
+
+			clock.now = arrival
+			core.Lock()
+			handled, ingressErr := adapter.ingressLocked(response)
+			core.Unlock()
+			if ingressErr != nil || handled || sync.Readiness() != nscore.ReadyError {
+				t.Fatalf("late response after clock failure = handled:%v err:%v readiness:%v", handled, ingressErr, sync.Readiness())
+			}
+			if err := sync.Close(); err != nil {
+				t.Fatal(err)
+			}
+			if usage, _ := account.Snapshot(); usage != (quota.Usage{}) {
+				t.Fatalf("closed clock failure quota = %+v", usage)
+			}
+		})
+	}
+}
+
+func TestNTPPrepareRejectsOutOfRangeClockWithoutPublishingPacket(t *testing.T) {
+	clock := &manualClock{now: time.Date(2026, 7, 14, 12, 0, 0, 0, time.UTC)}
+	core, adapter, account := newTestAdapter(t, clock, Config{
+		Server: netip.MustParseAddr("192.0.2.123"), Clock: clock, MaxSyncs: 1,
+		MaxAttempts: 1, RetryServiceAttempts: 2, Precision: -20,
+	})
+	resource, _, err := adapter.TrySync()
+	if err != nil {
+		t.Fatal(err)
+	}
+	sync := resource.(*syncResource)
+	port := sync.portLease.UDPPort()
+	clock.now = time.Date(1800, 1, 1, 0, 0, 0, 0, time.UTC)
+	frame := bytes.Repeat([]byte{0xa5}, core.Link().MaxFrameBytes())
+	core.Lock()
+	written, worked, egressErr := adapter.egressLocked(frame)
+	mapped := adapter.byPort[port]
+	leases := core.UDPPortLeaseCountLocked()
+	core.Unlock()
+	if egressErr != nil || !worked || written != 0 {
+		t.Fatalf("out-of-range prepare = %d, %v, %v", written, worked, egressErr)
+	}
+	if !bytes.Equal(frame, bytes.Repeat([]byte{0xa5}, len(frame))) {
+		t.Fatal("out-of-range prepare mutated packet destination")
+	}
+	if sync.state != syncFailed || sync.Readiness() != nscore.ReadyError || mapped != nil || leases != 0 || sync.portLease.UDPPort() != 0 {
+		t.Fatalf("out-of-range prepare retained lifecycle: state=%v readiness=%v mapped=%p leases=%d port=%d", sync.state, sync.Readiness(), mapped, leases, sync.portLease.UDPPort())
+	}
+	if _, _, resultErr := sync.TryResult(); failureOf(t, resultErr) != nscore.FailureInvalidState {
+		t.Fatalf("out-of-range prepare result = %v", resultErr)
+	}
+	if usage, _ := account.Snapshot(); usage != (quota.Usage{Resources: 1, NTPResources: 1}) {
+		t.Fatalf("out-of-range prepare quota = %+v", usage)
+	}
+}
+
 func TestNTPPolicyLimitsTimeoutCancelAndClose(t *testing.T) {
 	clock := &manualClock{now: time.Date(2026, 7, 13, 22, 0, 0, 0, time.UTC)}
 	core, adapter, account := newTestAdapterWithPolicy(t, clock, Config{
