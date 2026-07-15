@@ -560,6 +560,106 @@ func TestIngressParticipantErrorConsumesPacketAndLeavesOppositeDirectionServicea
 	}
 }
 
+func TestPacketServiceLaterErrorsReportEarlierWorkAndPreserveRecovery(t *testing.T) {
+	t.Run("egress failure after ingress packet", func(t *testing.T) {
+		ns := newTestNamespace(t, 38)
+		egressFailure := errors.New("egress failed")
+		ingressCalls, egressCalls := 0, 0
+		if err := ns.Install(Participant{
+			Ingress: func(frame []byte) (bool, error) {
+				ingressCalls++
+				if len(frame) != 1 || frame[0] != 0x38 {
+					t.Fatalf("ingress frame = %x", frame)
+				}
+				return true, nil
+			},
+			HasEgress: func() bool { return true },
+			Egress: func(frame []byte) (int, bool, error) {
+				egressCalls++
+				if egressCalls == 1 {
+					frame[0] = 0xff
+					return 1, false, egressFailure
+				}
+				frame[0] = 0x83
+				return 1, true, nil
+			},
+		}); err != nil {
+			t.Fatal(err)
+		}
+		if err := ns.Link().TryEnqueue(packetlink.Ingress, []byte{0x38}); err != nil {
+			t.Fatal(err)
+		}
+		ns.Lock()
+		ns.SetNextIngressLocked(true)
+		ns.Unlock()
+		budget := nscore.ServiceBudget{Packets: 2, Bytes: uint32(ns.Link().MaxFrameBytes()) * 2, Operations: 2}
+
+		report, progress, err := ns.TryService(budget)
+		if !errors.Is(err, egressFailure) || failureOf(err) != nscore.FailureIO || progress != nscore.ProgressDone || report != (nscore.ServiceReport{Packets: 1, Bytes: 1, Operations: 1}) || !report.ValidResult(budget, progress) {
+			t.Fatalf("partial service = %+v, %v, %v", report, progress, err)
+		}
+		if ingressCalls != 1 || egressCalls != 1 {
+			t.Fatalf("partial callback calls = ingress:%d egress:%d", ingressCalls, egressCalls)
+		}
+		if snapshot := ns.Link().Snapshot(); snapshot.IngressFrames != 0 || snapshot.EgressFrames != 0 || snapshot.EgressBytes != 0 {
+			t.Fatalf("partial failure queue state = %+v", snapshot)
+		}
+
+		report, progress, err = ns.TryService(budget)
+		if err != nil || progress != nscore.ProgressDone || report != (nscore.ServiceReport{Packets: 1, Bytes: 1, Operations: 1}) || !report.ValidResult(budget, progress) {
+			t.Fatalf("recovery service = %+v, %v, %v", report, progress, err)
+		}
+		if ingressCalls != 1 || egressCalls != 2 {
+			t.Fatalf("recovery callback calls = ingress:%d egress:%d", ingressCalls, egressCalls)
+		}
+		var frame [1]byte
+		if result, err := ns.Link().TryDequeue(packetlink.Egress, frame[:]); err != nil || result != (packetlink.FrameResult{Copied: 1, FrameBytes: 1, Ready: true}) || frame[0] != 0x83 {
+			t.Fatalf("recovery frame = %+v, %v, data=%x", result, err, frame)
+		}
+	})
+
+	t.Run("ingress failure after maintenance", func(t *testing.T) {
+		ns := newTestNamespace(t, 39)
+		ingressFailure := errors.New("ingress failed")
+		maintenance, ingressCalls := 0, 0
+		if err := ns.Install(Participant{
+			Ingress: func(frame []byte) (bool, error) {
+				ingressCalls++
+				if len(frame) != 1 || frame[0] != 0x39 {
+					t.Fatalf("ingress frame = %x", frame)
+				}
+				return true, ingressFailure
+			},
+			HasEgress: func() bool { return true },
+			Egress: func([]byte) (int, bool, error) {
+				maintenance++
+				ns.MarkMaintenanceLocked()
+				return 0, true, nil
+			},
+		}); err != nil {
+			t.Fatal(err)
+		}
+		if err := ns.Link().TryEnqueue(packetlink.Ingress, []byte{0x39}); err != nil {
+			t.Fatal(err)
+		}
+		ns.Lock()
+		ns.SetNextIngressLocked(false)
+		ns.Unlock()
+		budget := nscore.ServiceBudget{Packets: 1, Bytes: uint32(ns.Link().MaxFrameBytes()), Operations: 2}
+
+		report, progress, err := ns.TryService(budget)
+		if !errors.Is(err, ingressFailure) || failureOf(err) != nscore.FailureIO || progress != nscore.ProgressDone || report != (nscore.ServiceReport{Packets: 1, Bytes: 1, Operations: 2}) || !report.ValidResult(budget, progress) {
+			t.Fatalf("maintenance then failure = %+v, %v, %v", report, progress, err)
+		}
+		if maintenance != 1 || ingressCalls != 1 {
+			t.Fatalf("callback calls = maintenance:%d ingress:%d", maintenance, ingressCalls)
+		}
+		if snapshot := ns.Link().Snapshot(); snapshot.IngressFrames != 0 || snapshot.EgressFrames != 0 {
+			t.Fatalf("queues after maintenance/failure = %+v", snapshot)
+		}
+	})
+}
+
 func TestPacketServiceBudgetEdgesPreserveQueuedWorkAndAlternate(t *testing.T) {
 	t.Run("single operation calls alternate continuously ready directions", func(t *testing.T) {
 		ns := newTestNamespace(t, 36)
