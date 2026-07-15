@@ -464,6 +464,29 @@ func makeEchoReply(t testing.TB, request []byte, payloadOverride []byte) []byte 
 	return frame
 }
 
+func makeEchoReplyPayload(t testing.TB, request, payload []byte) []byte {
+	t.Helper()
+	base := makeEchoReply(t, request, nil)
+	frame := make([]byte, 14+20+8+len(payload))
+	copy(frame[:14+20+8], base[:14+20+8])
+	copy(frame[14+20+8:], payload)
+	ipFrame, err := ipv4.NewFrame(frame[14:])
+	if err != nil {
+		t.Fatal(err)
+	}
+	ipFrame.SetTotalLength(uint16(20 + 8 + len(payload)))
+	ipFrame.SetCRC(0)
+	ipFrame.SetCRC(ipFrame.CalculateHeaderCRC())
+	icmpFrame, err := lnetoicmp.NewFrame(ipFrame.Payload())
+	if err != nil {
+		t.Fatal(err)
+	}
+	icmpFrame.SetCRC(0)
+	var checksum lneto.CRC791
+	icmpFrame.SetCRC(checksum.PayloadSum16((lnetoicmp.FrameEcho{Frame: icmpFrame}).RawData()))
+	return frame
+}
+
 func makeEchoReplyWithIPv4OptionsAndPadding(t testing.TB, request []byte, padding int) []byte {
 	t.Helper()
 	base := makeEchoReply(t, request, nil)
@@ -907,6 +930,72 @@ func TestICMPv4ChecksumFailureAndNamespaceCloseClearTerminalAndActiveState(t *te
 	if len(adapter.echoes) != 0 || adapter.byIdentity != nil || failed.payload != nil || active.payload != nil || failed.failure != nil || active.failure != nil || failed.destination.IsValid() || active.destination.IsValid() {
 		t.Fatalf("namespace close retained state: echoes=%d identities=%v failed=%+v active=%+v", len(adapter.echoes), adapter.byIdentity, failed, active)
 	}
+}
+
+func FuzzICMPv4OwnedEchoReplyLifecycle(f *testing.F) {
+	f.Add([]byte("fuzz"), []byte("fuzz"))
+	f.Add([]byte("expected"), []byte("mismatch"))
+	f.Add([]byte{}, []byte{})
+	f.Fuzz(func(t *testing.T, expected, replyPayload []byte) {
+		if len(expected) > 64 || len(replyPayload) > 64 {
+			return
+		}
+		core, adapter, account := newTestAdapter(t, Config{MaxEchoes: 1, MaxPayloadBytes: 64, MaxAttempts: 2, RetryServiceAttempts: 2})
+		resource, progress, err := adapter.TryEcho(icmpns.Request{Destination: netip.MustParseAddr("192.0.2.99"), Payload: expected})
+		if err != nil || progress != nscore.ProgressInProgress {
+			t.Fatalf("TryEcho = %T, %v, %v", resource, progress, err)
+		}
+		exchange := resource.(*echo)
+		request := serviceEgress(t, core)
+		reply := makeEchoReplyPayload(t, request, replyPayload)
+		core.Lock()
+		handled, ingressErr := adapter.ingressLocked(reply)
+		mapped := adapter.byIdentity[identityKey(exchange.identifier, exchange.sequence)]
+		core.Unlock()
+		if ingressErr != nil || !handled {
+			t.Fatalf("owned reply ingress = handled:%v err:%v", handled, ingressErr)
+		}
+		wantUsage := quota.Usage{Resources: 1, ICMPv4Resources: 1, QueuedBytes: uint64(len(expected))}
+		if usage, closed := account.Snapshot(); closed || usage != wantUsage {
+			t.Fatalf("terminal quota = %+v, closed=%v; want %+v", usage, closed, wantUsage)
+		}
+		if mapped != nil {
+			t.Fatalf("terminal reply retained identity mapping %p", mapped)
+		}
+		if bytes.Equal(expected, replyPayload) {
+			if exchange.state != echoDone || exchange.failure != nil || exchange.Readiness() != nscore.ReadyICMPv4Reply {
+				t.Fatalf("matching reply state = %v failure=%v readiness=%v", exchange.state, exchange.failure, exchange.Readiness())
+			}
+			dst := bytes.Repeat([]byte{0xa5}, len(expected)+1)
+			result, next, err := exchange.TryResult(dst)
+			if err != nil || next != icmpns.NextReady || result.Source != exchange.destination || result.Identifier != exchange.identifier || result.Sequence != exchange.sequence || result.Copied != len(expected) || result.PayloadBytes != len(expected) || !bytes.Equal(dst[:len(expected)], expected) || dst[len(expected)] != 0xa5 {
+				t.Fatalf("matching reply result = %+v, %v, %v payload=%x", result, next, err, dst)
+			}
+		} else {
+			if exchange.state != echoFailed || exchange.failure == nil || exchange.Readiness() != nscore.ReadyError {
+				t.Fatalf("mismatching reply state = %v failure=%v readiness=%v", exchange.state, exchange.failure, exchange.Readiness())
+			}
+			if _, _, err := exchange.TryResult(nil); failureOf(t, err) != nscore.FailureIO {
+				t.Fatalf("mismatching reply result = %v", err)
+			}
+		}
+		terminalState := exchange.state
+		core.Lock()
+		lateHandled, lateErr := adapter.ingressLocked(reply)
+		core.Unlock()
+		if lateErr != nil || lateHandled || exchange.state != terminalState {
+			t.Fatalf("late reply = handled:%v err:%v state:%v", lateHandled, lateErr, exchange.state)
+		}
+		if err := exchange.Close(); err != nil {
+			t.Fatal(err)
+		}
+		if usage, _ := account.Snapshot(); usage != (quota.Usage{}) {
+			t.Fatalf("closed quota = %+v", usage)
+		}
+		if exchange.payload != nil || exchange.destination.IsValid() || exchange.failure != nil || len(adapter.echoes) != 0 || len(adapter.byIdentity) != 0 {
+			t.Fatalf("close retained fuzzed exchange state: exchange=%+v echoes=%d identities=%d", exchange, len(adapter.echoes), len(adapter.byIdentity))
+		}
+	})
 }
 
 func FuzzICMPv4IngressBoundedMalformedFrames(f *testing.F) {
