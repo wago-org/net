@@ -314,8 +314,20 @@ func TestEgressErrorsPreserveSourceCursorForRetry(t *testing.T) {
 		name  string
 		first func(dst []byte, call int) (int, bool, error)
 	}{
-		{name: "backend error", first: func([]byte, int) (int, bool, error) {
-			return 0, false, errors.New("egress failed")
+		{name: "backend error", first: func(dst []byte, call int) (int, bool, error) {
+			if call == 1 {
+				return 0, false, errors.New("egress failed")
+			}
+			dst[0] = 1
+			return 1, true, nil
+		}},
+		{name: "backend error with bytes", first: func(dst []byte, call int) (int, bool, error) {
+			if call == 1 {
+				dst[0] = 0xff
+				return 1, false, errors.New("egress failed after writing")
+			}
+			dst[0] = 1
+			return 1, true, nil
 		}},
 		{name: "invalid length", first: func(dst []byte, call int) (int, bool, error) {
 			if call == 1 {
@@ -333,10 +345,6 @@ func TestEgressErrorsPreserveSourceCursorForRetry(t *testing.T) {
 				EgressOrder: 10, HasEgress: func() bool { return true },
 				Egress: func(dst []byte) (int, bool, error) {
 					firstCalls++
-					if test.name == "backend error" && firstCalls > 1 {
-						dst[0] = 1
-						return 1, true, nil
-					}
 					return test.first(dst, firstCalls)
 				},
 			}); err != nil {
@@ -358,6 +366,9 @@ func TestEgressErrorsPreserveSourceCursorForRetry(t *testing.T) {
 			budget := nscore.ServiceBudget{Packets: 1, Bytes: uint32(ns.Link().MaxFrameBytes()), Operations: 1}
 			if report, progress, err := ns.TryService(budget); failureOf(err) != nscore.FailureIO || report != (nscore.ServiceReport{}) || progress != nscore.ProgressWouldBlock {
 				t.Fatalf("failed egress = %+v, %v, %v", report, progress, err)
+			}
+			if snapshot := ns.Link().Snapshot(); snapshot.EgressFrames != 0 || snapshot.EgressBytes != 0 {
+				t.Fatalf("failed egress committed partial output: %+v", snapshot)
 			}
 			ns.Lock()
 			ns.SetNextIngressLocked(false)
