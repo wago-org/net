@@ -405,6 +405,106 @@ func TestSelectiveBackendAssemblyRejectsIncompatibleFamily(t *testing.T) {
 	}
 }
 
+func TestSelectiveBackendAssemblyConfiguresAndInstallsExactLnetoBase(t *testing.T) {
+	extension := New(WithConfig(Config{StaticIPv4: selectiveTestStaticIPv4()}))
+	ipv6Address := netip.MustParseAddr("2001:db8::99")
+	firstService, secondService := new(int), new(string)
+	var configureOrder, installOrder []string
+	var firstBase, secondBase *lnetocore.Namespace
+
+	first := plugin.NewBackend(plugin.BackendLnetoV1, func(target any) error {
+		config, ok := target.(*lnetocore.Config)
+		if !ok {
+			return plugin.ErrInvalidBackend
+		}
+		configureOrder = append(configureOrder, "first")
+		config.IPv6Address = ipv6Address
+		config.IPv6PrefixBits = 64
+		config.MaxActiveTCPPorts = 3
+		return nil
+	}, func(base any) (nscore.Service, error) {
+		firstBase, _ = base.(*lnetocore.Namespace)
+		if firstBase == nil {
+			return nscore.Service{}, plugin.ErrInvalidBackend
+		}
+		installOrder = append(installOrder, "first")
+		return nscore.Service{Key: "first", Value: firstService}, nil
+	})
+	second := plugin.NewBackend(plugin.BackendLnetoV1, func(target any) error {
+		config, ok := target.(*lnetocore.Config)
+		if !ok || config.IPv6Address != ipv6Address || config.IPv6PrefixBits != 64 || config.MaxActiveTCPPorts != 3 {
+			return plugin.ErrInvalidBackend
+		}
+		configureOrder = append(configureOrder, "second")
+		return nil
+	}, func(base any) (nscore.Service, error) {
+		secondBase, _ = base.(*lnetocore.Namespace)
+		if secondBase == nil {
+			return nscore.Service{}, plugin.ErrInvalidBackend
+		}
+		installOrder = append(installOrder, "second")
+		return nscore.Service{Key: "second", Value: secondService}, nil
+	})
+	if err := extension.RegisterModule(plugin.NewModule(plugin.ModuleTCP, func(*wago.Registry, plugin.Host) {}, first)); err != nil {
+		t.Fatal(err)
+	}
+	if err := extension.RegisterModule(plugin.NewModule(plugin.ModuleIPv6, func(*wago.Registry, plugin.Host) {}, second)); err != nil {
+		t.Fatal(err)
+	}
+
+	runtime := wago.NewRuntime()
+	if err := runtime.Use(extension); err != nil {
+		t.Fatalf("Use: %v", err)
+	}
+	if !reflect.DeepEqual(configureOrder, []string{"first", "second"}) || len(installOrder) != 0 {
+		t.Fatalf("pre-instantiation order = configure:%v install:%v", configureOrder, installOrder)
+	}
+	instance, err := runtime.Instantiate(context.Background(), emptyModule(t, runtime))
+	if err != nil {
+		t.Fatalf("Instantiate: %v", err)
+	}
+	state, ok := extension.instanceManager().ForInstance(instance)
+	if !ok || state == nil {
+		t.Fatal("instance state missing")
+	}
+	if !reflect.DeepEqual(installOrder, []string{"first", "second"}) || firstBase == nil || firstBase != secondBase {
+		t.Fatalf("installation order/base = %v %p %p", installOrder, firstBase, secondBase)
+	}
+	firstBase.Lock()
+	gotAddress := firstBase.IPv6AddressLocked()
+	gotPrefix := firstBase.IPv6PrefixBitsLocked()
+	gotScope := firstBase.IPv6ScopeIDLocked()
+	gotEnabled := firstBase.IPv6EnabledLocked()
+	gotPolicy, gotQuotas := firstBase.PolicyLocked(), firstBase.QuotasLocked()
+	firstBase.Unlock()
+	if gotAddress != ipv6Address || gotPrefix != 64 || gotScope != 0 || !gotEnabled || gotPolicy == nil || gotQuotas == nil {
+		t.Fatalf("selected base = address:%v prefix:%d scope:%d enabled:%v policy:%p quotas:%p", gotAddress, gotPrefix, gotScope, gotEnabled, gotPolicy, gotQuotas)
+	}
+	value, err := state.LookupNamespace(state.NamespaceHandle())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := nscore.ResolveNamespaceBase(value); got != firstBase {
+		t.Fatalf("resolved selected base = %T %p, want %p", got, got, firstBase)
+	}
+	carrier, ok := value.(nscore.ServiceCarrier)
+	if !ok {
+		t.Fatalf("composed namespace = %T", value)
+	}
+	if got, exists := carrier.NamespaceService("first"); !exists || got != firstService {
+		t.Fatalf("first service = %T %v", got, exists)
+	}
+	if got, exists := carrier.NamespaceService("second"); !exists || got != secondService {
+		t.Fatalf("second service = %T %v", got, exists)
+	}
+	if err := instance.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if snapshot := firstBase.Link().Snapshot(); !snapshot.Closed {
+		t.Fatalf("closed selected base link = %+v", snapshot)
+	}
+}
+
 func TestSelectiveBackendAssemblyRollsBackCoreBeforePublication(t *testing.T) {
 	extension := New(WithConfig(Config{StaticIPv4: selectiveTestStaticIPv4()}))
 	installErr := errors.New("install selected adapter")

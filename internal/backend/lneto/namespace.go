@@ -6,7 +6,6 @@ import (
 	"net"
 	"net/netip"
 
-	lneto "github.com/soypat/lneto"
 	"github.com/soypat/lneto/x/xnet"
 	lnetocore "github.com/wago-org/net/internal/backend/lneto/core"
 	dnsbackend "github.com/wago-org/net/internal/backend/lneto/dns"
@@ -176,21 +175,6 @@ func (n *Namespace) TryService(budget nscore.ServiceBudget) (nscore.ServiceRepor
 		return nscore.ServiceReport{}, 0, nscore.Fail(nscore.FailureClosed, net.ErrClosed)
 	}
 	return n.core.TryService(budget)
-}
-
-func (n *Namespace) checkEndpoint(endpoint nscore.Endpoint) error {
-	if n == nil || n.core == nil {
-		return nscore.Fail(nscore.FailureClosed, net.ErrClosed)
-	}
-	n.core.Lock()
-	defer n.core.Unlock()
-	if n.core.ClosedLocked() {
-		return nscore.Fail(nscore.FailureClosed, net.ErrClosed)
-	}
-	if !endpoint.Valid() {
-		return nscore.Fail(nscore.FailureInvalidArgument, lneto.ErrInvalidAddr)
-	}
-	return nil
 }
 
 func validConfig(config Config, requireAuthority bool) bool {

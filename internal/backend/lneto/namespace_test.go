@@ -805,6 +805,43 @@ func TestLnetoErrorsMapToStableFailures(t *testing.T) {
 	}
 }
 
+func TestValidateConfigSeparatesFiniteShapeFromRuntimeAuthority(t *testing.T) {
+	config := testConfig(9)
+	config.UDP = UDPConfig{
+		MaxSockets: 1, ReceiveBytes: 32, TransmitBytes: 32,
+		ReceiveDatagrams: 1, TransmitDatagrams: 1, MaxPayloadBytes: 32,
+	}
+	if err := ValidateConfig(config); err != nil {
+		t.Fatalf("shape-only validation = %v", err)
+	}
+	if _, err := New(config); requireFailure(t, err) != namespace.FailureInvalidArgument {
+		t.Fatalf("authority-free construction error = %v", err)
+	}
+
+	compiled, err := policy.Compile(policy.Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	config.Policy = compiled
+	config.Quotas = quota.NewAccount(quota.Limits{Resources: 1, UDPResources: 1, QueuedBytes: 64})
+	ns, err := New(config)
+	if err != nil {
+		t.Fatalf("authorized construction: %v", err)
+	}
+	if err := ns.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	invalid := config
+	invalid.IPv4Address = netip.MustParseAddr("2001:db8::1")
+	if err := ValidateConfig(invalid); requireFailure(t, err) != namespace.FailureInvalidArgument {
+		t.Fatalf("IPv6 shape validation error = %v", err)
+	}
+	if _, err := New(invalid); requireFailure(t, err) != namespace.FailureInvalidArgument {
+		t.Fatalf("IPv6 construction error = %v", err)
+	}
+}
+
 func TestNewRejectsInvalidOrUndersizedConfigurations(t *testing.T) {
 	config := testConfig(9)
 	config.Link.MaxFrameBytes--
