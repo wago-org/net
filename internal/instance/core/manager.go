@@ -151,13 +151,18 @@ func (s *State) Close() error {
 // Manager is an extension-local attachment map. It must be owned by an
 // extension value; it is intentionally not a package-global registry.
 type Manager struct {
-	mu     sync.RWMutex
-	states map[*wago.Instance]*State
+	mu        sync.RWMutex
+	states    map[*wago.Instance]*State
+	attaching map[*wago.Instance]*attachmentAttempt
 
 	policy           *policy.Policy
 	limits           quota.Limits
 	readiness        readiness.Config
 	namespaceFactory NamespaceFactory
+}
+
+type attachmentAttempt struct {
+	done chan struct{}
 }
 
 // NewManager creates an empty extension-local manager with finite defaults and
@@ -183,6 +188,7 @@ func NewManagerConfigured(config Config) (*Manager, error) {
 	}
 	return &Manager{
 		states:           make(map[*wago.Instance]*State),
+		attaching:        make(map[*wago.Instance]*attachmentAttempt),
 		policy:           compiled,
 		limits:           config.Limits,
 		readiness:        config.Readiness,
@@ -223,25 +229,34 @@ func (m *Manager) Attach(instance *wago.Instance) error {
 	if m == nil || instance == nil {
 		return ErrInvalidInstance
 	}
+	attempt, err := m.beginAttachment(instance)
+	if err != nil {
+		return err
+	}
+	var state *State
+	published := false
+	defer func() {
+		if !published && state != nil {
+			_ = state.Close()
+		}
+		m.finishAttachment(instance, attempt)
+	}()
+
 	table, err := resource.NewTable()
 	if err != nil {
 		return fmt.Errorf("create resource table: %w", err)
 	}
+	state = &State{resources: table}
 	poller, err := readiness.New(table, m.readiness)
 	if err != nil {
-		_ = table.Close()
 		return fmt.Errorf("create readiness coordinator: %w", err)
 	}
-	state := &State{
-		resources:  table,
-		readiness:  poller,
-		quotas:     quota.NewAccount(m.limits),
-		policy:     m.policy,
-		pollEvents: make([]readiness.Event, m.readiness.MaxRegistrations),
-	}
+	state.readiness = poller
+	state.quotas = quota.NewAccount(m.limits)
+	state.policy = m.policy
+	state.pollEvents = make([]readiness.Event, m.readiness.MaxRegistrations)
 	if m.namespaceFactory != nil {
 		if _, err := state.createNamespace(m.namespaceFactory); err != nil {
-			_ = state.Close()
 			return fmt.Errorf("create instance namespace: %w", err)
 		}
 	}
@@ -250,14 +265,36 @@ func (m *Manager) Attach(instance *wago.Instance) error {
 	if m.states == nil {
 		m.states = make(map[*wago.Instance]*State)
 	}
-	if _, exists := m.states[instance]; exists {
-		m.mu.Unlock()
-		_ = state.Close()
-		return ErrAlreadyAttached
-	}
 	m.states[instance] = state
+	published = true
 	m.mu.Unlock()
 	return nil
+}
+
+func (m *Manager) beginAttachment(instance *wago.Instance) (*attachmentAttempt, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if _, exists := m.states[instance]; exists {
+		return nil, ErrAlreadyAttached
+	}
+	if _, exists := m.attaching[instance]; exists {
+		return nil, ErrAlreadyAttached
+	}
+	if m.attaching == nil {
+		m.attaching = make(map[*wago.Instance]*attachmentAttempt)
+	}
+	attempt := &attachmentAttempt{done: make(chan struct{})}
+	m.attaching[instance] = attempt
+	return attempt, nil
+}
+
+func (m *Manager) finishAttachment(instance *wago.Instance, attempt *attachmentAttempt) {
+	m.mu.Lock()
+	if m.attaching[instance] == attempt {
+		delete(m.attaching, instance)
+	}
+	close(attempt.done)
+	m.mu.Unlock()
 }
 
 func (s *State) createNamespace(factory NamespaceFactory) (resource.Handle, error) {
@@ -450,14 +487,22 @@ func (m *Manager) Detach(instance *wago.Instance) error {
 	if m == nil || instance == nil {
 		return ErrInvalidInstance
 	}
-	m.mu.Lock()
-	state := m.states[instance]
-	delete(m.states, instance)
-	m.mu.Unlock()
-	if state == nil {
-		return nil
+	for {
+		m.mu.Lock()
+		if attempt := m.attaching[instance]; attempt != nil {
+			done := attempt.done
+			m.mu.Unlock()
+			<-done
+			continue
+		}
+		state := m.states[instance]
+		delete(m.states, instance)
+		m.mu.Unlock()
+		if state == nil {
+			return nil
+		}
+		return state.Close()
 	}
-	return state.Close()
 }
 
 // ForInstance returns state only for the exact attached instance pointer.

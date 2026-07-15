@@ -239,6 +239,209 @@ func TestManagerConfigurationIsValidatedAndPolicyIsImmutable(t *testing.T) {
 	}
 }
 
+func TestDetachWaitsForInFlightAttachmentAndClosesPublishedState(t *testing.T) {
+	config := DefaultConfig()
+	started := make(chan struct{})
+	release := make(chan struct{})
+	backend := new(fakeNamespace)
+	config.NamespaceFactory = func(*policy.Policy, *quota.Account) (nscore.Namespace, error) {
+		close(started)
+		<-release
+		return backend, nil
+	}
+	manager, err := NewManagerConfigured(config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	instance := new(wago.Instance)
+	attachDone := make(chan error, 1)
+	go func() { attachDone <- manager.Attach(instance) }()
+	<-started
+
+	detachStarted := make(chan struct{})
+	detachDone := make(chan error, 1)
+	go func() {
+		close(detachStarted)
+		detachDone <- manager.Detach(instance)
+	}()
+	<-detachStarted
+	select {
+	case err := <-detachDone:
+		t.Fatalf("Detach returned while namespace construction was blocked: %v", err)
+	case <-time.After(20 * time.Millisecond):
+	}
+
+	close(release)
+	if err := <-attachDone; err != nil {
+		t.Fatalf("Attach error = %v", err)
+	}
+	if err := <-detachDone; err != nil {
+		t.Fatalf("Detach error = %v", err)
+	}
+	if manager.Len() != 0 {
+		t.Fatalf("manager length = %d, want 0", manager.Len())
+	}
+	if backend.closed.Load() != 1 {
+		t.Fatalf("backend close count = %d, want 1", backend.closed.Load())
+	}
+}
+
+func TestConcurrentDuplicateAttachSkipsNamespaceConstruction(t *testing.T) {
+	config := DefaultConfig()
+	started := make(chan struct{})
+	release := make(chan struct{})
+	backend := new(fakeNamespace)
+	var calls atomic.Int32
+	config.NamespaceFactory = func(*policy.Policy, *quota.Account) (nscore.Namespace, error) {
+		calls.Add(1)
+		close(started)
+		<-release
+		return backend, nil
+	}
+	manager, err := NewManagerConfigured(config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	instance := new(wago.Instance)
+	firstDone := make(chan error, 1)
+	go func() { firstDone <- manager.Attach(instance) }()
+	<-started
+	if err := manager.Attach(instance); !errors.Is(err, ErrAlreadyAttached) {
+		t.Fatalf("duplicate Attach error = %v, want ErrAlreadyAttached", err)
+	}
+	if calls.Load() != 1 {
+		t.Fatalf("namespace factory calls = %d, want 1", calls.Load())
+	}
+	close(release)
+	if err := <-firstDone; err != nil {
+		t.Fatalf("first Attach error = %v", err)
+	}
+	if err := manager.Detach(instance); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestFailedAttachmentReleasesOwnershipAndAllowsRetry(t *testing.T) {
+	factoryErr := errors.New("backend setup failed")
+	config := DefaultConfig()
+	var calls atomic.Int32
+	var failedAccount *quota.Account
+	backend := new(fakeNamespace)
+	config.NamespaceFactory = func(_ *policy.Policy, account *quota.Account) (nscore.Namespace, error) {
+		if calls.Add(1) == 1 {
+			failedAccount = account
+			return nil, factoryErr
+		}
+		return backend, nil
+	}
+	manager, err := NewManagerConfigured(config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	instance := new(wago.Instance)
+	if err := manager.Attach(instance); !errors.Is(err, factoryErr) {
+		t.Fatalf("failed Attach error = %v", err)
+	}
+	if manager.Len() != 0 {
+		t.Fatal("failed attachment published state")
+	}
+	usage, closed := failedAccount.Snapshot()
+	if !closed || usage != (quota.Usage{}) {
+		t.Fatalf("failed attachment quota usage=%+v closed=%v", usage, closed)
+	}
+	if err := manager.Attach(instance); err != nil {
+		t.Fatalf("retry Attach error = %v", err)
+	}
+	if err := manager.Detach(instance); err != nil {
+		t.Fatal(err)
+	}
+	if backend.closed.Load() != 1 {
+		t.Fatalf("retry backend close count = %d, want 1", backend.closed.Load())
+	}
+}
+
+func TestPanickingAttachmentRollsBackAndAllowsRetry(t *testing.T) {
+	panicValue := errors.New("readiness panic")
+	config := DefaultConfig()
+	var calls atomic.Int32
+	var failedAccount *quota.Account
+	backend := new(fakeNamespace)
+	config.NamespaceFactory = func(_ *policy.Policy, account *quota.Account) (nscore.Namespace, error) {
+		if calls.Add(1) == 1 {
+			failedAccount = account
+			panic(panicValue)
+		}
+		return backend, nil
+	}
+	manager, err := NewManagerConfigured(config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	instance := new(wago.Instance)
+	var recovered any
+	func() {
+		defer func() { recovered = recover() }()
+		_ = manager.Attach(instance)
+	}()
+	if recovered != panicValue {
+		t.Fatalf("recovered panic = %v, want %v", recovered, panicValue)
+	}
+	if manager.Len() != 0 {
+		t.Fatal("panicking attachment published state")
+	}
+	usage, closed := failedAccount.Snapshot()
+	if !closed || usage != (quota.Usage{}) {
+		t.Fatalf("panic rollback usage=%+v closed=%v", usage, closed)
+	}
+	if err := manager.Attach(instance); err != nil {
+		t.Fatalf("retry Attach error = %v", err)
+	}
+	if err := manager.Detach(instance); err != nil {
+		t.Fatal(err)
+	}
+	if backend.closed.Load() != 1 {
+		t.Fatalf("retry backend close count = %d, want 1", backend.closed.Load())
+	}
+}
+
+func TestDifferentInstancesAttachConcurrently(t *testing.T) {
+	config := DefaultConfig()
+	started := make(chan struct{}, 2)
+	release := make(chan struct{})
+	config.NamespaceFactory = func(*policy.Policy, *quota.Account) (nscore.Namespace, error) {
+		started <- struct{}{}
+		<-release
+		return new(fakeNamespace), nil
+	}
+	manager, err := NewManagerConfigured(config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	instances := []*wago.Instance{new(wago.Instance), new(wago.Instance)}
+	attachDone := make(chan error, len(instances))
+	for _, instance := range instances {
+		go func(instance *wago.Instance) { attachDone <- manager.Attach(instance) }(instance)
+	}
+	for range instances {
+		select {
+		case <-started:
+		case <-time.After(time.Second):
+			t.Fatal("different-instance namespace construction was serialized")
+		}
+	}
+	close(release)
+	for range instances {
+		if err := <-attachDone; err != nil {
+			t.Fatalf("Attach error = %v", err)
+		}
+	}
+	for _, instance := range instances {
+		if err := manager.Detach(instance); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
 func TestDetachUnpublishesBeforeSerializedTeardownCompletes(t *testing.T) {
 	manager := NewManager()
 	instance := new(wago.Instance)
