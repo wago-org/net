@@ -150,6 +150,77 @@ func TestClientTimeoutCancellationQuotaAndPortOwnership(t *testing.T) {
 	core.Unlock()
 }
 
+func TestClientTerminalFailureIsolatesFreshTransactionAfterClose(t *testing.T) {
+	for _, terminal := range []string{"cancel", "timeout"} {
+		t.Run(terminal, func(t *testing.T) {
+			clientCore, client := newClient(t, false)
+			serverCore, _ := newServer(t, 1)
+			resource, progress, err := client.TryAcquire(dhcpns.Request{})
+			if err != nil || progress != nscore.ProgressInProgress {
+				t.Fatalf("first acquire = %T, %v, %v", resource, progress, err)
+			}
+			stale := resource.(*leaseResource)
+			transferOne(t, clientCore, serverCore)
+			staleOffer := serviceEgress(t, serverCore)
+			if terminal == "cancel" {
+				if err := stale.Cancel(); err != nil {
+					t.Fatal(err)
+				}
+				if _, _, err := stale.TryResult(); failureOf(err) != nscore.FailureCanceled {
+					t.Fatalf("canceled result = %v", err)
+				}
+			} else {
+				for range client.config.ResponseServiceAttempts {
+					serviceNoFrame(t, clientCore)
+				}
+				if _, _, err := stale.TryResult(); failureOf(err) != nscore.FailureTimedOut {
+					t.Fatalf("timed-out result = %v", err)
+				}
+			}
+			if stale.state != leaseFailed || stale.wait != 0 || stale.Readiness() != nscore.ReadyError || client.lease != stale {
+				t.Fatalf("terminal state = state:%v wait:%d readiness:%v mapped:%p", stale.state, stale.wait, stale.Readiness(), client.lease)
+			}
+			if usage, _ := client.quotas.Snapshot(); usage != (quota.Usage{Resources: 1, DHCPv4Resources: 1, QueuedBytes: 576}) {
+				t.Fatalf("terminal quota = %+v", usage)
+			}
+			if err := stale.Close(); err != nil {
+				t.Fatal(err)
+			}
+
+			resource, progress, err = client.TryAcquire(dhcpns.Request{})
+			if err != nil || progress != nscore.ProgressInProgress {
+				t.Fatalf("fresh acquire = %T, %v, %v", resource, progress, err)
+			}
+			fresh := resource.(*leaseResource)
+			transferOne(t, clientCore, serverCore)
+			freshOffer := serviceEgress(t, serverCore)
+			stateBefore, waitBefore := fresh.state, fresh.wait
+			serviceIngress(t, clientCore, staleOffer)
+			if fresh.state != stateBefore || fresh.wait != waitBefore || fresh.result != (dhcpns.Lease{}) || fresh.failure != nil {
+				t.Fatalf("stale offer mutated fresh lease: state=%v wait=%d result=%+v failure=%v", fresh.state, fresh.wait, fresh.result, fresh.failure)
+			}
+			if err := stale.Close(); err != nil {
+				t.Fatal(err)
+			}
+			if client.lease != fresh {
+				t.Fatalf("stale close removed fresh lease: mapped=%p fresh=%p", client.lease, fresh)
+			}
+			if usage, _ := client.quotas.Snapshot(); usage != (quota.Usage{Resources: 1, DHCPv4Resources: 1, QueuedBytes: 576, DHCPv4Work: 1}) {
+				t.Fatalf("fresh quota after stale traffic = %+v", usage)
+			}
+			serviceIngress(t, clientCore, freshOffer)
+			if fresh.state != leaseRequest || fresh.wait != 0 {
+				t.Fatalf("fresh offer after stale traffic = state:%v wait:%d", fresh.state, fresh.wait)
+			}
+			transferOne(t, clientCore, serverCore)
+			transferOne(t, serverCore, clientCore)
+			if result, state, err := fresh.TryResult(); err != nil || state != dhcpns.ResultReady || !result.Valid() {
+				t.Fatalf("fresh result = %+v, %v, %v", result, state, err)
+			}
+		})
+	}
+}
+
 func TestClientDropsLimitedBroadcastLeaseOptionsBeforePinnedMutation(t *testing.T) {
 	for _, test := range []struct {
 		name   string
