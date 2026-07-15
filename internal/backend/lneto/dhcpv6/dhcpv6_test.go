@@ -320,7 +320,7 @@ func TestOperationalRetriesMalformedTransportAndNamespaceClosePreserveLifecycle(
 	core.Unlock()
 }
 
-func TestIngressConsumesRelevantInvalidEthernetSources(t *testing.T) {
+func TestIngressCorrelatesDHCPv6BeforeEthernetSourceValidation(t *testing.T) {
 	_, adapter, _ := newTestAdapter(t, defaultConfig())
 	resource, _, err := adapter.TryAcquire()
 	if err != nil {
@@ -357,6 +357,31 @@ func TestIngressConsumesRelevantInvalidEthernetSources(t *testing.T) {
 	*eth.DestinationHardwareAddr() = [6]byte{0x02, 0, 0, 0, 0, 99}
 	if handled, err := adapter.ingressLocked(foreign); err != nil || handled {
 		t.Fatalf("foreign destination = handled:%v err:%v", handled, err)
+	}
+
+	for name, mutate := range map[string]func([]byte){
+		"non-UDP next header": func(frame []byte) {
+			ip, _ := lnetoipv6.NewFrame(frame[14:])
+			ip.SetNextHeader(lneto.IPProtoTCP)
+		},
+		"foreign ports with invalid source MAC": func(frame []byte) {
+			eth, _ := ethernet.NewFrame(frame)
+			*eth.SourceHardwareAddr() = [6]byte{}
+			ip, _ := lnetoipv6.NewFrame(eth.Payload())
+			udp, _ := lnetoudp.NewFrame(ip.RawData()[40:])
+			udp.SetDestinationPort(9999)
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			unowned := wrapServerFrame(t, adapter, serverAddr, [6]byte{0x02, 0, 0, 0, 0, 2}, advertise)
+			mutate(unowned)
+			if handled, err := adapter.ingressLocked(unowned); err != nil || handled {
+				t.Fatalf("unowned IPv6 traffic = handled:%v err:%v", handled, err)
+			}
+			if lease.state != leaseWaitAdvertise || lease.serverLen != 0 || lease.result != (dhcpns.Configuration{}) || lease.failure != nil {
+				t.Fatalf("unowned IPv6 traffic mutated lease: state=%v serverLen=%d result=%+v failure=%v", lease.state, lease.serverLen, lease.result, lease.failure)
+			}
+		})
 	}
 
 	valid := wrapServerFrame(t, adapter, serverAddr, [6]byte{0x02, 0, 0, 0, 0, 2}, advertise)

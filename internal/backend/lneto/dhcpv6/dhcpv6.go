@@ -569,15 +569,19 @@ func (a *Adapter) validateFrameLocked(frame []byte) ([]byte, netip.Addr, [6]byte
 	if *eth.DestinationHardwareAddr() != a.hardwareAddress {
 		return nil, netip.Addr{}, [6]byte{}, false
 	}
+	ip, err := lnetoipv6.NewFrame(eth.Payload())
+	if err != nil || ip.NextHeader() != lneto.IPProtoUDP || len(ip.RawData()) < 40+8 {
+		return nil, netip.Addr{}, [6]byte{}, false
+	}
+	udp, err := lnetoudp.NewFrame(ip.RawData()[40:])
+	if err != nil || udp.SourcePort() != dhcpns.ServerPort || udp.DestinationPort() != dhcpns.ClientPort {
+		return nil, netip.Addr{}, [6]byte{}, false
+	}
 	if !validUnicastMAC(*eth.SourceHardwareAddr()) {
 		return nil, netip.Addr{}, [6]byte{}, true
 	}
-	ip, err := lnetoipv6.NewFrame(eth.Payload())
-	if err != nil {
-		return nil, netip.Addr{}, [6]byte{}, true
-	}
 	version, _, _ := ip.VersionTrafficAndFlow()
-	if version != 6 || ip.NextHeader() != lneto.IPProtoUDP || ip.HopLimit() == 0 || int(ip.PayloadLength())+40 > len(eth.Payload()) {
+	if version != 6 || ip.HopLimit() == 0 || int(ip.PayloadLength())+40 > len(eth.Payload()) {
 		return nil, netip.Addr{}, [6]byte{}, true
 	}
 	source := netip.AddrFrom16(*ip.SourceAddr())
@@ -586,8 +590,8 @@ func (a *Adapter) validateFrameLocked(frame []byte) ([]byte, netip.Addr, [6]byte
 		return nil, netip.Addr{}, [6]byte{}, true
 	}
 	udpPayload := ip.Payload()
-	udp, err := lnetoudp.NewFrame(udpPayload)
-	if err != nil || udp.SourcePort() != dhcpns.ServerPort || udp.DestinationPort() != dhcpns.ClientPort || udp.CRC() == 0 {
+	udp, err = lnetoudp.NewFrame(udpPayload)
+	if err != nil || udp.CRC() == 0 {
 		return nil, netip.Addr{}, [6]byte{}, true
 	}
 	var validator lneto.Validator
