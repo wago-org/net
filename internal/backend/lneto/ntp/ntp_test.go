@@ -485,6 +485,91 @@ func TestNTPMalformedTerminalRetiresTransportBeforeCloseAndStaleCloseCannotAffec
 	}
 }
 
+func TestNTPStaleResponsesCannotMutateForcedPortReuseAfterTerminalFailure(t *testing.T) {
+	for _, terminalize := range []struct {
+		name string
+		do   func(testing.TB, *lnetocore.Namespace, *syncResource)
+	}{
+		{
+			name: "cancel",
+			do: func(t testing.TB, _ *lnetocore.Namespace, sync *syncResource) {
+				if err := sync.Cancel(); err != nil {
+					t.Fatal(err)
+				}
+			},
+		},
+		{
+			name: "timeout",
+			do: func(t testing.TB, core *lnetocore.Namespace, _ *syncResource) {
+				serviceMaintenance(t, core)
+			},
+		},
+	} {
+		t.Run(terminalize.name, func(t *testing.T) {
+			clock := &manualClock{now: time.Date(2026, 7, 14, 12, 0, 0, 0, time.UTC)}
+			core, adapter, account := newTestAdapter(t, clock, Config{
+				Server: netip.MustParseAddr("192.0.2.123"), Clock: clock, MaxSyncs: 2,
+				MaxAttempts: 1, RetryServiceAttempts: 1, Precision: -20,
+			})
+			resource, _, err := adapter.TrySync()
+			if err != nil {
+				t.Fatal(err)
+			}
+			stale := resource.(*syncResource)
+			staleRequest := serviceEgress(t, core)
+			stalePort := stale.portLease.UDPPort()
+			staleResponse, _ := makeNTPResponse(t, staleRequest, 100*time.Millisecond, 20*time.Millisecond)
+			terminalize.do(t, core, stale)
+			if stale.state != syncFailed || stale.portLease.UDPPort() != 0 || adapter.byPort[stalePort] != nil {
+				t.Fatalf("terminal stale transport = state %v port %d mapped %p", stale.state, stale.portLease.UDPPort(), adapter.byPort[stalePort])
+			}
+
+			adapter.nextPort = stalePort
+			clock.now = clock.now.Add(time.Second)
+			resource, _, err = adapter.TrySync()
+			if err != nil {
+				t.Fatal(err)
+			}
+			fresh := resource.(*syncResource)
+			if fresh.portLease.UDPPort() != stalePort || adapter.byPort[stalePort] != fresh {
+				t.Fatalf("forced port reuse = port %d mapped %p, want %d/%p", fresh.portLease.UDPPort(), adapter.byPort[stalePort], stalePort, fresh)
+			}
+			freshRequest1 := serviceEgress(t, core)
+			beforeRequest, beforeClockSample, beforeCalls := fresh.request, fresh.clockSample, clock.calls
+			core.Lock()
+			handled, ingressErr := adapter.ingressLocked(staleResponse)
+			core.Unlock()
+			if ingressErr != nil || !handled {
+				t.Fatalf("stale response on reused port = handled %v, err %v", handled, ingressErr)
+			}
+			if fresh.state != syncWaiting || fresh.Readiness() != 0 || fresh.request != beforeRequest || fresh.clockSample != beforeClockSample || clock.calls != beforeCalls {
+				t.Fatalf("stale response mutated fresh sync: state=%v readiness=%v request_changed=%v clock_changed=%v calls=%d/%d", fresh.state, fresh.Readiness(), fresh.request != beforeRequest, fresh.clockSample != beforeClockSample, clock.calls, beforeCalls)
+			}
+
+			freshResponse1, arrival1 := makeNTPResponse(t, freshRequest1, 100*time.Millisecond, 20*time.Millisecond)
+			clock.now = arrival1
+			serviceIngress(t, core, freshResponse1)
+			if fresh.state != syncPrepare || fresh.Readiness() != 0 {
+				t.Fatalf("fresh first exchange = state %v readiness %v", fresh.state, fresh.Readiness())
+			}
+			clock.now = arrival1.Add(time.Second)
+			freshRequest2 := serviceEgress(t, core)
+			freshResponse2, arrival2 := makeNTPResponse(t, freshRequest2, 100*time.Millisecond, 20*time.Millisecond)
+			clock.now = arrival2
+			serviceIngress(t, core, freshResponse2)
+			if fresh.Readiness() != nscore.ReadyNTPResult {
+				t.Fatalf("fresh completion readiness = %v", fresh.Readiness())
+			}
+			if sample, next, err := fresh.TryResult(); err != nil || next != ntpns.NextReady || !sample.Valid() {
+				t.Fatalf("fresh result = %+v, %v, %v", sample, next, err)
+			}
+			if usage, closed := account.Snapshot(); closed || usage != (quota.Usage{Resources: 2, NTPResources: 2}) {
+				t.Fatalf("terminal and completed quota = %+v, closed=%v", usage, closed)
+			}
+		})
+	}
+}
+
 func TestNTPClockFailuresRetireTransportAndReleaseWork(t *testing.T) {
 	validTime := time.Date(2026, 7, 14, 12, 0, 0, 0, time.UTC)
 	for _, test := range []struct {
