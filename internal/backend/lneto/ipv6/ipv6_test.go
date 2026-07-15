@@ -120,6 +120,101 @@ func TestConfigurationIsSerializedWithNamespaceClose(t *testing.T) {
 	}
 }
 
+func TestValidConfigRequiresExactStaticIdentityAndAuthority(t *testing.T) {
+	global := Config{Address: netip.MustParseAddr("2001:db8::9"), PrefixBits: 64}
+	linkLocal := Config{Address: netip.MustParseAddr("fe80::9"), PrefixBits: 64, ScopeID: 9}
+	compiled, err := policy.Compile(policy.Config{Rules: []policy.Rule{{
+		Action: policy.ActionAllow, Transports: []policy.Transport{policy.TransportIPv6},
+		Directions: []policy.Direction{policy.DirectionInbound}, Prefixes: []netip.Prefix{netip.PrefixFrom(global.Address, 128)},
+	}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	account := quota.NewAccount(quota.DefaultLimits())
+	if !ValidConfig(Config{}, 0, nil, nil, true) {
+		t.Fatal("disabled IPv6 config rejected")
+	}
+	if !ValidConfig(global, 1280, compiled, account, true) || !ValidConfig(linkLocal, 1280, nil, nil, false) {
+		t.Fatal("valid IPv6 config rejected")
+	}
+	if ValidConfig(global, 1280, nil, account, true) || ValidConfig(global, 1280, compiled, nil, true) {
+		t.Fatal("authority-required validation accepted incomplete authority")
+	}
+	for name, config := range map[string]Config{
+		"unspecified":       {Address: netip.IPv6Unspecified(), PrefixBits: 64},
+		"loopback":          {Address: netip.IPv6Loopback(), PrefixBits: 128},
+		"multicast":         {Address: netip.MustParseAddr("ff02::1"), PrefixBits: 64, ScopeID: 9},
+		"mapped":            {Address: netip.MustParseAddr("::ffff:192.0.2.9"), PrefixBits: 64},
+		"zoned":             {Address: netip.MustParseAddr("fe80::9%eth0"), PrefixBits: 64, ScopeID: 9},
+		"global scope":      {Address: global.Address, PrefixBits: 64, ScopeID: 9},
+		"link scope absent": {Address: linkLocal.Address, PrefixBits: 64},
+		"zero prefix":       {Address: global.Address},
+		"large prefix":      {Address: global.Address, PrefixBits: 129},
+	} {
+		t.Run(name, func(t *testing.T) {
+			if ValidConfig(config, 1280, nil, nil, false) {
+				t.Fatalf("accepted invalid config: %+v", config)
+			}
+		})
+	}
+	if ValidConfig(global, 1279, nil, nil, false) {
+		t.Fatal("accepted IPv6 MTU below 1280")
+	}
+}
+
+func TestNewRejectsMismatchedOrClosedCoreWithoutMutation(t *testing.T) {
+	address := netip.MustParseAddr("2001:db8::10")
+	compiled, err := policy.Compile(policy.Config{Rules: []policy.Rule{{
+		Action: policy.ActionAllow, Transports: []policy.Transport{policy.TransportIPv6},
+		Directions: []policy.Direction{policy.DirectionInbound}, Prefixes: []netip.Prefix{netip.PrefixFrom(address, 128)},
+	}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, test := range []struct {
+		name   string
+		config Config
+		close  bool
+	}{
+		{name: "address", config: Config{Address: netip.MustParseAddr("2001:db8::11"), PrefixBits: 64}},
+		{name: "prefix", config: Config{Address: address, PrefixBits: 96}},
+		{name: "scope", config: Config{Address: address, PrefixBits: 64, ScopeID: 1}},
+		{name: "closed", config: Config{Address: address, PrefixBits: 64}, close: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			account := quota.NewAccount(quota.Limits{Resources: 1, IPv6Resources: 1})
+			common, err := lnetocore.New(lnetocore.Config{
+				Hostname: "ipv6-mismatch", RandSeed: 10,
+				HardwareAddress: [6]byte{2, 0, 0, 0, 0, 10}, IPv4Address: netip.MustParseAddr("192.0.2.10"),
+				IPv6Address: address, IPv6PrefixBits: 64, MTU: 1500,
+				Link: packetlink.Config{MaxFrameBytes: 1514, IngressFrames: 1, EgressFrames: 1}, Policy: compiled, Quotas: account,
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if test.close {
+				if err := common.Close(); err != nil {
+					t.Fatal(err)
+				}
+			} else {
+				defer common.Close()
+			}
+			if adapter, err := New(common, test.config); err == nil || adapter != nil {
+				t.Fatalf("New = %T, %v", adapter, err)
+			}
+			if usage, closed := account.Snapshot(); usage != (quota.Usage{}) || closed {
+				t.Fatalf("rejected install changed quota: %+v closed=%v", usage, closed)
+			}
+			common.Lock()
+			gotAddress, gotPrefix, gotScope := common.IPv6AddressLocked(), common.IPv6PrefixBitsLocked(), common.IPv6ScopeIDLocked()
+			common.Unlock()
+			if gotAddress != address || gotPrefix != 64 || gotScope != 0 {
+				t.Fatalf("rejected install mutated core identity: %v/%d%%%d", gotAddress, gotPrefix, gotScope)
+			}
+		})
+	}
+}
+
 func TestAdapterCallerDenyWins(t *testing.T) {
 	address := netip.MustParseAddr("2001:db8::7")
 	compiled, err := policy.Compile(policy.Config{Rules: []policy.Rule{

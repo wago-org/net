@@ -40,14 +40,85 @@ func TestSelectiveRegistrationAndFiniteConfiguration(t *testing.T) {
 	}
 	for _, config := range []Config{
 		{Address: netip.IPv6Unspecified(), PrefixBits: 64},
+		{Address: netip.IPv6Loopback(), PrefixBits: 128},
+		{Address: netip.MustParseAddr("ff02::1"), PrefixBits: 64, ScopeID: 1},
 		{Address: netip.MustParseAddr("::ffff:192.0.2.1"), PrefixBits: 64},
+		{Address: netip.MustParseAddr("fe80::1%eth0"), PrefixBits: 64, ScopeID: 1},
 		{Address: netip.MustParseAddr("2001:db8::1"), PrefixBits: 64, ScopeID: 1},
 		{Address: netip.MustParseAddr("fe80::1"), PrefixBits: 64},
 		{Address: netip.MustParseAddr("2001:db8::1"), PrefixBits: 0},
+		{Address: netip.MustParseAddr("2001:db8::1"), PrefixBits: 129},
 	} {
 		if err := Register(wagonet.New(), WithConfig(config)); err != ErrInvalidConfig {
 			t.Fatalf("invalid config %+v error = %v", config, err)
 		}
+	}
+}
+
+func TestConfiguredIPv6FailsClosedBeforePublication(t *testing.T) {
+	address := netip.MustParseAddr("2001:db8:73::1")
+	base := wagonet.StaticIPv4Config{
+		Hostname: "ipv6-terminal", RandSeed: 73, HardwareAddress: [6]byte{2, 0, 0, 0, 0, 73},
+		IPv4Address: netip.MustParseAddr("192.0.2.73"), MTU: 1500,
+		Link: wagonet.PacketLinkConfig{MaxFrameBytes: 1514, IngressFrames: 1, EgressFrames: 1},
+	}
+	for _, test := range []struct {
+		name   string
+		config wagonet.Config
+		option Option
+	}{
+		{
+			name: "caller deny wins over default grant",
+			config: wagonet.Config{
+				StaticIPv4: &base,
+				Policy: wagonet.PolicyConfig{Rules: []wagonet.PolicyRule{{
+					Action: wagonet.PolicyDeny, Transports: []wagonet.PolicyTransport{wagonet.PolicyTransportIPv6},
+					Directions: []wagonet.PolicyDirection{wagonet.PolicyInbound}, Prefixes: []netip.Prefix{netip.PrefixFrom(address, 128)},
+				}}},
+			},
+			option: WithConfig(DefaultConfig(address, 64, 0)),
+		},
+		{
+			name:   "default authority disabled",
+			config: wagonet.Config{StaticIPv4: &base},
+			option: WithoutDefaultAuthority(),
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			network := wagonet.New(wagonet.WithConfig(test.config))
+			if err := Register(network, WithConfig(DefaultConfig(address, 64, 0)), test.option); err != nil {
+				t.Fatal(err)
+			}
+			runtime := wago.NewRuntime()
+			if err := runtime.Use(network); err != nil {
+				t.Fatal(err)
+			}
+			module, err := runtime.Compile([]byte{0x00, 0x61, 0x73, 0x6d, 0x01, 0, 0, 0})
+			if err != nil {
+				t.Fatal(err)
+			}
+			instance, err := runtime.Instantiate(context.Background(), module)
+			if err == nil {
+				_ = instance.Close()
+				t.Fatal("configured IPv6 namespace published without authority")
+			}
+		})
+	}
+}
+
+func TestConfiguredIPv6RejectsTerminalCoreConfiguration(t *testing.T) {
+	base := wagonet.StaticIPv4Config{
+		Hostname: "ipv6-small-mtu", RandSeed: 74, HardwareAddress: [6]byte{2, 0, 0, 0, 0, 74},
+		IPv4Address: netip.MustParseAddr("192.0.2.74"), MTU: 1279,
+		Link: wagonet.PacketLinkConfig{MaxFrameBytes: 1293, IngressFrames: 1, EgressFrames: 1},
+	}
+	network := wagonet.New(wagonet.WithConfig(wagonet.Config{StaticIPv4: &base}))
+	if err := Register(network, WithConfig(DefaultConfig(netip.MustParseAddr("2001:db8:74::1"), 64, 0))); err != nil {
+		t.Fatal(err)
+	}
+	runtime := wago.NewRuntime()
+	if err := runtime.Use(network); err == nil {
+		t.Fatal("IPv6 contribution accepted an MTU below 1280")
 	}
 }
 
