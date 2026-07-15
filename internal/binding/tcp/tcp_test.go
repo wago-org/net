@@ -371,6 +371,124 @@ func TestBindingsRejectHighBitI32AliasesBeforeBackendCalls(t *testing.T) {
 	}
 }
 
+func TestBindingsPreserveFullWidthNamespaceListenerAndStreamHandles(t *testing.T) {
+	local := nscore.Endpoint{Address: netip.MustParseAddr("0.0.0.0"), Port: 8080}
+	remote := nscore.Endpoint{Address: netip.MustParseAddr("192.0.2.44"), Port: 443}
+	accepted := &fakeStream{local: local, remote: remote}
+	listener := &fakeListener{local: local, stream: accepted, progress: nscore.ProgressDone}
+	stream := &fakeStream{
+		local: local, remote: remote,
+		finishProgress:   nscore.ProgressDone,
+		readResult:       nscore.IOResult{State: nscore.IOWouldBlock},
+		writeResult:      nscore.IOResult{Bytes: 6, State: nscore.IOReady},
+		shutdownProgress: nscore.ProgressDone,
+	}
+	createdListener := &fakeListener{local: local, progress: nscore.ProgressWouldBlock}
+	createdStream := &fakeStream{local: local, remote: remote, finishProgress: nscore.ProgressDone}
+	backend := &fakeNamespace{
+		listener: createdListener, listenProgress: nscore.ProgressDone,
+		stream: createdStream, connectProgress: nscore.ProgressInProgress,
+	}
+	manager, instance := attachManager(t, backend)
+	defer manager.Detach(instance)
+	host := testHost{instance: instance, memory: bytes.Repeat([]byte{0x79}, 512)}
+	bindings := Bindings(plugin.NewHost(manager))
+	state, ok := manager.ForInstance(instance)
+	if !ok {
+		t.Fatal("attached state missing")
+	}
+	namespaceHandle := state.NamespaceHandle()
+	listenerHandle, err := state.Resources().Add(resource.KindTCPListener, listener)
+	if err != nil {
+		t.Fatal(err)
+	}
+	streamHandle, err := state.Resources().Add(resource.KindTCPStream, stream)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !abicore.EncodeEndpointV1(host.memory, 0, local) || !abicore.EncodeEndpointV1(host.memory, 32, remote) {
+		t.Fatal("encode endpoints")
+	}
+	copy(host.memory[384:390], "packet")
+
+	const high = uint64(1) << 63
+	listenBefore := append([]byte(nil), host.memory[80:88]...)
+	if status := callBinding(t, bindingByName(t, bindings, "listen"), host, uint64(namespaceHandle)|high, 0, 80); status != guest.StatusBadHandle || backend.listenCalls != 0 || !bytes.Equal(host.memory[80:88], listenBefore) {
+		t.Fatalf("high namespace listen = %v calls=%d", status, backend.listenCalls)
+	}
+	connectBefore := append([]byte(nil), host.memory[96:96+tcpabi.StreamV1Size]...)
+	if status := callBinding(t, bindingByName(t, bindings, "connect"), host, uint64(namespaceHandle)|high, 32, 96); status != guest.StatusBadHandle || backend.connectCalls != 0 || !bytes.Equal(host.memory[96:96+tcpabi.StreamV1Size], connectBefore) {
+		t.Fatalf("high namespace connect = %v calls=%d", status, backend.connectCalls)
+	}
+
+	acceptBefore := append([]byte(nil), host.memory[224:224+tcpabi.StreamV1Size]...)
+	if status := callBinding(t, bindingByName(t, bindings, "accept"), host, uint64(listenerHandle)|high, 224); status != guest.StatusBadHandle || listener.accepts != 0 || !bytes.Equal(host.memory[224:224+tcpabi.StreamV1Size], acceptBefore) {
+		t.Fatalf("high listener accept = %v calls=%d", status, listener.accepts)
+	}
+	if status := callBinding(t, bindingByName(t, bindings, "close_listener"), host, uint64(listenerHandle)|high); status != guest.StatusBadHandle || listener.closeCalls != 0 {
+		t.Fatalf("high listener close = %v calls=%d", status, listener.closeCalls)
+	}
+
+	payloadBefore := append([]byte(nil), host.memory[320:336]...)
+	resultBefore := append([]byte(nil), host.memory[352:352+tcpabi.IOResultV1Size]...)
+	if status := callBinding(t, bindingByName(t, bindings, "finish_connect"), host, uint64(streamHandle)|high); status != guest.StatusBadHandle || stream.finishCalls != 0 {
+		t.Fatalf("high stream finish_connect = %v calls=%d", status, stream.finishCalls)
+	}
+	if status := callBinding(t, bindingByName(t, bindings, "read"), host, uint64(streamHandle)|high, 320, 16, 352); status != guest.StatusBadHandle || stream.readCalls != 0 || !bytes.Equal(host.memory[320:336], payloadBefore) || !bytes.Equal(host.memory[352:352+tcpabi.IOResultV1Size], resultBefore) {
+		t.Fatalf("high stream read = %v calls=%d", status, stream.readCalls)
+	}
+	writeResultBefore := append([]byte(nil), host.memory[400:400+tcpabi.IOResultV1Size]...)
+	if status := callBinding(t, bindingByName(t, bindings, "write"), host, uint64(streamHandle)|high, 384, 6, 400); status != guest.StatusBadHandle || stream.writeCalls != 0 || !bytes.Equal(host.memory[400:400+tcpabi.IOResultV1Size], writeResultBefore) {
+		t.Fatalf("high stream write = %v calls=%d", status, stream.writeCalls)
+	}
+	if status := callBinding(t, bindingByName(t, bindings, "shutdown_write"), host, uint64(streamHandle)|high); status != guest.StatusBadHandle || stream.shutdownCalls != 0 {
+		t.Fatalf("high stream shutdown_write = %v calls=%d", status, stream.shutdownCalls)
+	}
+	if status := callBinding(t, bindingByName(t, bindings, "close_stream"), host, uint64(streamHandle)|high); status != guest.StatusBadHandle || stream.closeCalls != 0 {
+		t.Fatalf("high stream close = %v calls=%d", status, stream.closeCalls)
+	}
+
+	if status := callBinding(t, bindingByName(t, bindings, "listen"), host, uint64(namespaceHandle), 0, 80); status != guest.StatusOK || backend.listenCalls != 1 {
+		t.Fatalf("exact namespace listen = %v calls=%d", status, backend.listenCalls)
+	}
+	createdListenerHandle := resource.Handle(binary.LittleEndian.Uint64(host.memory[80:88]))
+	if status := callBinding(t, bindingByName(t, bindings, "connect"), host, uint64(namespaceHandle), 32, 96); status != guest.StatusInProgress || backend.connectCalls != 1 {
+		t.Fatalf("exact namespace connect = %v calls=%d", status, backend.connectCalls)
+	}
+	createdStreamHandle := resource.Handle(binary.LittleEndian.Uint64(host.memory[96:104]))
+	if status := callBinding(t, bindingByName(t, bindings, "accept"), host, uint64(listenerHandle), 224); status != guest.StatusOK || listener.accepts != 1 {
+		t.Fatalf("exact listener accept = %v calls=%d", status, listener.accepts)
+	}
+	acceptedHandle := resource.Handle(binary.LittleEndian.Uint64(host.memory[224:232]))
+	if status := callBinding(t, bindingByName(t, bindings, "finish_connect"), host, uint64(streamHandle)); status != guest.StatusOK || stream.finishCalls != 1 {
+		t.Fatalf("exact stream finish_connect = %v calls=%d", status, stream.finishCalls)
+	}
+	if status := callBinding(t, bindingByName(t, bindings, "read"), host, uint64(streamHandle), 320, 16, 352); status != guest.StatusAgain || stream.readCalls != 1 {
+		t.Fatalf("exact stream read = %v calls=%d", status, stream.readCalls)
+	}
+	if status := callBinding(t, bindingByName(t, bindings, "write"), host, uint64(streamHandle), 384, 6, 400); status != guest.StatusOK || stream.writeCalls != 1 || string(stream.written) != "packet" {
+		t.Fatalf("exact stream write = %v calls=%d payload=%q", status, stream.writeCalls, stream.written)
+	}
+	if status := callBinding(t, bindingByName(t, bindings, "shutdown_write"), host, uint64(streamHandle)); status != guest.StatusOK || stream.shutdownCalls != 1 {
+		t.Fatalf("exact stream shutdown_write = %v calls=%d", status, stream.shutdownCalls)
+	}
+	if status := callBinding(t, bindingByName(t, bindings, "close_stream"), host, uint64(streamHandle)); status != guest.StatusOK || stream.closeCalls != 1 {
+		t.Fatalf("exact stream close = %v calls=%d", status, stream.closeCalls)
+	}
+	if status := callBinding(t, bindingByName(t, bindings, "close_listener"), host, uint64(listenerHandle)); status != guest.StatusOK || listener.closeCalls != 1 {
+		t.Fatalf("exact listener close = %v calls=%d", status, listener.closeCalls)
+	}
+	if status := callBinding(t, bindingByName(t, bindings, "close_stream"), host, uint64(acceptedHandle)); status != guest.StatusOK || accepted.closeCalls != 1 {
+		t.Fatalf("accepted stream close = %v calls=%d", status, accepted.closeCalls)
+	}
+	if status := callBinding(t, bindingByName(t, bindings, "close_listener"), host, uint64(createdListenerHandle)); status != guest.StatusOK || createdListener.closeCalls != 1 {
+		t.Fatalf("created listener close = %v calls=%d", status, createdListener.closeCalls)
+	}
+	if status := callBinding(t, bindingByName(t, bindings, "close_stream"), host, uint64(createdStreamHandle)); status != guest.StatusOK || createdStream.closeCalls != 1 {
+		t.Fatalf("created stream close = %v calls=%d", status, createdStream.closeCalls)
+	}
+}
+
 func TestBindingsListenAcceptAtomicStatusesAndLifecycle(t *testing.T) {
 	local := nscore.Endpoint{Address: netip.MustParseAddr("0.0.0.0"), Port: 8080}
 	remote := nscore.Endpoint{Address: netip.MustParseAddr("192.0.2.44"), Port: 52000}
