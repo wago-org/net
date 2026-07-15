@@ -141,6 +141,45 @@ func TestIngressAcceptsTrafficClassAndFlowLabels(t *testing.T) {
 	}
 }
 
+func TestUDPAndIPv6PayloadLengthsContainDHCPBeforeMutation(t *testing.T) {
+	_, adapter, _ := newTestAdapter(t, defaultConfig())
+	resource, progress, err := adapter.TryAcquire()
+	if err != nil || progress != nscore.ProgressInProgress {
+		t.Fatalf("TryAcquire = %T %v %v", resource, progress, err)
+	}
+	lease := resource.(*leaseResource)
+	var scratch [1514]byte
+	if _, worked, err := adapter.egressLocked(scratch[:]); err != nil || !worked || lease.state != leaseWaitAdvertise {
+		t.Fatalf("Solicit egress = worked:%v err:%v state:%v", worked, err, lease.state)
+	}
+
+	serverAddr := netip.MustParseAddr("fe80::2")
+	serverMAC := [6]byte{0x02, 0, 0, 0, 0, 2}
+	serverDUID := []byte{0, 3, 0, 1, 2, 0, 0, 0, 0, 2}
+	assigned := netip.MustParseAddr("2001:db8::10")
+	advertise := wrapServerFrame(t, adapter, serverAddr, serverMAC, buildServerPayload(t, lnetodhcp.MsgAdvertise, lease.xid, lease.clientDUID[:], serverDUID, lease.iaid, assigned, false))
+	if handled, err := adapter.ingressLocked(shortenIPv6UDPDatagram(t, advertise, 1)); err != nil || !handled || lease.state != leaseWaitAdvertise || lease.Readiness() != 0 {
+		t.Fatalf("short UDP Advertise = handled:%v err:%v state:%v readiness:%v", handled, err, lease.state, lease.Readiness())
+	}
+	if handled, err := adapter.ingressLocked(appendIPv6LinkPadding(advertise)); err != nil || !handled || lease.state != leaseRequestPending {
+		t.Fatalf("padded Advertise = handled:%v err:%v state:%v", handled, err, lease.state)
+	}
+
+	if _, worked, err := adapter.egressLocked(scratch[:]); err != nil || !worked || lease.state != leaseWaitReply {
+		t.Fatalf("Request egress = worked:%v err:%v state:%v", worked, err, lease.state)
+	}
+	reply := wrapServerFrame(t, adapter, serverAddr, serverMAC, buildServerPayload(t, lnetodhcp.MsgReply, lease.xid, lease.clientDUID[:], serverDUID, lease.iaid, assigned, true))
+	if handled, err := adapter.ingressLocked(shortenIPv6UDPDatagram(t, reply, 1)); err != nil || !handled || lease.state != leaseWaitReply || lease.Readiness() != 0 {
+		t.Fatalf("short UDP Reply = handled:%v err:%v state:%v readiness:%v", handled, err, lease.state, lease.Readiness())
+	}
+	if handled, err := adapter.ingressLocked(appendIPv6LinkPadding(reply)); err != nil || !handled || lease.state != leaseBound {
+		t.Fatalf("padded Reply = handled:%v err:%v state:%v", handled, err, lease.state)
+	}
+	if configuration, state, err := lease.TryResult(); err != nil || state != dhcpns.ResultReady || configuration.AssignedAddr != assigned {
+		t.Fatalf("result = %+v %v %v", configuration, state, err)
+	}
+}
+
 func TestOperationalRetriesMalformedTransportAndNamespaceClosePreserveLifecycle(t *testing.T) {
 	core, adapter, account := newTestAdapter(t, defaultConfig())
 	resource, progress, err := adapter.TryAcquire()
@@ -916,6 +955,32 @@ func encodeName(name string) []byte {
 		result = append(result, label...)
 	}
 	return append(result, 0)
+}
+
+func shortenIPv6UDPDatagram(t testing.TB, frame []byte, bytes uint16) []byte {
+	t.Helper()
+	frame = append([]byte(nil), frame...)
+	ip, err := lnetoipv6.NewFrame(frame[14:])
+	if err != nil {
+		t.Fatal(err)
+	}
+	udp, err := lnetoudp.NewFrame(ip.Payload())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bytes == 0 || bytes >= udp.Length()-8 {
+		t.Fatalf("invalid UDP shortening %d for length %d", bytes, udp.Length())
+	}
+	udp.SetLength(udp.Length() - bytes)
+	udp.SetCRC(0)
+	var checksum lneto.CRC791
+	ip.CRCWritePseudo(&checksum)
+	udp.SetCRC(lneto.NeverZeroSum(checksum.PayloadSum16(udp.RawData())))
+	return frame
+}
+
+func appendIPv6LinkPadding(frame []byte) []byte {
+	return append(append([]byte(nil), frame...), 0xa5, 0x5a, 0xc3)
 }
 
 func wrapServerFrame(t testing.TB, adapter *Adapter, source netip.Addr, sourceMAC [6]byte, payload []byte) []byte {
