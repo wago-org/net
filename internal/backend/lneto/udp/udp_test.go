@@ -455,7 +455,7 @@ func TestUDPIngressDropsMalformedLocalDatagramsAndAcceptsFollowingValidFrame(t *
 	}
 }
 
-func TestSocketTrySendRejectsLoopbackWithoutQueueMutation(t *testing.T) {
+func TestSocketTrySendRejectsNonWireDestinationsWithoutQueueMutation(t *testing.T) {
 	config := Config{MaxSockets: 1, ReceiveBytes: 32, TransmitBytes: 128, ReceiveDatagrams: 1, TransmitDatagrams: 4, MaxPayloadBytes: 32}
 	policyConfig := policy.Config{
 		Rules: []policy.Rule{{
@@ -471,15 +471,19 @@ func TestSocketTrySendRejectsLoopbackWithoutQueueMutation(t *testing.T) {
 	socket := bindTestSocket(t, adapter, local).(*udpSocket)
 	usageBefore, closedBefore := account.Snapshot()
 	readyBefore := socket.Readiness()
-	loopback := nscore.Endpoint{Address: netip.MustParseAddr("127.0.0.1"), Port: 53}
-	if progress, err := socket.TrySend([]byte("loopback"), loopback); progress != 0 || udpFailureOf(t, err) != nscore.FailureInvalidArgument {
-		t.Fatalf("loopback send = %v, %v", progress, err)
-	}
-	if socket.tx.count != 0 || socket.tx.bytes != 0 || socket.tx.head != 0 || socket.Readiness() != readyBefore {
-		t.Fatalf("rejected loopback mutated queue: count=%d bytes=%d head=%d readiness=%v/%v", socket.tx.count, socket.tx.bytes, socket.tx.head, socket.Readiness(), readyBefore)
-	}
-	if usage, closed := account.Snapshot(); usage != usageBefore || closed != closedBefore {
-		t.Fatalf("rejected loopback changed quota = %+v, closed=%v; want %+v, closed=%v", usage, closed, usageBefore, closedBefore)
+	for _, remote := range []nscore.Endpoint{
+		{Address: netip.IPv4Unspecified(), Port: 53},
+		{Address: netip.MustParseAddr("127.0.0.1"), Port: 53},
+	} {
+		if progress, err := socket.TrySend([]byte("invalid"), remote); progress != 0 || udpFailureOf(t, err) != nscore.FailureInvalidArgument {
+			t.Fatalf("non-wire send to %v = %v, %v", remote, progress, err)
+		}
+		if socket.tx.count != 0 || socket.tx.bytes != 0 || socket.tx.head != 0 || socket.Readiness() != readyBefore {
+			t.Fatalf("rejected destination %v mutated queue: count=%d bytes=%d head=%d readiness=%v/%v", remote, socket.tx.count, socket.tx.bytes, socket.tx.head, socket.Readiness(), readyBefore)
+		}
+		if usage, closed := account.Snapshot(); usage != usageBefore || closed != closedBefore {
+			t.Fatalf("rejected destination %v changed quota = %+v, closed=%v; want %+v, closed=%v", remote, usage, closed, usageBefore, closedBefore)
+		}
 	}
 
 	for _, remote := range []nscore.Endpoint{
