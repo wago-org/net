@@ -102,6 +102,7 @@ var _ icmpns.Echo = (*echo)(nil)
 type resolution struct {
 	owner    *Adapter
 	entry    *neighborEntry
+	result   icmpns.Neighbor
 	attempts uint16
 	retry    uint16
 	state    state
@@ -292,7 +293,7 @@ func (a *Adapter) TryResolve(request icmpns.NeighborRequest) (nscore.Resource, n
 		if len(a.resolutions) >= int(a.config.MaxResolutions) {
 			return nil, 0, nscore.Fail(nscore.FailureResourceLimit, lneto.ErrExhausted)
 		}
-		resolved := &resolution{owner: a, entry: entry, state: stateDone}
+		resolved := &resolution{owner: a, result: neighborValue(entry), state: stateDone}
 		if err := a.quotas.AcquireResource(&resolved.retained, quota.ResourceICMPv6, 1); err != nil {
 			return nil, 0, lnetocore.MapError(err)
 		}
@@ -558,10 +559,13 @@ func (r *resolution) TryResult() (icmpns.Neighbor, icmpns.Next, error) {
 	if r.state == stateFailed {
 		return icmpns.Neighbor{}, 0, r.failure
 	}
-	if r.state != stateDone || r.entry == nil || !r.entry.complete {
+	if r.state != stateDone {
 		return icmpns.Neighbor{}, icmpns.NextWouldBlock, nil
 	}
-	return neighborValue(r.entry), icmpns.NextReady, nil
+	if !r.result.Valid() {
+		return icmpns.Neighbor{}, 0, nscore.Fail(nscore.FailureIO, lneto.ErrBadState)
+	}
+	return r.result, icmpns.NextReady, nil
 }
 
 func (r *resolution) Cancel() error {
@@ -604,6 +608,7 @@ func (r *resolution) closeLocked() error {
 	r.retained.Release()
 	r.retained.ResetReleased()
 	r.entry = nil
+	r.result = icmpns.Neighbor{}
 	r.owner = nil
 	return nil
 }
@@ -612,7 +617,10 @@ func (r *resolution) completeLocked() {
 	if r.state == stateClosed || r.state == stateDone || r.state == stateFailed {
 		return
 	}
+	result := neighborValue(r.entry)
 	r.retireLocked()
+	r.entry = nil
+	r.result = result
 	r.state = stateDone
 	r.releaseWorkLocked()
 }

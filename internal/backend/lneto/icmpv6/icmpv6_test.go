@@ -873,6 +873,62 @@ func TestTerminalEchoAndResolutionCleanupIsolateFreshResources(t *testing.T) {
 	}
 }
 
+func TestCompletedResolutionRetainsResultAcrossCacheMutation(t *testing.T) {
+	for _, alreadyCached := range []bool{false, true} {
+		t.Run(map[bool]string{false: "pending", true: "cached"}[alreadyCached], func(t *testing.T) {
+			core, adapter := newTestAdapter(t, 33, "2001:db8::33")
+			defer core.Close()
+			target := netip.MustParseAddr("2001:db8::44")
+			request := icmpns.NeighborRequest{Address: target}
+			first := icmpns.Neighbor{Address: target, MAC: [6]byte{0x02, 0, 0, 0, 0, 44}}
+			second := icmpns.Neighbor{Address: target, MAC: [6]byte{0x02, 0, 0, 0, 0, 45}}
+			if alreadyCached {
+				if err := adapter.SeedNeighbor(first); err != nil {
+					t.Fatal(err)
+				}
+			}
+			resource, progress, err := adapter.TryResolve(request)
+			if err != nil {
+				t.Fatal(err)
+			}
+			resolved := resource.(*resolution)
+			if alreadyCached && progress != nscore.ProgressDone {
+				t.Fatalf("cached progress = %v", progress)
+			}
+			if !alreadyCached {
+				if progress != nscore.ProgressInProgress {
+					t.Fatalf("pending progress = %v", progress)
+				}
+				if err := adapter.SeedNeighbor(first); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if resolved.Readiness() != nscore.ReadyICMPv6Neighbor {
+				t.Fatalf("completed readiness = %v", resolved.Readiness())
+			}
+			if err := adapter.RemoveNeighbor(request); err != nil {
+				t.Fatal(err)
+			}
+			if err := adapter.SeedNeighbor(second); err != nil {
+				t.Fatal(err)
+			}
+			neighbor, next, err := resolved.TryResult()
+			if err != nil || next != icmpns.NextReady || neighbor != first {
+				t.Fatalf("retained result = %+v, %v, %v; want %+v", neighbor, next, err, first)
+			}
+			if err := resolved.Close(); err != nil {
+				t.Fatal(err)
+			}
+			if err := adapter.RemoveNeighbor(request); err != nil {
+				t.Fatal(err)
+			}
+			if usage, _ := adapter.quotas.Snapshot(); usage != (quota.Usage{}) {
+				t.Fatalf("cleanup quota = %+v", usage)
+			}
+		})
+	}
+}
+
 func TestSeedLookupRemoveAndQuotaCleanup(t *testing.T) {
 	core, adapter := newTestAdapter(t, 5, "2001:db8::5")
 	if operations := adapter.Operations(); operations != icmpns.SupportedOperations {
