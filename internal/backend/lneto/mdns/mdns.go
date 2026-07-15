@@ -728,9 +728,6 @@ func (a *Adapter) validateFrame(frame []byte) ([]byte, netip.Addr, bool, error) 
 	if destinationMAC != multicastMAC && destinationMAC != a.hardwareAddress {
 		return nil, netip.Addr{}, false, nil
 	}
-	if !validUnicastMAC(*eth.SourceHardwareAddr()) {
-		return nil, netip.Addr{}, true, lneto.ErrInvalidAddr
-	}
 	ip, err := ipv4.NewFrame(eth.Payload())
 	if err != nil {
 		return nil, netip.Addr{}, false, err
@@ -752,6 +749,9 @@ func (a *Adapter) validateFrame(frame []byte) ([]byte, netip.Addr, bool, error) 
 	}
 	if udp.SourcePort() != Port || udp.DestinationPort() != Port {
 		return nil, netip.Addr{}, false, nil
+	}
+	if !validUnicastMAC(*eth.SourceHardwareAddr()) {
+		return nil, netip.Addr{}, true, lneto.ErrInvalidAddr
 	}
 	if version != 4 || ihl < 5 || ip.TTL() != 255 {
 		return nil, netip.Addr{}, true, lneto.ErrBadState

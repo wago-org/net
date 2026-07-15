@@ -791,6 +791,14 @@ func TestMDNSIngressRelevanceConsumesLocalMalformedAndLeavesForeignUnhandled(t *
 			udp.SetDestinationPort(9999)
 			udp.SetCRC(0)
 		}},
+		{name: "foreign protocol with invalid source MAC", mutate: func(frame []byte) {
+			eth, _ := ethernet.NewFrame(frame)
+			*eth.SourceHardwareAddr() = [6]byte{1, 0, 0, 0, 0, 1}
+			ip, _ := ipv4.NewFrame(eth.Payload())
+			ip.SetProtocol(lneto.IPProtoTCP)
+			ip.SetCRC(0)
+			ip.SetCRC(ip.CalculateHeaderCRC())
+		}},
 		{name: "local invalid TTL", wantHandled: true, mutate: func(frame []byte) {
 			eth, _ := ethernet.NewFrame(frame)
 			ip, _ := ipv4.NewFrame(eth.Payload())
