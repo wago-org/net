@@ -415,6 +415,63 @@ func TestPacketInspectionPreservesValidMultiAddressOptionsAndDirectedBroadcast(t
 	}
 }
 
+func FuzzDHCPv4WireOptions(f *testing.F) {
+	seedOptions := []byte{
+		byte(lnetodhcp.OptMessageType), 1, byte(lnetodhcp.MsgOffer),
+		byte(lnetodhcp.OptServerIdentification), 4, 192, 0, 2, 1,
+		byte(lnetodhcp.OptDNSServers), 8, 192, 0, 2, 53, 192, 0, 2, 54,
+		byte(lnetodhcp.OptClientIdentifier1), 6, 2, 0, 0, 0, 0, 7,
+		byte(lnetodhcp.OptEnd),
+	}
+	f.Add(seedOptions)
+	f.Add([]byte{byte(lnetodhcp.OptMessageType), 1, byte(lnetodhcp.MsgDiscover), byte(lnetodhcp.OptEnd)})
+	f.Add([]byte{byte(lnetodhcp.OptMessageType), 1})
+	f.Add([]byte{})
+	f.Fuzz(func(t *testing.T, options []byte) {
+		if len(options) > 576-lnetodhcp.OptionsOffset {
+			return
+		}
+		payload := make([]byte, lnetodhcp.OptionsOffset+len(options))
+		frame, err := lnetodhcp.NewFrame(payload)
+		if err != nil {
+			t.Fatal(err)
+		}
+		frame.ClearHeader()
+		frame.SetMagicCookie(lnetodhcp.MagicCookie)
+		*frame.CHAddrAs6() = [6]byte{2, 0, 0, 0, 0, 7}
+		copy(frame.OptionsPayload(), options)
+		before := append([]byte(nil), payload...)
+
+		message, server, dnsCount, ok := inspectPacket(frame)
+		key, canonicalOffset, identityOK := serverClientIdentity(frame)
+		if !bytes.Equal(payload, before) {
+			t.Fatal("wire inspection mutated caller-owned packet")
+		}
+		if ok {
+			if message == 0 || dnsCount < 0 || dnsCount > len(options)/4 || !completeOptionEnvelope(options) {
+				t.Fatalf("accepted invalid inspection result: message=%v server=%v dns=%d", message, server, dnsCount)
+			}
+			if server.IsValid() && !validIPv4(server) {
+				t.Fatalf("accepted invalid server address %v", server)
+			}
+		}
+		if identityOK {
+			if key.length == 0 || int(key.length) > len(key.value) {
+				t.Fatalf("accepted invalid client identity: %+v", key)
+			}
+			if key.identifier {
+				if canonicalOffset >= 0 && (canonicalOffset < lnetodhcp.OptionsOffset || canonicalOffset >= len(payload)) {
+					t.Fatalf("canonical client identifier offset %d outside packet length %d", canonicalOffset, len(payload))
+				}
+			} else if key.length != 6 || canonicalOffset != -1 {
+				t.Fatalf("invalid hardware fallback identity: %+v offset=%d", key, canonicalOffset)
+			}
+		} else if canonicalOffset != -1 {
+			t.Fatalf("rejected identity returned canonical offset %d", canonicalOffset)
+		}
+	})
+}
+
 func TestClientRejectsAmbiguousDuplicateMessageType(t *testing.T) {
 	clientCore, client := newClient(t, false)
 	serverCore, _ := newServer(t, 1)
