@@ -1,6 +1,7 @@
 package tcp
 
 import (
+	"encoding/binary"
 	"errors"
 	"io"
 	"net"
@@ -507,12 +508,15 @@ func (n *Adapter) ingressIPv6Locked(packet []byte, sourceHardwareAddress [6]byte
 }
 
 func (n *Adapter) ingressTCPPayloadLocked(payload []byte, checksum *lneto.CRC791, sourceHardwareAddress [6]byte, sourceAddress netip.Addr) (bool, error) {
-	tcpFrame, err := lnetotcp.NewFrame(payload)
-	if err != nil {
+	if len(payload) < 4 {
 		return false, nil
 	}
-	if _, owned := n.ports[tcpFrame.DestinationPort()]; !owned {
+	if _, owned := n.ports[binary.BigEndian.Uint16(payload[2:4])]; !owned {
 		return false, nil
+	}
+	tcpFrame, err := lnetotcp.NewFrame(payload)
+	if err != nil {
+		return true, nil
 	}
 	if !validTCPSourceAddress(sourceAddress) || !validUnicastMAC(sourceHardwareAddress) {
 		return true, nil

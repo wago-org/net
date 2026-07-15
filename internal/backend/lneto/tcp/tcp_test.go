@@ -1,6 +1,8 @@
 package tcp
 
 import (
+	"bytes"
+	"encoding/binary"
 	"net/netip"
 	"sync"
 	"testing"
@@ -521,6 +523,100 @@ func TestCorrelatedMalformedIPv6TCPIsHandledDropAndListenerRemainsRetryable(t *t
 	if ready := listener.Readiness(); ready != nscore.ReadyAccept {
 		t.Fatalf("valid retry listener readiness = %v", ready)
 	}
+}
+
+func FuzzTCPShortDeclaredPayloadOwnership(f *testing.F) {
+	f.Add(false, false, []byte(nil))
+	f.Add(false, true, []byte{1, 2, 0x10, 0x9a})
+	f.Add(true, false, make([]byte, 19))
+	f.Add(true, true, []byte{0xff, 0xff, 0xff, 0xff, 1, 2, 3})
+	f.Fuzz(func(t *testing.T, ipv6, owned bool, raw []byte) {
+		if len(raw) > 19 {
+			raw = raw[:19]
+		}
+		payload := append([]byte(nil), raw...)
+		var serverCore *lnetocore.Namespace
+		var server *Adapter
+		var listener *tcpListener
+		var validSYN []byte
+		if ipv6 {
+			clientCore, client := newIPv6TestAdapter(t, 73, netip.MustParseAddr("2001:db8::73"), 0, 1)
+			serverCore, server = newIPv6TestAdapter(t, 74, netip.MustParseAddr("2001:db8::74"), 1, 0)
+			endpoint := nscore.Endpoint{Address: netip.MustParseAddr("2001:db8::74"), Port: 4274}
+			listenerValue, progress, err := server.TryListen(endpoint)
+			if err != nil || progress != nscore.ProgressDone {
+				t.Fatalf("listen = %T, %v, %v", listenerValue, progress, err)
+			}
+			listener = listenerValue.(*tcpListener)
+			if _, progress, err := client.TryConnect(endpoint); err != nil || progress != nscore.ProgressInProgress {
+				t.Fatalf("connect = %v, %v", progress, err)
+			}
+			validSYN = nextTCPFrame(t, clientCore)
+		} else {
+			clientCore, client := newTestAdapter(t, 71, 0, 1)
+			serverCore, server = newTestAdapter(t, 72, 1, 0)
+			setGateways(clientCore, [6]byte{0x02, 0, 0, 0, 0, 72})
+			setGateways(serverCore, [6]byte{0x02, 0, 0, 0, 0, 71})
+			endpoint := nscore.Endpoint{Address: netip.MustParseAddr("192.0.2.72"), Port: 4272}
+			listenerValue, progress, err := server.TryListen(endpoint)
+			if err != nil || progress != nscore.ProgressDone {
+				t.Fatalf("listen = %T, %v, %v", listenerValue, progress, err)
+			}
+			listener = listenerValue.(*tcpListener)
+			if _, progress, err := client.TryConnect(endpoint); err != nil || progress != nscore.ProgressInProgress {
+				t.Fatalf("connect = %v, %v", progress, err)
+			}
+			validSYN = nextTCPFrame(t, clientCore)
+		}
+		if len(payload) >= 4 {
+			port := listener.local.Port + 1
+			if owned {
+				port = listener.local.Port
+			}
+			binary.BigEndian.PutUint16(payload[2:4], port)
+		}
+
+		var frame []byte
+		if ipv6 {
+			frame = make([]byte, 14+40+len(payload))
+			copy(frame[:54], validSYN[:54])
+			copy(frame[54:], payload)
+			ipFrame, err := lnetoipv6.NewFrame(frame[14:])
+			if err != nil {
+				t.Fatal(err)
+			}
+			ipFrame.SetPayloadLength(uint16(len(payload)))
+		} else {
+			frame = make([]byte, 14+20+len(payload))
+			copy(frame[:34], validSYN[:34])
+			copy(frame[34:], payload)
+			ipFrame, err := ipv4.NewFrame(frame[14:])
+			if err != nil {
+				t.Fatal(err)
+			}
+			ipFrame.SetTotalLength(uint16(20 + len(payload)))
+			ipFrame.SetCRC(0)
+			ipFrame.SetCRC(ipFrame.CalculateHeaderCRC())
+		}
+		before := append([]byte(nil), frame...)
+		usageBefore, closedBefore := server.quotas.Snapshot()
+		serverCore.Lock()
+		handled, err := server.ingressLocked(frame)
+		serverCore.Unlock()
+		wantHandled := len(payload) >= 4 && owned
+		if err != nil || handled != wantHandled {
+			t.Fatalf("short ingress = handled %v, err %v; want handled %v", handled, err, wantHandled)
+		}
+		if !bytes.Equal(frame, before) {
+			t.Fatal("short ingress mutated caller-owned frame")
+		}
+		if ready := listener.Readiness(); ready != 0 {
+			t.Fatalf("short ingress listener readiness = %v", ready)
+		}
+		if usage, closed := server.quotas.Snapshot(); usage != usageBefore || closed != closedBefore {
+			t.Fatalf("short ingress quota = %+v, closed=%v; want %+v, closed=%v", usage, closed, usageBefore, closedBefore)
+		}
+	})
 }
 
 func TestTCPIngressRejectsInvalidNetworkSourcesOnlyAfterOwnedPortCorrelation(t *testing.T) {
