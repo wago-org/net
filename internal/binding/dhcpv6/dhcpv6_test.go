@@ -168,6 +168,61 @@ func TestBindingsRejectHighBitI32AliasesBeforeStateAndBackendWork(t *testing.T) 
 	}
 }
 
+func TestBindingsPreserveFullWidthNamespaceAndLeaseHandles(t *testing.T) {
+	lease := &fakeLease{result: dhcpns.ResultWouldBlock}
+	backend := &fakeNamespace{lease: lease}
+	manager, instance := attachManager(t, backend)
+	defer manager.Detach(instance)
+	host := testHost{instance: instance, memory: bytes.Repeat([]byte{0x7b}, 4096)}
+	bindings := Bindings(plugin.NewHost(manager))
+	state, ok := manager.ForInstance(instance)
+	if !ok {
+		t.Fatal("attached state missing")
+	}
+	namespaceHandle := state.NamespaceHandle()
+	leaseHandle, err := state.Resources().Add(resource.KindDHCPv6Lease, lease)
+	if err != nil {
+		t.Fatal(err)
+	}
+	const high = uint64(1) << 63
+
+	operationsPtr := uint64(256)
+	operationsBefore := append([]byte(nil), host.memory[operationsPtr:operationsPtr+uint64(dhcpabi.OperationsV1Size)]...)
+	if status := callBinding(t, bindingByName(t, bindings, "operations"), host, uint64(namespaceHandle)|high, operationsPtr).status; status != guest.StatusBadHandle || backend.operationsCalls != 0 || !bytes.Equal(host.memory[operationsPtr:operationsPtr+uint64(dhcpabi.OperationsV1Size)], operationsBefore) {
+		t.Fatalf("high namespace operations = %v calls=%d", status, backend.operationsCalls)
+	}
+	startPtr := uint64(320)
+	startBefore := append([]byte(nil), host.memory[startPtr:startPtr+8]...)
+	if status := callBinding(t, bindingByName(t, bindings, "start"), host, uint64(namespaceHandle)|high, uint64(dhcpns.OperationAcquire), startPtr).status; status != guest.StatusBadHandle || backend.calls != 0 || !bytes.Equal(host.memory[startPtr:startPtr+8], startBefore) {
+		t.Fatalf("high namespace start = %v calls=%d", status, backend.calls)
+	}
+
+	resultPtr := uint64(512)
+	resultBefore := append([]byte(nil), host.memory[resultPtr:resultPtr+uint64(dhcpabi.ConfigurationV1Size)]...)
+	if status := callBinding(t, bindingByName(t, bindings, "result"), host, uint64(leaseHandle)|high, resultPtr).status; status != guest.StatusBadHandle || lease.resultCalls != 0 || !bytes.Equal(host.memory[resultPtr:resultPtr+uint64(dhcpabi.ConfigurationV1Size)], resultBefore) {
+		t.Fatalf("high lease result = %v calls=%d", status, lease.resultCalls)
+	}
+	if status := callBinding(t, bindingByName(t, bindings, "cancel"), host, uint64(leaseHandle)|high).status; status != guest.StatusBadHandle || lease.cancelCalls != 0 {
+		t.Fatalf("high lease cancel = %v calls=%d", status, lease.cancelCalls)
+	}
+	if status := callBinding(t, bindingByName(t, bindings, "close"), host, uint64(leaseHandle)|high).status; status != guest.StatusBadHandle || lease.closeCalls != 0 {
+		t.Fatalf("high lease close = %v calls=%d", status, lease.closeCalls)
+	}
+
+	if status := callBinding(t, bindingByName(t, bindings, "operations"), host, uint64(namespaceHandle), operationsPtr).status; status != guest.StatusOK || backend.operationsCalls != 1 {
+		t.Fatalf("exact namespace operations = %v calls=%d", status, backend.operationsCalls)
+	}
+	if status := callBinding(t, bindingByName(t, bindings, "result"), host, uint64(leaseHandle), resultPtr).status; status != guest.StatusAgain || lease.resultCalls != 1 {
+		t.Fatalf("exact lease result = %v calls=%d", status, lease.resultCalls)
+	}
+	if status := callBinding(t, bindingByName(t, bindings, "cancel"), host, uint64(leaseHandle)).status; status != guest.StatusOK || lease.cancelCalls != 1 {
+		t.Fatalf("exact lease cancel = %v calls=%d", status, lease.cancelCalls)
+	}
+	if status := callBinding(t, bindingByName(t, bindings, "close"), host, uint64(leaseHandle)).status; status != guest.StatusOK || lease.closeCalls != 1 {
+		t.Fatalf("exact lease close = %v calls=%d", status, lease.closeCalls)
+	}
+}
+
 func TestBindingsRejectTypedNilAndIsolateReusedLeaseGeneration(t *testing.T) {
 	backend := &fakeNamespace{}
 	manager, err := instancecore.NewManagerConfigured(instancecore.Config{
