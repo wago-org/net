@@ -412,6 +412,59 @@ func TestMalformedCorrelationStatusAndRepeatedBoundsDoNotMutate(t *testing.T) {
 	}
 }
 
+func TestTruncatedTopLevelOptionsAreRejectedBeforePinnedMutation(t *testing.T) {
+	_, adapter, account := newTestAdapter(t, defaultConfig())
+	resource, _, err := adapter.TryAcquire()
+	if err != nil {
+		t.Fatal(err)
+	}
+	lease := resource.(*leaseResource)
+	var scratch [1514]byte
+	if _, worked, err := adapter.egressLocked(scratch[:]); err != nil || !worked || lease.state != leaseWaitAdvertise {
+		t.Fatalf("Solicit egress = worked:%v err:%v state:%v", worked, err, lease.state)
+	}
+	serverAddr := netip.MustParseAddr("fe80::2")
+	serverMAC := [6]byte{0x02, 0, 0, 0, 0, 2}
+	serverDUID := []byte{0, 3, 0, 1, 2, 0, 0, 0, 0, 2}
+	assigned := netip.MustParseAddr("2001:db8::10")
+	advertise := buildServerPayload(t, lnetodhcp.MsgAdvertise, lease.xid, lease.clientDUID[:], serverDUID, lease.iaid, assigned, false)
+	if handled, err := adapter.ingressLocked(wrapServerFrame(t, adapter, serverAddr, serverMAC, advertise)); err != nil || !handled || lease.state != leaseRequestPending {
+		t.Fatalf("Advertise ingress = handled:%v err:%v state:%v", handled, err, lease.state)
+	}
+	if _, worked, err := adapter.egressLocked(scratch[:]); err != nil || !worked || lease.state != leaseWaitReply {
+		t.Fatalf("Request egress = worked:%v err:%v state:%v", worked, err, lease.state)
+	}
+
+	reply := buildServerPayload(t, lnetodhcp.MsgReply, lease.xid, lease.clientDUID[:], serverDUID, lease.iaid, assigned, true)
+	clientState := lease.client.State()
+	for name, suffix := range map[string][]byte{
+		"one header byte":        {0},
+		"two header bytes":       {0, byte(lnetodhcp.OptStatusCode)},
+		"three header bytes":     {0, byte(lnetodhcp.OptStatusCode), 0},
+		"missing option payload": {0, byte(lnetodhcp.OptStatusCode), 0, 1},
+	} {
+		t.Run(name, func(t *testing.T) {
+			malformed := append(append([]byte(nil), reply...), suffix...)
+			before, _ := account.Snapshot()
+			if handled, err := adapter.ingressLocked(wrapServerFrame(t, adapter, serverAddr, serverMAC, malformed)); err != nil || !handled {
+				t.Fatalf("malformed Reply ingress = handled:%v err:%v", handled, err)
+			}
+			if lease.state != leaseWaitReply || lease.client.State() != clientState || lease.result != (dhcpns.Configuration{}) || lease.failure != nil {
+				t.Fatalf("truncated top-level option mutated lease: state=%v client=%v result=%+v failure=%v", lease.state, lease.client.State(), lease.result, lease.failure)
+			}
+			if usage, _ := account.Snapshot(); usage != before {
+				t.Fatalf("truncated top-level option changed quota = %+v, want %+v", usage, before)
+			}
+		})
+	}
+	if handled, err := adapter.ingressLocked(wrapServerFrame(t, adapter, serverAddr, serverMAC, reply)); err != nil || !handled || lease.state != leaseBound {
+		t.Fatalf("valid Reply after truncated options = handled:%v err:%v state:%v", handled, err, lease.state)
+	}
+	if configuration, state, err := lease.TryResult(); err != nil || state != dhcpns.ResultReady || configuration.AssignedAddr != assigned {
+		t.Fatalf("result after truncated options = %+v %v %v", configuration, state, err)
+	}
+}
+
 func TestReplyDropsNonUnicastDelegatedPrefixesBeforePinnedMutation(t *testing.T) {
 	for _, value := range []string{"::/64", "::1/128", "fe80::/64", "ff05::/64"} {
 		t.Run(value, func(t *testing.T) {
