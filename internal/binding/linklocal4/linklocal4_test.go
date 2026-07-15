@@ -38,30 +38,34 @@ func (*fakeBase) TryService(nscore.ServiceBudget) (nscore.ServiceReport, nscore.
 type fakeNamespace struct {
 	claim    *fakeClaim
 	progress nscore.Progress
+	failure  error
 	calls    int
 }
 
 func (n *fakeNamespace) TryClaim(linklocalns.Request) (nscore.Resource, nscore.Progress, error) {
 	n.calls++
-	return n.claim, n.progress, nil
+	return n.claim, n.progress, n.failure
 }
 
 type fakeClaim struct {
-	value       linklocalns.Result
-	result      linklocalns.ResultState
-	failure     error
-	resultCalls int
-	closed      bool
-	canceled    bool
-	released    bool
+	value          linklocalns.Result
+	result         linklocalns.ResultState
+	failure        error
+	cancelFailure  error
+	releaseFailure error
+	resultCalls    int
+	closeCalls     int
+	closed         bool
+	canceled       bool
+	released       bool
 }
 
-func (c *fakeClaim) Close() error { c.closed = true; return nil }
+func (c *fakeClaim) Close() error { c.closed = true; c.closeCalls++; return nil }
 func (c *fakeClaim) Cancel() error {
 	c.canceled = true
-	return nil
+	return c.cancelFailure
 }
-func (c *fakeClaim) Release() error { c.released = true; return nil }
+func (c *fakeClaim) Release() error { c.released = true; return c.releaseFailure }
 func (*fakeClaim) Readiness() nscore.Readiness {
 	return nscore.ReadyLinkLocal4Result
 }
@@ -164,6 +168,65 @@ func TestBindingsPrevalidateClaimAndPreserveResultOutputs(t *testing.T) {
 	}
 	if status := callBinding(t, bindingByName(t, bindings, "close"), host, freshHandle); status != guest.StatusOK || !fresh.closed {
 		t.Fatalf("close fresh = %v, closed=%v", status, fresh.closed)
+	}
+}
+
+func TestBindingsClaimAndResultFailuresAreAtomicAndCloseReturnedResources(t *testing.T) {
+	backend := &fakeNamespace{}
+	manager, instance := attachManager(t, backend)
+	defer manager.Detach(instance)
+	state, _ := manager.ForInstance(instance)
+	host := testHost{instance: instance, memory: bytes.Repeat([]byte{0x37}, 256)}
+	bindings := Bindings(plugin.NewHost(manager))
+	if !linklocalabi.EncodeRequestV1(host.memory, 0, linklocalns.Request{}) {
+		t.Fatal("encode request")
+	}
+
+	failed := &fakeClaim{}
+	backend.claim, backend.progress = failed, nscore.ProgressDone
+	backend.failure = nscore.Fail(nscore.FailureAccessDenied, errors.New("denied"))
+	handleBefore := append([]byte(nil), host.memory[64:72]...)
+	if status := callBinding(t, bindingByName(t, bindings, "claim"), host, uint64(state.NamespaceHandle()), 0, 64); status != guest.StatusAccessDenied || failed.closeCalls != 1 || !bytes.Equal(host.memory[64:72], handleBefore) {
+		t.Fatalf("failed claim = %v, closes=%d, output mutated=%v", status, failed.closeCalls, !bytes.Equal(host.memory[64:72], handleBefore))
+	}
+
+	claim := &fakeClaim{value: validResult(t), result: linklocalns.ResultWouldBlock}
+	backend.claim, backend.progress, backend.failure = claim, nscore.ProgressInProgress, nil
+	if status := callBinding(t, bindingByName(t, bindings, "claim"), host, uint64(state.NamespaceHandle()), 0, 64); status != guest.StatusInProgress {
+		t.Fatalf("claim = %v", status)
+	}
+	handle := binary.LittleEndian.Uint64(host.memory[64:72])
+	output := host.memory[128 : 128+linklocalabi.ResultV1Size]
+	before := append([]byte(nil), output...)
+	if status := callBinding(t, bindingByName(t, bindings, "result"), host, handle, 128); status != guest.StatusAgain || !bytes.Equal(output, before) {
+		t.Fatalf("dirty would-block = %v, output mutated=%v", status, !bytes.Equal(output, before))
+	}
+	claim.failure = nscore.Fail(nscore.FailureTemporary, errors.New("retry"))
+	claim.result = linklocalns.ResultReady
+	if status := callBinding(t, bindingByName(t, bindings, "result"), host, handle, 128); status != guest.StatusTemporaryFailure || !bytes.Equal(output, before) {
+		t.Fatalf("failed result = %v, output mutated=%v", status, !bytes.Equal(output, before))
+	}
+	claim.failure = nil
+	claim.value = linklocalns.Result{}
+	if status := callBinding(t, bindingByName(t, bindings, "result"), host, handle, 128); status != guest.StatusIO || !bytes.Equal(output, before) {
+		t.Fatalf("malformed ready result = %v, output mutated=%v", status, !bytes.Equal(output, before))
+	}
+	claim.value = validResult(t)
+	claim.result = 99
+	if status := callBinding(t, bindingByName(t, bindings, "result"), host, handle, 128); status != guest.StatusIO || !bytes.Equal(output, before) {
+		t.Fatalf("malformed result state = %v, output mutated=%v", status, !bytes.Equal(output, before))
+	}
+
+	claim.cancelFailure = nscore.Fail(nscore.FailureTimedOut, errors.New("late"))
+	if status := callBinding(t, bindingByName(t, bindings, "cancel"), host, handle); status != guest.StatusTimedOut || !claim.canceled {
+		t.Fatalf("cancel failure = %v, called=%v", status, claim.canceled)
+	}
+	claim.releaseFailure = nscore.Fail(nscore.FailureInvalidState, errors.New("not bound"))
+	if status := callBinding(t, bindingByName(t, bindings, "release"), host, handle); status != guest.StatusInvalidState || !claim.released {
+		t.Fatalf("release failure = %v, called=%v", status, claim.released)
+	}
+	if status := callBinding(t, bindingByName(t, bindings, "close"), host, handle); status != guest.StatusOK || claim.closeCalls != 1 {
+		t.Fatalf("close = %v, calls=%d", status, claim.closeCalls)
 	}
 }
 
