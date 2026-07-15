@@ -185,23 +185,10 @@ cmp "$release_sum.after-tidy" "$release_sum"
 git diff --exit-code -- go.mod go.sum
 record_check go-mod-tidy pass 'generated release module is idempotent; repository module files unchanged'
 
-log "bounded fuzz corpus smoke ($fuzztime each)"
-GOWORK="$release_work" go test ./internal/backend/lneto/dns -run '^$' -fuzz '^FuzzDNSWireResponse$' -fuzztime="$fuzztime" | tee "$out/fuzz-dns-wire.txt"
-record_check fuzz-dns-wire pass "$fuzztime"
-GOWORK="$release_work" go test ./internal/abi/dns -run '^$' -fuzz '^FuzzDNSV1Layouts$' -fuzztime="$fuzztime" | tee "$out/fuzz-dns-layout.txt"
-record_check fuzz-dns-layout pass "$fuzztime"
-GOWORK="$release_work" go test ./internal/abi/tcp -run '^$' -fuzz '^FuzzV1Layouts$' -fuzztime="$fuzztime" | tee "$out/fuzz-tcp-layout.txt"
-record_check fuzz-tcp-layout pass "$fuzztime"
-GOWORK="$release_work" go test ./internal/abi/udp -run '^$' -fuzz '^FuzzReceiveResultV1$' -fuzztime="$fuzztime" | tee "$out/fuzz-udp-layout.txt"
-record_check fuzz-udp-layout pass "$fuzztime"
-GOWORK="$release_work" go test ./internal/abi/core -run '^$' -fuzz '^FuzzV1Layouts$' -fuzztime="$fuzztime" | tee "$out/fuzz-shared-layout.txt"
-record_check fuzz-shared-layout pass "$fuzztime"
-GOWORK="$release_work" go test . -run '^$' -fuzz '^FuzzGuestDNSMemory$' -fuzztime="$fuzztime" | tee "$out/fuzz-dns-guest.txt"
-record_check fuzz-dns-guest pass "$fuzztime"
-GOWORK="$release_work" go test . -run '^$' -fuzz '^FuzzGuestTCPStreamMemory$' -fuzztime="$fuzztime" | tee "$out/fuzz-tcp-guest.txt"
-record_check fuzz-tcp-guest pass "$fuzztime"
-GOWORK="$release_work" go test . -run '^$' -fuzz '^FuzzGuestUDPPollMemory$' -fuzztime="$fuzztime" | tee "$out/fuzz-udp-guest.txt"
-record_check fuzz-udp-guest pass "$fuzztime"
+log "bounded discovered fuzz smoke ($fuzztime each)"
+GOWORK="$release_work" FUZZTIME="$fuzztime" FUZZ_LOG_DIR="$out/fuzz" \
+  "$root/scripts/fuzz-smoke.sh" | tee "$out/fuzz-smoke.txt"
+record_check fuzz-smoke pass "all discovered targets; $fuzztime each"
 
 log "benchmarks"
 GOMAXPROCS=1 GOWORK="$release_work" go test ./... -run '^$' -bench '^Benchmark' -benchmem -benchtime=100ms -count=1 -cpu=1 | tee "$out/bench-runtime.txt"

@@ -63,9 +63,10 @@ The gate performs, in order:
    and an isolated audit of the reviewed production-line WASI snapshot;
 2. workspace and `GOWORK=off` Go tests, race tests, vet, package listing, and a
    no-change `go mod tidy`;
-3. bounded fuzz smoke for DNS wire parsing; split DNS, TCP, UDP, and shared-core
-   ABI layouts; and checked DNS, TCP, and UDP guest memory (`FUZZTIME=3s` by
-   default);
+3. deterministic discovery and bounded execution of every current Go fuzz
+   target, including wire parsers, ABI layouts, guest memory, resource handles,
+   exact-instance lifecycle, and protocol operation models (`FUZZTIME=3s` by
+   default, with the complete package/target manifest and per-target logs retained);
 4. guest UDP/TCP poll and fixed UDP queue benchmarks with `-benchmem`;
 5. TinyGo tests and a `linux/arm64` standard-Go package cross-build;
 6. a separately cross-compiled `linux/arm64` test binary and bounded execution
@@ -575,6 +576,22 @@ SIGNOFF_DIR=.wago/release-signoff \
 REVIEW_BUNDLE=.wago/release-signoff.review.tar.gz \
   scripts/release-review-bundle.sh
 ```
+
+## Bounded fuzz smoke
+
+Run the complete current fuzz surface without maintaining a hand-written target
+list:
+
+```sh
+FUZZTIME=1s scripts/fuzz-smoke.sh
+```
+
+The runner discovers package/target pairs from `go test -json -list`, sorts them
+deterministically, executes every target for the configured duration, reports
+each pass or failure, and exits nonzero only after all discovered targets have
+been attempted. Set `FUZZ_LOG_DIR` to retain `targets.tsv` and one log per target.
+Scheduled and manually dispatched GitHub CI runs this one-second matrix; release
+signoff uses the same runner with its selected `FUZZTIME` and retains the logs.
 
 ## CI tiers
 

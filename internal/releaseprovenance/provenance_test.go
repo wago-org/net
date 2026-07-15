@@ -13,6 +13,7 @@ func TestScanArtifactsIsSortedChecksummedAndExcludesProvenance(t *testing.T) {
 	dir := t.TempDir()
 	writeTestFile(t, filepath.Join(dir, "z.txt"), "z")
 	writeTestFile(t, filepath.Join(dir, "bench-poll.txt"), "bench")
+	writeTestFile(t, filepath.Join(dir, "fuzz", "github.com", "wago-org", "net", "FuzzGuestDNSMemory.log"), "fuzz")
 	writeTestFile(t, filepath.Join(dir, "custom-cli", "inspection-go.json"), "inspection")
 	writeTestFile(t, filepath.Join(dir, "provenance.json"), "exclude")
 	writeTestFile(t, filepath.Join(dir, "provenance.sha256"), "exclude")
@@ -22,7 +23,7 @@ func TestScanArtifactsIsSortedChecksummedAndExcludesProvenance(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	wantPaths := []string{"bench-poll.txt", "custom-cli/inspection-go.json", "z.txt"}
+	wantPaths := []string{"bench-poll.txt", "custom-cli/inspection-go.json", "fuzz/github.com/wago-org/net/FuzzGuestDNSMemory.log", "z.txt"}
 	var gotPaths []string
 	for _, artifact := range got {
 		gotPaths = append(gotPaths, artifact.Path)
@@ -30,8 +31,8 @@ func TestScanArtifactsIsSortedChecksummedAndExcludesProvenance(t *testing.T) {
 	if !reflect.DeepEqual(gotPaths, wantPaths) {
 		t.Fatalf("artifact paths = %v, want %v", gotPaths, wantPaths)
 	}
-	if got[0].Kind != "benchmark" || got[1].Kind != "inspection" || got[2].Kind != "support" {
-		t.Fatalf("artifact kinds = %q %q %q", got[0].Kind, got[1].Kind, got[2].Kind)
+	if got[0].Kind != "benchmark" || got[1].Kind != "inspection" || got[2].Kind != "fuzz" || got[3].Kind != "support" {
+		t.Fatalf("artifact kinds = %q %q %q %q", got[0].Kind, got[1].Kind, got[2].Kind, got[3].Kind)
 	}
 	sum := sha256.Sum256([]byte("bench"))
 	if got[0].SHA256 != hex.EncodeToString(sum[:]) || got[0].Size != 5 {

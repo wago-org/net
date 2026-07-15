@@ -430,7 +430,7 @@ func scanArtifacts(root string) ([]Artifact, error) {
 
 func artifactKind(path string) string {
 	switch {
-	case strings.HasPrefix(path, "fuzz-"):
+	case strings.HasPrefix(path, "fuzz-") || strings.HasPrefix(path, "fuzz/"):
 		return "fuzz"
 	case strings.HasPrefix(path, "bench-"):
 		return "benchmark"

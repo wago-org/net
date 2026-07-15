@@ -56,6 +56,21 @@ jobs:
         if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
         run: go test -race -shuffle=on -count=5 ./...
 
+  fuzz-smoke:
+    name: Discovered fuzz smoke
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.24.4"
+          cache: true
+      - name: Prepare exact dependency worktrees
+        run: scripts/ci-prepare-dependencies.sh
+      - name: Run every discovered fuzz target
+        run: FUZZTIME=1s scripts/fuzz-smoke.sh
+
   portability:
     name: Checkptr and 386
     runs-on: ubuntu-latest
