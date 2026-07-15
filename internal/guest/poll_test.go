@@ -237,6 +237,22 @@ func TestPollQuotaAndBackendFailuresPreserveOutputs(t *testing.T) {
 			t.Fatalf("failed service poll = %v, calls=%d", status, backend.serviceCalls)
 		}
 	})
+
+	t.Run("invalid readiness after service", func(t *testing.T) {
+		backend := &pollNamespace{
+			ready:    nscore.Readiness(1 << 31),
+			report:   nscore.ServiceReport{Operations: 1},
+			progress: nscore.ProgressDone,
+		}
+		manager, instance := attachPollManager(t, backend, quota.DefaultLimits())
+		defer manager.Detach(instance)
+		host := pollTestHost{instance: instance, memory: bytes.Repeat([]byte{0x91}, 128)}
+		writePollBudget(host.memory, 0, 1, 1, 1, 1, 64, 1)
+		before := append([]byte(nil), host.memory...)
+		if status := callPoll(plugin.NewHost(manager), host, 32, 1, 0, 64); status != StatusIO || backend.serviceCalls != 1 || backend.readinessCalls != 1 || !bytes.Equal(host.memory, before) {
+			t.Fatalf("invalid readiness poll = %v, service=%d readiness=%d", status, backend.serviceCalls, backend.readinessCalls)
+		}
+	})
 }
 
 func TestPollChargesExactInstanceScopedServiceUnits(t *testing.T) {
