@@ -246,6 +246,62 @@ func TestBindingsRejectHighBitI32AliasesBeforeBackendCalls(t *testing.T) {
 	}
 }
 
+func TestBindingsPreserveFullWidthNamespaceAndQueryHandles(t *testing.T) {
+	query := &fakeQuery{next: dnsns.NextWouldBlock}
+	created := &fakeQuery{next: dnsns.NextWouldBlock}
+	backend := &fakeNamespace{next: created, progress: nscore.ProgressInProgress}
+	manager, instance := attachManager(t, backend)
+	defer manager.Detach(instance)
+	host := testHost{instance: instance, memory: bytes.Repeat([]byte{0x73}, 1024)}
+	bindings := Bindings(plugin.NewHost(manager))
+	state, ok := manager.ForInstance(instance)
+	if !ok {
+		t.Fatal("attached state missing")
+	}
+	namespaceHandle := state.NamespaceHandle()
+	queryHandle, err := state.Resources().Add(resource.KindDNSQuery, query)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := dnsns.Request{Name: "api.example.com", Types: dnsns.RecordsA | dnsns.RecordsAAAA}
+	if !dnsabi.EncodeDNSQueryV1(host.memory, 0, request) {
+		t.Fatal("encode query")
+	}
+
+	const high = uint64(1) << 63
+	handleBefore := append([]byte(nil), host.memory[320:328]...)
+	if status := callBinding(t, bindingByName(t, bindings, "resolve"), host, uint64(namespaceHandle)|high, 0, 320); status != guest.StatusBadHandle || backend.calls != 0 || !bytes.Equal(host.memory[320:328], handleBefore) {
+		t.Fatalf("high namespace resolve = %v calls=%d", status, backend.calls)
+	}
+	recordBefore := append([]byte(nil), host.memory[400:400+dnsabi.DNSRecordV1Size]...)
+	if status := callBinding(t, bindingByName(t, bindings, "next"), host, uint64(queryHandle)|high, 400); status != guest.StatusBadHandle || query.nextCalls != 0 || !bytes.Equal(host.memory[400:400+dnsabi.DNSRecordV1Size], recordBefore) {
+		t.Fatalf("high query next = %v calls=%d", status, query.nextCalls)
+	}
+	if status := callBinding(t, bindingByName(t, bindings, "cancel"), host, uint64(queryHandle)|high); status != guest.StatusBadHandle || query.cancelCalls != 0 {
+		t.Fatalf("high query cancel = %v calls=%d", status, query.cancelCalls)
+	}
+	if status := callBinding(t, bindingByName(t, bindings, "close"), host, uint64(queryHandle)|high); status != guest.StatusBadHandle || query.closeCalls != 0 {
+		t.Fatalf("high query close = %v calls=%d", status, query.closeCalls)
+	}
+
+	if status := callBinding(t, bindingByName(t, bindings, "resolve"), host, uint64(namespaceHandle), 0, 320); status != guest.StatusInProgress || backend.calls != 1 || backend.request != request {
+		t.Fatalf("exact namespace resolve = %v calls=%d request=%+v", status, backend.calls, backend.request)
+	}
+	createdHandle := resource.Handle(binary.LittleEndian.Uint64(host.memory[320:328]))
+	if status := callBinding(t, bindingByName(t, bindings, "next"), host, uint64(queryHandle), 400); status != guest.StatusAgain || query.nextCalls != 1 || !bytes.Equal(host.memory[400:400+dnsabi.DNSRecordV1Size], recordBefore) {
+		t.Fatalf("exact query next = %v calls=%d", status, query.nextCalls)
+	}
+	if status := callBinding(t, bindingByName(t, bindings, "cancel"), host, uint64(queryHandle)); status != guest.StatusOK || query.cancelCalls != 1 {
+		t.Fatalf("exact query cancel = %v calls=%d", status, query.cancelCalls)
+	}
+	if status := callBinding(t, bindingByName(t, bindings, "close"), host, uint64(queryHandle)); status != guest.StatusOK || query.closeCalls != 1 {
+		t.Fatalf("exact query close = %v calls=%d", status, query.closeCalls)
+	}
+	if status := callBinding(t, bindingByName(t, bindings, "close"), host, uint64(createdHandle)); status != guest.StatusOK || created.closeCalls != 1 {
+		t.Fatalf("created query close = %v calls=%d", status, created.closeCalls)
+	}
+}
+
 func TestBindingsPrevalidateBeforeInstanceAndHandleLookup(t *testing.T) {
 	manager := instancecore.NewManager()
 	instance := new(wago.Instance)
