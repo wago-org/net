@@ -396,6 +396,42 @@ func TestEventBudgetEarlyStopRotatesScanCursor(t *testing.T) {
 	}
 }
 
+func TestClosedServiceFailureAdvancesIndependentServiceCursor(t *testing.T) {
+	table := newTable(t)
+	coordinator := newCoordinator(t, table, Config{MaxRegistrations: 2})
+	closed := &testService{failure: namespace.Fail(namespace.FailureClosed, errors.New("closed"))}
+	live := &testService{work: true}
+	addAndRegister(t, table, coordinator, resource.KindNamespace, closed)
+	liveHandle := addAndRegister(t, table, coordinator, resource.KindNamespace, live)
+	budget := Budget{
+		Scans: 2, Events: 2, ServiceAttempts: 1,
+		Service: namespace.ServiceBudget{Packets: 1, Bytes: 64, Operations: 1},
+	}
+	events := make([]Event, 2)
+
+	report, progress, err := coordinator.TryPoll(events, budget)
+	if err != nil || progress != namespace.ProgressWouldBlock || report != (Report{Scanned: 2, ServiceAttempts: 1}) || !report.ValidFor(budget) {
+		t.Fatalf("closed service poll = %+v, %v, %v", report, progress, err)
+	}
+	if closed.attempts.Load() != 1 || live.attempts.Load() != 0 {
+		t.Fatalf("closed service attempts = %d/%d", closed.attempts.Load(), live.attempts.Load())
+	}
+
+	report, progress, err = coordinator.TryPoll(events, budget)
+	if err != nil || progress != namespace.ProgressDone || report != (Report{Scanned: 2, Events: 1, ServiceAttempts: 1, ServiceCompleted: 1}) || !report.ValidFor(budget) {
+		t.Fatalf("service after closed peer = %+v, %v, %v, events=%+v", report, progress, err, events)
+	}
+	if events[0] != (Event{Handle: liveHandle, Readiness: namespace.ReadyReadable}) || closed.attempts.Load() != 1 || live.attempts.Load() != 1 {
+		t.Fatalf("service rotation after closed peer = events=%+v attempts=%d/%d", events, closed.attempts.Load(), live.attempts.Load())
+	}
+	coordinator.mu.Lock()
+	cursor, serviceCursor := coordinator.cursor, coordinator.serviceCursor
+	coordinator.mu.Unlock()
+	if cursor != 0 || serviceCursor != 0 {
+		t.Fatalf("post-rotation cursors = %d/%d", cursor, serviceCursor)
+	}
+}
+
 func TestServiceErrorCursorRecoversAfterOffenderRemoval(t *testing.T) {
 	table := newTable(t)
 	coordinator := newCoordinator(t, table, Config{MaxRegistrations: 2})
