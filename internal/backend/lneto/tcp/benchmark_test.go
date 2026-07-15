@@ -16,6 +16,7 @@ var (
 	benchmarkReady    nscore.Readiness
 	benchmarkErr      error
 	benchmarkInt      int
+	benchmarkHandled  bool
 )
 
 func BenchmarkAdapterNew(b *testing.B) {
@@ -79,6 +80,32 @@ func BenchmarkOutboundStreamCountScaling(b *testing.B) {
 				benchmarkInt = adapter.outboundTCPStreamsLocked()
 			}
 		})
+	}
+}
+
+func BenchmarkIngressOwnedIPv4SYN(b *testing.B) {
+	clientCore, client := newTestAdapter(b, 114, 0, 1)
+	serverCore, server := newTestAdapter(b, 115, 1, 0)
+	setGateways(clientCore, [6]byte{0x02, 0, 0, 0, 0, 115})
+	setGateways(serverCore, [6]byte{0x02, 0, 0, 0, 0, 114})
+	endpoint := nscore.Endpoint{Address: netip.MustParseAddr("192.0.2.115"), Port: 4215}
+	if _, progress, err := server.TryListen(endpoint); err != nil || progress != nscore.ProgressDone {
+		b.Fatalf("listen = %v, %v", progress, err)
+	}
+	if _, progress, err := client.TryConnect(endpoint); err != nil || progress != nscore.ProgressInProgress {
+		b.Fatalf("connect = %v, %v", progress, err)
+	}
+	frame := nextTCPFrame(b, clientCore)
+	b.SetBytes(int64(len(frame)))
+	b.ReportAllocs()
+	b.ResetTimer()
+	for b.Loop() {
+		serverCore.Lock()
+		benchmarkHandled, benchmarkErr = server.ingressLocked(frame)
+		serverCore.Unlock()
+		if benchmarkErr != nil || benchmarkHandled {
+			b.Fatalf("ingress = %v, %v", benchmarkHandled, benchmarkErr)
+		}
 	}
 }
 

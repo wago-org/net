@@ -523,6 +523,137 @@ func TestCorrelatedMalformedIPv6TCPIsHandledDropAndListenerRemainsRetryable(t *t
 	}
 }
 
+func TestTCPIngressRejectsInvalidNetworkSourcesOnlyAfterOwnedPortCorrelation(t *testing.T) {
+	for _, test := range []struct {
+		name    string
+		setup   func(*testing.T) (*lnetocore.Namespace, *lnetocore.Namespace, *Adapter, *tcpListener, *tcpStream, []byte)
+		mutate  func(*testing.T, []byte, netip.Addr, uint16)
+		sources []netip.Addr
+	}{
+		{
+			name: "IPv4",
+			setup: func(t *testing.T) (*lnetocore.Namespace, *lnetocore.Namespace, *Adapter, *tcpListener, *tcpStream, []byte) {
+				clientCore, client := newTestAdapter(t, 59, 0, 1)
+				serverCore, server := newTestAdapter(t, 60, 1, 0)
+				setGateways(clientCore, [6]byte{0x02, 0, 0, 0, 0, 60})
+				setGateways(serverCore, [6]byte{0x02, 0, 0, 0, 0, 59})
+				endpoint := nscore.Endpoint{Address: netip.MustParseAddr("192.0.2.60"), Port: 4260}
+				listenerValue, _, err := server.TryListen(endpoint)
+				if err != nil {
+					t.Fatal(err)
+				}
+				streamValue, _, err := client.TryConnect(endpoint)
+				if err != nil {
+					t.Fatal(err)
+				}
+				return clientCore, serverCore, server, listenerValue.(*tcpListener), streamValue.(*tcpStream), nextTCPFrame(t, clientCore)
+			},
+			mutate: func(t *testing.T, frame []byte, source netip.Addr, destinationPort uint16) {
+				eth, err := ethernet.NewFrame(frame)
+				if err != nil {
+					t.Fatal(err)
+				}
+				ip, err := ipv4.NewFrame(eth.Payload())
+				if err != nil {
+					t.Fatal(err)
+				}
+				*ip.SourceAddr() = source.As4()
+				ip.SetCRC(0)
+				ip.SetCRC(ip.CalculateHeaderCRC())
+				tcpFrame, err := lnetotcp.NewFrame(ip.Payload())
+				if err != nil {
+					t.Fatal(err)
+				}
+				tcpFrame.SetDestinationPort(destinationPort)
+				tcpFrame.SetCRC(0)
+				var checksum lneto.CRC791
+				ip.CRCWriteTCPPseudo(&checksum)
+				tcpFrame.SetCRC(checksum.PayloadSum16(tcpFrame.RawData()))
+			},
+			sources: []netip.Addr{
+				netip.IPv4Unspecified(), netip.MustParseAddr("127.0.0.1"),
+				netip.MustParseAddr("224.0.0.1"), netip.AddrFrom4([4]byte{255, 255, 255, 255}),
+			},
+		},
+		{
+			name: "IPv6",
+			setup: func(t *testing.T) (*lnetocore.Namespace, *lnetocore.Namespace, *Adapter, *tcpListener, *tcpStream, []byte) {
+				clientCore, client := newIPv6TestAdapter(t, 61, netip.MustParseAddr("2001:db8::61"), 0, 1)
+				serverCore, server := newIPv6TestAdapter(t, 62, netip.MustParseAddr("2001:db8::62"), 1, 0)
+				endpoint := nscore.Endpoint{Address: netip.MustParseAddr("2001:db8::62"), Port: 4262}
+				listenerValue, _, err := server.TryListen(endpoint)
+				if err != nil {
+					t.Fatal(err)
+				}
+				streamValue, _, err := client.TryConnect(endpoint)
+				if err != nil {
+					t.Fatal(err)
+				}
+				return clientCore, serverCore, server, listenerValue.(*tcpListener), streamValue.(*tcpStream), nextTCPFrame(t, clientCore)
+			},
+			mutate: func(t *testing.T, frame []byte, source netip.Addr, destinationPort uint16) {
+				ip, err := lnetoipv6.NewFrame(frame[14:])
+				if err != nil {
+					t.Fatal(err)
+				}
+				*ip.SourceAddr() = source.As16()
+				tcpFrame, err := lnetotcp.NewFrame(ip.Payload())
+				if err != nil {
+					t.Fatal(err)
+				}
+				tcpFrame.SetDestinationPort(destinationPort)
+				tcpFrame.SetCRC(0)
+				var checksum lneto.CRC791
+				ip.CRCWritePseudo(&checksum)
+				tcpFrame.SetCRC(checksum.PayloadSum16(tcpFrame.RawData()))
+			},
+			sources: []netip.Addr{netip.IPv6Unspecified(), netip.IPv6Loopback(), netip.MustParseAddr("ff02::1")},
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			clientCore, serverCore, server, listener, clientStream, validSYN := test.setup(t)
+			usageBefore, closedBefore := server.quotas.Snapshot()
+			for _, source := range test.sources {
+				t.Run(source.String(), func(t *testing.T) {
+					owned := append([]byte(nil), validSYN...)
+					test.mutate(t, owned, source, listener.local.Port)
+					serverCore.Lock()
+					handled, ingressErr := server.ingressLocked(owned)
+					serverCore.Unlock()
+					if ingressErr != nil || !handled {
+						t.Fatalf("owned invalid network source ingress = handled %v, err %v", handled, ingressErr)
+					}
+
+					unowned := append([]byte(nil), validSYN...)
+					test.mutate(t, unowned, source, listener.local.Port+1)
+					serverCore.Lock()
+					handled, ingressErr = server.ingressLocked(unowned)
+					serverCore.Unlock()
+					if ingressErr != nil || handled {
+						t.Fatalf("unowned invalid network source ingress = handled %v, err %v", handled, ingressErr)
+					}
+				})
+			}
+			if ready := listener.Readiness(); ready != 0 {
+				t.Fatalf("invalid network source listener readiness = %v", ready)
+			}
+			if usage, closed := server.quotas.Snapshot(); usage != usageBefore || closed != closedBefore {
+				t.Fatalf("invalid network sources changed quota = %+v, closed=%v; want %+v, closed=%v", usage, closed, usageBefore, closedBefore)
+			}
+
+			serviceTCPIngressFrame(t, serverCore, validSYN)
+			serviceTCPIngressFrame(t, clientCore, nextTCPFrame(t, serverCore))
+			serviceTCPIngressFrame(t, serverCore, nextTCPFrame(t, clientCore))
+			if progress, err := clientStream.TryFinishConnect(); err != nil || progress != nscore.ProgressDone {
+				t.Fatalf("finish after invalid network sources = %v, %v", progress, err)
+			}
+			if ready := listener.Readiness(); ready != nscore.ReadyAccept {
+				t.Fatalf("valid retry listener readiness = %v", ready)
+			}
+		})
+	}
+}
+
 func TestTCPIngressRejectsInvalidEthernetSourcesOnlyAfterOwnedPortCorrelation(t *testing.T) {
 	invalidSources := map[string][6]byte{
 		"zero":      {},

@@ -483,7 +483,7 @@ func (n *Adapter) ingressIPv4Locked(packet []byte, sourceHardwareAddress [6]byte
 	payload := ipFrame.RawData()[headerLength:totalLength]
 	var checksum lneto.CRC791
 	ipFrame.CRCWriteTCPPseudo(&checksum)
-	return n.ingressTCPPayloadLocked(payload, &checksum, sourceHardwareAddress)
+	return n.ingressTCPPayloadLocked(payload, &checksum, sourceHardwareAddress, netip.AddrFrom4(*ipFrame.SourceAddr()))
 }
 
 func (n *Adapter) ingressIPv6Locked(packet []byte, sourceHardwareAddress [6]byte) (bool, error) {
@@ -503,10 +503,10 @@ func (n *Adapter) ingressIPv6Locked(packet []byte, sourceHardwareAddress [6]byte
 	payload := ipFrame.RawData()[40 : 40+payloadLength]
 	var checksum lneto.CRC791
 	ipFrame.CRCWritePseudo(&checksum)
-	return n.ingressTCPPayloadLocked(payload, &checksum, sourceHardwareAddress)
+	return n.ingressTCPPayloadLocked(payload, &checksum, sourceHardwareAddress, netip.AddrFrom16(*ipFrame.SourceAddr()))
 }
 
-func (n *Adapter) ingressTCPPayloadLocked(payload []byte, checksum *lneto.CRC791, sourceHardwareAddress [6]byte) (bool, error) {
+func (n *Adapter) ingressTCPPayloadLocked(payload []byte, checksum *lneto.CRC791, sourceHardwareAddress [6]byte, sourceAddress netip.Addr) (bool, error) {
 	tcpFrame, err := lnetotcp.NewFrame(payload)
 	if err != nil {
 		return false, nil
@@ -514,7 +514,7 @@ func (n *Adapter) ingressTCPPayloadLocked(payload []byte, checksum *lneto.CRC791
 	if _, owned := n.ports[tcpFrame.DestinationPort()]; !owned {
 		return false, nil
 	}
-	if !validUnicastMAC(sourceHardwareAddress) {
+	if !validTCPSourceAddress(sourceAddress) || !validUnicastMAC(sourceHardwareAddress) {
 		return true, nil
 	}
 	tcpHeaderLength := tcpFrame.HeaderLength()
@@ -1044,6 +1044,13 @@ func (s *tcpStream) detachFromPoolLocked() {
 	if s.owner != nil {
 		removeTCPStream(s.owner, s)
 	}
+}
+
+func validTCPSourceAddress(address netip.Addr) bool {
+	if !address.IsValid() || address.IsUnspecified() || address.IsLoopback() || address.IsMulticast() {
+		return false
+	}
+	return !address.Is4() || address != limitedBroadcastAddress
 }
 
 func validUnicastMAC(mac [6]byte) bool {
