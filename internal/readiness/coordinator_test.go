@@ -249,6 +249,44 @@ func TestUnregisterPreservesScanCursorAcrossTailReplacement(t *testing.T) {
 	}
 }
 
+func TestUnregisterPreservesServiceCursorAcrossSwapDelete(t *testing.T) {
+	table := newTable(t)
+	coordinator := newCoordinator(t, table, Config{MaxRegistrations: 3})
+	first := &testService{work: true}
+	second := &testService{work: true}
+	third := &testService{work: true}
+	firstHandle := addAndRegister(t, table, coordinator, resource.KindNamespace, first)
+	secondHandle := addAndRegister(t, table, coordinator, resource.KindNamespace, second)
+	thirdHandle := addAndRegister(t, table, coordinator, resource.KindNamespace, third)
+
+	coordinator.mu.Lock()
+	coordinator.cursor = 0
+	coordinator.serviceCursor = 2
+	coordinator.mu.Unlock()
+	if !coordinator.Unregister(firstHandle) {
+		t.Fatal("head unregister failed")
+	}
+
+	budget := Budget{
+		Scans: 1, Events: 1, ServiceAttempts: 1,
+		Service: namespace.ServiceBudget{Packets: 1, Bytes: 64, Operations: 1},
+	}
+	events := make([]Event, 1)
+	report, progress, err := coordinator.TryPoll(events, budget)
+	if err != nil || progress != namespace.ProgressDone || report != (Report{Scanned: 1, Events: 1, ServiceAttempts: 1, ServiceCompleted: 1}) {
+		t.Fatalf("poll after swap-delete = %+v, %v, %v, events=%+v", report, progress, err, events)
+	}
+	if events[0] != (Event{Handle: thirdHandle, Readiness: namespace.ReadyReadable}) || first.attempts.Load() != 0 || second.attempts.Load() != 0 || third.attempts.Load() != 1 {
+		t.Fatalf("service cursor moved to wrong registration: events=%+v attempts=%d/%d/%d", events, first.attempts.Load(), second.attempts.Load(), third.attempts.Load())
+	}
+	if snapshot := coordinator.Snapshot(); snapshot.Registrations != 2 || snapshot.Cursor != 1 {
+		t.Fatalf("post-unregister snapshot = %+v", snapshot)
+	}
+	if !coordinator.Unregister(secondHandle) {
+		t.Fatal("remaining registration unregister failed")
+	}
+}
+
 func TestStaleSwapDeletePreservesScanAndServiceFairness(t *testing.T) {
 	for staleIndex := 0; staleIndex < 3; staleIndex++ {
 		t.Run([]string{"head", "middle", "tail"}[staleIndex], func(t *testing.T) {
