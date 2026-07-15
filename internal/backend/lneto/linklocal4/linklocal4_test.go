@@ -88,6 +88,67 @@ func TestClaimDefendReconfigureAndReleaseIdentity(t *testing.T) {
 	}
 }
 
+func TestReconfigureCancelCloseAllowsFreshClaimAndIsolatesStaleResource(t *testing.T) {
+	core, adapter, account, clock := newTestAdapter(t, Config{MaxClaims: 1, MaxConflicts: 4, MaxServiceAttempts: 64, Seed: 41})
+	resource, _, err := adapter.TryClaim(linklocalns.Request{FirstCandidate: netip.MustParseAddr("169.254.42.7")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	stale := resource.(*claimResource)
+	bound := driveBound(t, core, stale, clock)
+	conflict := makeConflict(t, bound.Address, [6]byte{2, 0, 0, 0, 0, 2})
+	serviceIngress(t, core, conflict)
+	if frame := nextEgress(t, core, clock); len(frame) != arpFrameSize {
+		t.Fatalf("defense frame length = %d", len(frame))
+	}
+	serviceIngress(t, core, conflict)
+	if result, state, err := stale.TryResult(); err != nil || state != linklocalns.ResultWouldBlock || result != (linklocalns.Result{}) {
+		t.Fatalf("reconfiguring result = %+v, %v, %v", result, state, err)
+	}
+	core.Lock()
+	address := core.IPv4AddressLocked()
+	core.Unlock()
+	if !address.IsUnspecified() || stale.identity.Active() {
+		t.Fatalf("reconfiguring identity retained: address=%v active=%v", address, stale.identity.Active())
+	}
+	if err := stale.Cancel(); err != nil {
+		t.Fatal(err)
+	}
+	if stale.Readiness() != nscore.ReadyError {
+		t.Fatalf("canceled readiness = %v", stale.Readiness())
+	}
+	if _, _, err := stale.TryResult(); failureOf(t, err) != nscore.FailureCanceled {
+		t.Fatalf("canceled result = %v", err)
+	}
+	if usage, _ := account.Snapshot(); usage != (quota.Usage{Resources: 1, LinkLocal4Resources: 1}) {
+		t.Fatalf("canceled quota = %+v", usage)
+	}
+	if err := stale.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if usage, _ := account.Snapshot(); usage != (quota.Usage{}) {
+		t.Fatalf("closed canceled quota = %+v", usage)
+	}
+
+	freshResource, progress, err := adapter.TryClaim(linklocalns.Request{FirstCandidate: netip.MustParseAddr("169.254.55.8")})
+	if err != nil || progress != nscore.ProgressInProgress {
+		t.Fatalf("fresh claim = %T, %v, %v", freshResource, progress, err)
+	}
+	fresh := freshResource.(*claimResource)
+	if err := stale.Close(); err != nil {
+		t.Fatal(err)
+	}
+	core.Lock()
+	ownerClaim, candidate, state := adapter.claim, fresh.handler.Candidate(), fresh.state
+	core.Unlock()
+	if ownerClaim != fresh || netip.AddrFrom4(candidate) != netip.MustParseAddr("169.254.55.8") || state != stateActive {
+		t.Fatalf("stale close mutated fresh claim: owner=%p fresh=%p candidate=%v state=%v", ownerClaim, fresh, netip.AddrFrom4(candidate), state)
+	}
+	if usage, _ := account.Snapshot(); usage != (quota.Usage{Resources: 1, LinkLocal4Resources: 1, LinkLocal4Work: 1}) {
+		t.Fatalf("fresh quota = %+v", usage)
+	}
+}
+
 func TestEgressShortBufferPreservesClaimLifecycleAndServiceBudget(t *testing.T) {
 	core, adapter, account, clock := newTestAdapter(t, Config{MaxClaims: 1, MaxConflicts: 2, MaxServiceAttempts: 1, Seed: 31})
 	resource, _, err := adapter.TryClaim(linklocalns.Request{FirstCandidate: netip.MustParseAddr("169.254.42.7")})
