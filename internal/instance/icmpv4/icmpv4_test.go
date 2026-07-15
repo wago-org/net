@@ -11,6 +11,7 @@ import (
 	icmpns "github.com/wago-org/net/internal/namespace/icmpv4"
 	"github.com/wago-org/net/internal/policy"
 	"github.com/wago-org/net/internal/quota"
+	"github.com/wago-org/net/internal/readiness"
 	"github.com/wago-org/net/internal/resource"
 	wago "github.com/wago-org/wago"
 )
@@ -163,6 +164,53 @@ func TestEchoErrorsCloseResourcesAndCanonicalizeOutputs(t *testing.T) {
 	}
 }
 
+func TestEchoRejectsMalformedSuccessResourcesAndRollsBackRegistration(t *testing.T) {
+	request := icmpns.Request{Destination: netip.MustParseAddr("192.0.2.1")}
+
+	for name, returned := range map[string]struct {
+		resource nscore.Resource
+		progress nscore.Progress
+	}{
+		"wrong type":       {resource: new(fakeBase), progress: nscore.ProgressDone},
+		"invalid progress": {resource: new(fakeEcho), progress: 99},
+	} {
+		t.Run(name, func(t *testing.T) {
+			adapter := &fakeNamespace{next: returned.resource, progress: returned.progress}
+			state, manager, instance := attachICMPv4State(t, adapter, 4)
+			defer manager.Detach(instance)
+			resourcesBefore := state.Resources().Len()
+			readinessBefore := state.Readiness().Snapshot()
+			if handle, progress, err := Echo(state, state.NamespaceHandle(), request); handle != 0 || progress != 0 || failureOf(err) != nscore.FailureIO {
+				t.Fatalf("Echo = %v, %v, %v", handle, progress, err)
+			}
+			if state.Resources().Len() != resourcesBefore || state.Readiness().Snapshot() != readinessBefore {
+				t.Fatalf("malformed success published state: resources=%d readiness=%+v", state.Resources().Len(), state.Readiness().Snapshot())
+			}
+			switch value := returned.resource.(type) {
+			case *fakeBase:
+				if !value.closed {
+					t.Fatal("wrong-type resource was not closed")
+				}
+			case *fakeEcho:
+				if value.closeCalls != 1 {
+					t.Fatalf("invalid-progress resource closes = %d", value.closeCalls)
+				}
+			}
+		})
+	}
+
+	exchange := new(fakeEcho)
+	adapter := &fakeNamespace{next: exchange, progress: nscore.ProgressInProgress}
+	state, manager, instance := attachICMPv4State(t, adapter, 1)
+	defer manager.Detach(instance)
+	if handle, progress, err := Echo(state, state.NamespaceHandle(), request); handle != 0 || progress != 0 || !errors.Is(err, readiness.ErrLimit) || exchange.closeCalls != 1 {
+		t.Fatalf("registration rollback = %v, %v, %v, closes=%d", handle, progress, err, exchange.closeCalls)
+	}
+	if state.Resources().Len() != 1 || state.Readiness().Snapshot().Registrations != 1 {
+		t.Fatalf("registration rollback retained state: resources=%d readiness=%+v", state.Resources().Len(), state.Readiness().Snapshot())
+	}
+}
+
 func TestInstanceICMPv4ExactKindLifecycle(t *testing.T) {
 	exchange := &fakeEcho{payload: []byte("reply")}
 	adapter := &fakeNamespace{next: exchange}
@@ -202,4 +250,27 @@ func TestInstanceICMPv4ExactKindLifecycle(t *testing.T) {
 	if _, _, err := Result(state, handle, dst[:]); !errors.Is(err, resource.ErrBadHandle) {
 		t.Fatalf("stale result = %v", err)
 	}
+}
+
+func attachICMPv4State(t testing.TB, adapter icmpns.Namespace, maxRegistrations int) (*instancecore.State, *instancecore.Manager, *wago.Instance) {
+	t.Helper()
+	config := instancecore.DefaultConfig()
+	config.Limits = quota.DefaultLimits()
+	config.Readiness = readiness.Config{MaxRegistrations: maxRegistrations}
+	config.NamespaceFactory = func(*policy.Policy, *quota.Account) (nscore.Namespace, error) {
+		return nscore.ComposeNamespace(&fakeBase{}, nscore.Service{Key: icmpns.ServiceKey, Value: adapter})
+	}
+	manager, err := instancecore.NewManagerConfigured(config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	instance := new(wago.Instance)
+	if err := manager.Attach(instance); err != nil {
+		t.Fatal(err)
+	}
+	state, ok := manager.ForInstance(instance)
+	if !ok {
+		t.Fatal("state not attached")
+	}
+	return state, manager, instance
 }
