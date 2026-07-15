@@ -308,7 +308,8 @@ func (q *frameQueue) tail() int {
 
 func (q *frameQueue) slot(index, maxFrameBytes int) []byte {
 	start := index * maxFrameBytes
-	return q.storage[start : start+maxFrameBytes]
+	end := start + maxFrameBytes
+	return q.storage[start:end:end]
 }
 
 func (q *frameQueue) push(frame []byte) {

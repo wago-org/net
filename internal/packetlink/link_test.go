@@ -104,6 +104,39 @@ func TestLinkFillCommitsAtomicallyAndRollsBackFailures(t *testing.T) {
 	}
 }
 
+func TestFillSliceCannotAppendIntoAdjacentCommittedFrame(t *testing.T) {
+	link := newTestLink(t, Config{MaxFrameBytes: 4, IngressFrames: 1, EgressFrames: 2})
+	if err := link.TryEnqueue(Egress, []byte("old!")); err != nil {
+		t.Fatal(err)
+	}
+	if err := link.TryEnqueue(Egress, []byte("safe")); err != nil {
+		t.Fatal(err)
+	}
+	var discarded [4]byte
+	if result, err := link.TryDequeue(Egress, discarded[:]); err != nil || result.FrameBytes != 4 {
+		t.Fatalf("initial dequeue = %+v, %v", result, err)
+	}
+
+	fillCapacity := 0
+	result, err := link.TryFill(Egress, func(dst []byte) (int, error) {
+		fillCapacity = cap(dst)
+		appended := append(dst, 0xff)
+		appended[len(dst)] = 0xff
+		copy(dst, []byte("new!"))
+		return len(dst), nil
+	})
+	if err != nil || result != (FrameResult{Copied: 4, FrameBytes: 4, Ready: true}) || fillCapacity != 4 {
+		t.Fatalf("fill = %+v, %v, capacity %d", result, err, fillCapacity)
+	}
+	var frame [4]byte
+	if result, err = link.TryDequeue(Egress, frame[:]); err != nil || result.FrameBytes != 4 || string(frame[:]) != "safe" {
+		t.Fatalf("adjacent frame = %+v, %v, %q", result, err, frame)
+	}
+	if result, err = link.TryDequeue(Egress, frame[:]); err != nil || result.FrameBytes != 4 || string(frame[:]) != "new!" {
+		t.Fatalf("filled frame = %+v, %v, %q", result, err, frame)
+	}
+}
+
 func TestZeroLengthFillRollbackRemainsDistinctFromCommittedEmptyFrame(t *testing.T) {
 	link := newTestLink(t, Config{MaxFrameBytes: 4, IngressFrames: 1, EgressFrames: 1})
 	result, err := link.TryFill(Egress, func(dst []byte) (int, error) {
