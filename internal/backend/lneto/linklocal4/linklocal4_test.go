@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net/netip"
+	"reflect"
 	"testing"
 	"time"
 
@@ -879,6 +880,83 @@ func TestConflictMutationFallsThroughToOrdinaryARPProcessing(t *testing.T) {
 	if ordinaryARPCalls != 1 {
 		t.Fatalf("ordinary ARP calls = %d, want 1", ordinaryARPCalls)
 	}
+}
+
+func FuzzLinkLocal4BoundWireIngressLifecycle(f *testing.F) {
+	candidate := netip.MustParseAddr("169.254.42.7")
+	validConflict := makeConflict(f, candidate, [6]byte{2, 0, 0, 0, 0, 2})
+	f.Add(append([]byte(nil), validConflict[14:]...), true)
+	f.Add([]byte{}, false)
+	f.Add([]byte{0, 1, 8, 0, 6, 4, 0, 1}, true)
+	f.Fuzz(func(t *testing.T, payload []byte, repeat bool) {
+		if len(payload) > 64 {
+			return
+		}
+		core, adapter, account, clock := newTestAdapter(t, Config{MaxClaims: 1, MaxConflicts: 4, MaxServiceAttempts: 64, Seed: 0xc0ffee})
+		resource, progress, err := adapter.TryClaim(linklocalns.Request{FirstCandidate: candidate})
+		if err != nil || progress != nscore.ProgressInProgress {
+			t.Fatalf("TryClaim = %T, %v, %v", resource, progress, err)
+		}
+		claim := resource.(*claimResource)
+		bound := driveBound(t, core, claim, clock)
+		frame := make([]byte, 14+len(payload))
+		ethernetFrame, err := ethernet.NewFrame(frame)
+		if err != nil {
+			t.Fatal(err)
+		}
+		*ethernetFrame.DestinationHardwareAddr() = ethernet.BroadcastAddr()
+		*ethernetFrame.SourceHardwareAddr() = [6]byte{2, 0, 0, 0, 0, 2}
+		ethernetFrame.SetEtherType(ethernet.TypeARP)
+		copy(ethernetFrame.Payload(), payload)
+		before := append([]byte(nil), frame...)
+		iterations := 1
+		if repeat {
+			iterations = 2
+		}
+		for range iterations {
+			core.Lock()
+			_, ingressErr := adapter.ingressLocked(frame)
+			core.Unlock()
+			if ingressErr != nil {
+				t.Fatalf("ARP ingress = %v", ingressErr)
+			}
+		}
+		if !bytes.Equal(frame, before) {
+			t.Fatal("ARP ingress mutated caller-owned frame")
+		}
+		core.Lock()
+		address := core.IPv4AddressLocked()
+		ownerClaim := adapter.claim
+		core.Unlock()
+		if ownerClaim != claim || claim.state != stateActive || claim.failure != nil || claim.handler.Conflicts() > int(adapter.config.MaxConflicts) {
+			t.Fatalf("ingress lifecycle = owner:%p claim:%p state:%v failure:%v conflicts:%d", ownerClaim, claim, claim.state, claim.failure, claim.handler.Conflicts())
+		}
+		result, resultState, resultErr := claim.TryResult()
+		if claim.identity.Active() {
+			claimed, ok := claim.handler.Addr()
+			if !ok || address != netip.AddrFrom4(claimed) || resultErr != nil || resultState != linklocalns.ResultReady || !result.Valid() || result.Address != address {
+				t.Fatalf("active identity = address:%v handler:%v/%v result:%+v/%v/%v", address, netip.AddrFrom4(claimed), ok, result, resultState, resultErr)
+			}
+		} else if !address.IsUnspecified() || resultErr != nil || resultState != linklocalns.ResultWouldBlock || result != (linklocalns.Result{}) {
+			t.Fatalf("released identity = address:%v result:%+v/%v/%v bound-before:%v", address, result, resultState, resultErr, bound)
+		}
+		if usage, closed := account.Snapshot(); closed || usage != (quota.Usage{Resources: 1, LinkLocal4Resources: 1, LinkLocal4Work: 1}) {
+			t.Fatalf("ingress quota = %+v, closed=%v", usage, closed)
+		}
+		if err := claim.Close(); err != nil {
+			t.Fatal(err)
+		}
+		core.Lock()
+		address = core.IPv4AddressLocked()
+		ownerClaim = adapter.claim
+		core.Unlock()
+		if !address.IsUnspecified() || ownerClaim != nil || claim.state != stateClosed || !reflect.DeepEqual(claim.handler, lnetolinklocal.Handler{}) || claim.failure != nil || claim.identity.Active() {
+			t.Fatalf("close retained fuzzed claim state: address=%v owner=%p claim=%+v", address, ownerClaim, claim)
+		}
+		if usage, _ := account.Snapshot(); usage != (quota.Usage{}) {
+			t.Fatalf("closed quota = %+v", usage)
+		}
+	})
 }
 
 func BenchmarkIngressUnrelatedARP(b *testing.B) {
