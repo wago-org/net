@@ -577,7 +577,8 @@ func (a *Adapter) validateFrameLocked(frame []byte) ([]byte, netip.Addr, [6]byte
 	if binary.BigEndian.Uint16(rawUDP[:2]) != dhcpns.ServerPort || binary.BigEndian.Uint16(rawUDP[2:4]) != dhcpns.ClientPort {
 		return nil, netip.Addr{}, [6]byte{}, false
 	}
-	if !validUnicastMAC(*eth.SourceHardwareAddr()) {
+	sourceMAC := *eth.SourceHardwareAddr()
+	if !validUnicastMAC(sourceMAC) || sourceMAC == a.hardwareAddress {
 		return nil, netip.Addr{}, [6]byte{}, true
 	}
 	version, _, _ := ip.VersionTrafficAndFlow()
@@ -586,7 +587,7 @@ func (a *Adapter) validateFrameLocked(frame []byte) ([]byte, netip.Addr, [6]byte
 	}
 	source := netip.AddrFrom16(*ip.SourceAddr())
 	destination := netip.AddrFrom16(*ip.DestinationAddr())
-	if !validServerAddress(source, a.scopeID) || destination != a.address || !a.policy.CheckEndpoint(policy.OperationDHCPv6ClientReceive, source, dhcpns.ServerPort) {
+	if !validServerAddress(source, a.scopeID) || source == a.address || destination != a.address || !a.policy.CheckEndpoint(policy.OperationDHCPv6ClientReceive, source, dhcpns.ServerPort) {
 		return nil, netip.Addr{}, [6]byte{}, true
 	}
 	udpPayload := ip.Payload()
@@ -604,7 +605,7 @@ func (a *Adapter) validateFrameLocked(frame []byte) ([]byte, netip.Addr, [6]byte
 	if checksum.PayloadSum16(udp.RawData()) != 0 {
 		return nil, netip.Addr{}, [6]byte{}, true
 	}
-	return udp.RawData()[8:], source, *eth.SourceHardwareAddr(), true
+	return udp.RawData()[8:], source, sourceMAC, true
 }
 
 func validServerAddress(address netip.Addr, scopeID uint32) bool {

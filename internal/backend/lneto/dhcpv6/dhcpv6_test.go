@@ -442,6 +442,60 @@ func TestIngressCorrelatesDHCPv6BeforeEthernetSourceValidation(t *testing.T) {
 	}
 }
 
+func TestIngressRejectsSelfOriginatedServerIdentities(t *testing.T) {
+	for _, test := range []struct {
+		name      string
+		source    func(*Adapter) netip.Addr
+		sourceMAC func(*Adapter) [6]byte
+	}{
+		{
+			name:      "client IPv6 source",
+			source:    func(adapter *Adapter) netip.Addr { return adapter.address },
+			sourceMAC: func(*Adapter) [6]byte { return [6]byte{0x02, 0, 0, 0, 0, 2} },
+		},
+		{
+			name:      "client Ethernet source",
+			source:    func(*Adapter) netip.Addr { return netip.MustParseAddr("fe80::2") },
+			sourceMAC: func(adapter *Adapter) [6]byte { return adapter.hardwareAddress },
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			_, adapter, account := newTestAdapter(t, defaultConfig())
+			resource, _, err := adapter.TryAcquire()
+			if err != nil {
+				t.Fatal(err)
+			}
+			lease := resource.(*leaseResource)
+			var scratch [1514]byte
+			if _, worked, err := adapter.egressLocked(scratch[:]); err != nil || !worked || lease.state != leaseWaitAdvertise {
+				t.Fatalf("Solicit egress = worked:%v err:%v state:%v", worked, err, lease.state)
+			}
+
+			serverDUID := []byte{0, 3, 0, 1, 2, 0, 0, 0, 0, 2}
+			advertise := buildServerPayload(t, lnetodhcp.MsgAdvertise, lease.xid, lease.clientDUID[:], serverDUID, lease.iaid, netip.MustParseAddr("2001:db8::10"), false)
+			usageBefore, _ := account.Snapshot()
+			packetBefore := append([]byte(nil), lease.packet...)
+			clientState := lease.client.State()
+			frame := wrapServerFrame(t, adapter, test.source(adapter), test.sourceMAC(adapter), advertise)
+			if handled, err := adapter.ingressLocked(frame); err != nil || !handled {
+				t.Fatalf("self-originated Advertise = handled:%v err:%v", handled, err)
+			}
+			if lease.state != leaseWaitAdvertise || lease.serverLen != 0 || lease.serverAddr.IsValid() || lease.serverMAC != ([6]byte{}) ||
+				!bytes.Equal(lease.packet, packetBefore) || lease.client.State() != clientState || lease.result != (dhcpns.Configuration{}) || lease.failure != nil {
+				t.Fatalf("self-originated Advertise mutated lease: state=%v server=%v/%x len=%d client=%v result=%+v failure=%v", lease.state, lease.serverAddr, lease.serverMAC, lease.serverLen, lease.client.State(), lease.result, lease.failure)
+			}
+			if usage, _ := account.Snapshot(); usage != usageBefore {
+				t.Fatalf("self-originated Advertise changed quota = %+v, want %+v", usage, usageBefore)
+			}
+
+			valid := wrapServerFrame(t, adapter, netip.MustParseAddr("fe80::2"), [6]byte{0x02, 0, 0, 0, 0, 2}, advertise)
+			if handled, err := adapter.ingressLocked(valid); err != nil || !handled || lease.state != leaseRequestPending {
+				t.Fatalf("valid Advertise after self-originated drop = handled:%v err:%v state:%v", handled, err, lease.state)
+			}
+		})
+	}
+}
+
 func TestIngressContainsTruncatedUDPOnlyAfterExactPortCorrelation(t *testing.T) {
 	_, adapter, _ := newTestAdapter(t, defaultConfig())
 	resource, _, err := adapter.TryAcquire()
