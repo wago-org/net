@@ -210,29 +210,71 @@ func ComposeNamespace(base Namespace, services ...Service) (Namespace, error) {
 // remain usable by focused operation tests and backend-neutral fakes.
 // ResolveNamespaceBase unwraps quota ownership and immutable composition to
 // the one protocol-neutral base namespace.
+const maxNamespaceResolutionDepth = 64
+
 func ResolveNamespaceBase(value any) Namespace {
-	if carrier, ok := value.(NamespaceCarrier); ok {
-		value = carrier.NamespaceBackend()
+	for range maxNamespaceResolutionDepth {
+		var ok bool
+		value, ok = unwrapNamespaceCarriers(value)
+		if !ok {
+			return nil
+		}
+		carrier, composed := value.(BaseCarrier)
+		if !composed {
+			base, _ := value.(Namespace)
+			if nilInterface(base) {
+				return nil
+			}
+			return base
+		}
+		if nilInterface(carrier) {
+			return nil
+		}
+		value = carrier.NamespaceBase()
+		if nilInterface(value) {
+			return nil
+		}
 	}
-	if carrier, ok := value.(BaseCarrier); ok {
-		return carrier.NamespaceBase()
-	}
-	base, _ := value.(Namespace)
-	return base
+	return nil
 }
 
 func ResolveNamespaceService(value any, key ServiceKey) any {
-	if carrier, ok := value.(NamespaceCarrier); ok {
-		value = carrier.NamespaceBackend()
+	var ok bool
+	value, ok = unwrapNamespaceCarriers(value)
+	if !ok {
+		return nil
 	}
-	if carrier, ok := value.(ServiceCarrier); ok {
+	if carrier, composed := value.(ServiceCarrier); composed {
+		if nilInterface(carrier) {
+			return nil
+		}
 		service, exists := carrier.NamespaceService(key)
-		if !exists {
+		if !exists || nilInterface(service) {
 			return nil
 		}
 		return service
 	}
 	return value
+}
+
+func unwrapNamespaceCarriers(value any) (any, bool) {
+	for range maxNamespaceResolutionDepth {
+		if nilInterface(value) {
+			return nil, false
+		}
+		carrier, wrapped := value.(NamespaceCarrier)
+		if !wrapped {
+			return value, true
+		}
+		if nilInterface(carrier) {
+			return nil, false
+		}
+		value = carrier.NamespaceBackend()
+		if nilInterface(value) {
+			return nil, false
+		}
+	}
+	return nil, false
 }
 
 // composedNamespace is immutable after construction. Adapter cleanup is

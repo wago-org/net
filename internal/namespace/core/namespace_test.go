@@ -154,6 +154,43 @@ type testNamespaceCarrier struct{ namespace Namespace }
 
 func (c testNamespaceCarrier) NamespaceBackend() Namespace { return c.namespace }
 
+type nestedNamespaceCarrier struct {
+	Namespace
+	backend Namespace
+}
+
+func (c *nestedNamespaceCarrier) NamespaceBackend() Namespace {
+	if c == nil {
+		panic("typed-nil namespace carrier invoked")
+	}
+	return c.backend
+}
+
+type panicBaseCarrier struct {
+	Namespace
+	base Namespace
+}
+
+func (c *panicBaseCarrier) NamespaceBase() Namespace {
+	if c == nil {
+		panic("typed-nil base carrier invoked")
+	}
+	return c.base
+}
+
+type panicServiceCarrier struct {
+	Namespace
+	service any
+	exists  bool
+}
+
+func (c *panicServiceCarrier) NamespaceService(ServiceKey) (any, bool) {
+	if c == nil {
+		panic("typed-nil service carrier invoked")
+	}
+	return c.service, c.exists
+}
+
 func TestResolveNamespaceBaseUnwrapsOwnershipAndComposition(t *testing.T) {
 	base := new(compositionBase)
 	composed, err := ComposeNamespace(base, Service{Key: "tcp", Value: new(int)})
@@ -169,12 +206,79 @@ func TestResolveNamespaceBaseUnwrapsOwnershipAndComposition(t *testing.T) {
 	if got := ResolveNamespaceBase(testNamespaceCarrier{namespace: composed}); got != base {
 		t.Fatalf("owned composed base = %T %p, want %p", got, got, base)
 	}
+	nestedCarrier := &nestedNamespaceCarrier{Namespace: composed, backend: composed}
+	if got := ResolveNamespaceBase(testNamespaceCarrier{namespace: nestedCarrier}); got != base {
+		t.Fatalf("nested owned composed base = %T %p, want %p", got, got, base)
+	}
+	nestedComposition, err := ComposeNamespace(composed, Service{Key: "udp", Value: new(int)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := ResolveNamespaceBase(nestedComposition); got != base {
+		t.Fatalf("nested composed base = %T %p, want %p", got, got, base)
+	}
 	carrier := composed.(BaseCarrier)
 	if carrier.NamespaceBase() != base {
 		t.Fatal("base carrier did not preserve exact namespace")
 	}
 	if (*composedNamespace)(nil).NamespaceBase() != nil {
 		t.Fatal("nil composed namespace exposed a base")
+	}
+}
+
+func TestResolveNamespaceRejectsTypedNilCarrierBoundaries(t *testing.T) {
+	var typedNilBase *compositionBase
+	var typedNilNamespaceCarrier *nestedNamespaceCarrier
+	var typedNilBaseCarrier *panicBaseCarrier
+	var typedNilServiceCarrier *panicServiceCarrier
+	var typedNilService *int
+
+	for _, test := range []struct {
+		name  string
+		value any
+	}{
+		{name: "direct namespace", value: typedNilBase},
+		{name: "namespace carrier", value: typedNilNamespaceCarrier},
+		{name: "namespace backend", value: testNamespaceCarrier{namespace: typedNilNamespaceCarrier}},
+		{name: "base carrier", value: typedNilBaseCarrier},
+		{name: "base result", value: &panicBaseCarrier{Namespace: new(compositionBase), base: typedNilBase}},
+	} {
+		t.Run("base/"+test.name, func(t *testing.T) {
+			if got := ResolveNamespaceBase(test.value); got != nil {
+				t.Fatalf("ResolveNamespaceBase = %T, want nil", got)
+			}
+		})
+	}
+
+	for _, test := range []struct {
+		name  string
+		value any
+	}{
+		{name: "direct value", value: typedNilService},
+		{name: "namespace carrier", value: typedNilNamespaceCarrier},
+		{name: "namespace backend", value: testNamespaceCarrier{namespace: typedNilServiceCarrier}},
+		{name: "service carrier", value: typedNilServiceCarrier},
+		{name: "service result", value: &panicServiceCarrier{Namespace: new(compositionBase), service: typedNilService, exists: true}},
+	} {
+		t.Run("service/"+test.name, func(t *testing.T) {
+			if got := ResolveNamespaceService(test.value, "tcp"); got != nil {
+				t.Fatalf("ResolveNamespaceService = %T, want nil", got)
+			}
+		})
+	}
+
+	base := new(compositionBase)
+	service := new(int)
+	composed, err := ComposeNamespace(base, Service{Key: "tcp", Value: service})
+	if err != nil {
+		t.Fatal(err)
+	}
+	nested := &nestedNamespaceCarrier{Namespace: composed, backend: composed}
+	if got := ResolveNamespaceService(testNamespaceCarrier{namespace: nested}, "tcp"); got != service {
+		t.Fatalf("nested valid service = %T, want %T", got, service)
+	}
+	if got := ResolveNamespaceService(base, "tcp"); got != base {
+		t.Fatalf("direct valid service = %T, want %T", got, base)
 	}
 }
 
