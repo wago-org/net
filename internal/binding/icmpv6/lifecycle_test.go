@@ -311,12 +311,22 @@ func TestBindingsNeighborAtomicStatusesCacheAndLifecycle(t *testing.T) {
 	if status := callLifecycleBinding(t, bindingByName(t, bindings, "lookup_neighbor"), host, uint64(namespaceHandle), 0, 16); status != guest.StatusInvalidArgument || backend.lookupCalls != 0 {
 		t.Fatalf("overlap lookup = %v calls=%d", status, backend.lookupCalls)
 	}
-	if status := callLifecycleBinding(t, bindingByName(t, bindings, "lookup_neighbor"), host, uint64(namespaceHandle), 0, lookupPtr); status != guest.StatusAgain || backend.lookupCalls != 1 || backend.lookupRequest != request || !bytes.Equal(host.memory[lookupPtr:lookupPtr+uint64(icmpabi.NeighborV1Size)], lookupBefore) {
-		t.Fatalf("missing lookup = %v calls=%d request=%+v", status, backend.lookupCalls, backend.lookupRequest)
+	backend.lookupFailure = nscore.Fail(nscore.FailureTemporary, errors.New("cache unavailable"))
+	if status := callLifecycleBinding(t, bindingByName(t, bindings, "lookup_neighbor"), host, uint64(namespaceHandle), 0, lookupPtr); status != guest.StatusTemporaryFailure || backend.lookupCalls != 1 || backend.lookupRequest != request || !bytes.Equal(host.memory[lookupPtr:lookupPtr+uint64(icmpabi.NeighborV1Size)], lookupBefore) {
+		t.Fatalf("failed lookup = %v calls=%d request=%+v", status, backend.lookupCalls, backend.lookupRequest)
+	}
+	backend.lookupFailure = nil
+	backend.lookupNeighbor, backend.lookupFound = icmpns.Neighbor{Address: address, ScopeID: 4}, true
+	if status := callLifecycleBinding(t, bindingByName(t, bindings, "lookup_neighbor"), host, uint64(namespaceHandle), 0, lookupPtr); status != guest.StatusIO || backend.lookupCalls != 2 || !bytes.Equal(host.memory[lookupPtr:lookupPtr+uint64(icmpabi.NeighborV1Size)], lookupBefore) {
+		t.Fatalf("malformed lookup = %v calls=%d", status, backend.lookupCalls)
+	}
+	backend.lookupFound = false
+	if status := callLifecycleBinding(t, bindingByName(t, bindings, "lookup_neighbor"), host, uint64(namespaceHandle), 0, lookupPtr); status != guest.StatusAgain || backend.lookupCalls != 3 || !bytes.Equal(host.memory[lookupPtr:lookupPtr+uint64(icmpabi.NeighborV1Size)], lookupBefore) {
+		t.Fatalf("missing lookup = %v calls=%d", status, backend.lookupCalls)
 	}
 	backend.lookupNeighbor, backend.lookupFound = neighbor, true
-	if status := callLifecycleBinding(t, bindingByName(t, bindings, "lookup_neighbor"), host, uint64(namespaceHandle), 0, lookupPtr); status != guest.StatusOK {
-		t.Fatalf("lookup = %v", status)
+	if status := callLifecycleBinding(t, bindingByName(t, bindings, "lookup_neighbor"), host, uint64(namespaceHandle), 0, lookupPtr); status != guest.StatusOK || backend.lookupCalls != 4 {
+		t.Fatalf("lookup = %v calls=%d", status, backend.lookupCalls)
 	}
 	if decoded, ok := icmpabi.DecodeNeighborV1(host.memory, uint32(lookupPtr)); !ok || decoded != neighbor {
 		t.Fatalf("lookup result = %+v/%v", decoded, ok)
@@ -330,8 +340,14 @@ func TestBindingsNeighborAtomicStatusesCacheAndLifecycle(t *testing.T) {
 		t.Fatalf("reserved seed = %v calls=%d", status, backend.seedCalls)
 	}
 	host.memory[256+38] = 0
+	if status := callLifecycleBinding(t, bindingByName(t, bindings, "seed_neighbor"), host, uint64(resolutionHandle), 256); status != guest.StatusBadHandle || backend.seedCalls != 0 {
+		t.Fatalf("wrong-kind seed = %v calls=%d", status, backend.seedCalls)
+	}
 	if status := callLifecycleBinding(t, bindingByName(t, bindings, "seed_neighbor"), host, uint64(namespaceHandle), 256); status != guest.StatusOK || backend.seedCalls != 1 || backend.seeded != neighbor {
 		t.Fatalf("seed = %v calls=%d neighbor=%+v", status, backend.seedCalls, backend.seeded)
+	}
+	if status := callLifecycleBinding(t, bindingByName(t, bindings, "remove_neighbor"), host, uint64(resolutionHandle), 0); status != guest.StatusBadHandle || backend.removeCalls != 0 {
+		t.Fatalf("wrong-kind remove = %v calls=%d", status, backend.removeCalls)
 	}
 	backend.removeFailure = nscore.Fail(nscore.FailureNotSupported, errors.New("unsupported"))
 	if status := callLifecycleBinding(t, bindingByName(t, bindings, "remove_neighbor"), host, uint64(namespaceHandle), 0); status != guest.StatusNotSupported || backend.removeCalls != 1 || backend.removed != request {
