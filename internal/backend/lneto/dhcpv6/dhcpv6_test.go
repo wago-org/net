@@ -181,6 +181,57 @@ func TestUDPAndIPv6PayloadLengthsContainDHCPBeforeMutation(t *testing.T) {
 	}
 }
 
+func TestIngressOwnsMalformedDeclaredIPv6PayloadAfterRawPortCorrelation(t *testing.T) {
+	_, adapter, account := newTestAdapter(t, defaultConfig())
+	resource, _, err := adapter.TryAcquire()
+	if err != nil {
+		t.Fatal(err)
+	}
+	lease := resource.(*leaseResource)
+	var scratch [1514]byte
+	if _, worked, err := adapter.egressLocked(scratch[:]); err != nil || !worked || lease.state != leaseWaitAdvertise {
+		t.Fatalf("Solicit egress = worked:%v err:%v state:%v", worked, err, lease.state)
+	}
+
+	serverAddr := netip.MustParseAddr("fe80::2")
+	serverMAC := [6]byte{0x02, 0, 0, 0, 0, 2}
+	serverDUID := []byte{0, 3, 0, 1, 2, 0, 0, 0, 0, 2}
+	assigned := netip.MustParseAddr("2001:db8::10")
+	advertise := buildServerPayload(t, lnetodhcp.MsgAdvertise, lease.xid, lease.clientDUID[:], serverDUID, lease.iaid, assigned, false)
+	base := wrapServerFrame(t, adapter, serverAddr, serverMAC, advertise)
+	fullPayloadBytes := 8 + len(advertise)
+	usageBefore, _ := account.Snapshot()
+	packetBefore := append([]byte(nil), lease.packet...)
+	clientState := lease.client.State()
+
+	for declaredBytes := 0; declaredBytes < fullPayloadBytes; declaredBytes++ {
+		t.Run(fmt.Sprintf("declared_payload_bytes_%d", declaredBytes), func(t *testing.T) {
+			malformed := append([]byte(nil), base...)
+			ip, err := lnetoipv6.NewFrame(malformed[14:])
+			if err != nil {
+				t.Fatal(err)
+			}
+			ip.SetPayloadLength(uint16(declaredBytes))
+			handled, ingressErr := adapter.ingressLocked(malformed)
+			if ingressErr != nil || !handled {
+				t.Fatalf("ingress = handled:%v err:%v", handled, ingressErr)
+			}
+			if lease.state != leaseWaitAdvertise || lease.attempts != 1 || lease.wait != adapter.config.ResponseServiceAttempts ||
+				!bytes.Equal(lease.packet, packetBefore) || lease.client.State() != clientState || lease.serverLen != 0 ||
+				lease.result != (dhcpns.Configuration{}) || lease.failure != nil {
+				t.Fatalf("malformed declared payload mutated lease: state=%v attempts=%d wait=%d client=%v serverLen=%d result=%+v failure=%v", lease.state, lease.attempts, lease.wait, lease.client.State(), lease.serverLen, lease.result, lease.failure)
+			}
+			if usage, _ := account.Snapshot(); usage != usageBefore {
+				t.Fatalf("malformed declared payload changed quota = %+v, want %+v", usage, usageBefore)
+			}
+		})
+	}
+
+	if handled, err := adapter.ingressLocked(base); err != nil || !handled || lease.state != leaseRequestPending {
+		t.Fatalf("valid Advertise after malformed declared payloads = handled:%v err:%v state:%v", handled, err, lease.state)
+	}
+}
+
 func TestOperationalRetriesMalformedTransportAndNamespaceClosePreserveLifecycle(t *testing.T) {
 	core, adapter, account := newTestAdapter(t, defaultConfig())
 	resource, progress, err := adapter.TryAcquire()
