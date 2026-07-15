@@ -124,6 +124,12 @@ func TestInstanceNTPCanonicalizesFailedAndUnusedOutputs(t *testing.T) {
 	if sample, next, err := Result(state, handle); sample != (ntpns.Sample{}) || next != 0 || failureOf(err) != nscore.FailureTimedOut {
 		t.Fatalf("failed Result = %+v, %v, %v", sample, next, err)
 	}
+	synchronization.failure = nil
+	synchronization.sample = dirtySample
+	synchronization.sample.Server = netip.MustParseAddr("127.0.0.1")
+	if sample, next, err := Result(state, handle); sample != (ntpns.Sample{}) || next != 0 || failureOf(err) != nscore.FailureIO {
+		t.Fatalf("invalid server Result = %+v, %v, %v", sample, next, err)
+	}
 }
 
 func TestInstanceNTPExactKindLifecycle(t *testing.T) {

@@ -58,6 +58,10 @@ func TestNarrowNTPFacetExplicitClockAndSampleValidation(t *testing.T) {
 	}
 	for _, invalid := range []Sample{
 		{},
+		{Server: netip.IPv4Unspecified(), CorrectedTime: now, RoundTripDelay: time.Millisecond, Stratum: 1, Version: 4},
+		{Server: netip.MustParseAddr("127.0.0.1"), CorrectedTime: now, RoundTripDelay: time.Millisecond, Stratum: 1, Version: 4},
+		{Server: netip.MustParseAddr("224.0.1.1"), CorrectedTime: now, RoundTripDelay: time.Millisecond, Stratum: 1, Version: 4},
+		{Server: netip.MustParseAddr("255.255.255.255"), CorrectedTime: now, RoundTripDelay: time.Millisecond, Stratum: 1, Version: 4},
 		{Server: netip.MustParseAddr("::1"), CorrectedTime: now, RoundTripDelay: time.Millisecond, Stratum: 1, Version: 4},
 		{Server: sample.Server, CorrectedTime: now.In(time.FixedZone("host", 0)), RoundTripDelay: time.Millisecond, Stratum: 1, Version: 4},
 		{Server: sample.Server, CorrectedTime: now, RoundTripDelay: -1, Stratum: 1, Version: 4},

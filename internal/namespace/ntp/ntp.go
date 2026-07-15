@@ -13,6 +13,8 @@ import (
 // shared composed namespace.
 const ServiceKey nscore.ServiceKey = "ntp"
 
+var limitedBroadcast = netip.AddrFrom4([4]byte{255, 255, 255, 255})
+
 // Clock is the explicit host time authority used to timestamp NTP exchanges.
 // Implementations must return promptly and must not reenter the namespace.
 type Clock interface {
@@ -47,7 +49,8 @@ type Sample struct {
 // Valid reports whether a sample is finite, canonical, and suitable for the
 // fixed guest ABI.
 func (s Sample) Valid() bool {
-	return s.Server.Is4() && !s.Server.Is4In6() && !s.Server.IsUnspecified() && s.Server.Zone() == "" &&
+	return s.Server.Is4() && !s.Server.Is4In6() && !s.Server.IsUnspecified() && !s.Server.IsLoopback() && !s.Server.IsMulticast() &&
+		s.Server != limitedBroadcast && s.Server.Zone() == "" &&
 		!s.CorrectedTime.IsZero() && s.CorrectedTime.Location() == time.UTC && s.CorrectedTime.Nanosecond() >= 0 &&
 		s.RoundTripDelay >= 0 && s.Stratum > 0 && s.Stratum < 16 && s.Leap < 3 && s.Version == 4
 }
