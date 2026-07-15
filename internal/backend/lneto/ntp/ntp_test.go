@@ -543,6 +543,80 @@ func TestNTPMalformedTerminalRetiresTransportBeforeCloseAndStaleCloseCannotAffec
 	}
 }
 
+func TestNTPMalformedFailureIsolatesForcedPortReuseAndStaleClose(t *testing.T) {
+	clock := &manualClock{now: time.Date(2026, 7, 14, 12, 0, 0, 0, time.UTC)}
+	core, adapter, account := newTestAdapter(t, clock, Config{
+		Server: netip.MustParseAddr("192.0.2.123"), Clock: clock, MaxSyncs: 2,
+		MaxAttempts: 1, RetryServiceAttempts: 2, Precision: -20,
+	})
+	resource, _, err := adapter.TrySync()
+	if err != nil {
+		t.Fatal(err)
+	}
+	stale := resource.(*syncResource)
+	staleRequest := serviceEgress(t, core)
+	stalePort := stale.portLease.UDPPort()
+	staleResponse, staleArrival := makeNTPResponse(t, staleRequest, 100*time.Millisecond, 20*time.Millisecond)
+	malformed := append([]byte(nil), staleResponse...)
+	ntpFrame := ntpPayload(t, malformed)
+	ntpFrame.SetFlags(lnetontp.ModeClient, lnetontp.Version4, lnetontp.LeapNoWarning)
+	rechecksumUDP(t, malformed)
+	clock.now = staleArrival
+	serviceIngress(t, core, malformed)
+	if stale.state != syncFailed || stale.Readiness() != nscore.ReadyError || stale.portLease.UDPPort() != 0 || adapter.byPort[stalePort] != nil {
+		t.Fatalf("malformed terminal transport = state:%v readiness:%v port:%d mapped:%p", stale.state, stale.Readiness(), stale.portLease.UDPPort(), adapter.byPort[stalePort])
+	}
+
+	adapter.nextPort = stalePort
+	clock.now = staleArrival.Add(time.Second)
+	resource, _, err = adapter.TrySync()
+	if err != nil {
+		t.Fatal(err)
+	}
+	fresh := resource.(*syncResource)
+	if fresh.portLease.UDPPort() != stalePort || adapter.byPort[stalePort] != fresh {
+		t.Fatalf("forced port reuse = port:%d mapped:%p want:%d/%p", fresh.portLease.UDPPort(), adapter.byPort[stalePort], stalePort, fresh)
+	}
+	freshRequest1 := serviceEgress(t, core)
+	beforeRequest, beforeClockSample, beforeCalls := fresh.request, fresh.clockSample, clock.calls
+	core.Lock()
+	handled, ingressErr := adapter.ingressLocked(staleResponse)
+	core.Unlock()
+	if ingressErr != nil || !handled || fresh.state != syncWaiting || fresh.Readiness() != 0 || fresh.request != beforeRequest || fresh.clockSample != beforeClockSample || clock.calls != beforeCalls {
+		t.Fatalf("stale malformed-terminal response = handled:%v err:%v state:%v readiness:%v request_changed:%v clock_changed:%v calls:%d/%d", handled, ingressErr, fresh.state, fresh.Readiness(), fresh.request != beforeRequest, fresh.clockSample != beforeClockSample, clock.calls, beforeCalls)
+	}
+	if err := stale.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if adapter.byPort[stalePort] != fresh || fresh.portLease.UDPPort() != stalePort {
+		t.Fatalf("stale close affected fresh transport: mapped=%p port=%d", adapter.byPort[stalePort], fresh.portLease.UDPPort())
+	}
+	if usage, closed := account.Snapshot(); closed || usage != (quota.Usage{Resources: 1, NTPResources: 1, NTPWork: 1}) {
+		t.Fatalf("fresh quota after stale close = %+v, closed=%v", usage, closed)
+	}
+
+	freshResponse1, freshArrival1 := makeNTPResponse(t, freshRequest1, 100*time.Millisecond, 20*time.Millisecond)
+	clock.now = freshArrival1
+	serviceIngress(t, core, freshResponse1)
+	if fresh.state != syncPrepare || fresh.Readiness() != 0 {
+		t.Fatalf("fresh first exchange = state:%v readiness:%v", fresh.state, fresh.Readiness())
+	}
+	clock.now = freshArrival1.Add(time.Second)
+	freshRequest2 := serviceEgress(t, core)
+	freshResponse2, freshArrival2 := makeNTPResponse(t, freshRequest2, 100*time.Millisecond, 20*time.Millisecond)
+	clock.now = freshArrival2
+	serviceIngress(t, core, freshResponse2)
+	if sample, next, err := fresh.TryResult(); err != nil || next != ntpns.NextReady || !sample.Valid() {
+		t.Fatalf("fresh result = %+v, %v, %v", sample, next, err)
+	}
+	if err := fresh.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if usage, _ := account.Snapshot(); usage != (quota.Usage{}) {
+		t.Fatalf("closed quota = %+v", usage)
+	}
+}
+
 func TestNTPStaleResponsesAndCloseCannotMutateForcedPortReuseAfterCompletion(t *testing.T) {
 	clock := &manualClock{now: time.Date(2026, 7, 14, 12, 0, 0, 0, time.UTC)}
 	core, adapter, account := newTestAdapter(t, clock, Config{
