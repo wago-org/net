@@ -719,6 +719,59 @@ func TestSocketDatagramQueuesShareBackingStorage(t *testing.T) {
 	}
 }
 
+func TestZeroPayloadDatagramRoundTripPreservesReadyEvent(t *testing.T) {
+	config := Config{MaxSockets: 1, ReceiveDatagrams: 1, TransmitDatagrams: 1}
+	sourceCore, sourceAdapter, sourceAccount := newTestAdapterWithConfig(t, 34, config)
+	_, destinationAdapter, destinationAccount := newTestAdapterWithConfig(t, 35, config)
+	sourceEndpoint := nscore.Endpoint{Address: netip.MustParseAddr("192.0.2.34"), Port: 4034}
+	destinationEndpoint := nscore.Endpoint{Address: netip.MustParseAddr("192.0.2.35"), Port: 4035}
+	source := bindTestSocket(t, sourceAdapter, sourceEndpoint)
+	destination := bindTestSocket(t, destinationAdapter, destinationEndpoint).(*udpSocket)
+
+	if progress, err := source.TrySend(nil, destinationEndpoint); err != nil || progress != nscore.ProgressDone {
+		t.Fatalf("empty datagram send = %v, %v", progress, err)
+	}
+	if ready := source.Readiness(); ready&nscore.ReadyWritable != 0 {
+		t.Fatalf("full zero-payload transmit queue remained writable: %v", ready)
+	}
+	frame := serviceUDPFrame(t, sourceCore)
+	if len(frame) != 14+20+8 {
+		t.Fatalf("empty datagram frame bytes = %d", len(frame))
+	}
+	ipFrame, udpFrame := decodeUDPFrame(t, frame)
+	if ipFrame.TotalLength() != 20+8 || udpFrame.Length() != 8 || len(udpFrame.Payload()) != 0 {
+		t.Fatalf("empty datagram wire lengths = IPv4 %d UDP %d payload %d", ipFrame.TotalLength(), udpFrame.Length(), len(udpFrame.Payload()))
+	}
+	ethernetFrame, err := ethernet.NewFrame(frame)
+	if err != nil {
+		t.Fatal(err)
+	}
+	*ethernetFrame.DestinationHardwareAddr() = destinationAdapter.hardwareAddress
+	destinationAdapter.core.Lock()
+	handled, err := destinationAdapter.ingressLocked(frame)
+	queued := destination.rx.count
+	destinationAdapter.core.Unlock()
+	if err != nil || !handled || queued != 1 || destination.Readiness()&nscore.ReadyReadable == 0 {
+		t.Fatalf("empty datagram ingress = handled %v, err %v, queued %d, readiness %v", handled, err, queued, destination.Readiness())
+	}
+
+	dst := []byte{0xa5}
+	result, err := destination.TryReceive(dst)
+	if err != nil || result != (udpns.DatagramResult{Source: sourceEndpoint, Ready: true}) || dst[0] != 0xa5 {
+		t.Fatalf("empty datagram receive = %+v, %v, dst=%x", result, err, dst)
+	}
+	if ready := destination.Readiness(); ready&nscore.ReadyReadable != 0 {
+		t.Fatalf("drained empty datagram remained readable: %v", ready)
+	}
+	wantUsage := quota.Usage{Resources: 1, UDPResources: 1}
+	if usage, _ := sourceAccount.Snapshot(); usage != wantUsage {
+		t.Fatalf("source metadata-only quota = %+v, want %+v", usage, wantUsage)
+	}
+	if usage, _ := destinationAccount.Snapshot(); usage != wantUsage {
+		t.Fatalf("destination metadata-only quota = %+v, want %+v", usage, wantUsage)
+	}
+}
+
 func TestZeroPayloadSocketCreationUsesMetadataOnlyQuota(t *testing.T) {
 	config := Config{MaxSockets: 1, ReceiveDatagrams: 1, TransmitDatagrams: 1}
 	_, adapter, account := newTestAdapterWithConfig(t, 34, config)
