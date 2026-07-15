@@ -482,6 +482,79 @@ func TestMalformedCorrelatedEchoRepliesAreDroppedWithoutRetiringExchange(t *test
 	}
 }
 
+func FuzzICMPv6OwnedEchoReplyLifecycle(f *testing.F) {
+	f.Add([]byte("fuzz"), []byte("fuzz"))
+	f.Add([]byte("expected"), []byte("mismatch"))
+	f.Add([]byte{0}, []byte{})
+	f.Fuzz(func(t *testing.T, expected, replyPayload []byte) {
+		if len(expected) == 0 || len(expected) > 64 || len(replyPayload) > 64 {
+			return
+		}
+		coreA, a := newTestAdapter(t, 71, "2001:db8::71")
+		coreB, b := newTestAdapter(t, 72, "2001:db8::72")
+		resource, progress, err := a.TryEcho(icmpns.EchoRequest{Destination: b.address, Payload: expected})
+		if err != nil || progress != nscore.ProgressInProgress {
+			t.Fatalf("TryEcho = %T, %v, %v", resource, progress, err)
+		}
+		exchange := resource.(*echo)
+		key := identityKey(exchange.identifier, exchange.sequence)
+		storage := make([]byte, coreA.Link().MaxFrameBytes())
+		coreA.Lock()
+		written, worked, err := a.egressLocked(storage)
+		coreA.Unlock()
+		if err != nil || !worked || written == 0 || exchange.state != stateWaiting {
+			t.Fatalf("echo request egress = %d, %v, %v state=%v", written, worked, err, exchange.state)
+		}
+		coreB.Lock()
+		written, err = b.writeEchoLocked(storage, a.address, a.hardwareAddress, lnetoicmp.TypeEchoReply, exchange.identifier, exchange.sequence, replyPayload, 64)
+		coreB.Unlock()
+		if err != nil || written == 0 {
+			t.Fatalf("echo reply build = %d, %v", written, err)
+		}
+		coreA.Lock()
+		handled, ingressErr := a.ingressLocked(storage[:written])
+		mapped := a.byIdentity[key]
+		coreA.Unlock()
+		if ingressErr != nil || !handled {
+			t.Fatalf("owned reply ingress = handled:%v err:%v", handled, ingressErr)
+		}
+		wantUsage := quota.Usage{Resources: 1, ICMPv6Resources: 1, QueuedBytes: uint64(len(expected))}
+		if bytes.Equal(expected, replyPayload) {
+			if exchange.state != stateDone || exchange.failure != nil || mapped != nil || exchange.Readiness() != nscore.ReadyICMPv6Reply {
+				t.Fatalf("matching reply state = %v failure=%v mapped=%p readiness=%v", exchange.state, exchange.failure, mapped, exchange.Readiness())
+			}
+			dst := bytes.Repeat([]byte{0xa5}, len(expected)+1)
+			result, next, err := exchange.TryResult(dst)
+			if err != nil || next != icmpns.NextReady || result.Source != b.address || result.ScopeID != 0 || result.Identifier != exchange.identifier || result.Sequence != exchange.sequence || result.Copied != len(expected) || result.PayloadBytes != len(expected) || !bytes.Equal(dst[:len(expected)], expected) || dst[len(expected)] != 0xa5 {
+				t.Fatalf("matching reply result = %+v, %v, %v payload=%x", result, next, err, dst)
+			}
+		} else {
+			wantUsage.ICMPv6Work = 1
+			if exchange.state != stateWaiting || exchange.failure != nil || mapped != exchange || exchange.Readiness() != 0 {
+				t.Fatalf("mismatching reply state = %v failure=%v mapped=%p readiness=%v", exchange.state, exchange.failure, mapped, exchange.Readiness())
+			}
+			if result, next, err := exchange.TryResult(nil); err != nil || next != icmpns.NextWouldBlock || result != (icmpns.EchoResult{}) {
+				t.Fatalf("mismatching reply result = %+v, %v, %v", result, next, err)
+			}
+		}
+		if usage, closed := a.quotas.Snapshot(); closed || usage != wantUsage {
+			t.Fatalf("reply quota = %+v, closed=%v; want %+v", usage, closed, wantUsage)
+		}
+		if err := coreA.Close(); err != nil {
+			t.Fatal(err)
+		}
+		if err := coreB.Close(); err != nil {
+			t.Fatal(err)
+		}
+		if usage, _ := a.quotas.Snapshot(); usage != (quota.Usage{}) {
+			t.Fatalf("namespace close quota = %+v", usage)
+		}
+		if exchange.owner != nil || exchange.payload != nil || len(a.echoes) != 0 || a.byIdentity != nil {
+			t.Fatalf("namespace close retained fuzzed echo state: exchange=%+v echoes=%d identities=%v", exchange, len(a.echoes), a.byIdentity)
+		}
+	})
+}
+
 func TestQueuedEchoResponsesPreserveQuotaAcrossSaturationRetryDrainAndClose(t *testing.T) {
 	coreA, a := newTestAdapter(t, 25, "2001:db8::25")
 	coreB, b := newTestAdapter(t, 26, "2001:db8::26")
