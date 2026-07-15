@@ -555,6 +555,43 @@ func TestICMPv4IngressRejectsForeignEthernetIdentity(t *testing.T) {
 	}
 }
 
+func TestICMPv4IngressDoesNotClaimUnownedTrafficWithInvalidSourceMAC(t *testing.T) {
+	core, adapter, _ := newTestAdapter(t, Config{MaxEchoes: 1, MaxPayloadBytes: 16, MaxAttempts: 1, RetryServiceAttempts: 2})
+	resource, _, err := adapter.TryEcho(icmpns.Request{Destination: netip.MustParseAddr("192.0.2.99"), Payload: []byte("wire")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	exchange := resource.(*echo)
+	request := serviceEgress(t, core)
+	unowned := makeEchoReply(t, request, nil)
+	ethernetFrame, err := ethernet.NewFrame(unowned)
+	if err != nil {
+		t.Fatal(err)
+	}
+	*ethernetFrame.SourceHardwareAddr() = [6]byte{1, 0, 0, 0, 0, 1}
+	ipFrame, err := ipv4.NewFrame(ethernetFrame.Payload())
+	if err != nil {
+		t.Fatal(err)
+	}
+	ipFrame.SetProtocol(lneto.IPProtoUDP)
+
+	core.Lock()
+	handled, ingressErr := adapter.ingressLocked(unowned)
+	state, attempts := exchange.state, exchange.attempts
+	core.Unlock()
+	if ingressErr != nil || handled {
+		t.Fatalf("unowned invalid-source frame = handled %v, err %v", handled, ingressErr)
+	}
+	if state != echoWaiting || attempts != 1 || exchange.Readiness() != 0 {
+		t.Fatalf("unowned invalid-source frame mutated exchange: state=%v attempts=%d readiness=%v", state, attempts, exchange.Readiness())
+	}
+
+	serviceIngress(t, core, makeEchoReply(t, request, nil))
+	if exchange.Readiness() != nscore.ReadyICMPv4Reply {
+		t.Fatalf("valid reply after unowned traffic readiness = %v", exchange.Readiness())
+	}
+}
+
 func TestICMPv4ClosedExchangeLateReplyAndStaleCloseCannotMutateFreshExchange(t *testing.T) {
 	core, adapter, account := newTestAdapter(t, Config{MaxEchoes: 1, MaxPayloadBytes: 16, MaxAttempts: 2, RetryServiceAttempts: 2})
 	request := icmpns.Request{Destination: netip.MustParseAddr("192.0.2.99"), Payload: []byte("fresh")}

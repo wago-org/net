@@ -416,9 +416,6 @@ func (a *Adapter) ingressLocked(frame []byte) (bool, error) {
 	if *ethernetFrame.DestinationHardwareAddr() != a.hardwareAddress {
 		return false, nil
 	}
-	if !validUnicastMAC(*ethernetFrame.SourceHardwareAddr()) {
-		return true, nil
-	}
 	ipFrame, err := ipv4.NewFrame(ethernetFrame.Payload())
 	if err != nil {
 		return false, err
@@ -440,6 +437,9 @@ func (a *Adapter) ingressLocked(frame []byte) (bool, error) {
 	exchange := a.byIdentity[identityKey(echoFrame.Identifier(), echoFrame.SequenceNumber())]
 	if exchange == nil || (exchange.state != echoPending && exchange.state != echoWaiting) || netip.AddrFrom4(*ipFrame.SourceAddr()) != exchange.destination {
 		return false, nil
+	}
+	if !validUnicastMAC(*ethernetFrame.SourceHardwareAddr()) {
+		return true, nil
 	}
 	ipFrame.ValidateExceptCRC(&validator)
 	if err := validator.ErrPop(); err != nil || ipFrame.CalculateHeaderCRC() != 0 || ipFrame.Flags().MoreFragments() || ipFrame.Flags().FragmentOffset() != 0 {
