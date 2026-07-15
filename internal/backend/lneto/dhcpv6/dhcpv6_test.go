@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/binary"
 	"errors"
+	"fmt"
 	"net/netip"
 	"testing"
 
@@ -387,6 +388,58 @@ func TestIngressCorrelatesDHCPv6BeforeEthernetSourceValidation(t *testing.T) {
 	valid := wrapServerFrame(t, adapter, serverAddr, [6]byte{0x02, 0, 0, 0, 0, 2}, advertise)
 	if handled, err := adapter.ingressLocked(valid); err != nil || !handled || lease.state != leaseRequestPending {
 		t.Fatalf("valid advertise after drops = handled:%v err:%v state:%v", handled, err, lease.state)
+	}
+}
+
+func TestIngressContainsTruncatedUDPOnlyAfterExactPortCorrelation(t *testing.T) {
+	_, adapter, _ := newTestAdapter(t, defaultConfig())
+	resource, _, err := adapter.TryAcquire()
+	if err != nil {
+		t.Fatal(err)
+	}
+	lease := resource.(*leaseResource)
+	var scratch [1514]byte
+	if _, worked, err := adapter.egressLocked(scratch[:]); err != nil || !worked || lease.state != leaseWaitAdvertise {
+		t.Fatalf("Solicit egress = worked:%v err:%v state:%v", worked, err, lease.state)
+	}
+
+	serverAddr := netip.MustParseAddr("fe80::2")
+	serverMAC := [6]byte{0x02, 0, 0, 0, 0, 2}
+	serverDUID := []byte{0, 3, 0, 1, 2, 0, 0, 0, 0, 2}
+	advertise := buildServerPayload(t, lnetodhcp.MsgAdvertise, lease.xid, lease.clientDUID[:], serverDUID, lease.iaid, netip.MustParseAddr("2001:db8::10"), false)
+	base := wrapServerFrame(t, adapter, serverAddr, serverMAC, advertise)
+
+	for udpBytes := 0; udpBytes < 8; udpBytes++ {
+		t.Run(fmt.Sprintf("udp_header_bytes_%d", udpBytes), func(t *testing.T) {
+			truncated := append([]byte(nil), base[:14+40+udpBytes]...)
+			handled, err := adapter.ingressLocked(truncated)
+			wantHandled := udpBytes >= 4
+			if err != nil || handled != wantHandled {
+				t.Fatalf("ingress = handled:%v err:%v, want handled:%v", handled, err, wantHandled)
+			}
+			if lease.state != leaseWaitAdvertise || lease.serverLen != 0 || lease.result != (dhcpns.Configuration{}) || lease.failure != nil {
+				t.Fatalf("truncated ingress mutated lease: state=%v serverLen=%d result=%+v failure=%v", lease.state, lease.serverLen, lease.result, lease.failure)
+			}
+		})
+	}
+
+	for udpBytes := 4; udpBytes < 8; udpBytes++ {
+		t.Run(fmt.Sprintf("foreign_ports_%d", udpBytes), func(t *testing.T) {
+			foreign := append([]byte(nil), base...)
+			udp, err := lnetoudp.NewFrame(foreign[14+40:])
+			if err != nil {
+				t.Fatal(err)
+			}
+			udp.SetDestinationPort(9999)
+			foreign = foreign[:14+40+udpBytes]
+			if handled, err := adapter.ingressLocked(foreign); err != nil || handled {
+				t.Fatalf("foreign truncated UDP = handled:%v err:%v", handled, err)
+			}
+		})
+	}
+
+	if handled, err := adapter.ingressLocked(base); err != nil || !handled || lease.state != leaseRequestPending {
+		t.Fatalf("valid advertise after truncations = handled:%v err:%v state:%v", handled, err, lease.state)
 	}
 }
 
