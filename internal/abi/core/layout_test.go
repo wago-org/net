@@ -119,6 +119,77 @@ func TestPollV1RejectedEncodingDoesNotMutate(t *testing.T) {
 	}
 }
 
+func FuzzPollEventV1EncodingAtomic(f *testing.F) {
+	f.Add(uint32(8), uint64(0xf102030405060708), uint32(namespace.ReadyReadable|namespace.ReadyClosed))
+	f.Add(^uint32(0), uint64(1), uint32(namespace.ReadyWritable))
+	f.Add(uint32(0), uint64(0), uint32(namespace.ReadyReadable))
+	f.Add(uint32(16), uint64(1), uint32(1<<31))
+	f.Fuzz(func(t *testing.T, ptr uint32, handle uint64, ready uint32) {
+		memory := bytes.Repeat([]byte{0xa5}, 64)
+		before := append([]byte(nil), memory...)
+		event := readiness.Event{Handle: resource.Handle(handle), Readiness: namespace.Readiness(ready)}
+		encoded := EncodePollEventsV1(memory, ptr, []readiness.Event{event})
+		want := event.Valid() && uint64(ptr)+uint64(PollEventV1Size) <= uint64(len(memory))
+		if encoded != want {
+			t.Fatalf("EncodePollEventsV1 ptr=%d event=%+v = %v, want %v", ptr, event, encoded, want)
+		}
+		if !encoded {
+			if !bytes.Equal(memory, before) {
+				t.Fatal("failed event encode mutated memory")
+			}
+			return
+		}
+		output := memory[ptr : ptr+PollEventV1Size]
+		if binary.LittleEndian.Uint64(output[0:8]) != handle || binary.LittleEndian.Uint32(output[8:12]) != ready || binary.LittleEndian.Uint32(output[12:16]) != 0 {
+			t.Fatalf("encoded event = %x", output)
+		}
+		if !bytes.Equal(memory[:ptr], before[:ptr]) || !bytes.Equal(memory[ptr+PollEventV1Size:], before[ptr+PollEventV1Size:]) {
+			t.Fatal("event encode mutated bytes outside output")
+		}
+	})
+}
+
+func FuzzPollResultV1EncodingAtomic(f *testing.F) {
+	f.Add(uint32(8), uint32(2), uint32(4), uint32(1), uint32(1), uint32(1))
+	f.Add(^uint32(0), uint32(0), uint32(0), uint32(0), uint32(0), uint32(0))
+	f.Add(uint32(0), uint32(2), uint32(1), uint32(0), uint32(0), uint32(0))
+	f.Fuzz(func(t *testing.T, ptr, events, scanned, attempts, completed, stale uint32) {
+		budget := readiness.Budget{
+			Scans: 4, Events: 2, ServiceAttempts: 2,
+			Service: namespace.ServiceBudget{Packets: 2, Bytes: 64, Operations: 2},
+		}
+		report := readiness.Report{Events: events, Scanned: scanned, ServiceAttempts: attempts, ServiceCompleted: completed, StaleRegistrations: stale}
+		memory := bytes.Repeat([]byte{0x5a}, 64)
+		before := append([]byte(nil), memory...)
+		encoded := EncodePollResultV1(memory, ptr, report, budget)
+		want := report.ValidFor(budget) && uint64(ptr)+uint64(PollResultV1Size) <= uint64(len(memory))
+		if encoded != want {
+			t.Fatalf("EncodePollResultV1 ptr=%d report=%+v = %v, want %v", ptr, report, encoded, want)
+		}
+		if !encoded {
+			if !bytes.Equal(memory, before) {
+				t.Fatal("failed result encode mutated memory")
+			}
+			return
+		}
+		output := memory[ptr : ptr+PollResultV1Size]
+		got := [6]uint32{
+			binary.LittleEndian.Uint32(output[0:4]),
+			binary.LittleEndian.Uint32(output[4:8]),
+			binary.LittleEndian.Uint32(output[8:12]),
+			binary.LittleEndian.Uint32(output[12:16]),
+			binary.LittleEndian.Uint32(output[16:20]),
+			binary.LittleEndian.Uint32(output[20:24]),
+		}
+		if want := [6]uint32{events, scanned, attempts, completed, stale, 0}; got != want {
+			t.Fatalf("encoded result = %v, want %v", got, want)
+		}
+		if !bytes.Equal(memory[:ptr], before[:ptr]) || !bytes.Equal(memory[ptr+PollResultV1Size:], before[ptr+PollResultV1Size:]) {
+			t.Fatal("result encode mutated bytes outside output")
+		}
+	})
+}
+
 func FuzzV1Layouts(f *testing.F) {
 	f.Add(make([]byte, 64), uint32(0), uint32(0), uint32(0))
 	f.Add([]byte{1, 2, 3}, ^uint32(0), ^uint32(0), uint32(16))
