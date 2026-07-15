@@ -643,7 +643,7 @@ func inspectMessage(payload []byte, want lnetodhcp.MsgType, xid uint32, clientDU
 		return packetInfo{}, false
 	}
 	var info packetInfo
-	var clientIDs, serverIDs, statuses, ianas, iapds, dnsOptions, domainOptions, ntpOptions int
+	var clientIDs, serverIDs, statuses, ianas, iapds, dnsOptions, domainOptions int
 	ok := true
 	err = frame.ForEachOption(func(_ int, code lnetodhcp.OptCode, data []byte) error {
 		switch code {
@@ -675,8 +675,7 @@ func inspectMessage(payload []byte, want lnetodhcp.MsgType, xid uint32, clientDU
 			domainOptions++
 			ok = ok && domainOptions == 1 && parseNames(data, info.domains[:], config.MaxDomainSearch, &info.domainCount)
 		case lnetodhcp.OptNTPServer:
-			ntpOptions++
-			ok = ok && ntpOptions == 1 && parseNTP(data, config, &info)
+			ok = ok && parseNTP(data, config, &info)
 		}
 		if !ok {
 			return lneto.ErrPacketDrop
@@ -857,49 +856,39 @@ func parseNames(data []byte, destination []dhcpns.Name, limit uint8, count *uint
 }
 
 func parseNTP(data []byte, config Config, info *packetInfo) bool {
-	if len(data) == 0 {
+	code, sub, next, ok := nextOption(data, 0)
+	if !ok || next != len(data) {
 		return false
 	}
-	for ptr := 0; ptr < len(data); {
-		if ptr+4 > len(data) {
+	switch uint16(code) {
+	case 1:
+		if len(sub) != 16 || info.ntpCount >= config.MaxNTPServers {
 			return false
 		}
-		code := binary.BigEndian.Uint16(data[ptr : ptr+2])
-		length := int(binary.BigEndian.Uint16(data[ptr+2 : ptr+4]))
-		if ptr+4+length > len(data) {
+		address := netip.AddrFrom16([16]byte(sub))
+		if !validResultUnicast(address) {
 			return false
 		}
-		sub := data[ptr+4 : ptr+4+length]
-		switch code {
-		case 1:
-			if length != 16 || info.ntpCount >= config.MaxNTPServers {
-				return false
-			}
-			address := netip.AddrFrom16([16]byte(sub))
-			if !validResultUnicast(address) {
-				return false
-			}
-			info.ntp[info.ntpCount], info.ntpCount = address, info.ntpCount+1
-		case 2:
-			if length != 16 || info.ntpMulticastCount >= config.MaxNTPMulticastServers {
-				return false
-			}
-			address := netip.AddrFrom16([16]byte(sub))
-			if !address.Is6() || !address.IsMulticast() || address.Is4In6() {
-				return false
-			}
-			info.ntpMulticast[info.ntpMulticastCount], info.ntpMulticastCount = address, info.ntpMulticastCount+1
-		case 3:
-			var names [1]dhcpns.Name
-			var count uint8
-			if info.ntpNameCount >= config.MaxNTPServerNames || !parseNames(sub, names[:], 1, &count) || count != 1 {
-				return false
-			}
-			info.ntpNames[info.ntpNameCount], info.ntpNameCount = names[0], info.ntpNameCount+1
-		default:
+		info.ntp[info.ntpCount], info.ntpCount = address, info.ntpCount+1
+	case 2:
+		if len(sub) != 16 || info.ntpMulticastCount >= config.MaxNTPMulticastServers {
 			return false
 		}
-		ptr += 4 + length
+		address := netip.AddrFrom16([16]byte(sub))
+		if !address.Is6() || !address.IsMulticast() || address.Is4In6() {
+			return false
+		}
+		info.ntpMulticast[info.ntpMulticastCount], info.ntpMulticastCount = address, info.ntpMulticastCount+1
+	case 3:
+		var names [1]dhcpns.Name
+		var count uint8
+		if info.ntpNameCount >= config.MaxNTPServerNames || !parseNames(sub, names[:], 1, &count) || count != 1 {
+			return false
+		}
+		info.ntpNames[info.ntpNameCount], info.ntpNameCount = names[0], info.ntpNameCount+1
+	default:
+		// Future time-source suboptions are ignored only after their complete
+		// single-suboption envelope has been validated above.
 	}
 	return true
 }

@@ -530,6 +530,39 @@ func TestWireNamesAreCanonicalizedWithoutRetainingInput(t *testing.T) {
 	}
 }
 
+func TestNTPServerOptionsRequireOneSourceAndAllowRepetition(t *testing.T) {
+	config := defaultConfig()
+	xid := uint32(0x123456)
+	iaid := [4]byte{2, 0, 0, 1}
+	clientDUID := []byte{0, 3, 0, 1, 2, 0, 0, 0, 0, 1}
+	serverDUID := []byte{0, 3, 0, 1, 2, 0, 0, 0, 0, 2}
+	assigned := netip.MustParseAddr("2001:db8::10")
+
+	valid := buildServerPayload(t, lnetodhcp.MsgReply, xid, clientDUID, serverDUID, iaid, assigned, true)
+	secondAddress := netip.MustParseAddr("2001:db8::124").As16()
+	valid = appendOption(valid, lnetodhcp.OptNTPServer, appendSuboption(nil, 1, secondAddress[:]))
+	unknown := appendSuboption(nil, 65000, []byte{1, 2, 3})
+	valid = appendOption(valid, lnetodhcp.OptNTPServer, unknown)
+	info, ok := inspectMessage(valid, lnetodhcp.MsgReply, xid, clientDUID, iaid, config, serverDUID)
+	if !ok || info.ntpCount != 2 || info.ntp[1] != netip.AddrFrom16(secondAddress) || info.ntpNameCount != 1 {
+		t.Fatalf("repeated NTP server options = ok:%v info:%+v", ok, info)
+	}
+
+	grouped := stripOption(buildServerPayload(t, lnetodhcp.MsgReply, xid, clientDUID, serverDUID, iaid, assigned, false), lnetodhcp.OptNTPServer)
+	firstAddress := netip.MustParseAddr("2001:db8::123").As16()
+	multipleSources := appendSuboption(nil, 1, firstAddress[:])
+	multipleSources = appendSuboption(multipleSources, 3, encodeName("time.example.com"))
+	grouped = appendOption(grouped, lnetodhcp.OptNTPServer, multipleSources)
+	if _, ok := inspectMessage(grouped, lnetodhcp.MsgReply, xid, clientDUID, iaid, config, serverDUID); ok {
+		t.Fatal("one NTP server option containing multiple time sources accepted")
+	}
+
+	malformedUnknown := appendOption(buildServerPayload(t, lnetodhcp.MsgReply, xid, clientDUID, serverDUID, iaid, assigned, false), lnetodhcp.OptNTPServer, []byte{0xfd, 0xe8, 0, 2, 1})
+	if _, ok := inspectMessage(malformedUnknown, lnetodhcp.MsgReply, xid, clientDUID, iaid, config, serverDUID); ok {
+		t.Fatal("malformed unknown NTP time source accepted")
+	}
+}
+
 func TestIAAddressAndPrefixNestedOptionsAreValidated(t *testing.T) {
 	config := defaultConfig()
 	xid := uint32(0x123456)
@@ -900,9 +933,8 @@ func buildServerPayload(t testing.TB, typ lnetodhcp.MsgType, xid uint32, clientD
 	payload = appendOption(payload, lnetodhcp.OptDNSServers, dns[:])
 	payload = appendOption(payload, lnetodhcp.OptDomainList, encodeName("example.com"))
 	ntpAddress := netip.MustParseAddr("2001:db8::123").As16()
-	ntp := appendSuboption(nil, 1, ntpAddress[:])
-	ntp = appendSuboption(ntp, 3, encodeName("time.example.com"))
-	payload = appendOption(payload, lnetodhcp.OptNTPServer, ntp)
+	payload = appendOption(payload, lnetodhcp.OptNTPServer, appendSuboption(nil, 1, ntpAddress[:]))
+	payload = appendOption(payload, lnetodhcp.OptNTPServer, appendSuboption(nil, 3, encodeName("time.example.com")))
 	prefix := netip.MustParsePrefix("2001:db8:100::/48")
 	prefixAddress := prefix.Addr().As16()
 	prefixData := make([]byte, 25)
