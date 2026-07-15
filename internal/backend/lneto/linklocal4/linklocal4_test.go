@@ -668,6 +668,31 @@ func TestUnsupportedARPOperationPreservesClaimAndValidRetry(t *testing.T) {
 	}
 }
 
+func TestConflictAcceptsEthernetLinkPadding(t *testing.T) {
+	core, adapter, _, _ := newTestAdapter(t, Config{MaxClaims: 1, MaxConflicts: 4, MaxServiceAttempts: 16, Seed: 32})
+	resource, _, err := adapter.TryClaim(linklocalns.Request{FirstCandidate: netip.MustParseAddr("169.254.42.7")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	claim := resource.(*claimResource)
+	core.Lock()
+	beforeCandidate, beforeConflicts := claim.handler.Candidate(), claim.handler.Conflicts()
+	core.Unlock()
+	frame := makeConflict(t, netip.AddrFrom4(beforeCandidate), [6]byte{2, 0, 0, 0, 0, 2})
+	frame = append(frame, bytes.Repeat([]byte{0xa5}, 18)...)
+
+	core.Lock()
+	handled, ingressErr := adapter.ingressLocked(frame)
+	afterCandidate, afterConflicts, state := claim.handler.Candidate(), claim.handler.Conflicts(), claim.state
+	core.Unlock()
+	if ingressErr != nil || handled {
+		t.Fatalf("padded conflict ingress = handled %v, err %v", handled, ingressErr)
+	}
+	if afterConflicts != beforeConflicts+1 || afterCandidate == beforeCandidate || state != stateActive {
+		t.Fatalf("padded conflict state = candidate %v -> %v conflicts %d -> %d state=%v", beforeCandidate, afterCandidate, beforeConflicts, afterConflicts, state)
+	}
+}
+
 func TestConflictMutationFallsThroughToOrdinaryARPProcessing(t *testing.T) {
 	core, adapter, _, _ := newTestAdapter(t, Config{MaxClaims: 1, MaxConflicts: 4, MaxServiceAttempts: 16, Seed: 31})
 	resource, _, err := adapter.TryClaim(linklocalns.Request{FirstCandidate: netip.MustParseAddr("169.254.42.7")})
