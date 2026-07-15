@@ -99,6 +99,30 @@ func TestDefaultAuthorityPermitsAllocationButNotExplicitEphemeralBind(t *testing
 	}
 }
 
+func TestWithConfigAndAllowLoopbackRemainUDPScoped(t *testing.T) {
+	want := DefaultConfig()
+	want.MaxSockets = 3
+	config := registration{defaultAuthority: true}
+	for _, option := range []Option{WithConfig(want), AllowLoopback()} {
+		if err := option.applyUDP(&config); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if config.config != want {
+		t.Fatalf("config = %+v, want %+v", config.config, want)
+	}
+	compiled, err := policy.Compile(config.authority())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !compiled.CheckEndpoint(policy.OperationUDPSend, netip.MustParseAddr("127.0.0.1"), 53) {
+		t.Fatal("UDP loopback authority missing")
+	}
+	if compiled.CheckEndpoint(policy.OperationTCPConnect, netip.MustParseAddr("127.0.0.1"), 53) {
+		t.Fatal("UDP loopback authority widened TCP")
+	}
+}
+
 func TestAllowAllStillHonorsRawDenyRules(t *testing.T) {
 	denied := netip.MustParsePrefix("192.0.2.77/32")
 	config := registration{defaultAuthority: true}

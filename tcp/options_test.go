@@ -78,6 +78,30 @@ func TestAllowListenersRejectsEmptyInputAndAllPortsHelperStaysExplicit(t *testin
 	}
 }
 
+func TestWithConfigAndAllowLoopbackRemainTCPScoped(t *testing.T) {
+	want := DefaultConfig()
+	want.MaxOutboundStreams = 3
+	config := registration{defaultAuthority: true}
+	for _, option := range []Option{WithConfig(want), AllowLoopback()} {
+		if err := option.applyTCP(&config); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if config.config != want {
+		t.Fatalf("config = %+v, want %+v", config.config, want)
+	}
+	compiled, err := policy.Compile(config.authority())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !compiled.CheckEndpoint(policy.OperationTCPConnect, netip.MustParseAddr("127.0.0.1"), 443) {
+		t.Fatal("TCP loopback authority missing")
+	}
+	if compiled.CheckEndpoint(policy.OperationUDPSend, netip.MustParseAddr("127.0.0.1"), 443) {
+		t.Fatal("TCP loopback authority widened UDP")
+	}
+}
+
 func TestAllowAllStillHonorsRawDenyRules(t *testing.T) {
 	denied := netip.MustParsePrefix("192.0.2.77/32")
 	config := registration{defaultAuthority: true}
