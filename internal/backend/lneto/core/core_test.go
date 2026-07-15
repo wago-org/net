@@ -376,6 +376,67 @@ func TestEgressErrorsPreserveSourceCursorForRetry(t *testing.T) {
 	}
 }
 
+func TestQueueFullEgressPreservesExactSourceCursorForRetry(t *testing.T) {
+	ns := newTestNamespace(t, 45)
+	calls := [2]int{}
+	for i := range calls {
+		index := i
+		if err := ns.Install(Participant{
+			EgressOrder: index,
+			HasEgress:   func() bool { return true },
+			Egress: func(dst []byte) (int, bool, error) {
+				calls[index]++
+				dst[0] = byte(index + 1)
+				return 1, true, nil
+			},
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	link := ns.Link()
+	for i := 0; i < testConfig(45).Link.EgressFrames; i++ {
+		if err := link.TryEnqueue(packetlink.Egress, []byte{0xa5}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	ns.Lock()
+	ns.nextEgress = 1
+	ns.SetNextIngressLocked(false)
+	ns.Unlock()
+	budget := nscore.ServiceBudget{Packets: 1, Bytes: uint32(link.MaxFrameBytes()), Operations: 1}
+	if report, progress, err := ns.TryService(budget); err != nil || progress != nscore.ProgressWouldBlock || report != (nscore.ServiceReport{}) {
+		t.Fatalf("queue-full service = %+v, %v, %v", report, progress, err)
+	}
+	if calls != [2]int{} {
+		t.Fatalf("queue-full service probed producers: %v", calls)
+	}
+	ns.Lock()
+	nextEgress := ns.nextEgress
+	ns.Unlock()
+	if nextEgress != 1 {
+		t.Fatalf("queue-full source cursor = %d, want 1", nextEgress)
+	}
+
+	var frame [1]byte
+	for i := 0; i < testConfig(45).Link.EgressFrames; i++ {
+		if result, err := link.TryDequeue(packetlink.Egress, frame[:]); err != nil || !result.Ready || frame[0] != 0xa5 {
+			t.Fatalf("drain %d = %+v, %v, data=%v", i, result, err, frame)
+		}
+	}
+	ns.Lock()
+	ns.SetNextIngressLocked(false)
+	ns.Unlock()
+	if report, progress, err := ns.TryService(budget); err != nil || progress != nscore.ProgressDone || report != (nscore.ServiceReport{Packets: 1, Bytes: 1, Operations: 1}) {
+		t.Fatalf("retry service = %+v, %v, %v", report, progress, err)
+	}
+	if calls != [2]int{0, 1} {
+		t.Fatalf("retry producer calls = %v", calls)
+	}
+	if result, err := link.TryDequeue(packetlink.Egress, frame[:]); err != nil || !result.Ready || result.FrameBytes != 1 || frame[0] != 2 {
+		t.Fatalf("retry frame = %+v, %v, data=%v", result, err, frame)
+	}
+}
+
 func TestMalformedEgressResultFailsClosedAsIO(t *testing.T) {
 	for name, written := range map[string]int{
 		"negative": -1,
