@@ -780,6 +780,58 @@ func TestServerRejectsInvalidAdvertisementsBeforeOwnership(t *testing.T) {
 	}
 }
 
+func TestUDPDatagramLengthMismatchIsContainedBeforeDHCPMutation(t *testing.T) {
+	t.Run("client responses remain retryable", func(t *testing.T) {
+		clientCore, client := newClient(t, false)
+		serverCore, _ := newServer(t, 1)
+		resource, _, err := client.TryAcquire(dhcpns.Request{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		lease := resource.(*leaseResource)
+		transferOne(t, clientCore, serverCore)
+		offer := serviceEgress(t, serverCore)
+
+		serviceIngress(t, clientCore, shortenUDPDatagram(t, offer, 1))
+		if lease.state != leaseWaitOffer || lease.wait != client.config.ResponseServiceAttempts || lease.Readiness() != 0 {
+			t.Fatalf("short UDP OFFER mutated lease: state=%v wait=%d readiness=%v", lease.state, lease.wait, lease.Readiness())
+		}
+		serviceIngress(t, clientCore, appendLinkPadding(offer))
+		if lease.state != leaseRequest || lease.wait != 0 {
+			t.Fatalf("padded valid OFFER = state:%v wait:%d", lease.state, lease.wait)
+		}
+
+		transferOne(t, clientCore, serverCore)
+		ack := serviceEgress(t, serverCore)
+		serviceIngress(t, clientCore, shortenUDPDatagram(t, ack, 1))
+		if lease.state != leaseWaitACK || lease.wait != client.config.ResponseServiceAttempts || lease.Readiness() != 0 {
+			t.Fatalf("short UDP ACK mutated lease: state=%v wait=%d readiness=%v", lease.state, lease.wait, lease.Readiness())
+		}
+		serviceIngress(t, clientCore, appendLinkPadding(ack))
+		if result, state, err := lease.TryResult(); err != nil || state != dhcpns.ResultReady || !result.Valid() {
+			t.Fatalf("valid padded ACK after mismatch = %+v, %v, %v", result, state, err)
+		}
+	})
+
+	t.Run("server requests do not reserve or queue", func(t *testing.T) {
+		clientCore, client := newClient(t, false)
+		serverCore, server := newServer(t, 1)
+		if _, _, err := client.TryAcquire(dhcpns.Request{}); err != nil {
+			t.Fatal(err)
+		}
+		discover := serviceEgress(t, clientCore)
+
+		serviceIngress(t, serverCore, shortenUDPDatagram(t, discover, 1))
+		if len(server.serverClients) != 0 || server.serverPending != 0 || server.hasWorkLocked() {
+			t.Fatalf("short UDP DISCOVER mutated server: clients=%d pending=%d work=%v", len(server.serverClients), server.serverPending, server.hasWorkLocked())
+		}
+		serviceIngress(t, serverCore, appendLinkPadding(discover))
+		if len(server.serverClients) != 1 || server.serverPending != 1 || !server.hasWorkLocked() {
+			t.Fatalf("valid padded DISCOVER after mismatch: clients=%d pending=%d work=%v", len(server.serverClients), server.serverPending, server.hasWorkLocked())
+		}
+	})
+}
+
 func TestClientIngressDropsInvalidIPv4LengthsWithoutMutatingLease(t *testing.T) {
 	for _, test := range []struct {
 		name        string
@@ -1017,6 +1069,36 @@ func serviceIngress(t testing.TB, core *lnetocore.Namespace, frame []byte) {
 	if err != nil || progress != nscore.ProgressDone || report.Packets != 1 {
 		t.Fatalf("ingress = %+v, %v, %v", report, progress, err)
 	}
+}
+
+func shortenUDPDatagram(t testing.TB, frame []byte, bytes uint16) []byte {
+	t.Helper()
+	frame = append([]byte(nil), frame...)
+	eth, err := ethernet.NewFrame(frame)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ip, err := ipv4.NewFrame(eth.Payload())
+	if err != nil {
+		t.Fatal(err)
+	}
+	udp, err := lnetoudp.NewFrame(ip.Payload())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bytes == 0 || bytes >= udp.Length()-8 {
+		t.Fatalf("invalid UDP shortening %d for length %d", bytes, udp.Length())
+	}
+	udp.SetLength(udp.Length() - bytes)
+	udp.SetCRC(0)
+	var checksum lneto.CRC791
+	ip.CRCWriteUDPPseudo(&checksum, udp.Length())
+	udp.SetCRC(lneto.NeverZeroSum(checksum.PayloadSum16(udp.RawData()[:udp.Length()])))
+	return frame
+}
+
+func appendLinkPadding(frame []byte) []byte {
+	return append(append([]byte(nil), frame...), 0xa5, 0x5a, 0xc3)
 }
 
 func rewriteDHCPMessageType(t testing.TB, frame []byte, message lnetodhcp.MessageType) []byte {

@@ -600,7 +600,7 @@ func (a *Adapter) validateFrame(frame []byte) ([]byte, netip.Addr, uint16, uint1
 		return nil, netip.Addr{}, 0, 0, true, err
 	}
 	length := udp.Length()
-	if int(length)-8 > a.config.MaxPacketBytes {
+	if int(length) != len(ip.Payload()) || int(length)-8 > a.config.MaxPacketBytes {
 		return nil, netip.Addr{}, 0, 0, true, lneto.ErrShortBuffer
 	}
 	if udp.CRC() != 0 {
