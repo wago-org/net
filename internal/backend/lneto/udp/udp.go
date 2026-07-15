@@ -622,7 +622,8 @@ func (n *Adapter) ingressLocked(frame []byte) (bool, error) {
 	if ipFrame.CalculateHeaderCRC() != 0 || ipFrame.Flags().MoreFragments() || ipFrame.Flags().FragmentOffset() != 0 {
 		return true, nil
 	}
-	udpFrame, err := lnetoudp.NewFrame(ipFrame.Payload())
+	ipPayload := ipFrame.Payload()
+	udpFrame, err := lnetoudp.NewFrame(ipPayload)
 	if err != nil {
 		return true, nil
 	}
@@ -631,6 +632,9 @@ func (n *Adapter) ingressLocked(frame []byte) (bool, error) {
 		return true, nil
 	}
 	udpLength := udpFrame.Length()
+	if int(udpLength) != len(ipPayload) {
+		return true, nil
+	}
 	if udpFrame.CRC() != 0 {
 		var checksum lneto.CRC791
 		ipFrame.CRCWriteUDPPseudo(&checksum, udpLength)

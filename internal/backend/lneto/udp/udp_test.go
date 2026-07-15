@@ -309,10 +309,18 @@ func TestUDPIngressDropsMalformedLocalDatagramsAndAcceptsFollowingValidFrame(t *
 			},
 		},
 		{
-			name: "invalid UDP length",
+			name: "oversized UDP length",
 			mutate: func(t *testing.T, frame []byte) {
 				_, udpFrame := decodeUDPFrame(t, frame)
 				udpFrame.SetLength(udpFrame.Length() + 1)
+			},
+		},
+		{
+			name: "undersized UDP length",
+			mutate: func(t *testing.T, frame []byte) {
+				ipFrame, udpFrame := decodeUDPFrame(t, frame)
+				udpFrame.SetLength(udpFrame.Length() - 1)
+				rechecksumUDPFrame(ipFrame, udpFrame)
 			},
 		},
 		{
