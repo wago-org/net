@@ -1074,6 +1074,41 @@ func TestServerInvalidClientHardwareAddressesDoNotReserveCapacity(t *testing.T) 
 	}
 }
 
+func TestServerIngressRejectsInvalidIPv4SourcesAfterDirectionCorrelation(t *testing.T) {
+	invalid := map[string]netip.Addr{
+		"loopback":          netip.MustParseAddr("127.0.0.1"),
+		"multicast":         netip.MustParseAddr("224.0.0.1"),
+		"limited broadcast": limitedBroadcast,
+	}
+	for name, source := range invalid {
+		t.Run(name, func(t *testing.T) {
+			clientCore, client := newClient(t, false)
+			serverCore, server := newServer(t, 1)
+			if _, _, err := client.TryAcquire(dhcpns.Request{}); err != nil {
+				t.Fatal(err)
+			}
+			discover := serviceEgress(t, clientCore)
+			usageBefore, _ := server.quotas.Snapshot()
+			serverCore.Lock()
+			handled, ingressErr := server.ingressLocked(rewriteIPv4Source(t, discover, source))
+			serverCore.Unlock()
+			if ingressErr != nil || !handled {
+				t.Fatalf("invalid source ingress = handled:%v err:%v", handled, ingressErr)
+			}
+			if len(server.serverClients) != 0 || server.serverPending != 0 || server.hasWorkLocked() {
+				t.Fatalf("invalid source mutated server: clients=%d pending=%d work=%v", len(server.serverClients), server.serverPending, server.hasWorkLocked())
+			}
+			if usage, _ := server.quotas.Snapshot(); usage != usageBefore {
+				t.Fatalf("invalid source changed quota = %+v, want %+v", usage, usageBefore)
+			}
+			serviceIngress(t, serverCore, discover)
+			if len(server.serverClients) != 1 || server.serverPending != 1 {
+				t.Fatalf("unspecified-source discover after invalid source = clients:%d pending:%d", len(server.serverClients), server.serverPending)
+			}
+		})
+	}
+}
+
 func TestServerIngressRejectsInvalidEthernetSources(t *testing.T) {
 	invalid := map[string][6]byte{
 		"zero":      {},

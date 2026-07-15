@@ -598,6 +598,10 @@ func (a *Adapter) validateFrame(frame []byte) ([]byte, netip.Addr, uint16, uint1
 	if !validUnicastMAC(*eth.SourceHardwareAddr()) {
 		return nil, netip.Addr{}, sourcePort, destinationPort, true, nil
 	}
+	source := netip.AddrFrom4(*ip.SourceAddr())
+	if serverDirection && !source.IsUnspecified() && !validIPv4(source) {
+		return nil, netip.Addr{}, sourcePort, destinationPort, true, nil
+	}
 	ip.ValidateExceptCRC(&validator)
 	if validator.ErrPop() != nil || ip.CalculateHeaderCRC() != 0 || ip.Flags().MoreFragments() || ip.Flags().FragmentOffset() != 0 {
 		return nil, netip.Addr{}, 0, 0, true, lneto.ErrBadCRC
@@ -617,7 +621,7 @@ func (a *Adapter) validateFrame(frame []byte) ([]byte, netip.Addr, uint16, uint1
 			return nil, netip.Addr{}, 0, 0, true, lneto.ErrBadCRC
 		}
 	}
-	return udp.RawData()[8:length], netip.AddrFrom4(*ip.SourceAddr()), sourcePort, destinationPort, true, nil
+	return udp.RawData()[8:length], source, sourcePort, destinationPort, true, nil
 }
 
 func (a *Adapter) acceptClientLocked(payload []byte, source netip.Addr) {

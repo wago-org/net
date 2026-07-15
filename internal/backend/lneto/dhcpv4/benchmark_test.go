@@ -34,6 +34,29 @@ func BenchmarkClientLeaseSnapshot(b *testing.B) {
 	}
 }
 
+func BenchmarkIngressDHCPv4DiscoverKnownClient(b *testing.B) {
+	clientCore, client := newClient(b, false)
+	serverCore, server := newServer(b, 1)
+	resource, _, err := client.TryAcquire(dhcpns.Request{})
+	if err != nil {
+		b.Fatal(err)
+	}
+	defer resource.Close()
+	discover := serviceEgress(b, clientCore)
+	serviceIngress(b, serverCore, discover)
+
+	serverCore.Lock()
+	defer serverCore.Unlock()
+	b.ReportAllocs()
+	b.ResetTimer()
+	for b.Loop() {
+		handled, err := server.ingressLocked(discover)
+		if err != nil || !handled {
+			b.Fatalf("ingress = %v, %v", handled, err)
+		}
+	}
+}
+
 func BenchmarkIngressDHCPv4OfferWithoutLease(b *testing.B) {
 	clientCore, client := newClient(b, false)
 	serverCore, _ := newServer(b, 1)
