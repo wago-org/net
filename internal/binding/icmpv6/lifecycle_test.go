@@ -463,6 +463,110 @@ func TestBindingsRejectHighBitI32AliasesBeforeStateAndBackendWork(t *testing.T) 
 	}
 }
 
+func TestBindingsPreserveFullWidthNamespaceAndResourceHandles(t *testing.T) {
+	address := netip.MustParseAddr("fe80::20")
+	request := icmpns.NeighborRequest{Address: address, ScopeID: 4}
+	neighbor := icmpns.Neighbor{Address: address, ScopeID: 4, MAC: [6]byte{0x02, 0, 0, 0, 0, 0x20}}
+	echo := &lifecycleEcho{next: icmpns.NextWouldBlock}
+	resolution := &lifecycleResolution{next: icmpns.NextWouldBlock}
+	backend := &lifecycleNamespace{operations: icmpns.SupportedOperations}
+	manager, instance := attachLifecycleManager(t, backend)
+	defer manager.Detach(instance)
+	host := testHost{instance: instance, memory: bytes.Repeat([]byte{0x7b}, 2048)}
+	bindings := Bindings(plugin.NewHost(manager))
+	state, ok := manager.ForInstance(instance)
+	if !ok {
+		t.Fatal("attached state missing")
+	}
+	namespaceHandle := state.NamespaceHandle()
+	copy(host.memory[128:132], "ping")
+	if !icmpabi.EncodeEchoRequestV1(host.memory, 0, nscore.Endpoint{Address: netip.MustParseAddr("2001:db8::2")}, 128, 4) {
+		t.Fatal("encode echo request")
+	}
+	if !icmpabi.EncodeNeighborKeyV1(host.memory, 256, request) {
+		t.Fatal("encode neighbor key")
+	}
+	if !icmpabi.EncodeNeighborV1(host.memory, 320, neighbor) {
+		t.Fatal("encode neighbor")
+	}
+	echoHandle, err := state.Resources().Add(resource.KindICMPv6Echo, echo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resolutionHandle, err := state.Resources().Add(resource.KindICMPv6Neighbor, resolution)
+	if err != nil {
+		t.Fatal(err)
+	}
+	const high = uint64(1) << 63
+
+	operationsBefore := append([]byte(nil), host.memory[400:404]...)
+	if status := callLifecycleBinding(t, bindingByName(t, bindings, "operations"), host, uint64(namespaceHandle)|high, 400); status != guest.StatusBadHandle || backend.operationsCalls != 0 || !bytes.Equal(host.memory[400:404], operationsBefore) {
+		t.Fatalf("high namespace operations = %v calls=%d", status, backend.operationsCalls)
+	}
+	echoOutBefore := append([]byte(nil), host.memory[192:200]...)
+	if status := callLifecycleBinding(t, bindingByName(t, bindings, "echo"), host, uint64(namespaceHandle)|high, 0, 192); status != guest.StatusBadHandle || backend.echoCalls != 0 || !bytes.Equal(host.memory[192:200], echoOutBefore) {
+		t.Fatalf("high namespace echo = %v calls=%d", status, backend.echoCalls)
+	}
+	resolveOutBefore := append([]byte(nil), host.memory[200:208]...)
+	if status := callLifecycleBinding(t, bindingByName(t, bindings, "resolve"), host, uint64(namespaceHandle)|high, 256, 200); status != guest.StatusBadHandle || backend.resolveCalls != 0 || !bytes.Equal(host.memory[200:208], resolveOutBefore) {
+		t.Fatalf("high namespace resolve = %v calls=%d", status, backend.resolveCalls)
+	}
+	lookupBefore := append([]byte(nil), host.memory[448:448+uint64(icmpabi.NeighborV1Size)]...)
+	if status := callLifecycleBinding(t, bindingByName(t, bindings, "lookup_neighbor"), host, uint64(namespaceHandle)|high, 256, 448); status != guest.StatusBadHandle || backend.lookupCalls != 0 || !bytes.Equal(host.memory[448:448+uint64(icmpabi.NeighborV1Size)], lookupBefore) {
+		t.Fatalf("high namespace lookup = %v calls=%d", status, backend.lookupCalls)
+	}
+	if status := callLifecycleBinding(t, bindingByName(t, bindings, "seed_neighbor"), host, uint64(namespaceHandle)|high, 320); status != guest.StatusBadHandle || backend.seedCalls != 0 {
+		t.Fatalf("high namespace seed = %v calls=%d", status, backend.seedCalls)
+	}
+	if status := callLifecycleBinding(t, bindingByName(t, bindings, "remove_neighbor"), host, uint64(namespaceHandle)|high, 256); status != guest.StatusBadHandle || backend.removeCalls != 0 {
+		t.Fatalf("high namespace remove = %v calls=%d", status, backend.removeCalls)
+	}
+
+	payloadBefore := append([]byte(nil), host.memory[512:520]...)
+	echoResultBefore := append([]byte(nil), host.memory[600:600+uint64(icmpabi.EchoResultV1Size)]...)
+	if status := callLifecycleBinding(t, bindingByName(t, bindings, "echo_result"), host, uint64(echoHandle)|high, 512, 8, 600); status != guest.StatusBadHandle || echo.resultCalls != 0 || !bytes.Equal(host.memory[512:520], payloadBefore) || !bytes.Equal(host.memory[600:600+uint64(icmpabi.EchoResultV1Size)], echoResultBefore) {
+		t.Fatalf("high echo result = %v calls=%d", status, echo.resultCalls)
+	}
+	if status := callLifecycleBinding(t, bindingByName(t, bindings, "cancel_echo"), host, uint64(echoHandle)|high); status != guest.StatusBadHandle || echo.cancelCalls != 0 {
+		t.Fatalf("high echo cancel = %v calls=%d", status, echo.cancelCalls)
+	}
+	if status := callLifecycleBinding(t, bindingByName(t, bindings, "close_echo"), host, uint64(echoHandle)|high); status != guest.StatusBadHandle || echo.closeCalls != 0 {
+		t.Fatalf("high echo close = %v calls=%d", status, echo.closeCalls)
+	}
+	neighborResultBefore := append([]byte(nil), host.memory[700:700+uint64(icmpabi.NeighborV1Size)]...)
+	if status := callLifecycleBinding(t, bindingByName(t, bindings, "neighbor_result"), host, uint64(resolutionHandle)|high, 700); status != guest.StatusBadHandle || resolution.resultCalls != 0 || !bytes.Equal(host.memory[700:700+uint64(icmpabi.NeighborV1Size)], neighborResultBefore) {
+		t.Fatalf("high neighbor result = %v calls=%d", status, resolution.resultCalls)
+	}
+	if status := callLifecycleBinding(t, bindingByName(t, bindings, "cancel_neighbor"), host, uint64(resolutionHandle)|high); status != guest.StatusBadHandle || resolution.cancelCalls != 0 {
+		t.Fatalf("high neighbor cancel = %v calls=%d", status, resolution.cancelCalls)
+	}
+	if status := callLifecycleBinding(t, bindingByName(t, bindings, "close_neighbor"), host, uint64(resolutionHandle)|high); status != guest.StatusBadHandle || resolution.closeCalls != 0 {
+		t.Fatalf("high neighbor close = %v calls=%d", status, resolution.closeCalls)
+	}
+
+	if status := callLifecycleBinding(t, bindingByName(t, bindings, "operations"), host, uint64(namespaceHandle), 400); status != guest.StatusOK || backend.operationsCalls != 1 {
+		t.Fatalf("exact namespace operations = %v calls=%d", status, backend.operationsCalls)
+	}
+	if status := callLifecycleBinding(t, bindingByName(t, bindings, "echo_result"), host, uint64(echoHandle), 512, 8, 600); status != guest.StatusAgain || echo.resultCalls != 1 {
+		t.Fatalf("exact echo result = %v calls=%d", status, echo.resultCalls)
+	}
+	if status := callLifecycleBinding(t, bindingByName(t, bindings, "cancel_echo"), host, uint64(echoHandle)); status != guest.StatusOK || echo.cancelCalls != 1 {
+		t.Fatalf("exact echo cancel = %v calls=%d", status, echo.cancelCalls)
+	}
+	if status := callLifecycleBinding(t, bindingByName(t, bindings, "close_echo"), host, uint64(echoHandle)); status != guest.StatusOK || echo.closeCalls != 1 {
+		t.Fatalf("exact echo close = %v calls=%d", status, echo.closeCalls)
+	}
+	if status := callLifecycleBinding(t, bindingByName(t, bindings, "neighbor_result"), host, uint64(resolutionHandle), 700); status != guest.StatusAgain || resolution.resultCalls != 1 {
+		t.Fatalf("exact neighbor result = %v calls=%d", status, resolution.resultCalls)
+	}
+	if status := callLifecycleBinding(t, bindingByName(t, bindings, "cancel_neighbor"), host, uint64(resolutionHandle)); status != guest.StatusOK || resolution.cancelCalls != 1 {
+		t.Fatalf("exact neighbor cancel = %v calls=%d", status, resolution.cancelCalls)
+	}
+	if status := callLifecycleBinding(t, bindingByName(t, bindings, "close_neighbor"), host, uint64(resolutionHandle)); status != guest.StatusOK || resolution.closeCalls != 1 {
+		t.Fatalf("exact neighbor close = %v calls=%d", status, resolution.closeCalls)
+	}
+}
+
 func TestBindingsPrevalidateICMPv6OutputsBeforeLookup(t *testing.T) {
 	manager := instancecore.NewManager()
 	instance := new(wago.Instance)
