@@ -24,9 +24,10 @@ import (
 )
 
 const (
-	serviceOrder      = -80
-	closeOrder        = 8
-	inlinePacketBytes = 1024
+	serviceOrder            = -80
+	closeOrder              = 8
+	inlinePacketBytes       = 1024
+	statusNoPrefixAvailable = 6
 )
 
 var (
@@ -686,7 +687,15 @@ func inspectMessage(payload []byte, want lnetodhcp.MsgType, xid uint32, clientDU
 }
 
 func successStatus(data []byte) bool {
-	return len(data) >= 2 && binary.BigEndian.Uint16(data[:2]) == uint16(lnetodhcp.StatusSuccess)
+	status, ok := parseStatus(data)
+	return ok && status == uint16(lnetodhcp.StatusSuccess)
+}
+
+func parseStatus(data []byte) (uint16, bool) {
+	if len(data) < 2 {
+		return 0, false
+	}
+	return binary.BigEndian.Uint16(data[:2]), true
 }
 
 func parseIANA(data []byte, iaid [4]byte, info *packetInfo) bool {
@@ -730,6 +739,7 @@ func parseIAPD(data []byte, iaid [4]byte, limit uint8, info *packetInfo) bool {
 	info.pdT1, info.pdT2 = binary.BigEndian.Uint32(data[4:8]), binary.BigEndian.Uint32(data[8:12])
 	initialCount := info.prefixCount
 	var maximum uint32
+	var status uint16
 	statuses := 0
 	for ptr := 12; ptr < len(data); {
 		code, sub, next, ok := nextOption(data, ptr)
@@ -754,13 +764,24 @@ func parseIAPD(data []byte, iaid [4]byte, limit uint8, info *packetInfo) bool {
 			}
 		case lnetodhcp.OptStatusCode:
 			statuses++
-			if statuses != 1 || !successStatus(sub) {
+			var valid bool
+			status, valid = parseStatus(sub)
+			if statuses != 1 || !valid {
 				return false
 			}
 		}
 		ptr = next
 	}
-	return info.prefixCount > initialCount && validTimers(info.pdT1, info.pdT2, maximum)
+	if info.prefixCount == initialCount {
+		if statuses != 1 || status != statusNoPrefixAvailable {
+			return false
+		}
+		// NoPrefixAvail is local to IA_PD and does not invalidate a usable
+		// IA_NA. An absent delegation has no renewal or rebinding timers.
+		info.pdT1, info.pdT2 = 0, 0
+		return true
+	}
+	return (statuses == 0 || status == uint16(lnetodhcp.StatusSuccess)) && validTimers(info.pdT1, info.pdT2, maximum)
 }
 
 func parseAddresses(data []byte, destination []netip.Addr, limit uint8, multicast bool, count *uint8) bool {

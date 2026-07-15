@@ -421,6 +421,61 @@ func TestReplyDropsNonUnicastDelegatedPrefixesBeforePinnedMutation(t *testing.T)
 	}
 }
 
+func TestReplyAcceptsAddressWhenDelegationIsUnavailable(t *testing.T) {
+	_, adapter, account := newTestAdapter(t, defaultConfig())
+	resource, _, err := adapter.TryAcquire()
+	if err != nil {
+		t.Fatal(err)
+	}
+	lease := resource.(*leaseResource)
+	var scratch [1514]byte
+	if _, _, err := adapter.egressLocked(scratch[:]); err != nil {
+		t.Fatal(err)
+	}
+	serverAddr := netip.MustParseAddr("fe80::2")
+	serverMAC := [6]byte{0x02, 0, 0, 0, 0, 2}
+	serverDUID := []byte{0, 3, 0, 1, 2, 0, 0, 0, 0, 2}
+	assigned := netip.MustParseAddr("2001:db8::10")
+	advertise := buildServerPayload(t, lnetodhcp.MsgAdvertise, lease.xid, lease.clientDUID[:], serverDUID, lease.iaid, assigned, false)
+	if handled, err := adapter.ingressLocked(wrapServerFrame(t, adapter, serverAddr, serverMAC, advertise)); err != nil || !handled || lease.state != leaseRequestPending {
+		t.Fatalf("Advertise = %v %v state=%v", handled, err, lease.state)
+	}
+	if _, _, err := adapter.egressLocked(scratch[:]); err != nil || lease.state != leaseWaitReply {
+		t.Fatalf("Request = %v state=%v", err, lease.state)
+	}
+
+	conflicting := buildServerPayload(t, lnetodhcp.MsgReply, lease.xid, lease.clientDUID[:], serverDUID, lease.iaid, assigned, true)
+	conflicting = appendToLastOption(t, conflicting, lnetodhcp.OptIAPD, appendOption(nil, lnetodhcp.OptStatusCode, []byte{0, statusNoPrefixAvailable}))
+	before, _ := account.Snapshot()
+	if handled, err := adapter.ingressLocked(wrapServerFrame(t, adapter, serverAddr, serverMAC, conflicting)); err != nil || !handled {
+		t.Fatalf("conflicting Reply = %v %v", handled, err)
+	}
+	if lease.state != leaseWaitReply || lease.result != (dhcpns.Configuration{}) || lease.failure != nil {
+		t.Fatalf("conflicting delegation mutated lease: state=%v result=%+v failure=%v", lease.state, lease.result, lease.failure)
+	}
+	if usage, _ := account.Snapshot(); usage != before {
+		t.Fatalf("conflicting delegation changed quota = %+v, want %+v", usage, before)
+	}
+
+	reply := buildServerPayload(t, lnetodhcp.MsgReply, lease.xid, lease.clientDUID[:], serverDUID, lease.iaid, assigned, false)
+	iapd := make([]byte, 12)
+	copy(iapd[:4], lease.iaid[:])
+	binary.BigEndian.PutUint32(iapd[4:8], 900)
+	binary.BigEndian.PutUint32(iapd[8:12], 1800)
+	iapd = appendOption(iapd, lnetodhcp.OptStatusCode, []byte{0, statusNoPrefixAvailable})
+	reply = appendOption(reply, lnetodhcp.OptIAPD, iapd)
+	if handled, err := adapter.ingressLocked(wrapServerFrame(t, adapter, serverAddr, serverMAC, reply)); err != nil || !handled || lease.state != leaseBound {
+		t.Fatalf("NoPrefixAvail Reply = %v %v state=%v", handled, err, lease.state)
+	}
+	configuration, state, err := lease.TryResult()
+	if err != nil || state != dhcpns.ResultReady || !configuration.Valid() || configuration.AssignedAddr != assigned || configuration.PrefixCount != 0 || configuration.PrefixRenewalSeconds != 0 || configuration.PrefixRebindingSeconds != 0 {
+		t.Fatalf("NoPrefixAvail result = %+v %v %v", configuration, state, err)
+	}
+	if usage, _ := account.Snapshot(); usage.DHCPv6Work != 0 || usage.DHCPv6Resources != 1 {
+		t.Fatalf("NoPrefixAvail quota = %+v", usage)
+	}
+}
+
 func TestWireNamesAreCanonicalizedWithoutRetainingInput(t *testing.T) {
 	wire := encodeName("EXAMPLE.Com")
 	var names [dhcpns.MaxDomainSearch]dhcpns.Name
