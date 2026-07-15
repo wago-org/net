@@ -3,6 +3,7 @@ package linklocal4
 import (
 	"bytes"
 	"errors"
+	"fmt"
 	"net/netip"
 	"testing"
 	"time"
@@ -550,6 +551,47 @@ func TestBoundCloseAndNamespaceCloseRollbackIdentityAndQuota(t *testing.T) {
 	}
 	if adapter.claim != nil || fresh.identity.Active() || fresh.handler.State() != 0 || fresh.handler.Candidate() != ([4]byte{}) || fresh.handler.Conflicts() != 0 {
 		t.Fatalf("namespace close retained claim state: owner=%p identity=%v handler=%+v", adapter.claim, fresh.identity.Active(), fresh.handler)
+	}
+}
+
+func TestIngressContainsTruncatedARPAfterExactSenderCorrelation(t *testing.T) {
+	core, adapter, account, _ := newTestAdapter(t, Config{MaxClaims: 1, MaxConflicts: 4, MaxServiceAttempts: 16, Seed: 33})
+	resource, _, err := adapter.TryClaim(linklocalns.Request{FirstCandidate: netip.MustParseAddr("169.254.42.7")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	claim := resource.(*claimResource)
+	candidate := netip.AddrFrom4(claim.handler.Candidate())
+	base := makeConflict(t, candidate, [6]byte{2, 0, 0, 0, 0, 2})
+	usageBefore, _ := account.Snapshot()
+
+	for arpBytes := 0; arpBytes < 28; arpBytes++ {
+		t.Run(fmt.Sprintf("arp_bytes_%d", arpBytes), func(t *testing.T) {
+			truncated := append([]byte(nil), base[:14+arpBytes]...)
+			core.Lock()
+			beforeState, beforeCandidate, beforeConflicts := claim.handler.State(), claim.handler.Candidate(), claim.handler.Conflicts()
+			handled, ingressErr := adapter.ingressLocked(truncated)
+			afterState, afterCandidate, afterConflicts := claim.handler.State(), claim.handler.Candidate(), claim.handler.Conflicts()
+			core.Unlock()
+			wantHandled := arpBytes >= 18
+			if ingressErr != nil || handled != wantHandled {
+				t.Fatalf("ingress = handled %v, err %v; want handled %v", handled, ingressErr, wantHandled)
+			}
+			if afterState != beforeState || afterCandidate != beforeCandidate || afterConflicts != beforeConflicts || claim.state != stateActive || claim.failure != nil {
+				t.Fatalf("truncated ARP mutated claim: state %v -> %v candidate %v -> %v conflicts %d -> %d resource=%v failure=%v", beforeState, afterState, beforeCandidate, afterCandidate, beforeConflicts, afterConflicts, claim.state, claim.failure)
+			}
+			if usage, _ := account.Snapshot(); usage != usageBefore {
+				t.Fatalf("truncated ARP changed quota = %+v, want %+v", usage, usageBefore)
+			}
+		})
+	}
+
+	serviceIngress(t, core, base)
+	core.Lock()
+	afterCandidate, afterConflicts := claim.handler.Candidate(), claim.handler.Conflicts()
+	core.Unlock()
+	if afterConflicts != 1 || afterCandidate == candidate.As4() || claim.state != stateActive || claim.failure != nil {
+		t.Fatalf("valid conflict after truncations = candidate %v -> %v conflicts=%d state=%v failure=%v", candidate, netip.AddrFrom4(afterCandidate), afterConflicts, claim.state, claim.failure)
 	}
 }
 

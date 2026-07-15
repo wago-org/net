@@ -3,6 +3,7 @@
 package linklocal4
 
 import (
+	"encoding/binary"
 	"errors"
 	"net"
 	"net/netip"
@@ -371,24 +372,33 @@ func (a *Adapter) ingressLocked(frame []byte) (bool, error) {
 	if destination != ethernet.BroadcastAddr() && destination != a.core.HardwareAddressLocked() {
 		return false, nil
 	}
-	aframe, err := arp.NewFrame(eth.Payload())
-	if err != nil {
+	arpPayload := eth.Payload()
+	if len(arpPayload) < 8 {
 		return false, nil
+	}
+	hardwareType := binary.BigEndian.Uint16(arpPayload[0:2])
+	protocolType := ethernet.Type(binary.BigEndian.Uint16(arpPayload[2:4]))
+	hardwareLength, protocolLength := arpPayload[4], arpPayload[5]
+	if hardwareType != 1 || hardwareLength != 6 || protocolType != ethernet.TypeIPv4 || protocolLength != 4 {
+		return false, nil
+	}
+	candidate := r.handler.Candidate()
+	relevant := len(arpPayload) >= 18 && [4]byte(arpPayload[14:18]) == candidate
+	if len(arpPayload) >= 28 {
+		relevant = relevant || [4]byte(arpPayload[24:28]) == candidate
+	} else {
+		return relevant, nil
+	}
+	aframe, err := arp.NewFrame(arpPayload)
+	if err != nil {
+		return relevant, nil
 	}
 	var validator lneto.Validator
 	aframe.ValidateSize(&validator)
 	if validator.ErrPop() != nil {
-		return false, nil
-	}
-	hardwareType, hardwareLength := aframe.Hardware()
-	protocolType, protocolLength := aframe.Protocol()
-	if hardwareType != 1 || hardwareLength != 6 || protocolType != ethernet.TypeIPv4 || protocolLength != 4 {
-		return false, nil
+		return relevant, nil
 	}
 	senderHW, senderProto := aframe.Sender4()
-	_, targetProto := aframe.Target4()
-	candidate := r.handler.Candidate()
-	relevant := *senderProto == candidate || *targetProto == candidate
 	source := *eth.SourceHardwareAddr()
 	if !validUnicastMAC(source) || *senderHW != source {
 		return relevant, nil
