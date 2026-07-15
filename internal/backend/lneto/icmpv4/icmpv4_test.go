@@ -463,6 +463,36 @@ func makeEchoReply(t testing.TB, request []byte, payloadOverride []byte) []byte 
 	return frame
 }
 
+func makeEchoReplyWithIPv4OptionsAndPadding(t testing.TB, request []byte, padding int) []byte {
+	t.Helper()
+	base := makeEchoReply(t, request, nil)
+	ethernetFrame, err := ethernet.NewFrame(base)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ipFrame, err := ipv4.NewFrame(ethernetFrame.Payload())
+	if err != nil {
+		t.Fatal(err)
+	}
+	payload := append([]byte(nil), ipFrame.Payload()...)
+	frame := make([]byte, 14+24+len(payload)+padding)
+	copy(frame[:14+20], base[:14+20])
+	copy(frame[14+20:14+24], []byte{1, 1, 0, 0})
+	copy(frame[14+24:], payload)
+	for i := 14 + 24 + len(payload); i < len(frame); i++ {
+		frame[i] = 0xa5
+	}
+	optioned, err := ipv4.NewFrame(frame[14:])
+	if err != nil {
+		t.Fatal(err)
+	}
+	optioned.SetVersionAndIHL(4, 6)
+	optioned.SetTotalLength(uint16(24 + len(payload)))
+	optioned.SetCRC(0)
+	optioned.SetCRC(optioned.CalculateHeaderCRC())
+	return frame
+}
+
 func failureOf(t testing.TB, err error) nscore.Failure {
 	t.Helper()
 	failure, ok := nscore.FailureOf(err)
@@ -574,6 +604,28 @@ func TestICMPv4ClosedExchangeLateReplyAndStaleCloseCannotMutateFreshExchange(t *
 	}
 	if usage, _ := account.Snapshot(); usage != (quota.Usage{}) {
 		t.Fatalf("fresh close quota = %+v", usage)
+	}
+}
+
+func TestICMPv4ReplyAcceptsIPv4OptionsAndLinkPadding(t *testing.T) {
+	core, adapter, _ := newTestAdapter(t, Config{MaxEchoes: 1, MaxPayloadBytes: 16, MaxAttempts: 2, RetryServiceAttempts: 2})
+	resource, _, err := adapter.TryEcho(icmpns.Request{Destination: netip.MustParseAddr("192.0.2.99"), Payload: []byte("live")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	exchange := resource.(*echo)
+	request := serviceEgress(t, core)
+	reply := makeEchoReplyWithIPv4OptionsAndPadding(t, request, 18)
+	core.Lock()
+	handled, ingressErr := adapter.ingressLocked(reply)
+	core.Unlock()
+	if ingressErr != nil || !handled || exchange.Readiness() != nscore.ReadyICMPv4Reply {
+		t.Fatalf("optioned padded reply = handled %v, err %v, readiness %v", handled, ingressErr, exchange.Readiness())
+	}
+	var payload [4]byte
+	result, next, err := exchange.TryResult(payload[:])
+	if err != nil || next != icmpns.NextReady || result.PayloadBytes != len(payload) || string(payload[:]) != "live" {
+		t.Fatalf("optioned padded result = %+v, %v, %v payload=%q", result, next, err, payload[:])
 	}
 }
 
