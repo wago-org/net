@@ -437,6 +437,76 @@ func assertMDNSDecodeScratchReset(t testing.TB, message *lnetodns.Message) {
 	}
 }
 
+func FuzzMDNSWireIngress(f *testing.F) {
+	config := queryOnlyConfig()
+	valid, err := buildServicePacket(testService("peer", "192.0.2.22"), lnetodns.TypeA, config.MaxPacketBytes)
+	if err != nil {
+		f.Fatal(err)
+	}
+	f.Add(valid)
+	f.Add([]byte{})
+	f.Add(make([]byte, lnetodns.SizeHeader))
+	f.Add([]byte{0, 0, 0x84, 0, 0, 1})
+	f.Fuzz(func(t *testing.T, payload []byte) {
+		if len(payload) > config.MaxPacketBytes {
+			return
+		}
+		core, adapter, account := newTestAdapter(t, config, testPolicy())
+		resource, progress, err := adapter.TryQuery(mdnsns.Request{Name: "peer.local", Types: mdnsns.RecordsA})
+		if err != nil || progress != nscore.ProgressInProgress {
+			t.Fatalf("TryQuery = %T, %v, %v", resource, progress, err)
+		}
+		q := resource.(*query)
+		_ = serviceEgress(t, core)
+		frame := wrapMDNSFrame(t, payload, [6]byte{2, 0, 0, 0, 0, 22}, netip.MustParseAddr("192.0.2.22"))
+		core.Lock()
+		handled, ingressErr := adapter.ingressLocked(frame)
+		core.Unlock()
+		if ingressErr != nil || !handled {
+			t.Fatalf("owned ingress = handled:%v err:%v", handled, ingressErr)
+		}
+		assertMDNSDecodeScratchReset(t, &adapter.decode)
+		if len(q.records) > int(config.MaxRecords) {
+			t.Fatalf("retained %d records, limit %d", len(q.records), config.MaxRecords)
+		}
+		for _, record := range q.records {
+			if !record.Valid() || record.Name != q.request.Name {
+				t.Fatalf("retained invalid or unrelated record: %+v", record)
+			}
+		}
+		wantWork := uint64(1)
+		switch q.state {
+		case stateWaiting:
+			if len(q.records) != 0 || q.failure != nil {
+				t.Fatalf("waiting query retained terminal state: records=%d failure=%v", len(q.records), q.failure)
+			}
+		case stateDone:
+			wantWork = 0
+			if len(q.records) == 0 || q.failure != nil {
+				t.Fatalf("completed query state: records=%d failure=%v", len(q.records), q.failure)
+			}
+		case stateFailed:
+			wantWork = 0
+			if len(q.records) != 0 || q.failure == nil {
+				t.Fatalf("failed query state: records=%d failure=%v", len(q.records), q.failure)
+			}
+		default:
+			t.Fatalf("unexpected query state %v", q.state)
+		}
+		if usage, closed := account.Snapshot(); closed || usage != (quota.Usage{
+			Resources: 1, MDNSResources: 1, QueuedBytes: queryRetainedBytes(config), MDNSWork: wantWork,
+		}) {
+			t.Fatalf("ingress quota = %+v, closed=%v", usage, closed)
+		}
+		if err := q.Close(); err != nil {
+			t.Fatal(err)
+		}
+		if usage, _ := account.Snapshot(); usage != (quota.Usage{}) {
+			t.Fatalf("closed query retained quota = %+v", usage)
+		}
+	})
+}
+
 func TestMDNSRejectsMalformedOrIrrelevantResponses(t *testing.T) {
 	core, adapter, _ := newTestAdapter(t, queryOnlyConfig(), testPolicy())
 	resource, _, err := adapter.TryQuery(mdnsns.Request{Name: "peer.local", Types: mdnsns.RecordsA})
