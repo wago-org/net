@@ -745,7 +745,8 @@ func (a *Adapter) validateFrame(frame []byte) ([]byte, netip.Addr, bool, error) 
 	if validator.ErrPop() != nil {
 		return nil, netip.Addr{}, false, nil
 	}
-	udp, err := lnetoudp.NewFrame(ip.Payload())
+	ipPayload := ip.Payload()
+	udp, err := lnetoudp.NewFrame(ipPayload)
 	if err != nil {
 		return nil, netip.Addr{}, true, err
 	}
@@ -764,6 +765,9 @@ func (a *Adapter) validateFrame(frame []byte) ([]byte, netip.Addr, bool, error) 
 		return nil, netip.Addr{}, true, err
 	}
 	length := udp.Length()
+	if int(length) != len(ipPayload) {
+		return nil, netip.Addr{}, true, lneto.ErrMismatchLen
+	}
 	if int(length)-8 > a.config.MaxPacketBytes {
 		return nil, netip.Addr{}, true, lneto.ErrShortBuffer
 	}
