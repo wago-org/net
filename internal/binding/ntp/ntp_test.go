@@ -178,6 +178,63 @@ func TestBindingsSyncResultAtomicStatusesAndLifecycle(t *testing.T) {
 	}
 }
 
+func TestBindingsPreserveFullWidthNamespaceAndSynchronizationHandles(t *testing.T) {
+	synchronization := &fakeSync{next: ntpns.NextWouldBlock}
+	backend := &fakeNamespace{next: synchronization, progress: nscore.ProgressInProgress}
+	manager, instance := attachManager(t, backend)
+	defer manager.Detach(instance)
+	host := testHost{instance: instance, memory: bytes.Repeat([]byte{0x7b}, 512)}
+	bindings := Bindings(plugin.NewHost(manager))
+	state, ok := manager.ForInstance(instance)
+	if !ok {
+		t.Fatal("attached state missing")
+	}
+	namespaceHandle := state.NamespaceHandle()
+	syncHandle, err := state.Resources().Add(resource.KindNTPSync, synchronization)
+	if err != nil {
+		t.Fatal(err)
+	}
+	const high = uint64(1) << 63
+
+	handlePtr := uint64(32)
+	handleBefore := append([]byte(nil), host.memory[handlePtr:handlePtr+8]...)
+	if status := callBinding(t, bindingByName(t, bindings, "sync"), host, uint64(namespaceHandle)|high, handlePtr); status != guest.StatusBadHandle || backend.calls != 0 || !bytes.Equal(host.memory[handlePtr:handlePtr+8], handleBefore) {
+		t.Fatalf("high namespace sync = %v calls=%d", status, backend.calls)
+	}
+
+	resultPtr := uint64(128)
+	resultBefore := append([]byte(nil), host.memory[resultPtr:resultPtr+uint64(ntpabi.SampleV1Size)]...)
+	if status := callBinding(t, bindingByName(t, bindings, "result"), host, uint64(syncHandle)|high, resultPtr); status != guest.StatusBadHandle || synchronization.resultCalls != 0 || !bytes.Equal(host.memory[resultPtr:resultPtr+uint64(ntpabi.SampleV1Size)], resultBefore) {
+		t.Fatalf("high synchronization result = %v calls=%d", status, synchronization.resultCalls)
+	}
+	if status := callBinding(t, bindingByName(t, bindings, "cancel"), host, uint64(syncHandle)|high); status != guest.StatusBadHandle || synchronization.cancelCalls != 0 {
+		t.Fatalf("high synchronization cancel = %v calls=%d", status, synchronization.cancelCalls)
+	}
+	if status := callBinding(t, bindingByName(t, bindings, "close"), host, uint64(syncHandle)|high); status != guest.StatusBadHandle || synchronization.closeCalls != 0 {
+		t.Fatalf("high synchronization close = %v calls=%d", status, synchronization.closeCalls)
+	}
+
+	if status := callBinding(t, bindingByName(t, bindings, "sync"), host, uint64(namespaceHandle), handlePtr); status != guest.StatusInProgress || backend.calls != 1 {
+		t.Fatalf("exact namespace sync = %v calls=%d", status, backend.calls)
+	}
+	createdHandle := resource.Handle(binary.LittleEndian.Uint64(host.memory[handlePtr : handlePtr+8]))
+	if createdHandle == 0 {
+		t.Fatal("exact namespace sync returned zero handle")
+	}
+	if status := callBinding(t, bindingByName(t, bindings, "result"), host, uint64(syncHandle), resultPtr); status != guest.StatusAgain || synchronization.resultCalls != 1 {
+		t.Fatalf("exact synchronization result = %v calls=%d", status, synchronization.resultCalls)
+	}
+	if status := callBinding(t, bindingByName(t, bindings, "cancel"), host, uint64(syncHandle)); status != guest.StatusOK || synchronization.cancelCalls != 1 {
+		t.Fatalf("exact synchronization cancel = %v calls=%d", status, synchronization.cancelCalls)
+	}
+	if status := callBinding(t, bindingByName(t, bindings, "close"), host, uint64(syncHandle)); status != guest.StatusOK || synchronization.closeCalls != 1 {
+		t.Fatalf("exact synchronization close = %v calls=%d", status, synchronization.closeCalls)
+	}
+	if status := callBinding(t, bindingByName(t, bindings, "close"), host, uint64(createdHandle)); status != guest.StatusOK || synchronization.closeCalls != 2 {
+		t.Fatalf("created synchronization close = %v calls=%d", status, synchronization.closeCalls)
+	}
+}
+
 func TestBindingsRejectHighBitI32AliasesBeforeBackendCalls(t *testing.T) {
 	backend := &fakeNamespace{}
 	manager, instance := attachManager(t, backend)
