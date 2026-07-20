@@ -604,12 +604,30 @@ func (n *Adapter) TryListen(local nscore.Endpoint) (nscore.Resource, nscore.Prog
 	return listener, nscore.ProgressDone, nil
 }
 
-// TryConnectTCP implements the narrow TCP namespace facet.
+// ConnectAuthorizer decides whether one already validated remote endpoint may
+// consume this private TCP transport. It runs while the shared core lock is
+// held and must not block, retain either argument, or call back into the
+// adapter. Protocol adapters use this seam to apply their own authority kind
+// without publishing a raw-TCP guest capability.
+type ConnectAuthorizer func(*policy.Policy, nscore.Endpoint) bool
+
+// TryConnectTCP implements the narrow raw-TCP namespace facet.
 func (n *Adapter) TryConnectTCP(remote nscore.Endpoint) (nscore.Resource, nscore.Progress, error) {
 	return n.TryConnect(remote)
 }
 
+// TryConnect preserves the public raw-TCP policy behavior.
 func (n *Adapter) TryConnect(remote nscore.Endpoint) (nscore.Resource, nscore.Progress, error) {
+	return n.TryConnectAuthorized(remote, func(compiled *policy.Policy, endpoint nscore.Endpoint) bool {
+		return compiled.CheckEndpoint(policy.OperationTCPConnect, endpoint.Address, endpoint.Port)
+	})
+}
+
+// TryConnectAuthorized creates a private outbound TCP transport only when the
+// selecting protocol's authorizer permits it. The returned resource remains a
+// backend-neutral TCP stream owned by the caller; this method never publishes a
+// guest handle or grants raw-TCP authority.
+func (n *Adapter) TryConnectAuthorized(remote nscore.Endpoint, authorize ConnectAuthorizer) (nscore.Resource, nscore.Progress, error) {
 	if n == nil {
 		return nil, 0, nscore.Fail(nscore.FailureClosed, net.ErrClosed)
 	}
@@ -630,7 +648,7 @@ func (n *Adapter) TryConnect(remote nscore.Endpoint) (nscore.Resource, nscore.Pr
 	if n.config.MaxOutboundStreams == 0 {
 		return nil, 0, nscore.Fail(nscore.FailureNotSupported, lneto.ErrUnsupported)
 	}
-	if !n.policy.CheckEndpoint(policy.OperationTCPConnect, remote.Address, remote.Port) {
+	if authorize == nil || !authorize(n.policy, remote) {
 		return nil, 0, nscore.Fail(nscore.FailureAccessDenied, ErrPolicyDenied)
 	}
 	if n.outboundTCPStreamsLocked() >= int(n.config.MaxOutboundStreams) {
