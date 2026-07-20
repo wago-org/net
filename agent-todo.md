@@ -30,18 +30,21 @@ and lneto as the first backend.
 
 ## TLS client slice (July 20, 2026)
 
-- Added granular public package `github.com/wago-org/net/tls` and self-register key
-  `net-tls`.
-- TLS-only inspection is exactly `net.info`, `net.tls`, `wago_net.abi_version`,
-  and nine `wago_net_tls` imports; raw TCP capability/imports are absent.
+- Added granular public package `github.com/wago-org/net/tls`; TLS intentionally
+  has no self-registering package or `net-tls` key because deployment trust and
+  identity authority must be supplied explicitly by the host.
+- Explicit TLS-only composition is exactly `net.info`, `net.tls`,
+  `wago_net.abi_version`, and nine `wago_net_tls` imports; raw TCP
+  capability/imports are absent.
 - Added immutable host profiles, mandatory standard-library certificate and
   DNS/IP SAN verification, host-owned ALPN, TLS 1.3 defaults, explicit TLS 1.2
   opt-in, and rejection of unsafe callbacks, key logging, renegotiation,
   arbitrary session caches, and insecure verification.
-- Added distinct TLS policy authority with raw-TCP deny inheritance, TLS quotas,
-  fixed ABI layouts, kind-safe handles, a bounded three-worker `crypto/tls`
-  bridge, private lneto TCP ownership, deterministic cancellation, and exact
-  rollback/release paths.
+- Added distinct TLS policy authority with raw-TCP deny inheritance, working
+  TLS-scoped loopback authority, TLS quotas, fixed ABI layouts, kind-safe
+  handles, a bounded three-worker `crypto/tls` bridge, shared namespace TCP-port
+  leases for raw and private transports, exactly-once EOF service transitions,
+  deterministic cancellation, and exact rollback/release paths.
 - Added TLS-only and TCP+TLS composition/dependency tests, standard-library peer
   security tests, race coverage, fuzz targets, and benchmarks.
 - TLS remains granular-only and outside aggregate `register` pending refreshed

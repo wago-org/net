@@ -67,13 +67,6 @@
       "imports": {"wago_net": 1, "wago_net_tcp": 11}
     },
     {
-      "key": "net-tls",
-      "package": "github.com/wago-org/net/tls/register",
-      "capabilities": ["net.info", "net.tls"],
-      "imports": {"wago_net": 1, "wago_net_tls": 9},
-      "granularOnly": true
-    },
-    {
       "key": "net-udp",
       "package": "github.com/wago-org/net/udp/register",
       "capabilities": ["net.info", "net.udp"],

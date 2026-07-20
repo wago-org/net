@@ -19,7 +19,6 @@ import (
 	_ "github.com/wago-org/net/ntp/register"
 	_ "github.com/wago-org/net/register"
 	_ "github.com/wago-org/net/tcp/register"
-	_ "github.com/wago-org/net/tls/register"
 	_ "github.com/wago-org/net/udp/register"
 	wago "github.com/wago-org/wago"
 )
@@ -29,8 +28,8 @@ func TestCanonicalPolicyMatchesEveryRegisteredBundle(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(policy.Bundles) != 13 {
-		t.Fatalf("bundle count = %d, want 13", len(policy.Bundles))
+	if len(policy.Bundles) != 12 {
+		t.Fatalf("bundle count = %d, want 12", len(policy.Bundles))
 	}
 	for _, bundle := range policy.Bundles {
 		extension, ok := wago.NewExtension(bundle.Key)
@@ -163,7 +162,6 @@ func clonePolicy(source inspectionpolicy.Policy) inspectionpolicy.Policy {
 			Package:      bundle.Package,
 			Capabilities: append([]string(nil), bundle.Capabilities...),
 			Imports:      make(map[string]int, len(bundle.Imports)),
-			GranularOnly: bundle.GranularOnly,
 		}
 		for module, count := range bundle.Imports {
 			clone.Bundles[index].Imports[module] = count

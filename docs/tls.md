@@ -31,7 +31,15 @@ and require an IP SAN. Common Name fallback is not used. Offered ALPN comes only
 from the host profile; required ALPN must be negotiated before connection
 completion. TLS allow/deny rules and special endpoint gates apply first, and
 matching raw-TCP deny rules additionally constrain the private transport without
-requiring a raw-TCP allow rule.
+requiring a raw-TCP allow rule. `tls.AllowLoopback()` adds only the TLS-scoped
+loopback gate; raw TCP still requires its own TCP-scoped grant. Multicast and
+limited broadcast remain unsupported TLS destinations even if advanced policy
+mentions those endpoint classes.
+
+TLS intentionally has no `tls/register` package or zero-configuration extension.
+A self-registering package cannot safely invent trust roots, profile IDs,
+verification identities, ALPN, or client credentials. Hosts must call
+`tls.NewClientProfile` and `tls.Register` explicitly in Go composition.
 
 ## Nonblocking engine
 
@@ -80,7 +88,9 @@ SHA-256, and verified identity type. Arbitrary certificate DER is not exported.
 All input/output ranges are checked before backend work. Server-name bytes are
 copied during the host call. Outputs remain unchanged on errors, would-block,
 EOF, and invalid state. Handles are generation-, table-, instance-, and
-kind-checked. Clean peer `close_notify` becomes `EOF`; raw TCP EOF without
+kind-checked. Clean peer `close_notify` becomes level-triggered `EOF`; after
+that transition repeated service calls report zero work and would-block rather
+than repeatedly charging the already-known transport EOF. Raw TCP EOF without
 `close_notify` and corrupted records become `TLS_PROTOCOL`.
 
 ## Default finite bounds

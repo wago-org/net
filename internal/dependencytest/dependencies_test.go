@@ -32,7 +32,7 @@ var protocolDependencies = map[string]protocolDependency{
 	"linklocal4": {public: modulePath + "/linklocal4", register: modulePath + "/linklocal4/register", binding: modulePath + "/internal/binding/linklocal4", operation: modulePath + "/internal/instance/linklocal4", abi: modulePath + "/internal/abi/linklocal4", namespace: modulePath + "/internal/namespace/linklocal4", adapter: modulePath + "/internal/backend/lneto/linklocal4"},
 	"ipv6":       {public: modulePath + "/ipv6", register: modulePath + "/ipv6/register", binding: modulePath + "/internal/binding/ipv6", operation: modulePath + "/internal/instance/ipv6", abi: modulePath + "/internal/abi/ipv6", namespace: modulePath + "/internal/namespace/ipv6", adapter: modulePath + "/internal/backend/lneto/ipv6"},
 	"dhcpv6":     {public: modulePath + "/dhcpv6", register: modulePath + "/dhcpv6/register", binding: modulePath + "/internal/binding/dhcpv6", operation: modulePath + "/internal/instance/dhcpv6", abi: modulePath + "/internal/abi/dhcpv6", namespace: modulePath + "/internal/namespace/dhcpv6", adapter: modulePath + "/internal/backend/lneto/dhcpv6"},
-	"tls":        {public: modulePath + "/tls", register: modulePath + "/tls/register", binding: modulePath + "/internal/binding/tls", operation: modulePath + "/internal/instance/tls", abi: modulePath + "/internal/abi/tls", namespace: modulePath + "/internal/namespace/tls", adapter: modulePath + "/internal/backend/lneto/tls"},
+	"tls":        {public: modulePath + "/tls", binding: modulePath + "/internal/binding/tls", operation: modulePath + "/internal/instance/tls", abi: modulePath + "/internal/abi/tls", namespace: modulePath + "/internal/namespace/tls", adapter: modulePath + "/internal/backend/lneto/tls"},
 }
 
 func TestFixtureDependencyBoundaries(t *testing.T) {
@@ -132,7 +132,6 @@ func TestSelfRegisterPackageDependencyBoundaries(t *testing.T) {
 		{name: "linklocal4", fixture: "../../linklocal4/register", selected: map[string]bool{"linklocal4": true}},
 		{name: "ipv6", fixture: "../../ipv6/register", selected: map[string]bool{"ipv6": true}},
 		{name: "dhcpv6", fixture: "../../dhcpv6/register", selected: map[string]bool{"dhcpv6": true}},
-		{name: "tls", fixture: "../../tls/register", selected: map[string]bool{"tls": true}},
 		{name: "all", fixture: "../../register", selected: map[string]bool{"tcp": true, "udp": true, "dns": true, "icmpv4": true, "icmpv6": true, "ntp": true, "mdns": true, "dhcpv4": true, "linklocal4": true, "ipv6": true, "dhcpv6": true}},
 	}
 	for _, test := range tests {
@@ -143,7 +142,7 @@ func TestSelfRegisterPackageDependencyBoundaries(t *testing.T) {
 					if !dependencies[dependency.public] || !dependencies[dependency.binding] || !dependencies[dependency.operation] || !dependencies[dependency.abi] || !dependencies[dependency.namespace] || !dependencies[dependency.adapter] {
 						t.Fatalf("selected %s self-register graph is incomplete", protocol)
 					}
-					if test.name != "all" && !dependencies[dependency.register] {
+					if test.name != "all" && dependency.register != "" && !dependencies[dependency.register] {
 						t.Fatalf("selected %s granular register package absent", protocol)
 					}
 					continue

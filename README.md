@@ -112,6 +112,11 @@ if err := wagonettls.Register(network, wagonettls.WithClientProfile(profile)); e
 }
 ```
 
+TLS intentionally has no `tls/register` zero-configuration extension and no
+`net-tls` custom-CLI key. Trust roots, verification identities, ALPN, client
+credentials, and profile IDs are deployment authority that must be supplied by
+explicit Go composition; the repository does not invent placeholder TLS policy.
+
 Profiles are finite and host-defined. The guest selects only a profile ID,
 remote IP endpoint, and authorized verification name. Certificate-chain and
 DNS/IP SAN verification are mandatory; Common Name fallback, key logging,
@@ -193,7 +198,8 @@ ABI import, and seven `wago_net_dhcpv6` imports; it becomes operational only
 with a separately configured scoped link-local IPv6 identity. Registering only TLS
 exposes exactly `net.info` and `net.tls`, `wago_net.abi_version`, and nine
 `wago_net_tls` imports; it does not expose `net.tcp` or `wago_net_tcp`.
-Unregistered protocol imports are absent and fail normal WebAssembly import resolution. The public TCP,
+This exact TLS surface is inspected through explicit composition fixtures rather
+than a self-registering extension. Unregistered protocol imports are absent and fail normal WebAssembly import resolution. The public TCP,
 UDP, DNS, ICMPv4, NTP, mDNS, DHCPv4, link-local, IPv6, ICMPv6, DHCPv6, and TLS facades each construct
 an opaque descriptor, and all twelve checked host tables live in protocol-specific
 internal binding packages. The

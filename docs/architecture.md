@@ -164,7 +164,11 @@ truncated datagrams, validates checksums and fragmentation, enforces policy on
 bind and every send, reserves exact finite resource/retained-storage quota,
 rotates egress deterministically, and clears all queue bytes on close.
 `internal/backend/lneto/tcp` independently owns TCP
-listener/stream pools, ports, and fixed buffers over the same core lock and stack.
+listener/stream pools and fixed buffers over the same core lock and stack. Local
+TCP ports are leased from one namespace-owned domain in
+`internal/backend/lneto/core`, shared by listeners, raw outbound streams, and
+private TLS transports. Opaque owner identities and exactly-once leases prevent
+one adapter or a stale release from colliding with another adapter's live port.
 It uses only immediate `tcp.Handler` buffer/state primitives and never calls
 `tcp.Conn`'s backoff-based `Read`, `Write`, or `Flush` wrappers. Fixed listener
 pools and
@@ -289,13 +293,16 @@ completing the Stage 4 compile-isolation boundary; runtime composition separatel
 covers all 4096 selective registrations.
 Granular `tcp/register`, `udp/register`, `dns/register`, `icmpv4/register`,
 `ntp/register`, `mdns/register`, `dhcpv4/register`, `linklocal4/register`,
-`ipv6/register`, `icmpv6/register`, `dhcpv6/register`, and `tls/register` packages own only their selected public
-facade and exact implementation graph. TLS-only may compile the neutral TCP
-facet and private lneto TCP adapter, but not the public TCP facade, TCP binding,
-TCP instance operations, or TCP ABI. The root `register` package intentionally
-continues to compose the eleven previously signed-off protocols in one extension rather than
-using the aggregate compatibility constructor. TLS remains granular-only until
-TinyGo and complete release-signoff evidence are refreshed.
+`ipv6/register`, `icmpv6/register`, and `dhcpv6/register` packages own only their
+selected public facade and exact implementation graph. TLS intentionally has no
+self-registering package because no secure zero-configuration extension can
+invent trust roots, identities, ALPN, credentials, or profile IDs. Explicit TLS
+Go composition may compile the neutral TCP facet and private lneto TCP adapter,
+but not the public TCP facade, TCP binding, TCP instance operations, or TCP ABI.
+The root `register` package intentionally continues to compose the eleven
+previously signed-off protocols in one extension rather than using the aggregate
+compatibility constructor. TLS remains granular-only until TinyGo and complete
+release-signoff evidence are refreshed.
 
 `internal/readiness` attaches a finite coordinator to each instance resource
 table. Registrations retain opaque handle plus exact kind, level-triggered polls

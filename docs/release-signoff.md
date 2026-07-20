@@ -18,11 +18,13 @@ The outbound `net.tls` client is intentionally absent from the aggregate
 `register` bundle and its historical aggregate evidence. Standard-Go unit,
 focused race, source-boundary, dependency-isolation, ABI, certificate/hostname,
 ALPN, truncation, corruption, bounded-queue, quota, and worker-join checks apply
-to `tls/register` separately. The canonical inspection policy marks `net-tls`
-as `granularOnly`, so aggregate completeness remains exact rather than silently
-claiming TLS signoff. TLS must not be called production-ready until the complete
-release gate is regenerated with TLS-aware lifecycle evidence and a truthful
-TinyGo decision for `crypto/tls` and `crypto/x509`.
+to explicit `tls.Register` composition fixtures separately. TLS has no
+self-registering extension and no canonical custom-CLI policy entry because a
+zero-configuration bundle would have to invent deployment trust and identity
+authority. Aggregate completeness therefore remains exact without claiming TLS
+signoff. TLS must not be called production-ready until the complete release gate
+is regenerated with TLS-aware lifecycle evidence and a truthful TinyGo decision
+for `crypto/tls` and `crypto/x509`.
 
 ## Pinned inputs
 

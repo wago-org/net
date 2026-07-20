@@ -23,7 +23,6 @@ type Bundle struct {
 	Package      string         `json:"package"`
 	Capabilities []string       `json:"capabilities"`
 	Imports      map[string]int `json:"imports"`
-	GranularOnly bool           `json:"granularOnly,omitempty"`
 }
 
 func Data() []byte {
@@ -99,9 +98,6 @@ func Validate(policy Policy) error {
 		}
 		if protocolCapability == "" {
 			return fmt.Errorf("inspection policy: granular bundle %q has no protocol capability", bundle.Key)
-		}
-		if bundle.GranularOnly {
-			continue
 		}
 		if _, duplicate := granularCapabilities[protocolCapability]; duplicate {
 			return fmt.Errorf("inspection policy: duplicate protocol capability %q", protocolCapability)
