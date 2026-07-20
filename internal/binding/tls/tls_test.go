@@ -42,13 +42,24 @@ func TestBindingsRejectMalformedAndOverlappingRangesWithoutMutation(t *testing.T
 		t.Fatal("malformed read mutated memory")
 	}
 
-	results[0] = 0
-	byName["connection_info"].Func(memoryModule{memory}, []uint64{1, ^uint64(0)}, results)
-	if got := guest.Status(wago.AsI32(results[0])); got != guest.StatusInvalidArgument {
-		t.Fatalf("info status = %v", got)
-	}
-	if !bytes.Equal(memory, before) {
-		t.Fatal("malformed info mutated memory")
+	for _, name := range []string{"connection_info", "connection_info_v2"} {
+		results[0] = 0
+		byName[name].Func(memoryModule{memory}, []uint64{1, ^uint64(0)}, results)
+		if got := guest.Status(wago.AsI32(results[0])); got != guest.StatusInvalidArgument {
+			t.Fatalf("%s malformed status = %v", name, got)
+		}
+		if !bytes.Equal(memory, before) {
+			t.Fatalf("malformed %s mutated memory", name)
+		}
+
+		results[0] = 0
+		byName[name].Func(memoryModule{memory}, []uint64{1, 64}, results)
+		if got := guest.Status(wago.AsI32(results[0])); got == guest.StatusOK {
+			t.Fatalf("%s unexpectedly succeeded without an instance", name)
+		}
+		if !bytes.Equal(memory, before) {
+			t.Fatalf("failed %s mutated output", name)
+		}
 	}
 }
 

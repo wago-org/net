@@ -683,6 +683,8 @@ provide `net.tcp`. All functions return one `i32` status:
 
 ```text
 namespace_default(out_namespace_ptr: i32) -> i32
+listen(namespace: i64, local_ptr: i32, profile_id: i32, out_listener_ptr: i32) -> i32
+accept(listener: i64, out_stream_ptr: i32) -> i32
 connect(namespace: i64, remote_ptr: i32, profile_id: i32,
         server_name_ptr: i32, server_name_len: i32, out_stream_ptr: i32) -> i32
 finish_connect(stream: i64) -> i32
@@ -690,7 +692,9 @@ read(stream: i64, dst_ptr: i32, dst_len: i32, out_result_ptr: i32) -> i32
 write(stream: i64, src_ptr: i32, src_len: i32, out_result_ptr: i32) -> i32
 shutdown_write(stream: i64) -> i32
 connection_info(stream: i64, out_info_ptr: i32) -> i32
+connection_info_v2(stream: i64, out_info_ptr: i32) -> i32
 close(stream: i64) -> i32
+close_listener(listener: i64) -> i32
 poll(events_ptr: i32, events_capacity: i32, budget_ptr: i32, result_ptr: i32) -> i32
 ```
 
@@ -711,6 +715,40 @@ struct wago_net_tls_connection_info_v1 {
     uint8_t  peer_leaf_spki_sha256[32];  // offset 112
 };
 ```
+
+At offset 68, v1 `resumed` remains a little-endian boolean whose only emitted
+values are exactly 0 and 1. Server role and peer-authentication state are not
+encoded into that field. This byte-for-byte contract predates server support and
+is retained unchanged.
+
+The additive `connection_info_v2` import writes a distinct 144-byte
+`wago_net_tls_connection_info_v2` layout. Its physical offsets match v1 except
+that offset 68 is a flags word:
+
+```c
+struct wago_net_tls_connection_info_v2 {
+    struct wago_net_addr_v1 local;       // offset 0
+    struct wago_net_addr_v1 remote;      // offset 32
+    uint16_t tls_version;                // offset 64
+    uint16_t cipher_suite;               // offset 66
+    uint32_t flags;                      // offset 68
+    uint32_t identity_type;              // offset 72
+    uint32_t alpn_length;                // offset 76, maximum 32
+    uint8_t  alpn[32];                   // offset 80
+    uint8_t  peer_leaf_spki_sha256[32];  // offset 112
+};
+```
+
+Defined v2 flags are bit 0 `RESUMED`, bit 1 `SERVER_ROLE`, and bit 2
+`PEER_AUTHENTICATED`; all other bits are reserved and must be zero. For a server
+stream without required client authentication, `PEER_AUTHENTICATED` is clear,
+`identity_type` is 0, and the peer SPKI digest is all zero. For a mutually
+authenticated server stream, the flag and digest are present while
+`identity_type` remains 0 because no DNS/IP client-name assertion is made.
+
+The shared `wago_net.abi_version` remains 1.0: the existing v1 import and bytes
+are unchanged, while role-aware metadata is feature-detected through the
+separately named additive `connection_info_v2` import.
 
 Connection metadata is available only after verified completion. Certificate
 DER, chains, private keys, and error strings are never guest output. Clean

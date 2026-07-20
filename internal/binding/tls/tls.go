@@ -40,7 +40,10 @@ func Bindings(host plugin.Host) []plugin.Binding {
 		{Name: "read", Func: func(module wago.HostModule, params, results []uint64) { read(host, module, params, results) }, Params: []wago.ValType{wago.ValI64, wago.ValI32, wago.ValI32, wago.ValI32}, Results: []wago.ValType{wago.ValI32}, Capability: Capability, Docs: "perform one checked partial decrypted read"},
 		{Name: "write", Func: func(module wago.HostModule, params, results []uint64) { write(host, module, params, results) }, Params: []wago.ValType{wago.ValI64, wago.ValI32, wago.ValI32, wago.ValI32}, Results: []wago.ValType{wago.ValI32}, Capability: Capability, Docs: "perform one checked partial plaintext write"},
 		{Name: "shutdown_write", Func: func(module wago.HostModule, params, results []uint64) { shutdownWrite(host, module, params, results) }, Params: []wago.ValType{wago.ValI64}, Results: []wago.ValType{wago.ValI32}, Capability: Capability, Docs: "queue TLS close_notify and reject later plaintext writes"},
-		{Name: "connection_info", Func: func(module wago.HostModule, params, results []uint64) { connectionInfo(host, module, params, results) }, Params: []wago.ValType{wago.ValI64, wago.ValI32}, Results: []wago.ValType{wago.ValI32}, Capability: Capability, Docs: "return bounded verified TLS connection metadata"},
+		{Name: "connection_info", Func: func(module wago.HostModule, params, results []uint64) { connectionInfo(host, module, params, results) }, Params: []wago.ValType{wago.ValI64, wago.ValI32}, Results: []wago.ValType{wago.ValI32}, Capability: Capability, Docs: "return backward-compatible TLS connection-info v1 metadata"},
+		{Name: "connection_info_v2", Func: func(module wago.HostModule, params, results []uint64) {
+			connectionInfoV2(host, module, params, results)
+		}, Params: []wago.ValType{wago.ValI64, wago.ValI32}, Results: []wago.ValType{wago.ValI32}, Capability: Capability, Docs: "return role-aware TLS connection-info v2 metadata"},
 		{Name: "close", Func: func(module wago.HostModule, params, results []uint64) { closeStream(host, module, params, results) }, Params: []wago.ValType{wago.ValI64}, Results: []wago.ValType{wago.ValI32}, Capability: Capability, Docs: "abort and close one exact TLS stream without waiting for the peer"},
 		{Name: "close_listener", Func: func(module wago.HostModule, params, results []uint64) { closeListener(host, module, params, results) }, Params: []wago.ValType{wago.ValI64}, Results: []wago.ValType{wago.ValI32}, Capability: Capability, Docs: "close one exact TLS server listener"},
 		{Name: "poll", Func: func(module wago.HostModule, params, results []uint64) { guest.Poll(host, module, params, results) }, Params: []wago.ValType{wago.ValI32, wago.ValI32, wago.ValI32, wago.ValI32}, Results: []wago.ValType{wago.ValI32}, Capability: Capability, Docs: "perform one bounded TLS readiness and transport-service pass"},
@@ -307,13 +310,25 @@ func shutdownWrite(host plugin.Host, module wago.HostModule, params, results []u
 }
 
 func connectionInfo(host plugin.Host, module wago.HostModule, params, results []uint64) {
+	connectionInfoCall(host, module, params, results, false)
+}
+
+func connectionInfoV2(host plugin.Host, module wago.HostModule, params, results []uint64) {
+	connectionInfoCall(host, module, params, results, true)
+}
+
+func connectionInfoCall(host plugin.Host, module wago.HostModule, params, results []uint64, version2 bool) {
 	if len(params) != 2 || len(results) != 1 {
 		guest.SetStatus(results, guest.StatusInvalidArgument)
 		return
 	}
 	memory := guest.Memory(module)
 	out, ok := abicore.NarrowUint32(params[1])
-	if !ok || !abicore.CheckRanges(memory, false, abicore.Range{Ptr: out, Length: tlsabi.ConnectionInfoV1Size}) {
+	size := tlsabi.ConnectionInfoV1Size
+	if version2 {
+		size = tlsabi.ConnectionInfoV2Size
+	}
+	if !ok || !abicore.CheckRanges(memory, false, abicore.Range{Ptr: out, Length: size}) {
 		guest.SetStatus(results, guest.StatusInvalidArgument)
 		return
 	}
@@ -332,7 +347,11 @@ func connectionInfo(host plugin.Host, module wago.HostModule, params, results []
 		guest.SetStatus(results, status)
 		return
 	}
-	if !tlsabi.EncodeConnectionInfoV1(memory, out, info) {
+	encoded := tlsabi.EncodeConnectionInfoV1(memory, out, info)
+	if version2 {
+		encoded = tlsabi.EncodeConnectionInfoV2(memory, out, info)
+	}
+	if !encoded {
 		guest.SetStatus(results, guest.StatusIO)
 		return
 	}
