@@ -12,6 +12,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"sort"
 	"strings"
 	"testing"
 )
@@ -1358,6 +1359,45 @@ func TestTLSPlatformSignoffScriptsAreWiredToReleaseAndCI(t *testing.T) {
 			if !strings.Contains(contents, required) {
 				t.Fatalf("%s does not retain %q", file.path, required)
 			}
+		}
+	}
+}
+
+func TestArm64TLSExecutionManifestAndStatusesRemainExplicit(t *testing.T) {
+	manifestData, err := os.ReadFile("../../scripts/arm64-test-binaries.tsv")
+	if err != nil {
+		t.Fatal(err)
+	}
+	rows := strings.Split(strings.TrimSpace(string(manifestData)), "\n")
+	if len(rows) != 4 {
+		t.Fatalf("arm64 binary rows = %d, want 4", len(rows))
+	}
+	if !sort.StringsAreSorted(rows) {
+		t.Fatal("arm64 binary manifest is not sorted")
+	}
+	manifest := string(manifestData)
+	for _, required := range []string{
+		"github.com/wago-org/net/internal/backend/gotls",
+		"github.com/wago-org/net/internal/backend/lneto/tls",
+		"github.com/wago-org/net/tls",
+	} {
+		if !strings.Contains(manifest, required) {
+			t.Fatalf("arm64 manifest does not retain %q", required)
+		}
+	}
+
+	scriptData, err := os.ReadFile("../../scripts/arm64-execution-signoff.sh")
+	if err != nil {
+		t.Fatal(err)
+	}
+	script := string(scriptData)
+	for _, required := range []string{
+		"GOOS=linux GOARCH=arm64 CGO_ENABLED=0", "timeout \"$limit\"", "ARM64_EXECUTION must be auto, required, or skip",
+		"status=executed-%s", "status=skipped-no-runner", "status=skipped-disabled",
+		"if [[ $mode == required ]]", "run_failures=$((run_failures + 1))",
+	} {
+		if !strings.Contains(script, required) {
+			t.Fatalf("arm64 execution script does not enforce %q", required)
 		}
 	}
 }
