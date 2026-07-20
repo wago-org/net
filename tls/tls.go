@@ -1,5 +1,6 @@
-// Package tls selectively registers Wago's outbound, verified, nonblocking TLS
-// client capability. TLS is independent from the public raw-TCP capability.
+// Package tls selectively registers Wago's verified, nonblocking TLS client
+// and explicitly authorized server-listener capability. TLS is independent
+// from the public raw-TCP capability.
 package tls
 
 import (
@@ -30,6 +31,7 @@ type registration struct {
 	profiles           []*ClientProfile
 	serverProfiles     []*ServerProfile
 	defaultAuthority   bool
+	listenerAuthority  bool
 	authorityAdditions policy.Config
 }
 
@@ -60,6 +62,13 @@ func WithServerProfile(profile *ServerProfile) Option {
 		target.serverProfiles = append(target.serverProfiles, profile)
 		return nil
 	})
+}
+
+// AllowListeners explicitly grants ordinary inbound TLS listen authority when
+// at least one server profile is registered. Storing server credentials alone
+// never grants endpoint authority or raw-TCP listen capability.
+func AllowListeners() Option {
+	return optionFunc(func(target *registration) error { target.listenerAuthority = true; return nil })
 }
 
 // WithPolicy adds advanced TLS authority. Deny rules from any composition
@@ -102,7 +111,7 @@ func (registration registration) authority() policy.Config {
 	if !registration.defaultAuthority {
 		return policy.Merge(registration.authorityAdditions)
 	}
-	return policy.Merge(defaultAuthority(len(registration.profiles) != 0, len(registration.serverProfiles) != 0), registration.authorityAdditions)
+	return policy.Merge(defaultAuthority(len(registration.profiles) != 0, registration.listenerAuthority && len(registration.serverProfiles) != 0), registration.authorityAdditions)
 }
 
 // Register selects only net.tls, wago_net_tls, and the private TLS transport.
@@ -117,7 +126,7 @@ func Register(network *wagonet.Network, options ...Option) error {
 			return err
 		}
 	}
-	if network == nil || !validConfig(config.config) || (len(config.profiles) == 0 && len(config.serverProfiles) == 0) || len(config.profiles) > MaximumClientProfiles || len(config.serverProfiles) > MaximumClientProfiles {
+	if network == nil || !validConfig(config.config) || (len(config.profiles) == 0 && len(config.serverProfiles) == 0) || len(config.profiles) > MaximumClientProfiles || len(config.serverProfiles) > MaximumClientProfiles || (config.listenerAuthority && len(config.serverProfiles) == 0) {
 		return ErrInvalidConfig
 	}
 	profiles, err := compileProfiles(config.profiles, config.config)

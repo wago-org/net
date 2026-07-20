@@ -1,10 +1,11 @@
-# Outbound TLS client capability
+# Bounded TLS client and server capability
 
-`github.com/wago-org/net/tls` is a separately selectable, client-only secure
-stream protocol. It declares `net.tls` and `wago_net_tls`; it does not declare
-`net.tcp` or install `wago_net_tcp`. The lneto implementation privately owns an
-internal TCP stream, never publishes that stream in the guest resource table,
-and closes both TLS and TCP ownership exactly once.
+`github.com/wago-org/net/tls` is a separately selectable secure stream protocol
+with outbound clients and explicitly authorized inbound listeners. It declares
+`net.tls` and `wago_net_tls`; it does not declare `net.tcp` or install
+`wago_net_tcp`. The lneto implementation privately owns internal TCP streams and
+listeners, never publishes them in the guest resource table, and closes TLS and
+TCP ownership exactly once.
 
 ## Public API and authority
 
@@ -36,10 +37,28 @@ loopback gate; raw TCP still requires its own TCP-scoped grant. Multicast and
 limited broadcast remain unsupported TLS destinations even if advanced policy
 mentions those endpoint classes.
 
+Hosts construct server profiles with `NewServerProfile` and static certificate
+chains. Every DER certificate is parsed during profile construction, each chain
+link is signature-checked, and each leaf public key must match its
+`crypto.Signer`. Certificate DER, OCSP staples, SCTs, ALPN, and CA pools are
+cloned. The signer itself remains a host-owned interface value and must remain
+available, immutable, and concurrency-safe for the profile lifetime; it never
+enters guest memory. Dynamic certificate/config selection and verification
+callbacks are rejected. Client SNI may select only among the immutable static
+certificates supplied by the host; it cannot select a new configuration or
+credential source. Server session tickets remain disabled.
+
+A stored server profile grants no endpoint authority. Hosts must separately opt
+in with `tls.AllowListeners()` or supply explicit advanced inbound TLS policy.
+That authority does not grant raw-TCP listen, and applicable raw-TCP inbound deny
+rules continue to constrain the private listener. Listener handles and accepted
+TLS streams remain kind-separated and finite.
+
 TLS intentionally has no `tls/register` package or zero-configuration extension.
 A self-registering package cannot safely invent trust roots, profile IDs,
-verification identities, ALPN, or client credentials. Hosts must call
-`tls.NewClientProfile` and `tls.Register` explicitly in Go composition.
+verification identities, ALPN, server certificates, private keys, or listen
+policy. Hosts must call profile constructors and `tls.Register` explicitly in Go
+composition.
 
 ## Nonblocking engine
 

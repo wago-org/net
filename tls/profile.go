@@ -1,6 +1,7 @@
 package tls
 
 import (
+	"bytes"
 	"crypto"
 	cryptotls "crypto/tls"
 	"crypto/x509"
@@ -177,10 +178,13 @@ func NewClientProfile(id uint32, config *cryptotls.Config, options ...ClientProf
 	return &ClientProfile{id: id, config: cloned, allowedNames: builder.allowedNames, requiredALPN: builder.requiredALPN, allowTLS12: builder.allowTLS12}, nil
 }
 
-// NewServerProfile validates and deeply clones a caller-owned crypto/tls
-// server configuration. Static certificates are mandatory. Dynamic
-// certificate, verification, session, entropy, and key-log callbacks are
-// rejected so guest traffic cannot mutate host policy.
+// NewServerProfile validates and clones a caller-owned crypto/tls server
+// configuration. Static certificate DER and metadata are deeply cloned. Each
+// crypto.Signer remains a host-owned interface value because private keys are
+// intentionally never copied or exposed; the caller must keep that signer
+// available, concurrency-safe, and immutable for the profile lifetime.
+// Dynamic certificate, verification, session, entropy, and key-log callbacks
+// are rejected so guest traffic cannot mutate host policy.
 func NewServerProfile(id uint32, config *cryptotls.Config, options ...ServerProfileOption) (*ServerProfile, error) {
 	if id == 0 || config == nil {
 		return nil, ErrInvalidServerProfile
@@ -306,14 +310,8 @@ func cloneSafeServerConfig(input *cryptotls.Config, allowTLS12 bool) (*cryptotls
 		return nil, ErrInvalidServerProfile
 	}
 	for _, certificate := range input.Certificates {
-		signer, signerOK := certificate.PrivateKey.(crypto.Signer)
-		if len(certificate.Certificate) == 0 || !signerOK || signer.Public() == nil {
-			return nil, ErrInvalidServerProfile
-		}
-		for _, der := range certificate.Certificate {
-			if len(der) == 0 {
-				return nil, ErrInvalidServerProfile
-			}
+		if err := validateStaticServerCertificate(certificate); err != nil {
+			return nil, err
 		}
 	}
 	cloned := input.Clone()
@@ -353,6 +351,38 @@ func cloneSafeServerConfig(input *cryptotls.Config, allowTLS12 bool) (*cryptotls
 	return cloned, nil
 }
 
+func validateStaticServerCertificate(certificate cryptotls.Certificate) error {
+	signer, signerOK := certificate.PrivateKey.(crypto.Signer)
+	if len(certificate.Certificate) == 0 || !signerOK || signer.Public() == nil {
+		return ErrInvalidServerProfile
+	}
+	parsed := make([]*x509.Certificate, len(certificate.Certificate))
+	for index, der := range certificate.Certificate {
+		if len(der) == 0 {
+			return ErrInvalidServerProfile
+		}
+		value, err := x509.ParseCertificate(der)
+		if err != nil {
+			return ErrInvalidServerProfile
+		}
+		parsed[index] = value
+	}
+	for index := 0; index+1 < len(parsed); index++ {
+		if err := parsed[index].CheckSignatureFrom(parsed[index+1]); err != nil {
+			return ErrInvalidServerProfile
+		}
+	}
+	leafPublic, err := x509.MarshalPKIXPublicKey(parsed[0].PublicKey)
+	if err != nil {
+		return ErrInvalidServerProfile
+	}
+	signerPublic, err := x509.MarshalPKIXPublicKey(signer.Public())
+	if err != nil || !bytes.Equal(leafPublic, signerPublic) {
+		return ErrInvalidServerProfile
+	}
+	return nil
+}
+
 func cloneCertificates(input []cryptotls.Certificate) []cryptotls.Certificate {
 	out := make([]cryptotls.Certificate, len(input))
 	for i := range input {
@@ -366,27 +396,11 @@ func cloneCertificates(input []cryptotls.Certificate) []cryptotls.Certificate {
 		for j := range input[i].SignedCertificateTimestamps {
 			out[i].SignedCertificateTimestamps[j] = append([]byte(nil), input[i].SignedCertificateTimestamps[j]...)
 		}
-		if input[i].Leaf != nil {
-			out[i].Leaf = cloneCertificate(input[i].Leaf)
+		if len(out[i].Certificate) != 0 {
+			out[i].Leaf, _ = x509.ParseCertificate(out[i].Certificate[0])
 		}
 	}
 	return out
-}
-
-func cloneCertificate(input *x509.Certificate) *x509.Certificate {
-	if input == nil {
-		return nil
-	}
-	// Parsing Raw creates an independent standard-library representation while
-	// avoiding a fragile hand-maintained copy of x509.Certificate's slices.
-	if len(input.Raw) != 0 {
-		if parsed, err := x509.ParseCertificate(append([]byte(nil), input.Raw...)); err == nil {
-			return parsed
-		}
-	}
-	// A malformed or synthetic Leaf is not retained: crypto/tls can safely parse
-	// the independently cloned certificate DER when it needs a leaf.
-	return nil
 }
 
 func normalizeIdentity(name string) (string, identityKind, bool) {
