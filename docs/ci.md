@@ -2,10 +2,16 @@
 
 `.github/workflows/ci.yml` runs on pull requests, pushes to `main`, manual
 dispatches, and a weekly schedule. The workflow uses Go 1.24.4 with the Go module
-and build caches enabled and has five bounded jobs:
+and build caches enabled and has seven bounded jobs:
 
 - **quality** runs the ordinary suite, one shuffled suite, `go vet`, and the
   backend/source-boundary guard;
+- **tls-standard-go** runs `scripts/tls-signoff.sh`, retaining the exact public
+  composition, security, ABI, dependency, mixed-transport, EOF, quota, and worker
+  lifecycle ordinary/race evidence;
+- **tinygo-supported** installs pinned TinyGo 0.41.1 and runs
+  `scripts/tinygo-supported-test.sh` across the exact 123-package supported
+  surface while retaining the reviewed five-package TLS exclusion;
 - **race** runs the complete suite with the race detector and shuffle, with five
   repetitions only for scheduled or manually requested deep checks;
 - **fuzz-smoke** runs all targets discovered by `scripts/fuzz-smoke.sh` on weekly
@@ -15,6 +21,13 @@ and build caches enabled and has five bounded jobs:
   retains `targets.tsv`, `detail.txt`, and every package-grouped target log;
 - **portability** runs strict pointer instrumentation and the strongest truthful
   linux/386 coverage currently possible.
+
+TLS is intentionally absent from TinyGo rather than represented by a stub. The
+TinyGo job uploads its supported and excluded manifests, canonical detail, and
+per-package logs on failure and for scheduled/manual runs. The standard-Go TLS
+job similarly retains its package/test manifests and logs. Static repository
+tests require both script invocations and the pinned TinyGo version to remain in
+the workflow.
 
 The module intentionally develops against exact local Wago and lneto worktrees.
 `scripts/ci-prepare-dependencies.sh` creates the ignored `.audit/wago` and
