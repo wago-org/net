@@ -11,31 +11,34 @@ import (
 type Status = guest.Status
 
 const (
-	StatusOK                  = guest.StatusOK
-	StatusAgain               = guest.StatusAgain
-	StatusInProgress          = guest.StatusInProgress
-	StatusEOF                 = guest.StatusEOF
-	StatusAccessDenied        = guest.StatusAccessDenied
-	StatusInvalidArgument     = guest.StatusInvalidArgument
-	StatusBadHandle           = guest.StatusBadHandle
-	StatusInvalidState        = guest.StatusInvalidState
-	StatusNotSupported        = guest.StatusNotSupported
-	StatusNoMemory            = guest.StatusNoMemory
-	StatusResourceLimit       = guest.StatusResourceLimit
-	StatusAddressInUse        = guest.StatusAddressInUse
-	StatusAddressNotAvailable = guest.StatusAddressNotAvailable
-	StatusRemoteUnreachable   = guest.StatusRemoteUnreachable
-	StatusConnectionRefused   = guest.StatusConnectionRefused
-	StatusConnectionReset     = guest.StatusConnectionReset
-	StatusConnectionAborted   = guest.StatusConnectionAborted
-	StatusConnectionBroken    = guest.StatusConnectionBroken
-	StatusTimedOut            = guest.StatusTimedOut
-	StatusMessageTooLarge     = guest.StatusMessageTooLarge
-	StatusNameNotFound        = guest.StatusNameNotFound
-	StatusTemporaryFailure    = guest.StatusTemporaryFailure
-	StatusIO                  = guest.StatusIO
-	StatusCanceled            = guest.StatusCanceled
-	StatusOther               = guest.StatusOther
+	StatusOK                       = guest.StatusOK
+	StatusAgain                    = guest.StatusAgain
+	StatusInProgress               = guest.StatusInProgress
+	StatusEOF                      = guest.StatusEOF
+	StatusAccessDenied             = guest.StatusAccessDenied
+	StatusInvalidArgument          = guest.StatusInvalidArgument
+	StatusBadHandle                = guest.StatusBadHandle
+	StatusInvalidState             = guest.StatusInvalidState
+	StatusNotSupported             = guest.StatusNotSupported
+	StatusNoMemory                 = guest.StatusNoMemory
+	StatusResourceLimit            = guest.StatusResourceLimit
+	StatusAddressInUse             = guest.StatusAddressInUse
+	StatusAddressNotAvailable      = guest.StatusAddressNotAvailable
+	StatusRemoteUnreachable        = guest.StatusRemoteUnreachable
+	StatusConnectionRefused        = guest.StatusConnectionRefused
+	StatusConnectionReset          = guest.StatusConnectionReset
+	StatusConnectionAborted        = guest.StatusConnectionAborted
+	StatusConnectionBroken         = guest.StatusConnectionBroken
+	StatusTimedOut                 = guest.StatusTimedOut
+	StatusMessageTooLarge          = guest.StatusMessageTooLarge
+	StatusNameNotFound             = guest.StatusNameNotFound
+	StatusTemporaryFailure         = guest.StatusTemporaryFailure
+	StatusIO                       = guest.StatusIO
+	StatusCanceled                 = guest.StatusCanceled
+	StatusOther                    = guest.StatusOther
+	StatusTLSAuthentication        = guest.StatusTLSAuthentication
+	StatusTLSProtocol              = guest.StatusTLSProtocol
+	StatusUnsupportedConfiguration = guest.StatusUnsupportedConfiguration
 )
 
 // Compatibility wrappers keep existing root-package tests and aggregate

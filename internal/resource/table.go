@@ -32,6 +32,7 @@ const (
 	KindICMPv6Echo
 	KindICMPv6Neighbor
 	KindDHCPv6Lease
+	KindTLSStream
 	KindPollable
 )
 
@@ -334,6 +335,8 @@ func (k Kind) String() string {
 		return "icmpv6_neighbor"
 	case KindDHCPv6Lease:
 		return "dhcpv6_lease"
+	case KindTLSStream:
+		return "tls_stream"
 	case KindPollable:
 		return "pollable"
 	default:

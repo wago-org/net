@@ -31,10 +31,15 @@ const (
 	FailureCanceled
 	FailureClosed
 	FailureAccessDenied
+	FailureTLSAuthentication
+	FailureTLSProtocol
+	FailureUnsupportedConfiguration
 )
 
 // Valid reports whether failure is a defined category.
-func (f Failure) Valid() bool { return f >= FailureInvalidArgument && f <= FailureAccessDenied }
+func (f Failure) Valid() bool {
+	return f >= FailureInvalidArgument && f <= FailureUnsupportedConfiguration
+}
 
 // Error wraps a backend cause with a stable semantic category.
 type Error struct {

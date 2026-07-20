@@ -36,9 +36,10 @@ const (
 	TransportIPv6
 	TransportICMPv6
 	TransportDHCPv6
+	TransportTLS
 
 	transportFirst = TransportUDP
-	transportLast  = TransportDHCPv6
+	transportLast  = TransportTLS
 )
 
 // Direction identifies whether authority accepts local inbound traffic or
@@ -82,6 +83,7 @@ const (
 	OperationDHCPv6ClientBind
 	OperationDHCPv6ClientSend
 	OperationDHCPv6ClientReceive
+	OperationTLSConnect
 )
 
 // PortRange is an inclusive port selector.
@@ -205,7 +207,17 @@ func (p *Policy) CheckEndpoint(operation Operation, address netip.Addr, port uin
 	if p == nil || !ok || !p.endpointClassAllowed(transport, direction, address, port) {
 		return false
 	}
-	return p.decide(query{transport: transport, direction: direction, address: address, port: port, hasPort: true})
+	request := query{transport: transport, direction: direction, address: address, port: port, hasPort: true}
+	if !p.decide(request) {
+		return false
+	}
+	// TLS is distinct authority, but its private byte transport must continue
+	// to honor every applicable raw-TCP deny without requiring a TCP allow.
+	if transport == TransportTLS {
+		request.transport = TransportTCP
+		return !p.denied(request)
+	}
+	return true
 }
 
 // CheckPortAllocation validates an authority-preserving local port allocation.
@@ -504,6 +516,8 @@ func operationEndpoint(operation Operation) (Transport, Direction, bool) {
 		return TransportTCP, DirectionInbound, true
 	case OperationTCPConnect:
 		return TransportTCP, DirectionOutbound, true
+	case OperationTLSConnect:
+		return TransportTLS, DirectionOutbound, true
 	case OperationNTPSync:
 		return TransportNTP, DirectionOutbound, true
 	case OperationMDNSSend:

@@ -41,6 +41,9 @@ const (
 	StatusIO
 	StatusCanceled
 	StatusOther
+	StatusTLSAuthentication
+	StatusTLSProtocol
+	StatusUnsupportedConfiguration
 )
 
 // FromProgress maps valid nonblocking progress onto the stable guest taxonomy.
@@ -131,6 +134,12 @@ func FromError(err error) Status {
 			return StatusCanceled
 		case nscore.FailureAccessDenied:
 			return StatusAccessDenied
+		case nscore.FailureTLSAuthentication:
+			return StatusTLSAuthentication
+		case nscore.FailureTLSProtocol:
+			return StatusTLSProtocol
+		case nscore.FailureUnsupportedConfiguration:
+			return StatusUnsupportedConfiguration
 		default:
 			return StatusOther
 		}
@@ -216,6 +225,12 @@ func (s Status) String() string {
 		return "CANCELED"
 	case StatusOther:
 		return "OTHER"
+	case StatusTLSAuthentication:
+		return "TLS_AUTHENTICATION"
+	case StatusTLSProtocol:
+		return "TLS_PROTOCOL"
+	case StatusUnsupportedConfiguration:
+		return "UNSUPPORTED_CONFIGURATION"
 	default:
 		return "UNKNOWN"
 	}

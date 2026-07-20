@@ -28,6 +28,7 @@ const (
 	ModuleIPv6       ModuleKey = "ipv6"
 	ModuleICMPv6     ModuleKey = "icmpv6"
 	ModuleDHCPv6     ModuleKey = "dhcpv6"
+	ModuleTLS        ModuleKey = "tls"
 )
 
 var (

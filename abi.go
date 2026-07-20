@@ -11,6 +11,10 @@ const (
 	UDPReceiveResultV1Size    uint32 = 48
 	TCPStreamV1Size           uint32 = 72
 	TCPIOResultV1Size         uint32 = 8
+	TLSStreamV1Size           uint32 = 72
+	TLSIOResultV1Size         uint32 = 8
+	TLSConnectionInfoV1Size   uint32 = 144
+	TLSMaxALPNV1Bytes         uint32 = 32
 	DNSNameV1Size             uint32 = 260
 	DNSQueryV1Size            uint32 = 268
 	DNSRecordV1Size           uint32 = 560

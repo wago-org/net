@@ -49,6 +49,8 @@ const (
 	ICMPv6Module = "wago_net_icmpv6"
 	// DHCPv6Module owns the bounded initial DHCPv6 acquisition subset.
 	DHCPv6Module = "wago_net_dhcpv6"
+	// TLSModule owns the outbound verified TLS client surface.
+	TLSModule = "wago_net_tls"
 
 	// ABIVersion1 encodes ABI version 1.0 as major in the upper 16 bits and minor
 	// in the lower 16 bits.
@@ -78,6 +80,8 @@ const (
 	CapICMPv6 wago.Capability = "net.icmpv6"
 	// CapDHCPv6 permits the checked bounded initial DHCPv6 acquisition subset.
 	CapDHCPv6 wago.Capability = "net.dhcpv6"
+	// CapTLS permits checked outbound verified TLS client streams.
+	CapTLS wago.Capability = "net.tls"
 )
 
 // PolicyConfig and related aliases expose the backend-neutral authority model
@@ -104,6 +108,7 @@ const (
 	PolicyTransportIPv6       = policy.TransportIPv6
 	PolicyTransportICMPv6     = policy.TransportICMPv6
 	PolicyTransportDHCPv6     = policy.TransportDHCPv6
+	PolicyTransportTLS        = policy.TransportTLS
 
 	PolicyInbound  = policy.DirectionInbound
 	PolicyOutbound = policy.DirectionOutbound
