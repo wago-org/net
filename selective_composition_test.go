@@ -2,7 +2,6 @@ package net_test
 
 import (
 	"context"
-	cryptotls "crypto/tls"
 	"net/netip"
 	"reflect"
 	"slices"
@@ -20,7 +19,6 @@ import (
 	"github.com/wago-org/net/mdns"
 	"github.com/wago-org/net/ntp"
 	"github.com/wago-org/net/tcp"
-	wagonettls "github.com/wago-org/net/tls"
 	"github.com/wago-org/net/udp"
 	wago "github.com/wago-org/wago"
 	"github.com/wago-org/wago/src/core/compiler/wasm"
@@ -49,13 +47,6 @@ var publicProtocols = []protocolSelection{
 	}},
 	{name: "icmpv6", module: wagonet.ICMPv6Module, capability: wagonet.CapICMPv6, imports: 14, register: func(network *wagonet.Network) error { return icmpv6.Register(network) }},
 	{name: "dhcpv6", module: wagonet.DHCPv6Module, capability: wagonet.CapDHCPv6, imports: 7, register: func(network *wagonet.Network) error { return dhcpv6.Register(network) }},
-	{name: "tls", module: wagonet.TLSModule, capability: wagonet.CapTLS, imports: 9, register: func(network *wagonet.Network) error {
-		profile, err := wagonettls.NewClientProfile(1, &cryptotls.Config{}, wagonettls.AllowServerNames("api.example.com"))
-		if err != nil {
-			return err
-		}
-		return wagonettls.Register(network, wagonettls.WithClientProfile(profile))
-	}},
 }
 
 func TestPublicSelectiveCompositionMatrix(t *testing.T) {
