@@ -1,12 +1,17 @@
 package tls_test
 
 import (
+	"context"
 	cryptotls "crypto/tls"
+	"encoding/binary"
 	"errors"
+	"net/netip"
 	"reflect"
 	"testing"
 
 	wagonet "github.com/wago-org/net"
+	abicore "github.com/wago-org/net/internal/abi/core"
+	nscore "github.com/wago-org/net/internal/namespace/core"
 	"github.com/wago-org/net/tcp"
 	wagonettls "github.com/wago-org/net/tls"
 	wago "github.com/wago-org/wago"
@@ -64,6 +69,63 @@ func TestTCPAndTLSComposeWithoutCapabilityWidening(t *testing.T) {
 	}
 }
 
+func TestPublicTLSRegistrationLoopbackOptionControlsOnlyTLSConnect(t *testing.T) {
+	for _, test := range []struct {
+		name  string
+		allow bool
+		want  wagonet.Status
+	}{
+		{name: "default denied", want: wagonet.StatusAccessDenied},
+		{name: "explicit TLS grant", allow: true, want: wagonet.StatusInProgress},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			network := wagonet.New(wagonet.WithConfig(wagonet.Config{StaticIPv4: tlsStaticIPv4()}))
+			profile, err := wagonettls.NewClientProfile(1, &cryptotls.Config{}, wagonettls.AllowServerNames("localhost"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			options := []wagonettls.Option{wagonettls.WithClientProfile(profile)}
+			if test.allow {
+				options = append(options, wagonettls.AllowLoopback())
+			}
+			if err := wagonettls.Register(network, options...); err != nil {
+				t.Fatal(err)
+			}
+			runtime := wago.NewRuntime()
+			if err := runtime.Use(network); err != nil {
+				t.Fatal(err)
+			}
+			module, err := runtime.Compile([]byte{0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00})
+			if err != nil {
+				t.Fatal(err)
+			}
+			instance, err := runtime.Instantiate(context.Background(), module)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer instance.Close()
+			host := tlsExactHost{instance: instance, memory: make([]byte, 256)}
+			if got := callTLS(t, runtime, host, "namespace_default", 0); got != wagonet.StatusOK {
+				t.Fatalf("namespace_default = %v", got)
+			}
+			namespaceHandle := binary.LittleEndian.Uint64(host.memory[:8])
+			if !abicore.EncodeEndpointV1(host.memory, 16, nscore.Endpoint{Address: netip.MustParseAddr("127.0.0.1"), Port: 443}) {
+				t.Fatal("encode loopback")
+			}
+			copy(host.memory[48:], "localhost")
+			if got := callTLS(t, runtime, host, "connect", namespaceHandle, 16, 1, 48, uint64(len("localhost")), 64); got != test.want {
+				t.Fatalf("loopback connect = %v, want %v", got, test.want)
+			}
+			if test.allow {
+				streamHandle := binary.LittleEndian.Uint64(host.memory[64:72])
+				if got := callTLS(t, runtime, host, "close", streamHandle); got != wagonet.StatusOK {
+					t.Fatalf("close = %v", got)
+				}
+			}
+		})
+	}
+}
+
 func TestRegisterRejectsMissingProfileDuplicateAndFrozen(t *testing.T) {
 	if err := wagonettls.Register(nil, wagonettls.WithClientProfile(testProfile(t))); !errors.Is(err, wagonettls.ErrInvalidConfig) {
 		t.Fatalf("nil network = %v", err)
@@ -88,6 +150,34 @@ func TestRegisterRejectsMissingProfileDuplicateAndFrozen(t *testing.T) {
 	}
 	if err := wagonettls.Register(network, wagonettls.WithClientProfile(profile)); !errors.Is(err, wagonet.ErrProtocolRegistrationFrozen) {
 		t.Fatalf("frozen = %v", err)
+	}
+}
+
+type tlsExactHost struct {
+	instance *wago.Instance
+	memory   []byte
+}
+
+func (host tlsExactHost) Memory() []byte           { return host.memory }
+func (host tlsExactHost) Instance() *wago.Instance { return host.instance }
+
+func callTLS(t testing.TB, runtime *wago.Runtime, host tlsExactHost, name string, params ...uint64) wagonet.Status {
+	t.Helper()
+	function, ok := runtime.HostImports()[wagonet.TLSModule+"."+name].(wago.HostFunc)
+	if !ok {
+		t.Fatalf("TLS import %q missing", name)
+	}
+	results := []uint64{0}
+	function(host, params, results)
+	return wagonet.Status(wago.AsI32(results[0]))
+}
+
+func tlsStaticIPv4() *wagonet.StaticIPv4Config {
+	return &wagonet.StaticIPv4Config{
+		Hostname: "tls-loopback", RandSeed: 17,
+		HardwareAddress: [6]byte{2, 0, 0, 0, 0, 17}, GatewayHardwareAddress: [6]byte{2, 0, 0, 0, 0, 1},
+		IPv4Address: netip.MustParseAddr("192.0.2.17"), MTU: 1500,
+		Link: wagonet.PacketLinkConfig{MaxFrameBytes: 1514, IngressFrames: 4, EgressFrames: 4},
 	}
 }
 

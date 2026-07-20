@@ -8,13 +8,14 @@ import (
 )
 
 var (
-	benchmarkServiceReport nscore.ServiceReport
-	benchmarkProgress      nscore.Progress
-	benchmarkErr           error
-	benchmarkReadiness     nscore.Readiness
-	benchmarkLeaseStorage  UDPPortLease
-	benchmarkPort          uint16
-	benchmarkOK            bool
+	benchmarkServiceReport   nscore.ServiceReport
+	benchmarkProgress        nscore.Progress
+	benchmarkErr             error
+	benchmarkReadiness       nscore.Readiness
+	benchmarkLeaseStorage    UDPPortLease
+	benchmarkTCPLeaseStorage TCPPortLease
+	benchmarkPort            uint16
+	benchmarkOK              bool
 )
 
 func BenchmarkNamespaceReadiness(b *testing.B) {
@@ -22,6 +23,31 @@ func BenchmarkNamespaceReadiness(b *testing.B) {
 	b.ReportAllocs()
 	for b.Loop() {
 		benchmarkReadiness = ns.Readiness()
+	}
+}
+
+func BenchmarkTCPPortLeaseAcquireRelease(b *testing.B) {
+	config := testConfig(78)
+	config.MaxActiveTCPPorts = 16
+	ns, err := New(config)
+	if err != nil {
+		b.Fatal(err)
+	}
+	b.Cleanup(func() { _ = ns.Close() })
+	ns.Lock()
+	owner := ns.NewTCPPortOwnerLocked()
+	ns.Unlock()
+	b.ReportAllocs()
+	for b.Loop() {
+		ns.Lock()
+		benchmarkOK = ns.AcquireTCPPortIntoLocked(&benchmarkTCPLeaseStorage, owner, 0)
+		if benchmarkOK {
+			benchmarkTCPLeaseStorage.ReleaseLocked()
+		}
+		ns.Unlock()
+		if !benchmarkOK {
+			b.Fatal("TCP lease")
+		}
 	}
 }
 

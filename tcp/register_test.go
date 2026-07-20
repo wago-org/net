@@ -146,7 +146,7 @@ func TestDefaultTCPAllowsFiniteOutboundAndDeniesListenerSpecialAndCallerDeniedAu
 	if !abicore.EncodeEndpointV1(host.memory, 16, nscore.Endpoint{Address: netip.MustParseAddr("127.0.0.1"), Port: 443}) {
 		t.Fatal("encode loopback remote")
 	}
-	if got := callTCP(t, runtime, host, "connect", namespaceHandle, 16, 64); got != wagonet.StatusInvalidArgument {
+	if got := callTCP(t, runtime, host, "connect", namespaceHandle, 16, 64); got != wagonet.StatusAccessDenied {
 		t.Fatalf("default loopback connect = %v", got)
 	}
 	if !abicore.EncodeEndpointV1(host.memory, 16, nscore.Endpoint{Address: netip.MustParseAddr("192.0.2.10"), Port: 8080}) {
