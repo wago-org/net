@@ -65,7 +65,7 @@ func (stream *fakeStream) ConnectionInfo() (tlsns.ConnectionInfo, bool) { return
 func TestTLSOperationsKeepHandlesKindSpecificAndPartial(t *testing.T) {
 	local := nscore.Endpoint{Address: netip.MustParseAddr("192.0.2.1"), Port: 49152}
 	remote := nscore.Endpoint{Address: netip.MustParseAddr("192.0.2.2"), Port: 443}
-	info := tlsns.ConnectionInfo{LocalEndpoint: local, RemoteEndpoint: remote, TLSVersion: 0x304, CipherSuite: 0x1301, NegotiatedALPN: "h2", VerifiedIdentity: tlsns.IdentityDNS}
+	info := tlsns.ConnectionInfo{LocalEndpoint: local, RemoteEndpoint: remote, TLSVersion: 0x304, CipherSuite: 0x1301, NegotiatedALPN: "h2", Role: tlsns.RoleClient, PeerAuthenticated: true, PeerLeafSPKI256: [32]byte{1}, VerifiedIdentity: tlsns.IdentityDNS}
 	stream := &fakeStream{local: local, remote: remote, input: []byte("reply"), info: info}
 	namespace := &fakeNamespace{stream: stream}
 	state, manager, instance := attachState(t, namespace)
@@ -103,7 +103,7 @@ func TestTLSOperationsKeepHandlesKindSpecificAndPartial(t *testing.T) {
 
 func TestTLSHandleIsCrossInstanceAndWrongKindSafe(t *testing.T) {
 	endpoint := nscore.Endpoint{Address: netip.MustParseAddr("192.0.2.2"), Port: 443}
-	firstStream := &fakeStream{local: endpoint, remote: endpoint, info: tlsns.ConnectionInfo{LocalEndpoint: endpoint, RemoteEndpoint: endpoint, TLSVersion: 0x304, CipherSuite: 0x1301, VerifiedIdentity: tlsns.IdentityIP}}
+	firstStream := &fakeStream{local: endpoint, remote: endpoint, info: tlsns.ConnectionInfo{LocalEndpoint: endpoint, RemoteEndpoint: endpoint, TLSVersion: 0x304, CipherSuite: 0x1301, Role: tlsns.RoleClient, PeerAuthenticated: true, PeerLeafSPKI256: [32]byte{1}, VerifiedIdentity: tlsns.IdentityIP}}
 	first, firstManager, firstInstance := attachState(t, &fakeNamespace{stream: firstStream})
 	defer firstManager.Detach(firstInstance)
 	handle, _, err := Connect(first, first.NamespaceHandle(), endpoint, 1, "192.0.2.2")

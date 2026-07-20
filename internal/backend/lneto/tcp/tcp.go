@@ -508,12 +508,31 @@ func (n *Adapter) ingressTCPPayloadLocked(payload []byte, checksum *lneto.CRC791
 	return false, nil
 }
 
+// ListenAuthorizer decides whether one structurally valid local endpoint may
+// consume a private TCP listener and returns a stable classified failure when
+// denied or unsupported. It runs while the shared core lock is held and must
+// not block, retain either argument, or call back into the adapter.
+type ListenAuthorizer func(*policy.Policy, nscore.Endpoint) error
+
 // TryListenTCP implements the narrow TCP namespace facet.
 func (n *Adapter) TryListenTCP(local nscore.Endpoint) (nscore.Resource, nscore.Progress, error) {
 	return n.TryListen(local)
 }
 
+// TryListen preserves the public raw-TCP policy behavior.
 func (n *Adapter) TryListen(local nscore.Endpoint) (nscore.Resource, nscore.Progress, error) {
+	return n.TryListenAuthorized(local, func(compiled *policy.Policy, endpoint nscore.Endpoint) error {
+		if !compiled.CheckEndpoint(policy.OperationTCPListen, endpoint.Address, endpoint.Port) {
+			return nscore.Fail(nscore.FailureAccessDenied, ErrPolicyDenied)
+		}
+		return nil
+	})
+}
+
+// TryListenAuthorized creates a private TCP listener only when the selecting
+// protocol's authorizer permits it. The returned listener remains owned by the
+// caller and is never published as a raw-TCP guest handle.
+func (n *Adapter) TryListenAuthorized(local nscore.Endpoint, authorize ListenAuthorizer) (nscore.Resource, nscore.Progress, error) {
 	if n == nil {
 		return nil, 0, nscore.Fail(nscore.FailureClosed, net.ErrClosed)
 	}
@@ -538,8 +557,11 @@ func (n *Adapter) TryListen(local nscore.Endpoint) (nscore.Resource, nscore.Prog
 	} else if local.FlowInfo != 0 || (!local.Address.IsUnspecified() && (local.Address != n.core.IPv6AddressLocked() || !n.ipv6ScopeMatchesLocked(local))) {
 		return nil, 0, nscore.Fail(nscore.FailureAddressUnavailable, lneto.ErrInvalidAddr)
 	}
-	if !n.policy.CheckEndpoint(policy.OperationTCPListen, local.Address, local.Port) {
+	if authorize == nil {
 		return nil, 0, nscore.Fail(nscore.FailureAccessDenied, ErrPolicyDenied)
+	}
+	if err := authorize(n.policy, local); err != nil {
+		return nil, 0, err
 	}
 	if len(n.listeners) == int(n.config.MaxListeners) {
 		return nil, 0, nscore.Fail(nscore.FailureResourceLimit, lneto.ErrExhausted)

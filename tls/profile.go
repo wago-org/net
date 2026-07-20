@@ -1,6 +1,7 @@
 package tls
 
 import (
+	"crypto"
 	cryptotls "crypto/tls"
 	"crypto/x509"
 	"errors"
@@ -13,10 +14,11 @@ import (
 )
 
 var (
-	ErrInvalidProfile     = errors.New("wagonet/tls: invalid client profile")
-	ErrUnsafeTLSConfig    = errors.New("wagonet/tls: unsafe TLS configuration")
-	ErrUnauthorizedName   = errors.New("wagonet/tls: server name is not authorized")
-	ErrTLS12RequiresOptIn = errors.New("wagonet/tls: TLS 1.2 requires explicit opt-in")
+	ErrInvalidProfile       = errors.New("wagonet/tls: invalid client profile")
+	ErrInvalidServerProfile = errors.New("wagonet/tls: invalid server profile")
+	ErrUnsafeTLSConfig      = errors.New("wagonet/tls: unsafe TLS configuration")
+	ErrUnauthorizedName     = errors.New("wagonet/tls: server name is not authorized")
+	ErrTLS12RequiresOptIn   = errors.New("wagonet/tls: TLS 1.2 requires explicit opt-in")
 )
 
 // ClientProfile is an effectively immutable host-defined TLS client profile.
@@ -25,6 +27,16 @@ type ClientProfile struct {
 	id           uint32
 	config       *cryptotls.Config
 	allowedNames map[string]identityKind
+	requiredALPN string
+	allowTLS12   bool
+}
+
+// ServerProfile is an effectively immutable host-defined TLS server profile.
+// Certificate chains and private keys remain host-owned and never enter guest
+// memory; guests can select only the numeric profile ID while listening.
+type ServerProfile struct {
+	id           uint32
+	config       *cryptotls.Config
 	requiredALPN string
 	allowTLS12   bool
 }
@@ -47,6 +59,22 @@ func (option clientProfileOptionFunc) applyClientProfile(builder *profileBuilder
 
 type profileBuilder struct {
 	allowedNames map[string]identityKind
+	requiredALPN string
+	allowTLS12   bool
+}
+
+// ServerProfileOption constrains one host-owned server profile.
+type ServerProfileOption interface {
+	applyServerProfile(*serverProfileBuilder) error
+}
+
+type serverProfileOptionFunc func(*serverProfileBuilder) error
+
+func (option serverProfileOptionFunc) applyServerProfile(builder *serverProfileBuilder) error {
+	return option(builder)
+}
+
+type serverProfileBuilder struct {
 	requiredALPN string
 	allowTLS12   bool
 }
@@ -95,6 +123,27 @@ func EnableTLS12() ClientProfileOption {
 	})
 }
 
+// RequireServerALPN requires an accepted client to negotiate exactly protocol.
+// The offered protocol list remains immutable host configuration.
+func RequireServerALPN(protocol string) ServerProfileOption {
+	return serverProfileOptionFunc(func(builder *serverProfileBuilder) error {
+		if !validALPN(protocol) || builder.requiredALPN != "" {
+			return ErrInvalidServerProfile
+		}
+		builder.requiredALPN = protocol
+		return nil
+	})
+}
+
+// EnableServerTLS12 is the conspicuous opt-in required before a server profile
+// may lower MinVersion to TLS 1.2.
+func EnableServerTLS12() ServerProfileOption {
+	return serverProfileOptionFunc(func(builder *serverProfileBuilder) error {
+		builder.allowTLS12 = true
+		return nil
+	})
+}
+
 // NewClientProfile validates and deeply clones a caller-owned crypto/tls
 // configuration. Later mutation of the supplied config, trust pool, certificate
 // slices, or ALPN slice cannot change the profile.
@@ -128,8 +177,47 @@ func NewClientProfile(id uint32, config *cryptotls.Config, options ...ClientProf
 	return &ClientProfile{id: id, config: cloned, allowedNames: builder.allowedNames, requiredALPN: builder.requiredALPN, allowTLS12: builder.allowTLS12}, nil
 }
 
-// ID returns the finite guest-selectable profile identifier.
+// NewServerProfile validates and deeply clones a caller-owned crypto/tls
+// server configuration. Static certificates are mandatory. Dynamic
+// certificate, verification, session, entropy, and key-log callbacks are
+// rejected so guest traffic cannot mutate host policy.
+func NewServerProfile(id uint32, config *cryptotls.Config, options ...ServerProfileOption) (*ServerProfile, error) {
+	if id == 0 || config == nil {
+		return nil, ErrInvalidServerProfile
+	}
+	builder := serverProfileBuilder{}
+	for _, option := range options {
+		if option == nil {
+			return nil, ErrInvalidServerProfile
+		}
+		if err := option.applyServerProfile(&builder); err != nil {
+			return nil, err
+		}
+	}
+	cloned, err := cloneSafeServerConfig(config, builder.allowTLS12)
+	if err != nil {
+		return nil, err
+	}
+	if builder.requiredALPN != "" {
+		if len(cloned.NextProtos) == 0 {
+			cloned.NextProtos = []string{builder.requiredALPN}
+		} else if !slices.Contains(cloned.NextProtos, builder.requiredALPN) {
+			return nil, ErrInvalidServerProfile
+		}
+	}
+	return &ServerProfile{id: id, config: cloned, requiredALPN: builder.requiredALPN, allowTLS12: builder.allowTLS12}, nil
+}
+
+// ID returns the finite guest-selectable client profile identifier.
 func (profile *ClientProfile) ID() uint32 {
+	if profile == nil {
+		return 0
+	}
+	return profile.id
+}
+
+// ID returns the finite guest-selectable server profile identifier.
+func (profile *ServerProfile) ID() uint32 {
 	if profile == nil {
 		return 0
 	}
@@ -193,6 +281,74 @@ func cloneSafeConfig(input *cryptotls.Config, allowTLS12 bool) (*cryptotls.Confi
 	}
 	if cloned.MaxVersion < cloned.MinVersion || cloned.MaxVersion > cryptotls.VersionTLS13 {
 		return nil, ErrInvalidProfile
+	}
+	return cloned, nil
+}
+
+func cloneSafeServerConfig(input *cryptotls.Config, allowTLS12 bool) (*cryptotls.Config, error) {
+	if len(input.Certificates) == 0 {
+		return nil, ErrInvalidServerProfile
+	}
+	if input.InsecureSkipVerify || input.KeyLogWriter != nil || input.Renegotiation != cryptotls.RenegotiateNever ||
+		input.VerifyPeerCertificate != nil || input.VerifyConnection != nil || input.GetClientCertificate != nil ||
+		input.GetCertificate != nil || input.GetConfigForClient != nil || input.ClientSessionCache != nil ||
+		input.UnwrapSession != nil || input.WrapSession != nil || input.Rand != nil || input.NameToCertificate != nil ||
+		input.RootCAs != nil || input.ServerName != "" || input.SessionTicketKey != ([32]byte{}) ||
+		len(input.CipherSuites) != 0 || len(input.CurvePreferences) != 0 ||
+		len(input.EncryptedClientHelloConfigList) != 0 || input.EncryptedClientHelloRejectionVerify != nil ||
+		len(input.EncryptedClientHelloKeys) != 0 {
+		return nil, ErrUnsafeTLSConfig
+	}
+	if input.ClientAuth != cryptotls.NoClientCert && input.ClientAuth != cryptotls.RequireAndVerifyClientCert {
+		return nil, ErrUnsafeTLSConfig
+	}
+	if input.ClientAuth == cryptotls.RequireAndVerifyClientCert && input.ClientCAs == nil {
+		return nil, ErrInvalidServerProfile
+	}
+	for _, certificate := range input.Certificates {
+		signer, signerOK := certificate.PrivateKey.(crypto.Signer)
+		if len(certificate.Certificate) == 0 || !signerOK || signer.Public() == nil {
+			return nil, ErrInvalidServerProfile
+		}
+		for _, der := range certificate.Certificate {
+			if len(der) == 0 {
+				return nil, ErrInvalidServerProfile
+			}
+		}
+	}
+	cloned := input.Clone()
+	cloned.NextProtos = append([]string(nil), input.NextProtos...)
+	for _, protocol := range cloned.NextProtos {
+		if !validALPN(protocol) {
+			return nil, ErrInvalidServerProfile
+		}
+	}
+	cloned.Certificates = cloneCertificates(input.Certificates)
+	if input.ClientCAs != nil {
+		cloned.ClientCAs = input.ClientCAs.Clone()
+	}
+	// Session resumption requires additional key-rotation and retained-state
+	// policy. Disable it until that authority is represented explicitly.
+	cloned.SessionTicketsDisabled = true
+	minVersion := cloned.MinVersion
+	if minVersion == 0 {
+		minVersion = cryptotls.VersionTLS13
+	}
+	if minVersion < cryptotls.VersionTLS12 {
+		return nil, ErrUnsafeTLSConfig
+	}
+	if minVersion == cryptotls.VersionTLS12 && !allowTLS12 {
+		return nil, ErrTLS12RequiresOptIn
+	}
+	if minVersion > cryptotls.VersionTLS13 {
+		return nil, ErrInvalidServerProfile
+	}
+	cloned.MinVersion = minVersion
+	if cloned.MaxVersion == 0 {
+		cloned.MaxVersion = cryptotls.VersionTLS13
+	}
+	if cloned.MaxVersion < cloned.MinVersion || cloned.MaxVersion > cryptotls.VersionTLS13 {
+		return nil, ErrInvalidServerProfile
 	}
 	return cloned, nil
 }

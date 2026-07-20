@@ -59,7 +59,9 @@ type Stream struct {
 	closed          bool
 	terminal        error
 	info            tlsns.ConnectionInfo
+	role            tlsns.Role
 	profile         Profile
+	serverProfile   ServerProfile
 	identity        tlsns.IdentityType
 }
 
@@ -73,18 +75,54 @@ func NewClient(transport Transport, profile Profile, serverName string, identity
 	}
 	config := cloned.Config.Clone()
 	config.ServerName = serverName
+	stream, err := newStream(transport, limits, tlsns.RoleClient, func(bridge *bridgeConn) *cryptotls.Conn {
+		return cryptotls.Client(bridge, config)
+	})
+	if err != nil {
+		return nil, err
+	}
+	stream.profile = cloned
+	stream.identity = identity
+	return stream, nil
+}
+
+// NewServer starts one bounded server handshake over an already accepted,
+// private transport. The accepted TCP stream remains solely owned by the TLS
+// stream and never becomes guest-visible.
+func NewServer(transport Transport, profile ServerProfile, limits Limits) (*Stream, error) {
+	if transport == nil || !ValidLimits(limits) {
+		return nil, ErrInvalidConfig
+	}
+	cloned, err := profile.Clone()
+	if err != nil {
+		return nil, err
+	}
+	stream, err := newStream(transport, limits, tlsns.RoleServer, func(bridge *bridgeConn) *cryptotls.Conn {
+		return cryptotls.Server(bridge, cloned.Config)
+	})
+	if err != nil {
+		return nil, err
+	}
+	stream.serverProfile = cloned
+	return stream, nil
+}
+
+func newStream(transport Transport, limits Limits, role tlsns.Role, makeTLS func(*bridgeConn) *cryptotls.Conn) (*Stream, error) {
 	local, remote := transport.LocalEndpoint(), transport.RemoteEndpoint()
-	if !local.Valid() || !remote.Valid() {
+	if !local.Valid() || !remote.Valid() || (role != tlsns.RoleClient && role != tlsns.RoleServer) || makeTLS == nil {
 		return nil, ErrInvalidConfig
 	}
 	bridge := newBridgeConn(limits.CiphertextReceiveBytes, limits.CiphertextTransmitBytes, limits.MaxHandshakeBytes)
 	ctx, cancel := context.WithCancel(context.Background())
 	stream := &Stream{
-		transport: transport, local: local, remote: remote, bridge: bridge, tls: cryptotls.Client(bridge, config), limits: limits,
+		transport: transport, local: local, remote: remote, bridge: bridge, tls: makeTLS(bridge), limits: limits,
 		cancel: cancel, ready: make(chan struct{}), rxPlain: newByteRing(limits.PlaintextReceiveBytes),
 		txPlain: newByteRing(limits.PlaintextTransmitBytes), readScratch: make([]byte, 16<<10),
-		writeScratch: make([]byte, 16<<10), cipherScratch: make([]byte, CiphertextScratchBytes),
-		profile: cloned, identity: identity,
+		writeScratch: make([]byte, 16<<10), cipherScratch: make([]byte, CiphertextScratchBytes), role: role,
+	}
+	if stream.tls == nil {
+		cancel()
+		return nil, ErrInvalidConfig
 	}
 	stream.cond = sync.NewCond(&stream.mu)
 	stream.wg.Add(3)
@@ -114,27 +152,65 @@ func (stream *Stream) handshakeWorker(ctx context.Context) {
 
 func (stream *Stream) validateConnection() error {
 	state := stream.tls.ConnectionState()
-	if len(state.PeerCertificates) == 0 || len(state.PeerCertificates) > int(stream.profile.MaxPeerCertificates) {
+	info := tlsns.ConnectionInfo{
+		LocalEndpoint: stream.local, RemoteEndpoint: stream.remote,
+		TLSVersion: state.Version, CipherSuite: state.CipherSuite, NegotiatedALPN: state.NegotiatedProtocol,
+		Resumed: state.DidResume, Role: stream.role,
+	}
+	switch stream.role {
+	case tlsns.RoleClient:
+		if err := validatePeerCertificates(state.PeerCertificates, state.VerifiedChains, stream.profile.MaxCertificateChainBytes, stream.profile.MaxPeerCertificates, true); err != nil {
+			return err
+		}
+		if stream.profile.RequiredALPN != "" && state.NegotiatedProtocol != stream.profile.RequiredALPN {
+			return ErrALPN
+		}
+		info.PeerAuthenticated = true
+		info.PeerLeafSPKI256 = sha256.Sum256(state.PeerCertificates[0].RawSubjectPublicKeyInfo)
+		info.VerifiedIdentity = stream.identity
+	case tlsns.RoleServer:
+		requirePeer := stream.serverProfile.Config.ClientAuth == cryptotls.RequireAndVerifyClientCert
+		if err := validatePeerCertificates(state.PeerCertificates, state.VerifiedChains, stream.serverProfile.MaxCertificateChainBytes, stream.serverProfile.MaxPeerCertificates, requirePeer); err != nil {
+			return err
+		}
+		if stream.serverProfile.RequiredALPN != "" && state.NegotiatedProtocol != stream.serverProfile.RequiredALPN {
+			return ErrALPN
+		}
+		if len(state.PeerCertificates) != 0 {
+			info.PeerAuthenticated = len(state.VerifiedChains) != 0
+			if info.PeerAuthenticated {
+				info.PeerLeafSPKI256 = sha256.Sum256(state.PeerCertificates[0].RawSubjectPublicKeyInfo)
+			}
+		}
+	default:
+		return ErrInvalidConfig
+	}
+	if !info.Valid(255) {
+		return ErrInvalidConfig
+	}
+	stream.info = info
+	return nil
+}
+
+func validatePeerCertificates(peer []*x509.Certificate, verified [][]*x509.Certificate, maxBytes int, maxCertificates uint16, required bool) error {
+	if len(peer) == 0 {
+		if required {
+			return x509.UnknownAuthorityError{}
+		}
+		return nil
+	}
+	if len(peer) > int(maxCertificates) {
 		return ErrCertificateLimit
 	}
 	total := 0
-	for _, certificate := range state.PeerCertificates {
+	for _, certificate := range peer {
 		total += len(certificate.Raw)
-		if total > stream.profile.MaxCertificateChainBytes {
+		if total > maxBytes {
 			return ErrCertificateLimit
 		}
 	}
-	if len(state.VerifiedChains) == 0 {
+	if len(verified) == 0 {
 		return x509.UnknownAuthorityError{}
-	}
-	if stream.profile.RequiredALPN != "" && state.NegotiatedProtocol != stream.profile.RequiredALPN {
-		return ErrALPN
-	}
-	stream.info = tlsns.ConnectionInfo{
-		LocalEndpoint: stream.local, RemoteEndpoint: stream.remote,
-		TLSVersion: state.Version, CipherSuite: state.CipherSuite, NegotiatedALPN: state.NegotiatedProtocol,
-		Resumed: state.DidResume, PeerLeafSPKI256: sha256.Sum256(state.PeerCertificates[0].RawSubjectPublicKeyInfo),
-		VerifiedIdentity: stream.identity,
 	}
 	return nil
 }

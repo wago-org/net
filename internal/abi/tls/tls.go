@@ -77,9 +77,17 @@ func EncodeConnectionInfoV1(memory []byte, ptr uint32, info tlsns.ConnectionInfo
 	}
 	binary.LittleEndian.PutUint16(encoded[64:66], info.TLSVersion)
 	binary.LittleEndian.PutUint16(encoded[66:68], info.CipherSuite)
+	var flags uint32
 	if info.Resumed {
-		binary.LittleEndian.PutUint32(encoded[68:72], 1)
+		flags |= 1 << 0
 	}
+	if info.Role == tlsns.RoleServer {
+		flags |= 1 << 1
+	}
+	if info.PeerAuthenticated {
+		flags |= 1 << 2
+	}
+	binary.LittleEndian.PutUint32(encoded[68:72], flags)
 	binary.LittleEndian.PutUint32(encoded[72:76], uint32(info.VerifiedIdentity))
 	binary.LittleEndian.PutUint32(encoded[76:80], uint32(len(info.NegotiatedALPN)))
 	copy(encoded[80:112], info.NegotiatedALPN)
