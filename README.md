@@ -206,8 +206,9 @@ operation bitset and work operations return `NOT_SUPPORTED` without output
 mutation. Registering only DHCPv6 exposes `net.info`, `net.dhcpv6`, the shared
 ABI import, and seven `wago_net_dhcpv6` imports; it becomes operational only
 with a separately configured scoped link-local IPv6 identity. Registering only TLS
-exposes exactly `net.info` and `net.tls`, `wago_net.abi_version`, and nine
-`wago_net_tls` imports; it does not expose `net.tcp` or `wago_net_tcp`.
+exposes exactly `net.info` and `net.tls`, `wago_net.abi_version`, and thirteen
+`wago_net_tls` imports on the server-foundation branch; it does not expose
+`net.tcp` or `wago_net_tcp`.
 This exact TLS surface is inspected through explicit composition fixtures rather
 than a self-registering extension. Unregistered protocol imports are absent and fail normal WebAssembly import resolution. The public TCP,
 UDP, DNS, ICMPv4, NTP, mDNS, DHCPv4, link-local, IPv6, ICMPv6, DHCPv6, and TLS facades each construct

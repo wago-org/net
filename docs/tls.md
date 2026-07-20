@@ -70,24 +70,32 @@ executed arm64 evidence are still required before production readiness.
 
 ## ABI
 
-`wago_net_tls` exports nine operations:
+`wago_net_tls` exports thirteen operations on the server-foundation branch:
 
 - `namespace_default`
+- `listen`
+- `accept`
 - `connect`
 - `finish_connect`
 - `read`
 - `write`
 - `shutdown_write`
 - `connection_info`
+- `connection_info_v2`
 - `close`
+- `close_listener`
 - `poll`
 
 `finish_connect` reports success only after TCP establishment, TLS handshake,
 certificate-chain validation, DNS/IP identity validation, and required ALPN.
 No plaintext is readable or writable before that point. `connection_info`
-returns only local/remote endpoints, TLS version, cipher-suite number,
-negotiated ALPN (maximum 32 bytes in ABI v1), resumption flag, peer leaf SPKI
-SHA-256, and verified identity type. Arbitrary certificate DER is not exported.
+retains the exact client-era v1 byte contract: offset 68 is only the resumed
+boolean 0 or 1. `connection_info_v2` additively reports resumed, local server
+role, and peer-authenticated flags without reinterpreting v1. Both versions
+return only bounded local/remote endpoints, TLS version, cipher-suite number,
+negotiated ALPN (maximum 32 bytes), optional peer leaf SPKI SHA-256, and the
+client-side verified server identity type. Arbitrary certificate DER is not
+exported.
 
 All input/output ranges are checked before backend work. Server-name bytes are
 copied during the host call. Outputs remain unchanged on errors, would-block,
@@ -125,8 +133,9 @@ close and failed verification release each charge exactly once.
 
 ## Unsupported scope
 
-There are no listeners, server handshakes, incoming client authentication,
-DTLS, QUIC TLS, STARTTLS upgrades, guest-handle wrapping, arbitrary guest TLS
-configuration, session-ticket key rotation, or inbound handshake queues. The
-certificate-validation clock is the cloned host `tls.Config.Time` function when
-provided, otherwise Go's standard clock.
+There is no HTTP/HTTPS request API, DTLS, QUIC TLS, STARTTLS upgrade,
+guest-handle wrapping, arbitrary guest TLS configuration, or session-ticket key
+rotation. Server listeners and bounded inbound handshakes are available only
+through explicit granular TLS registration and authority; they do not place TLS
+in aggregate `register`. The certificate-validation clock is the cloned host
+`tls.Config.Time` function when provided, otherwise Go's standard clock.
