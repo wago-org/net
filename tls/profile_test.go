@@ -1,9 +1,14 @@
 package tls
 
 import (
+	"crypto/ed25519"
+	"crypto/rand"
 	cryptotls "crypto/tls"
+	"crypto/x509"
+	"math/big"
 	"net/netip"
 	"testing"
+	"time"
 
 	"github.com/wago-org/net/internal/policy"
 )
@@ -59,6 +64,70 @@ func TestClientProfileRequiresTLS12OptInAndExactIdentity(t *testing.T) {
 	if _, _, err := profile.authorizeServerName("example.com"); err != ErrUnauthorizedName {
 		t.Fatalf("wrong identity: %v", err)
 	}
+}
+
+func TestServerProfileDefaultsTLS13ClonesAndRequiresStaticCertificate(t *testing.T) {
+	config := testServerConfig(t)
+	profile, err := NewServerProfile(7, config, RequireServerALPN("h2"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	originalDER := append([]byte(nil), profile.config.Certificates[0].Certificate[0]...)
+	config.NextProtos[0] = "mutated"
+	config.Certificates[0].Certificate[0][0] ^= 0xff
+	config.SessionTicketsDisabled = false
+	if profile.ID() != 7 || profile.config.NextProtos[0] != "h2" || string(profile.config.Certificates[0].Certificate[0]) != string(originalDER) {
+		t.Fatal("server profile retained caller mutation")
+	}
+	if profile.config.MinVersion != cryptotls.VersionTLS13 || profile.config.MaxVersion != cryptotls.VersionTLS13 || !profile.config.SessionTicketsDisabled {
+		t.Fatalf("server profile defaults = %x..%x tickets-disabled=%v", profile.config.MinVersion, profile.config.MaxVersion, profile.config.SessionTicketsDisabled)
+	}
+	if _, err := NewServerProfile(8, &cryptotls.Config{}); err != ErrInvalidServerProfile {
+		t.Fatalf("missing certificate = %v", err)
+	}
+}
+
+func TestServerProfileRejectsUnsafeConfigurationAndRequiresTLS12OptIn(t *testing.T) {
+	unsafe := testServerConfig(t)
+	unsafe.GetCertificate = func(*cryptotls.ClientHelloInfo) (*cryptotls.Certificate, error) { return nil, nil }
+	if _, err := NewServerProfile(1, unsafe); err != ErrUnsafeTLSConfig {
+		t.Fatalf("dynamic certificate callback = %v", err)
+	}
+	invalidClientAuth := testServerConfig(t)
+	invalidClientAuth.ClientAuth = cryptotls.RequireAndVerifyClientCert
+	if _, err := NewServerProfile(1, invalidClientAuth); err != ErrInvalidServerProfile {
+		t.Fatalf("client auth without roots = %v", err)
+	}
+	tls12 := testServerConfig(t)
+	tls12.MinVersion = cryptotls.VersionTLS12
+	if _, err := NewServerProfile(1, tls12); err != ErrTLS12RequiresOptIn {
+		t.Fatalf("TLS 1.2 without opt-in = %v", err)
+	}
+	if _, err := NewServerProfile(1, tls12, EnableServerTLS12()); err != nil {
+		t.Fatalf("TLS 1.2 with opt-in = %v", err)
+	}
+}
+
+func testServerConfig(t testing.TB) *cryptotls.Config {
+	t.Helper()
+	publicKey, privateKey, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Unix(1_800_000_000, 0)
+	der, err := x509.CreateCertificate(rand.Reader, &x509.Certificate{
+		SerialNumber: big.NewInt(1), DNSNames: []string{"server.example.com"},
+		NotBefore: now.Add(-time.Hour), NotAfter: now.Add(time.Hour),
+		KeyUsage: x509.KeyUsageDigitalSignature, ExtKeyUsage: []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
+	}, &x509.Certificate{
+		SerialNumber: big.NewInt(1), DNSNames: []string{"server.example.com"},
+		NotBefore: now.Add(-time.Hour), NotAfter: now.Add(time.Hour),
+		KeyUsage: x509.KeyUsageDigitalSignature, ExtKeyUsage: []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
+	}, publicKey, privateKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return &cryptotls.Config{Certificates: []cryptotls.Certificate{{Certificate: [][]byte{der}, PrivateKey: privateKey}}, NextProtos: []string{"h2"}}
 }
 
 func TestAllowLoopbackRegistrationAuthorityIsTLSScoped(t *testing.T) {

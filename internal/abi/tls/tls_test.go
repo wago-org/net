@@ -30,8 +30,8 @@ func TestEncodeConnectionInfoAtomicAndBounded(t *testing.T) {
 	info := tlsns.ConnectionInfo{
 		LocalEndpoint:  nscore.Endpoint{Address: netip.MustParseAddr("192.0.2.1"), Port: 1234},
 		RemoteEndpoint: nscore.Endpoint{Address: netip.MustParseAddr("192.0.2.2"), Port: 443},
-		TLSVersion:     0x304, CipherSuite: 0x1301, NegotiatedALPN: string(make([]byte, MaxALPNV1Bytes+1)),
-		VerifiedIdentity: tlsns.IdentityDNS,
+		TLSVersion:     0x304, CipherSuite: 0x1301, NegotiatedALPN: string(make([]byte, MaxALPNV1Bytes+1)), Role: tlsns.RoleClient,
+		PeerAuthenticated: true, PeerLeafSPKI256: [32]byte{1}, VerifiedIdentity: tlsns.IdentityDNS,
 	}
 	if EncodeConnectionInfoV1(memory, 0, info) || !bytes.Equal(memory, before) {
 		t.Fatal("oversized ALPN mutated output")
@@ -62,7 +62,8 @@ func FuzzEncodeConnectionInfoV1(f *testing.F) {
 		info := tlsns.ConnectionInfo{
 			LocalEndpoint:  nscore.Endpoint{Address: netip.MustParseAddr("192.0.2.1"), Port: 1234},
 			RemoteEndpoint: nscore.Endpoint{Address: netip.MustParseAddr("192.0.2.2"), Port: 443},
-			TLSVersion:     version, CipherSuite: cipher, NegotiatedALPN: alpn, VerifiedIdentity: tlsns.IdentityDNS,
+			TLSVersion:     version, CipherSuite: cipher, NegotiatedALPN: alpn, Role: tlsns.RoleClient,
+			PeerAuthenticated: true, PeerLeafSPKI256: [32]byte{1}, VerifiedIdentity: tlsns.IdentityDNS,
 		}
 		_ = EncodeConnectionInfoV1(memory, 0, info)
 	})

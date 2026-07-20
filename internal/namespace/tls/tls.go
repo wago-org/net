@@ -13,29 +13,54 @@ const MaxReadBytes = 64 << 10
 type IdentityType uint8
 
 const (
-	IdentityDNS IdentityType = iota + 1
+	IdentityNone IdentityType = iota
+	IdentityDNS
 	IdentityIP
 )
 
+// Role records which side of the authenticated TLS channel is locally owned.
+type Role uint8
+
+const (
+	RoleClient Role = iota + 1
+	RoleServer
+)
+
 // ConnectionInfo is bounded post-handshake metadata. Certificate chains and
-// private key material are deliberately absent.
+// private key material are deliberately absent. Client streams always
+// authenticate their server peer. A server stream may omit peer authentication
+// when its immutable profile does not require a client certificate.
 type ConnectionInfo struct {
-	LocalEndpoint    nscore.Endpoint
-	RemoteEndpoint   nscore.Endpoint
-	TLSVersion       uint16
-	CipherSuite      uint16
-	NegotiatedALPN   string
-	Resumed          bool
-	PeerLeafSPKI256  [32]byte
-	VerifiedIdentity IdentityType
+	LocalEndpoint     nscore.Endpoint
+	RemoteEndpoint    nscore.Endpoint
+	TLSVersion        uint16
+	CipherSuite       uint16
+	NegotiatedALPN    string
+	Resumed           bool
+	PeerAuthenticated bool
+	PeerLeafSPKI256   [32]byte
+	VerifiedIdentity  IdentityType
+	Role              Role
 }
 
 // Valid reports whether metadata can be represented without truncation.
 func (info ConnectionInfo) Valid(maxALPN int) bool {
-	return info.LocalEndpoint.Valid() && info.RemoteEndpoint.Valid() &&
-		info.TLSVersion != 0 && info.CipherSuite != 0 &&
-		(info.VerifiedIdentity == IdentityDNS || info.VerifiedIdentity == IdentityIP) &&
-		len(info.NegotiatedALPN) <= maxALPN
+	if !info.LocalEndpoint.Valid() || !info.RemoteEndpoint.Valid() || info.TLSVersion == 0 || info.CipherSuite == 0 || len(info.NegotiatedALPN) > maxALPN {
+		return false
+	}
+	switch info.Role {
+	case RoleClient:
+		return info.PeerAuthenticated &&
+			(info.VerifiedIdentity == IdentityDNS || info.VerifiedIdentity == IdentityIP) &&
+			info.PeerLeafSPKI256 != ([32]byte{})
+	case RoleServer:
+		if !info.PeerAuthenticated {
+			return info.VerifiedIdentity == IdentityNone && info.PeerLeafSPKI256 == ([32]byte{})
+		}
+		return info.PeerLeafSPKI256 != ([32]byte{})
+	default:
+		return false
+	}
 }
 
 // Namespace creates only outbound secure streams from finite host profiles.

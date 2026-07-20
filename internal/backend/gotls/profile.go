@@ -36,6 +36,17 @@ type Profile struct {
 	AllowedNames             map[string]tlsns.IdentityType
 }
 
+// ServerProfile is an internal immutable crypto/tls server profile. It owns
+// host-selected certificate material, ALPN policy, and optional verified client
+// authentication policy; guests select only its numeric ID.
+type ServerProfile struct {
+	ID                       uint32
+	Config                   *cryptotls.Config
+	RequiredALPN             string
+	MaxCertificateChainBytes int
+	MaxPeerCertificates      uint16
+}
+
 func (profile Profile) Clone() (Profile, error) {
 	if profile.ID == 0 || profile.Config == nil || profile.MaxCertificateChainBytes <= 0 || profile.MaxPeerCertificates == 0 {
 		return Profile{}, ErrInvalidConfig
@@ -57,6 +68,46 @@ func (profile Profile) Clone() (Profile, error) {
 		cloned.Config.RootCAs = profile.Config.RootCAs.Clone()
 	}
 	return cloned, nil
+}
+
+// Clone validates and deeply clones one server profile. Dynamic certificate,
+// verification, and session callbacks are rejected by the public profile layer
+// before this internal boundary.
+func (profile ServerProfile) Clone() (ServerProfile, error) {
+	if profile.ID == 0 || profile.Config == nil || len(profile.Config.Certificates) == 0 || profile.MaxCertificateChainBytes <= 0 || profile.MaxPeerCertificates == 0 {
+		return ServerProfile{}, ErrInvalidConfig
+	}
+	if profile.Config.ClientAuth != cryptotls.NoClientCert && profile.Config.ClientAuth != cryptotls.RequireAndVerifyClientCert {
+		return ServerProfile{}, ErrInvalidConfig
+	}
+	if profile.Config.ClientAuth == cryptotls.RequireAndVerifyClientCert && profile.Config.ClientCAs == nil {
+		return ServerProfile{}, ErrInvalidConfig
+	}
+	cloned := profile
+	cloned.Config = profile.Config.Clone()
+	cloned.Config.NextProtos = append([]string(nil), profile.Config.NextProtos...)
+	cloned.Config.Certificates = cloneTLSCertificates(profile.Config.Certificates)
+	if profile.Config.ClientCAs != nil {
+		cloned.Config.ClientCAs = profile.Config.ClientCAs.Clone()
+	}
+	return cloned, nil
+}
+
+func cloneTLSCertificates(input []cryptotls.Certificate) []cryptotls.Certificate {
+	output := make([]cryptotls.Certificate, len(input))
+	for index := range input {
+		output[index] = input[index]
+		output[index].Certificate = make([][]byte, len(input[index].Certificate))
+		for certificateIndex := range input[index].Certificate {
+			output[index].Certificate[certificateIndex] = append([]byte(nil), input[index].Certificate[certificateIndex]...)
+		}
+		output[index].OCSPStaple = append([]byte(nil), input[index].OCSPStaple...)
+		output[index].SignedCertificateTimestamps = make([][]byte, len(input[index].SignedCertificateTimestamps))
+		for timestampIndex := range input[index].SignedCertificateTimestamps {
+			output[index].SignedCertificateTimestamps[timestampIndex] = append([]byte(nil), input[index].SignedCertificateTimestamps[timestampIndex]...)
+		}
+	}
+	return output
 }
 
 // AuthorizeServerName normalizes one guest-selected verification identity and
