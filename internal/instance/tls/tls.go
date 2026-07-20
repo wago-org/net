@@ -8,6 +8,98 @@ import (
 	"github.com/wago-org/net/internal/resource"
 )
 
+// Listen transactionally creates and poll-registers one TLS server listener.
+func Listen(state *core.State, namespaceHandle resource.Handle, local nscore.Endpoint, profileID uint32) (handle resource.Handle, progress nscore.Progress, err error) {
+	err = state.WithLock(func(locked core.LockedState) error {
+		value, lookupErr := locked.Resources.Lookup(namespaceHandle, resource.KindNamespace)
+		if lookupErr != nil {
+			return lookupErr
+		}
+		backend, ok := nscore.ResolveNamespaceService(value, tlsns.ServiceKey).(tlsns.Namespace)
+		if !ok || resource.IsNil(backend) {
+			return nscore.Fail(nscore.FailureIO, core.ErrInvalidBackendResult)
+		}
+		created, backendProgress, backendErr := backend.TryListenTLS(local, profileID)
+		progress = backendProgress
+		if backendErr != nil {
+			if !resource.IsNil(created) {
+				_ = created.Close()
+			}
+			return backendErr
+		}
+		listener, ok := created.(tlsns.Listener)
+		if progress != nscore.ProgressDone || !ok || resource.IsNil(listener) {
+			if !resource.IsNil(created) {
+				_ = created.Close()
+			}
+			progress = 0
+			return nscore.Fail(nscore.FailureIO, core.ErrInvalidBackendResult)
+		}
+		handle, err = locked.Resources.Add(resource.KindTLSListener, listener)
+		if err != nil {
+			_ = listener.Close()
+			return err
+		}
+		if err = locked.Readiness.Register(handle, resource.KindTLSListener); err != nil {
+			_ = locked.Resources.CloseHandle(handle, resource.KindTLSListener)
+			handle, progress = 0, 0
+			return err
+		}
+		return nil
+	})
+	if err != nil {
+		handle, progress = 0, 0
+	}
+	return
+}
+
+// Accept owns one accepted stream while its TLS server handshake progresses.
+func Accept(state *core.State, listenerHandle resource.Handle) (handle resource.Handle, progress nscore.Progress, err error) {
+	err = state.WithLock(func(locked core.LockedState) error {
+		value, lookupErr := locked.Resources.Lookup(listenerHandle, resource.KindTLSListener)
+		if lookupErr != nil {
+			return lookupErr
+		}
+		listener, ok := value.(tlsns.Listener)
+		if !ok || resource.IsNil(listener) {
+			return nscore.Fail(nscore.FailureIO, core.ErrInvalidBackendResult)
+		}
+		created, backendProgress, backendErr := listener.TryAcceptTLS()
+		progress = backendProgress
+		if backendErr != nil {
+			if !resource.IsNil(created) {
+				_ = created.Close()
+			}
+			return backendErr
+		}
+		if progress == nscore.ProgressWouldBlock {
+			if !resource.IsNil(created) {
+				_ = created.Close()
+				progress = 0
+				return nscore.Fail(nscore.FailureIO, core.ErrInvalidBackendResult)
+			}
+			return nil
+		}
+		stream, ok := created.(tlsns.Stream)
+		if (progress != nscore.ProgressDone && progress != nscore.ProgressInProgress) || !ok || resource.IsNil(stream) {
+			if !resource.IsNil(created) {
+				_ = created.Close()
+			}
+			progress = 0
+			return nscore.Fail(nscore.FailureIO, core.ErrInvalidBackendResult)
+		}
+		handle, err = ownStream(locked, stream)
+		if err != nil {
+			progress = 0
+		}
+		return err
+	})
+	if err != nil {
+		handle, progress = 0, 0
+	}
+	return
+}
+
 func Connect(state *core.State, namespaceHandle resource.Handle, remote nscore.Endpoint, profileID uint32, serverName string) (handle resource.Handle, progress nscore.Progress, err error) {
 	err = state.WithLock(func(locked core.LockedState) error {
 		value, lookupErr := locked.Resources.Lookup(namespaceHandle, resource.KindNamespace)
@@ -34,22 +126,48 @@ func Connect(state *core.State, namespaceHandle resource.Handle, remote nscore.E
 			progress = 0
 			return nscore.Fail(nscore.FailureIO, core.ErrInvalidBackendResult)
 		}
-		handle, err = locked.Resources.Add(resource.KindTLSStream, stream)
+		handle, err = ownStream(locked, stream)
 		if err != nil {
-			_ = stream.Close()
 			progress = 0
-			return err
 		}
-		if err = locked.Readiness.Register(handle, resource.KindTLSStream); err != nil {
-			_ = locked.Resources.CloseHandle(handle, resource.KindTLSStream)
-			handle, progress = 0, 0
-			return err
-		}
-		return nil
+		return err
 	})
 	if err != nil {
 		handle, progress = 0, 0
 	}
+	return
+}
+
+func ownStream(locked core.LockedState, stream tlsns.Stream) (resource.Handle, error) {
+	handle, err := locked.Resources.Add(resource.KindTLSStream, stream)
+	if err != nil {
+		_ = stream.Close()
+		return 0, err
+	}
+	if err := locked.Readiness.Register(handle, resource.KindTLSStream); err != nil {
+		_ = locked.Resources.CloseHandle(handle, resource.KindTLSStream)
+		return 0, err
+	}
+	return handle, nil
+}
+
+func ListenerEndpoint(state *core.State, handle resource.Handle) (local nscore.Endpoint, err error) {
+	err = state.WithLock(func(locked core.LockedState) error {
+		value, lookupErr := locked.Resources.Lookup(handle, resource.KindTLSListener)
+		if lookupErr != nil {
+			return lookupErr
+		}
+		listener, ok := value.(tlsns.Listener)
+		if !ok || resource.IsNil(listener) {
+			return nscore.Fail(nscore.FailureIO, core.ErrInvalidBackendResult)
+		}
+		local = listener.LocalEndpoint()
+		if !local.Valid() {
+			local = nscore.Endpoint{}
+			return nscore.Fail(nscore.FailureIO, core.ErrInvalidBackendResult)
+		}
+		return nil
+	})
 	return
 }
 

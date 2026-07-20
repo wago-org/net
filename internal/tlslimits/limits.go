@@ -6,6 +6,8 @@ import "github.com/wago-org/net/internal/checked"
 
 const (
 	MaxStreams               uint16 = 64
+	MaxListeners             uint16 = 64
+	MaxAcceptBacklog         uint16 = 64
 	MaxConcurrentHandshakes  uint16 = 64
 	MaxProfiles                     = 256
 	MaxServerNamesPerProfile        = 256
@@ -32,6 +34,8 @@ const (
 // Config contains every TLS-owned or private-transport storage dimension.
 type Config struct {
 	MaxStreams               uint16
+	MaxListeners             uint16
+	AcceptBacklog            uint16
 	MaxConcurrentHandshakes  uint16
 	PlaintextReceiveBytes    int
 	PlaintextTransmitBytes   int
@@ -47,17 +51,19 @@ type Config struct {
 // configuration. TransportBytes is charged by the private TCP adapter, not by
 // TLS plaintext/ciphertext quota, while TotalBytes includes it exactly once.
 type Plan struct {
-	PlaintextBytes  uint64
-	CiphertextBytes uint64
-	TransportBytes  uint64
-	PerStreamBytes  uint64
-	TotalBytes      uint64
+	PlaintextBytes         uint64
+	CiphertextBytes        uint64
+	TransportBytes         uint64
+	ListenerTransportBytes uint64
+	PerStreamBytes         uint64
+	TotalBytes             uint64
 }
 
 // Validate proves target-int representability, every sum, stream
 // multiplication, and the repository aggregate retained-storage ceiling.
 func Validate(config Config, maxIntValue uint64) (Plan, bool) {
-	if config.MaxStreams == 0 || config.MaxStreams > MaxStreams ||
+	if config.MaxStreams == 0 || config.MaxStreams > MaxStreams || config.MaxListeners > MaxListeners ||
+		(config.MaxListeners == 0 && config.AcceptBacklog != 0) || (config.MaxListeners != 0 && (config.AcceptBacklog == 0 || config.AcceptBacklog > MaxAcceptBacklog)) ||
 		config.MaxConcurrentHandshakes == 0 || config.MaxConcurrentHandshakes > MaxConcurrentHandshakes ||
 		config.MaxConcurrentHandshakes > config.MaxStreams {
 		return Plan{}, false
@@ -123,10 +129,22 @@ func Validate(config Config, maxIntValue uint64) (Plan, bool) {
 		return Plan{}, false
 	}
 	total, ok := checked.MultiplyUint64(perStream, uint64(config.MaxStreams))
+	if !ok {
+		return Plan{}, false
+	}
+	listenerSlots, ok := checked.MultiplyUint64(uint64(config.MaxListeners), uint64(config.AcceptBacklog))
+	if !ok {
+		return Plan{}, false
+	}
+	listenerTransport, ok := checked.MultiplyUint64(listenerSlots, transport)
+	if !ok {
+		return Plan{}, false
+	}
+	total, ok = checked.AddUint64(total, listenerTransport)
 	if !ok || total > MaxAggregateRetainedBytes {
 		return Plan{}, false
 	}
-	return Plan{PlaintextBytes: plaintext, CiphertextBytes: ciphertext, TransportBytes: transport, PerStreamBytes: perStream, TotalBytes: total}, true
+	return Plan{PlaintextBytes: plaintext, CiphertextBytes: ciphertext, TransportBytes: transport, ListenerTransportBytes: listenerTransport, PerStreamBytes: perStream, TotalBytes: total}, true
 }
 
 func storageValue(value int, minimum int, maximum uint64, maxIntValue uint64) (uint64, bool) {

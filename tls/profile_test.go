@@ -87,6 +87,29 @@ func TestServerProfileDefaultsTLS13ClonesAndRequiresStaticCertificate(t *testing
 	}
 }
 
+func TestServerOnlyRegistrationAuthorityIsInboundAndProfileCompiles(t *testing.T) {
+	profile, err := NewServerProfile(7, testServerConfig(t), RequireServerALPN("h2"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	configuration := registration{config: DefaultConfig(), serverProfiles: []*ServerProfile{profile}, defaultAuthority: true}
+	compiled, err := policy.Compile(configuration.authority())
+	if err != nil {
+		t.Fatal(err)
+	}
+	address := netip.MustParseAddr("192.0.2.20")
+	if !compiled.CheckEndpoint(policy.OperationTLSListen, address, 8443) {
+		t.Fatal("server profile did not grant inbound TLS authority")
+	}
+	if compiled.CheckEndpoint(policy.OperationTLSConnect, address, 8443) {
+		t.Fatal("server-only profile granted outbound TLS authority")
+	}
+	profiles, err := compileServerProfiles(configuration.serverProfiles, configuration.config)
+	if err != nil || len(profiles) != 1 || profiles[0].ID != 7 || profiles[0].RequiredALPN != "h2" {
+		t.Fatalf("compiled server profiles = %+v, %v", profiles, err)
+	}
+}
+
 func TestServerProfileRejectsUnsafeConfigurationAndRequiresTLS12OptIn(t *testing.T) {
 	unsafe := testServerConfig(t)
 	unsafe.GetCertificate = func(*cryptotls.ClientHelloInfo) (*cryptotls.Certificate, error) { return nil, nil }
@@ -131,7 +154,7 @@ func testServerConfig(t testing.TB) *cryptotls.Config {
 }
 
 func TestAllowLoopbackRegistrationAuthorityIsTLSScoped(t *testing.T) {
-	configuration := registration{config: DefaultConfig(), defaultAuthority: true}
+	configuration := registration{config: DefaultConfig(), profiles: []*ClientProfile{{id: 1}}, defaultAuthority: true}
 	if err := AllowLoopback().applyTLS(&configuration); err != nil {
 		t.Fatal(err)
 	}

@@ -28,6 +28,7 @@ func (option optionFunc) applyTLS(target *registration) error { return option(ta
 type registration struct {
 	config             Config
 	profiles           []*ClientProfile
+	serverProfiles     []*ServerProfile
 	defaultAuthority   bool
 	authorityAdditions policy.Config
 }
@@ -45,6 +46,18 @@ func WithClientProfile(profile *ClientProfile) Option {
 			return ErrInvalidProfile
 		}
 		target.profiles = append(target.profiles, profile)
+		return nil
+	})
+}
+
+// WithServerProfile adds one immutable host-defined server identity profile.
+// Duplicate IDs are rejected independently from client profile IDs.
+func WithServerProfile(profile *ServerProfile) Option {
+	return optionFunc(func(target *registration) error {
+		if profile == nil || profile.id == 0 {
+			return ErrInvalidServerProfile
+		}
+		target.serverProfiles = append(target.serverProfiles, profile)
 		return nil
 	})
 }
@@ -69,9 +82,19 @@ func AllowLoopback() Option {
 	return WithPolicy(wagonet.PolicyConfig{LoopbackTransports: []wagonet.PolicyTransport{wagonet.PolicyTransportTLS}})
 }
 
-func defaultAuthority() policy.Config {
+func defaultAuthority(client, server bool) policy.Config {
+	directions := make([]policy.Direction, 0, 2)
+	if client {
+		directions = append(directions, policy.DirectionOutbound)
+	}
+	if server {
+		directions = append(directions, policy.DirectionInbound)
+	}
+	if len(directions) == 0 {
+		return policy.Config{}
+	}
 	return policy.Config{Rules: []policy.Rule{{
-		Action: policy.ActionAllow, Transports: []policy.Transport{policy.TransportTLS}, Directions: []policy.Direction{policy.DirectionOutbound},
+		Action: policy.ActionAllow, Transports: []policy.Transport{policy.TransportTLS}, Directions: directions,
 	}}}
 }
 
@@ -79,7 +102,7 @@ func (registration registration) authority() policy.Config {
 	if !registration.defaultAuthority {
 		return policy.Merge(registration.authorityAdditions)
 	}
-	return policy.Merge(defaultAuthority(), registration.authorityAdditions)
+	return policy.Merge(defaultAuthority(len(registration.profiles) != 0, len(registration.serverProfiles) != 0), registration.authorityAdditions)
 }
 
 // Register selects only net.tls, wago_net_tls, and the private TLS transport.
@@ -94,20 +117,32 @@ func Register(network *wagonet.Network, options ...Option) error {
 			return err
 		}
 	}
-	if network == nil || !validConfig(config.config) || len(config.profiles) == 0 || len(config.profiles) > MaximumClientProfiles {
+	if network == nil || !validConfig(config.config) || (len(config.profiles) == 0 && len(config.serverProfiles) == 0) || len(config.profiles) > MaximumClientProfiles || len(config.serverProfiles) > MaximumClientProfiles {
 		return ErrInvalidConfig
 	}
 	profiles, err := compileProfiles(config.profiles, config.config)
 	if err != nil {
 		return err
 	}
+	serverProfiles, err := compileServerProfiles(config.serverProfiles, config.config)
+	if err != nil {
+		return err
+	}
+	maxListeners, acceptBacklog := uint16(0), uint16(0)
+	if len(serverProfiles) != 0 {
+		maxListeners, acceptBacklog = config.config.MaxListeners, config.config.AcceptBacklog
+	}
 	backendConfig := tlsbackend.Config{
 		MaxStreams:                     config.config.MaxStreams,
+		MaxListeners:                   maxListeners,
+		AcceptBacklog:                  acceptBacklog,
 		MaxConcurrentHandshakes:        config.config.MaxConcurrentHandshakes,
 		MaxServerNameBytes:             config.config.MaxServerNameBytes,
 		MaxServiceAttemptsPerHandshake: config.config.MaxServiceAttemptsPerHandshake,
 		TCP: tcpbackend.Config{
+			MaxListeners:       maxListeners,
 			MaxOutboundStreams: config.config.MaxStreams,
+			AcceptBacklog:      acceptBacklog,
 			ReceiveBytes:       config.config.TransportReceiveBytes,
 			TransmitBytes:      config.config.TransportTransmitBytes,
 			TransmitPackets:    config.config.TransportTransmitPackets,
@@ -121,7 +156,7 @@ func Register(network *wagonet.Network, options ...Option) error {
 			MaxServiceAttemptsPerHandshake: config.config.MaxServiceAttemptsPerHandshake,
 			MaxRecordsPerService:           int(config.config.MaxRecordsPerService),
 		},
-		Profiles: profiles,
+		Profiles: profiles, ServerProfiles: serverProfiles,
 	}
 	backend := plugin.NewBackend(plugin.BackendLnetoV1,
 		func(target any) error {
@@ -129,10 +164,10 @@ func Register(network *wagonet.Network, options ...Option) error {
 			if !ok {
 				return plugin.ErrInvalidBackend
 			}
-			if uint32(common.MaxActiveTCPPorts)+uint32(config.config.MaxStreams) > uint32(^uint16(0)) {
+			if uint32(common.MaxActiveTCPPorts)+uint32(config.config.MaxStreams)+uint32(maxListeners) > uint32(^uint16(0)) {
 				return plugin.ErrInvalidBackend
 			}
-			common.MaxActiveTCPPorts += config.config.MaxStreams
+			common.MaxActiveTCPPorts += config.config.MaxStreams + maxListeners
 			return nil
 		},
 		func(base any) (nscore.Service, error) {
@@ -149,6 +184,47 @@ func Register(network *wagonet.Network, options ...Option) error {
 	)
 	module := tlsbinding.Descriptor(backend).WithAuthority(plugin.NewAuthority(config.authority()))
 	return network.RegisterModule(module)
+}
+
+func compileServerProfiles(input []*ServerProfile, config Config) ([]gotls.ServerProfile, error) {
+	profiles := make([]gotls.ServerProfile, 0, len(input))
+	seen := make(map[uint32]struct{}, len(input))
+	for _, profile := range input {
+		if profile == nil || profile.id == 0 || profile.config == nil {
+			return nil, ErrInvalidServerProfile
+		}
+		if _, exists := seen[profile.id]; exists {
+			return nil, ErrInvalidServerProfile
+		}
+		seen[profile.id] = struct{}{}
+		if len(profile.config.NextProtos) > int(config.MaxALPNProtocols) {
+			return nil, ErrInvalidServerProfile
+		}
+		aggregate := 0
+		for _, protocol := range profile.config.NextProtos {
+			if len(protocol) > 32 {
+				return nil, ErrInvalidServerProfile
+			}
+			aggregate += len(protocol)
+		}
+		if aggregate > int(config.MaxALPNAggregateBytes) {
+			return nil, ErrInvalidServerProfile
+		}
+		chainBytes := 0
+		for _, certificate := range profile.config.Certificates {
+			for _, der := range certificate.Certificate {
+				chainBytes += len(der)
+				if chainBytes > config.MaxCertificateChainBytes {
+					return nil, ErrInvalidServerProfile
+				}
+			}
+		}
+		profiles = append(profiles, gotls.ServerProfile{
+			ID: profile.id, Config: profile.config.Clone(), RequiredALPN: profile.requiredALPN,
+			MaxCertificateChainBytes: config.MaxCertificateChainBytes, MaxPeerCertificates: config.MaxPeerCertificates,
+		})
+	}
+	return profiles, nil
 }
 
 func compileProfiles(input []*ClientProfile, config Config) ([]gotls.Profile, error) {

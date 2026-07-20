@@ -63,9 +63,19 @@ func (info ConnectionInfo) Valid(maxALPN int) bool {
 	}
 }
 
-// Namespace creates only outbound secure streams from finite host profiles.
+// Namespace creates outbound streams and inbound listeners from finite,
+// immutable host profiles.
 type Namespace interface {
 	TryConnectTLS(remote nscore.Endpoint, profileID uint32, serverName string) (nscore.Resource, nscore.Progress, error)
+	TryListenTLS(local nscore.Endpoint, profileID uint32) (nscore.Resource, nscore.Progress, error)
+}
+
+// Listener accepts private TCP streams and begins one bounded TLS server
+// handshake before returning a secure stream resource to the caller.
+type Listener interface {
+	nscore.Resource
+	LocalEndpoint() nscore.Endpoint
+	TryAcceptTLS() (nscore.Resource, nscore.Progress, error)
 }
 
 // Stream exposes plaintext only after TCP completion, TLS handshake,

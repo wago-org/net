@@ -48,9 +48,10 @@ func TestDefaultTLSStorageClassificationMatchesQuotaOwnership(t *testing.T) {
 	wantPlaintext := uint64(64 << 10)
 	wantCiphertext := uint64(80 << 10)
 	wantTransport := uint64(64 << 10)
+	wantListenerTransport := uint64(4 * 4 * (64 << 10))
 	wantPerStream := uint64(208 << 10)
-	wantTotal := uint64(8 * (208 << 10))
-	if plan.PlaintextBytes != wantPlaintext || plan.CiphertextBytes != wantCiphertext || plan.TransportBytes != wantTransport || plan.PerStreamBytes != wantPerStream || plan.TotalBytes != wantTotal {
+	wantTotal := uint64(8*(208<<10)) + wantListenerTransport
+	if plan.PlaintextBytes != wantPlaintext || plan.CiphertextBytes != wantCiphertext || plan.TransportBytes != wantTransport || plan.ListenerTransportBytes != wantListenerTransport || plan.PerStreamBytes != wantPerStream || plan.TotalBytes != wantTotal {
 		t.Fatalf("default storage plan = %+v", plan)
 	}
 }

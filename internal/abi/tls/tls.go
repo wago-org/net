@@ -12,6 +12,7 @@ import (
 
 const (
 	StreamV1Size         uint32 = 72
+	ListenerV1Size       uint32 = 40
 	IOResultV1Size       uint32 = 8
 	ConnectionInfoV1Size uint32 = 144
 	MaxALPNV1Bytes       uint32 = 32
@@ -25,11 +26,35 @@ func CheckCreateV1(memory []byte, endpointPtr, serverNamePtr, serverNameLength, 
 	)
 }
 
+func CheckListenV1(memory []byte, endpointPtr, listenerPtr uint32) bool {
+	return abicore.CheckRanges(memory, true,
+		abicore.Range{Ptr: endpointPtr, Length: abicore.AddressV1Size},
+		abicore.Range{Ptr: listenerPtr, Length: ListenerV1Size},
+	)
+}
+
 func CheckIOV1(memory []byte, payloadPtr, payloadLength, resultPtr uint32) bool {
 	return abicore.CheckRanges(memory, true,
 		abicore.Range{Ptr: payloadPtr, Length: payloadLength},
 		abicore.Range{Ptr: resultPtr, Length: IOResultV1Size},
 	)
+}
+
+func EncodeListenerV1(memory []byte, ptr uint32, handle resource.Handle, local nscore.Endpoint) bool {
+	if handle == 0 || !local.Valid() {
+		return false
+	}
+	output, ok := abicore.Slice(memory, ptr, ListenerV1Size)
+	if !ok {
+		return false
+	}
+	var encoded [ListenerV1Size]byte
+	binary.LittleEndian.PutUint64(encoded[0:8], uint64(handle))
+	if !abicore.EncodeEndpointV1(encoded[:], 8, local) {
+		return false
+	}
+	copy(output, encoded[:])
+	return true
 }
 
 func EncodeStreamV1(memory []byte, ptr uint32, handle resource.Handle, local, remote nscore.Endpoint) bool {

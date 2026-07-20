@@ -93,6 +93,59 @@ func TestTLSUsesPrivateTCPWithoutRawTCPAuthorityAndRollsBack(t *testing.T) {
 	}
 }
 
+func TestTLSServerListenerUsesInboundTLSAuthorityWithoutRawTCPGrant(t *testing.T) {
+	compiled, err := policy.Compile(policy.Config{Rules: []policy.Rule{{
+		Action: policy.ActionAllow, Transports: []policy.Transport{policy.TransportTLS}, Directions: []policy.Direction{policy.DirectionInbound}, Prefixes: []netip.Prefix{netip.MustParsePrefix("192.0.2.0/24")},
+	}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	account := quota.NewAccount(quota.Limits{Resources: 8, TCPResources: 4, TLSResources: 4, TLSHandshakes: 2, QueuedBytes: 1 << 20, TLSPlaintextBytes: 128 << 10, TLSCiphertextBytes: 128 << 10})
+	mtu := uint16(ethernet.MaxMTU)
+	common, err := lnetocore.New(lnetocore.Config{
+		Hostname: "tls-server", RandSeed: 3, HardwareAddress: [6]byte{0x02, 0, 0, 0, 0, 3},
+		GatewayHardwareAddress: [6]byte{0x02, 0, 0, 0, 0, 4}, IPv4Address: netip.MustParseAddr("192.0.2.3"), MTU: mtu,
+		Link: packetlink.Config{MaxFrameBytes: int(mtu) + 14, IngressFrames: 4, EgressFrames: 4}, MaxActiveTCPPorts: 2, Policy: compiled, Quotas: account,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer common.Close()
+	tcpConfig := tcpbackend.Config{MaxListeners: 1, MaxOutboundStreams: 1, AcceptBacklog: 1, ReceiveBytes: 512, TransmitBytes: 512, TransmitPackets: 4}
+	adapter, err := New(common, Config{
+		MaxStreams: 1, MaxListeners: 1, AcceptBacklog: 1, MaxConcurrentHandshakes: 1, MaxServerNameBytes: 253, MaxServiceAttemptsPerHandshake: 64,
+		TCP: tcpConfig, Engine: engineLimitsForTest(),
+		ServerProfiles: []gotls.ServerProfile{{
+			ID: 2, Config: &cryptotls.Config{Certificates: []cryptotls.Certificate{{Certificate: [][]byte{{1}}, PrivateKey: struct{}{}}}, MinVersion: cryptotls.VersionTLS13, MaxVersion: cryptotls.VersionTLS13},
+			MaxCertificateChainBytes: 64 << 10, MaxPeerCertificates: 4,
+		}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	local := nscore.Endpoint{Address: netip.MustParseAddr("192.0.2.3"), Port: 8443}
+	if compiled.CheckEndpoint(policy.OperationTCPListen, local.Address, local.Port) {
+		t.Fatal("fixture accidentally grants raw TCP listen")
+	}
+	value, progress, err := adapter.TryListenTLS(local, 2)
+	if err != nil || progress != nscore.ProgressDone || value == nil {
+		t.Fatalf("TLS listen = %T, %v, %v", value, progress, err)
+	}
+	listener := value.(tlsns.Listener)
+	if listener.LocalEndpoint() != local {
+		t.Fatalf("listener endpoint = %+v", listener.LocalEndpoint())
+	}
+	if accepted, progress, err := listener.TryAcceptTLS(); accepted != nil || progress != nscore.ProgressWouldBlock || err != nil {
+		t.Fatalf("empty accept = %T, %v, %v", accepted, progress, err)
+	}
+	if err := listener.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if usage, _ := account.Snapshot(); usage != (quota.Usage{}) {
+		t.Fatalf("server listener leaked quota = %+v", usage)
+	}
+}
+
 func TestTLSLoopbackAuthorityIsScopedAndFunctional(t *testing.T) {
 	for _, test := range []struct {
 		name  string

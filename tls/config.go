@@ -13,6 +13,8 @@ const (
 	// MaximumStreams and MaximumConcurrentHandshakes bound worker and handshake
 	// concurrency for one instance.
 	MaximumStreams               = tlslimits.MaxStreams
+	MaximumListeners             = tlslimits.MaxListeners
+	MaximumAcceptBacklog         = tlslimits.MaxAcceptBacklog
 	MaximumConcurrentHandshakes  = tlslimits.MaxConcurrentHandshakes
 	MaximumClientProfiles        = tlslimits.MaxProfiles
 	MaximumServerNamesPerProfile = tlslimits.MaxServerNamesPerProfile
@@ -42,6 +44,8 @@ const (
 // sentinel.
 type Config struct {
 	MaxStreams                     uint16
+	MaxListeners                   uint16
+	AcceptBacklog                  uint16
 	MaxConcurrentHandshakes        uint16
 	PlaintextReceiveBytes          int
 	PlaintextTransmitBytes         int
@@ -65,6 +69,8 @@ type Config struct {
 func DefaultConfig() Config {
 	return Config{
 		MaxStreams:                     8,
+		MaxListeners:                   4,
+		AcceptBacklog:                  4,
 		MaxConcurrentHandshakes:        4,
 		PlaintextReceiveBytes:          16 << 10,
 		PlaintextTransmitBytes:         16 << 10,
@@ -91,7 +97,7 @@ func validConfig(config Config) bool {
 
 func validateConfig(config Config, maxIntValue uint64) (tlslimits.Plan, bool) {
 	plan, ok := tlslimits.Validate(tlslimits.Config{
-		MaxStreams: config.MaxStreams, MaxConcurrentHandshakes: config.MaxConcurrentHandshakes,
+		MaxStreams: config.MaxStreams, MaxListeners: config.MaxListeners, AcceptBacklog: config.AcceptBacklog, MaxConcurrentHandshakes: config.MaxConcurrentHandshakes,
 		PlaintextReceiveBytes: config.PlaintextReceiveBytes, PlaintextTransmitBytes: config.PlaintextTransmitBytes,
 		CiphertextReceiveBytes: config.CiphertextReceiveBytes, CiphertextTransmitBytes: config.CiphertextTransmitBytes,
 		TransportReceiveBytes: config.TransportReceiveBytes, TransportTransmitBytes: config.TransportTransmitBytes,
