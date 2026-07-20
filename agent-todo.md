@@ -17,7 +17,7 @@ and lneto as the first backend.
 - Protocols are independently selectable at registration and compile time: a TCP-only client exposes and compiles no UDP or DNS plugin module.
 - Endpoint policy is enforced at every authority-changing operation.
 - Instance cleanup is deterministic and never relies on guest destructors or finalizers.
-- Each recursive iteration produces exactly three bounded atomic commits unless the project completes earlier.
+- Long-running work uses bounded atomic commits; recursive handoff is opt-in and was not used for the TLS slice.
 
 ## Pinned analysis revisions
 
@@ -27,6 +27,26 @@ and lneto as the first backend.
 - Current selective networking review: `362ddf815904340aefc526d4bc57e1c7a24d36c9` (tree `40e707389b44ccc075498d905265e3faa0407331`), with exact socket-cleanup children `e79ae21532c2a60c60d0524855db0cc38dd17598` and `4cd6ff1e22d751e4a7a112a1eadf04da3e77ef1f` above registration review `173b38a4d5a0db0e6058544576942a46b9d543df`. It preserves protocol compile isolation against integrated Wago `d556b20f` and proves active UDP, TCP listener/stream, DNS, packet-link, quota, readiness, and resource cleanup for direct, managed, failed-setup, and external-worker lifecycle paths.
 - lneto main: `ab1a0c735a8b534a1d6322a3e245bc11a09431e7` (2026-07-10).
 - WASI audit: production remains `3df6c766ad00e83b314da799dbf9a77b409ad19d`; production-line review `1a7eeb215229e05bcb0f09d5cb3280d231739def` changes only README/CI files and has an implementation-tree inventory identical to the pin. Current WASI `cbdb9b32a3f28c0e63c7ab40d9c59712162367c4` (tree `b77c7e975c29de5bcff9da4464ce50d9b8ad2c65`, parent `1a7eeb2`) adds capability-based registration required by current Wago. Production Wago `97e6f91` matches the exact four-pass/four-fault preview-1 matrix. Production-derived fix `5c7f76dba0aa82ca94a1dd644318ed062b03f7cc` and current integrated review `d556b20f` each pass their complete matching WASI suites, but all local Wago fix subjects remain unpublished and unadopted.
+
+## TLS client slice (July 20, 2026)
+
+- Added granular public package `github.com/wago-org/net/tls` and self-register key
+  `net-tls`.
+- TLS-only inspection is exactly `net.info`, `net.tls`, `wago_net.abi_version`,
+  and nine `wago_net_tls` imports; raw TCP capability/imports are absent.
+- Added immutable host profiles, mandatory standard-library certificate and
+  DNS/IP SAN verification, host-owned ALPN, TLS 1.3 defaults, explicit TLS 1.2
+  opt-in, and rejection of unsafe callbacks, key logging, renegotiation,
+  arbitrary session caches, and insecure verification.
+- Added distinct TLS policy authority with raw-TCP deny inheritance, TLS quotas,
+  fixed ABI layouts, kind-safe handles, a bounded three-worker `crypto/tls`
+  bridge, private lneto TCP ownership, deterministic cancellation, and exact
+  rollback/release paths.
+- Added TLS-only and TCP+TLS composition/dependency tests, standard-library peer
+  security tests, race coverage, fuzz targets, and benchmarks.
+- TLS remains granular-only and outside aggregate `register` pending refreshed
+  complete release-signoff and a truthful TinyGo decision for `crypto/tls` and
+  `crypto/x509`; it is experimental, not production-ready.
 
 ## Approved protocol-submodule target
 

@@ -42,6 +42,32 @@ func TestEncodeConnectionInfoAtomicAndBounded(t *testing.T) {
 	}
 }
 
+func FuzzCheckCreateV1(f *testing.F) {
+	f.Add(uint32(0), uint32(32), uint32(4), uint32(64), uint32(256))
+	f.Fuzz(func(t *testing.T, endpointPtr, namePtr, nameLength, streamPtr, memoryLength uint32) {
+		if memoryLength > 4096 {
+			memoryLength = 4096
+		}
+		_ = CheckCreateV1(make([]byte, memoryLength), endpointPtr, namePtr, nameLength, streamPtr)
+	})
+}
+
+func FuzzEncodeConnectionInfoV1(f *testing.F) {
+	f.Add("h2", uint16(0x304), uint16(0x1301))
+	f.Fuzz(func(t *testing.T, alpn string, version, cipher uint16) {
+		if len(alpn) > 128 {
+			alpn = alpn[:128]
+		}
+		memory := make([]byte, ConnectionInfoV1Size)
+		info := tlsns.ConnectionInfo{
+			LocalEndpoint:  nscore.Endpoint{Address: netip.MustParseAddr("192.0.2.1"), Port: 1234},
+			RemoteEndpoint: nscore.Endpoint{Address: netip.MustParseAddr("192.0.2.2"), Port: 443},
+			TLSVersion:     version, CipherSuite: cipher, NegotiatedALPN: alpn, VerifiedIdentity: tlsns.IdentityDNS,
+		}
+		_ = EncodeConnectionInfoV1(memory, 0, info)
+	})
+}
+
 func TestEncodeStreamRejectsZeroHandle(t *testing.T) {
 	memory := make([]byte, StreamV1Size)
 	endpoint := nscore.Endpoint{Address: netip.MustParseAddr("192.0.2.1"), Port: 443}

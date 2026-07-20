@@ -24,7 +24,8 @@ The suite therefore uses **protocol import modules**:
 
 - `wago_net` for shared core operations;
 - `wago_net_udp` for UDP;
-- `wago_net_tcp` for TCP;
+- `wago_net_tcp` for raw TCP;
+- `wago_net_tls` for outbound verified TLS client streams;
 - `wago_net_dns` for DNS;
 - `wago_net_icmpv4` for ICMPv4 echo;
 - `wago_net_ntp` for explicit-clock NTP synchronization;
@@ -42,7 +43,7 @@ protocol modules; no process-global state or placeholder protocol module is used
 
 ## Current implementation
 
-The root extension owns twelve distinct import modules: `wago_net` declares
+The selectable extension surface owns thirteen distinct import modules: `wago_net` declares
 `net.info` and exposes `abi_version`; `wago_net_udp` declares narrow `net.udp`
 authority; `wago_net_tcp` declares narrow `net.tcp` authority;
 `wago_net_dns` declares narrow `net.dns` authority; `wago_net_icmpv4`
@@ -52,7 +53,8 @@ declares narrow `net.icmpv4` authority; `wago_net_ntp` declares narrow
 `wago_net_linklocal4` declares narrow `net.linklocal4` authority;
 `wago_net_ipv6` declares narrow `net.ipv6` authority; and `wago_net_icmpv6`
 declares narrow `net.icmpv6` authority; and `wago_net_dhcpv6` declares narrow
-`net.dhcpv6` authority. UDP, TCP, DNS, ICMPv4, NTP, mDNS, DHCPv4, IPv4
+`net.dhcpv6` authority; granular `wago_net_tls` declares distinct `net.tls`
+authority. UDP, TCP, TLS, DNS, ICMPv4, NTP, mDNS, DHCPv4, IPv4
 link-local, IPv6, ICMPv6, and DHCPv6 each expose complete configured-namespace discovery plus their truthful
 operation or introspection surface and independently capability-gated bounded
 poll. Resource-owning modules retain kind-safe close; IPv6 configuration owns no
@@ -81,7 +83,9 @@ invalid and unmatched requests fail closed, and separate zero-default gates are
 required for wildcard binds, loopback, multicast, limited broadcast, and local
 bind/listen ports below 1024. IPv4-mapped IPv6 values are rejected rather than
 normalized across policy families. Authority-changing operations have explicit
-UDP bind/send, TCP listen/connect, and DNS resolve checks. Selected protocol
+UDP bind/send, TCP listen/connect, TLS connect, and DNS resolve checks. TLS
+allows are evaluated as TLS authority, while applicable TCP denies additionally
+constrain the private byte transport without requiring any raw-TCP allow. Selected protocol
 modules contribute deep-copied grant sets through an opaque shared contract after
 registration freezes and before manager construction. Caller policy is copied
 first, grants compose monotonically, and one compile step preserves deny-wins
@@ -176,7 +180,13 @@ egress service probe reclaims that entry and now reports one charged service
 operation even when no frame is
 emitted. This preserves lneto's private accepted-list bookkeeping without unsafe
 direct slot reuse, while making the finite maintenance cost and reuse point
-observable. `internal/backend/lneto/icmpv4` owns immediate Ethernet/IPv4/ICMP echo codecs,
+observable. `internal/backend/gotls` owns the standard-library `crypto/tls`
+client engine over fixed plaintext/ciphertext rings and exactly three workers per
+finite stream. `internal/backend/lneto/tls` owns only lneto transport pumping and
+a private TCP adapter. TLS stream teardown joins workers before private TCP
+teardown; no raw TCP handle is published. Every pump and handshake is bounded by
+bytes, operations, record-sized attempts, queues, certificate/handshake limits,
+and service attempts. `internal/backend/lneto/icmpv4` owns immediate Ethernet/IPv4/ICMP echo codecs,
 finite copied payload and exchange storage, address-only deny-wins policy,
 resource/byte/active-work quota, deterministic service-attempt retry and timeout,
 exact source/identifier/sequence/checksum/payload correlation, cancellation, and
@@ -276,13 +286,16 @@ construction imports only the shared lneto core. Root, single-protocol, pair,
 and all-protocol dependency fixtures require exactly the selected
 adapters/facets and reject every omitted one plus the aggregate assembler,
 completing the Stage 4 compile-isolation boundary; runtime composition separately
-covers all 2048 selections.
+covers all 4096 selective registrations.
 Granular `tcp/register`, `udp/register`, `dns/register`, `icmpv4/register`,
 `ntp/register`, `mdns/register`, `dhcpv4/register`, `linklocal4/register`,
-`ipv6/register`, `icmpv6/register`, and `dhcpv6/register` packages own only their selected public
-facade and exact implementation graph. The root `register` package explicitly
-composes all eleven implemented protocols in one extension rather than
-using the aggregate compatibility constructor.
+`ipv6/register`, `icmpv6/register`, `dhcpv6/register`, and `tls/register` packages own only their selected public
+facade and exact implementation graph. TLS-only may compile the neutral TCP
+facet and private lneto TCP adapter, but not the public TCP facade, TCP binding,
+TCP instance operations, or TCP ABI. The root `register` package intentionally
+continues to compose the eleven previously signed-off protocols in one extension rather than
+using the aggregate compatibility constructor. TLS remains granular-only until
+TinyGo and complete release-signoff evidence are refreshed.
 
 `internal/readiness` attaches a finite coordinator to each instance resource
 table. Registrations retain opaque handle plus exact kind, level-triggered polls

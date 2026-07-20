@@ -2,7 +2,8 @@
 // suite. The guest ABI is backend-neutral; lneto is the first backend and is
 // not part of the public contract. Complete UDP, TCP, bounded DNS, ICMPv4 echo,
 // explicit-clock NTP, bounded mDNS, DHCPv4, IPv4 link-local, configured IPv6,
-// bounded ICMPv6/NDP, and bounded initial DHCPv6 acquisition modules are independently capability-gated. Runtime registration requires physical
+// bounded ICMPv6/NDP, bounded initial DHCPv6 acquisition, and granular outbound
+// TLS client modules are independently capability-gated. Runtime registration requires physical
 // reinstantiation between class leases so instance-owned network state cannot
 // survive an in-place Wasm memory reset.
 package net
@@ -198,8 +199,8 @@ var (
 )
 
 // Option configures shared network composition. Protocol-specific options live
-// in the tcp, udp, dns, icmpv4, ntp, mdns, dhcpv4, linklocal4, ipv6, and
-// icmpv6 and dhcpv6 packages rather than in the root package.
+// in the tcp, tls, udp, dns, icmpv4, ntp, mdns, dhcpv4, linklocal4, ipv6,
+// icmpv6, and dhcpv6 packages rather than in the root package.
 type Option interface {
 	applyNetwork(*Config) error
 }

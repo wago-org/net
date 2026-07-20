@@ -12,6 +12,18 @@ checkout's `.wago/` artifact root, and obvious destructive targets such as `/`,
 `$HOME`, source repositories, their ancestors, and the active working directory
 are rejected even when an explicit override is supplied.
 
+## TLS granular-only signoff status
+
+The outbound `net.tls` client is intentionally absent from the aggregate
+`register` bundle and its historical aggregate evidence. Standard-Go unit,
+focused race, source-boundary, dependency-isolation, ABI, certificate/hostname,
+ALPN, truncation, corruption, bounded-queue, quota, and worker-join checks apply
+to `tls/register` separately. The canonical inspection policy marks `net-tls`
+as `granularOnly`, so aggregate completeness remains exact rather than silently
+claiming TLS signoff. TLS must not be called production-ready until the complete
+release gate is regenerated with TLS-aware lifecycle evidence and a truthful
+TinyGo decision for `crypto/tls` and `crypto/x509`.
+
 ## Pinned inputs
 
 The script refuses revision drift before doing work:

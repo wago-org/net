@@ -151,7 +151,11 @@ func cloneSafeConfig(input *cryptotls.Config, allowTLS12 bool) (*cryptotls.Confi
 	if input.InsecureSkipVerify || input.KeyLogWriter != nil || input.Renegotiation != cryptotls.RenegotiateNever ||
 		input.VerifyPeerCertificate != nil || input.VerifyConnection != nil || input.GetClientCertificate != nil ||
 		input.GetCertificate != nil || input.GetConfigForClient != nil || input.ClientSessionCache != nil ||
-		len(input.EncryptedClientHelloConfigList) != 0 || input.EncryptedClientHelloRejectionVerify != nil {
+		input.UnwrapSession != nil || input.WrapSession != nil || input.Rand != nil || input.NameToCertificate != nil ||
+		input.ClientAuth != cryptotls.NoClientCert || input.ClientCAs != nil || input.SessionTicketKey != ([32]byte{}) ||
+		len(input.CipherSuites) != 0 || len(input.CurvePreferences) != 0 ||
+		len(input.EncryptedClientHelloConfigList) != 0 || input.EncryptedClientHelloRejectionVerify != nil ||
+		len(input.EncryptedClientHelloKeys) != 0 {
 		return nil, ErrUnsafeTLSConfig
 	}
 	cloned := input.Clone()
@@ -224,15 +228,16 @@ func cloneCertificate(input *x509.Certificate) *x509.Certificate {
 			return parsed
 		}
 	}
-	copy := *input
-	return &copy
+	// A malformed or synthetic Leaf is not retained: crypto/tls can safely parse
+	// the independently cloned certificate DER when it needs a leaf.
+	return nil
 }
 
 func normalizeIdentity(name string) (string, identityKind, bool) {
 	if name == "" || !utf8.ValidString(name) || strings.TrimSpace(name) != name {
 		return "", 0, false
 	}
-	if address, err := netip.ParseAddr(name); err == nil && !address.Is4In6() && !address.IsUnspecified() {
+	if address, err := netip.ParseAddr(name); err == nil && address.Zone() == "" && !address.Is4In6() && !address.IsUnspecified() {
 		return address.String(), identityIP, true
 	}
 	normalized, ok := dnsname.Normalize(name)

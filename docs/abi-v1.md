@@ -12,7 +12,7 @@ and minor version 0.
 Except for `abi_version`, networking imports return one `i32` status and write
 additional values through checked guest-memory output pointers. `InfoImports()`
 and the historical zero-config `Imports(Config{})` helper intentionally expose
-only `wago_net.abi_version`; every resource-owning UDP/TCP/DNS/ICMPv4/NTP/mDNS/
+only `wago_net.abi_version`; every resource-owning UDP/TCP/TLS/DNS/ICMPv4/NTP/mDNS/
 DHCPv4/link-local/ICMPv6/DHCPv6 imports and the configured IPv6 namespace import require exact
 Runtime lifecycle identity and are therefore available only through
 extension registration. The completed `internal/backend/lneto/core` plus `/tcp`,
@@ -676,6 +676,48 @@ units from the exact instance quota and releases them when the call returns. A
 request above the finite limit returns `RESOURCE_LIMIT` without service or output
 mutation.
 
+## TLS module, signatures, and layouts
+
+`wago_net_tls` is independently gated by `net.tls`; it does not require or
+provide `net.tcp`. All functions return one `i32` status:
+
+```text
+namespace_default(out_namespace_ptr: i32) -> i32
+connect(namespace: i64, remote_ptr: i32, profile_id: i32,
+        server_name_ptr: i32, server_name_len: i32, out_stream_ptr: i32) -> i32
+finish_connect(stream: i64) -> i32
+read(stream: i64, dst_ptr: i32, dst_len: i32, out_result_ptr: i32) -> i32
+write(stream: i64, src_ptr: i32, src_len: i32, out_result_ptr: i32) -> i32
+shutdown_write(stream: i64) -> i32
+connection_info(stream: i64, out_info_ptr: i32) -> i32
+close(stream: i64) -> i32
+poll(events_ptr: i32, events_capacity: i32, budget_ptr: i32, result_ptr: i32) -> i32
+```
+
+The 72-byte stream and 8-byte I/O layouts match TCP's handle/local/remote and
+partial-byte shapes but are separately owned by `internal/abi/tls`. The
+144-byte `wago_net_tls_connection_info_v1` layout is:
+
+```c
+struct wago_net_tls_connection_info_v1 {
+    struct wago_net_addr_v1 local;       // offset 0
+    struct wago_net_addr_v1 remote;      // offset 32
+    uint16_t tls_version;                // offset 64
+    uint16_t cipher_suite;               // offset 66
+    uint32_t resumed;                    // offset 68
+    uint32_t identity_type;              // offset 72: 1 DNS, 2 IP
+    uint32_t alpn_length;                // offset 76, maximum 32
+    uint8_t  alpn[32];                   // offset 80
+    uint8_t  peer_leaf_spki_sha256[32];  // offset 112
+};
+```
+
+Connection metadata is available only after verified completion. Certificate
+DER, chains, private keys, and error strings are never guest output. Clean
+`close_notify` returns `EOF`; raw transport EOF and corrupted records return
+`TLS_PROTOCOL`. `AGAIN`, `EOF`, errors, invalid handles, and invalid state leave
+all output ranges unchanged.
+
 ## Status values
 
 | Value | Name |
@@ -705,6 +747,9 @@ mutation.
 | 22 | `IO` |
 | 23 | `CANCELED` |
 | 24 | `OTHER` |
+| 25 | `TLS_AUTHENTICATION` |
+| 26 | `TLS_PROTOCOL` |
+| 27 | `UNSUPPORTED_CONFIGURATION` |
 
 Unknown backend or Go errors map to a stable status, normally `OTHER` or `IO`.
 Unstable Go error strings are not returned to guests.

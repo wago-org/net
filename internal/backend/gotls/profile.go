@@ -11,6 +11,11 @@ import (
 	tlsns "github.com/wago-org/net/internal/namespace/tls"
 )
 
+const (
+	PlaintextScratchBytes  = 32 << 10
+	CiphertextScratchBytes = 16 << 10
+)
+
 var (
 	ErrInvalidConfig    = errors.New("net/tls: invalid engine configuration")
 	ErrHandshakeLimit   = errors.New("net/tls: handshake byte limit exceeded")
@@ -58,7 +63,10 @@ func (profile Profile) AuthorizeServerName(name string) (string, tlsns.IdentityT
 	if name == "" || !utf8.ValidString(name) || strings.TrimSpace(name) != name {
 		return "", 0, false
 	}
-	if address, err := netip.ParseAddr(name); err == nil && !address.Is4In6() && !address.IsUnspecified() {
+	if identity, ok := profile.AllowedNames[name]; ok {
+		return name, identity, identity == tlsns.IdentityDNS || identity == tlsns.IdentityIP
+	}
+	if address, err := netip.ParseAddr(name); err == nil && address.Zone() == "" && !address.Is4In6() && !address.IsUnspecified() {
 		normalized := address.String()
 		identity := tlsns.IdentityIP
 		return normalized, identity, profile.AllowedNames[normalized] == identity
@@ -82,7 +90,8 @@ type Limits struct {
 	MaxRecordsPerService           int
 }
 
-func (limits Limits) valid() bool {
+// ValidLimits reports whether every engine queue and service bound is finite.
+func ValidLimits(limits Limits) bool {
 	return limits.PlaintextReceiveBytes > 0 && limits.PlaintextTransmitBytes > 0 &&
 		limits.CiphertextReceiveBytes >= 17<<10 && limits.CiphertextTransmitBytes >= 17<<10 &&
 		limits.MaxHandshakeBytes > 0 && limits.MaxServiceAttemptsPerHandshake > 0 &&

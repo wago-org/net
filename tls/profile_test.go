@@ -31,6 +31,8 @@ func TestClientProfileRejectsUnsafeConfiguration(t *testing.T) {
 		{Renegotiation: cryptotls.RenegotiateOnceAsClient},
 		{VerifyConnection: func(cryptotls.ConnectionState) error { return nil }},
 		{ClientSessionCache: cryptotls.NewLRUClientSessionCache(1)},
+		{WrapSession: func(cryptotls.ConnectionState, *cryptotls.SessionState) ([]byte, error) { return nil, nil }},
+		{CipherSuites: []uint16{cryptotls.TLS_RSA_WITH_AES_128_CBC_SHA}},
 	}
 	for _, config := range unsafe {
 		if _, err := NewClientProfile(1, config, AllowServerNames("example.com")); err != ErrUnsafeTLSConfig {
@@ -54,6 +56,21 @@ func TestClientProfileRequiresTLS12OptInAndExactIdentity(t *testing.T) {
 	if _, _, err := profile.authorizeServerName("example.com"); err != ErrUnauthorizedName {
 		t.Fatalf("wrong identity: %v", err)
 	}
+}
+
+func FuzzServerNameNormalizationAndAuthorization(f *testing.F) {
+	f.Add("api.example.com")
+	f.Add("192.0.2.10")
+	f.Fuzz(func(t *testing.T, name string) {
+		if len(name) > 512 {
+			name = name[:512]
+		}
+		profile, err := NewClientProfile(1, &cryptotls.Config{}, AllowServerNames("api.example.com", "192.0.2.10"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, _, _ = profile.authorizeServerName(name)
+	})
 }
 
 type discardWriter struct{}

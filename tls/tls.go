@@ -167,6 +167,9 @@ func compileProfiles(input []*ClientProfile, config Config) ([]gotls.Profile, er
 		}
 		aggregate := 0
 		for _, protocol := range profile.config.NextProtos {
+			if len(protocol) > 32 {
+				return nil, ErrInvalidProfile
+			}
 			aggregate += len(protocol)
 		}
 		if aggregate > int(config.MaxALPNAggregateBytes) {

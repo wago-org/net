@@ -3,7 +3,7 @@
 The benchmark suite covers the runtime paths identified as performance-sensitive
 in `docs/architecture.md`:
 
-- checked shared, TCP, UDP, and DNS guest-memory codecs;
+- checked shared, TCP, TLS, UDP, and DNS guest-memory codecs;
 - namespace value validation and service lookup;
 - resource handle creation, lookup, reuse, close, and table teardown;
 - policy merge/compile and endpoint/DNS decisions;
@@ -16,11 +16,15 @@ in `docs/architecture.md`:
   client/server round trip;
 - DNS query construction, wire-name decode, response parse/selection, query
   creation, record iteration, and readiness;
+- TLS 1.3 handshake, fixed-ring steady-state transfer, and profile-name
+  authorization with allocation reporting;
 - instance manager attach/lookup/locking/poll and protocol operation wrappers;
 - guest status mapping and complete UDP/TCP guest poll host calls.
 
 The checked-in capture is in `baseline.txt`; `baseline-summary.md` lists the
-median timing and allocation result for all 114 benchmark cases. It was captured
+median timing and allocation result for the pre-TLS 114 benchmark cases. TLS
+benchmarks are discoverable in current runs and require a refreshed retained
+baseline before TLS release signoff. The existing baseline was captured
 with three 100 ms samples to keep the initial audit bounded. The script defaults
 to the stronger five-by-200 ms profile for future comparison runs.
 

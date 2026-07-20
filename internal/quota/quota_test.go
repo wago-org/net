@@ -488,3 +488,27 @@ func TestAccountCloseReleasesEverythingAndRejectsLateUse(t *testing.T) {
 		t.Fatal("late rollback was not locally exactly once")
 	}
 }
+
+func TestTLSStreamAndHandshakeAccountingIsExact(t *testing.T) {
+	account := NewAccount(Limits{
+		Resources: 1, TLSResources: 1, QueuedBytes: 96,
+		TLSPlaintextBytes: 32, TLSCiphertextBytes: 64, TLSHandshakes: 1,
+	})
+	var stream, handshake Charge
+	if err := account.AcquireTLSStream(&stream, 32, 64); err != nil {
+		t.Fatal(err)
+	}
+	if err := account.AcquireTLSHandshake(&handshake, 1); err != nil {
+		t.Fatal(err)
+	}
+	usage, _ := account.Snapshot()
+	if usage.Resources != 1 || usage.TLSResources != 1 || usage.QueuedBytes != 96 || usage.TLSPlaintextBytes != 32 || usage.TLSCiphertextBytes != 64 || usage.TLSHandshakes != 1 {
+		t.Fatalf("TLS usage = %+v", usage)
+	}
+	if stream.Release() != true || stream.Release() != false || handshake.Release() != true || handshake.Release() != false {
+		t.Fatal("TLS charges were not exactly once")
+	}
+	if usage, _ := account.Snapshot(); usage != (Usage{}) {
+		t.Fatalf("TLS charges leaked: %+v", usage)
+	}
+}

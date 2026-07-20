@@ -7,8 +7,10 @@ import (
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"math/big"
+	"net"
 	"net/netip"
 	"runtime"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -37,7 +39,7 @@ func TestClientHandshakeVerificationALPNAndPlaintext(t *testing.T) {
 		RequiredALPN: "h2", MaxCertificateChainBytes: 64 << 10, MaxPeerCertificates: 4,
 		AllowedNames: map[string]tlsns.IdentityType{"api.example.com": tlsns.IdentityDNS},
 	}
-	transport := &memoryTransport{peer: serverBridge}
+	transport := &memoryTransport{peer: serverBridge, readLimit: 13, writeLimit: 11}
 	client, err := NewClient(transport, profile, "api.example.com", tlsns.IdentityDNS, testLimits())
 	if err != nil {
 		t.Fatal(err)
@@ -127,13 +129,16 @@ func testLimits() Limits {
 	return Limits{
 		PlaintextReceiveBytes: 16 << 10, PlaintextTransmitBytes: 16 << 10,
 		CiphertextReceiveBytes: 32 << 10, CiphertextTransmitBytes: 32 << 10,
-		MaxHandshakeBytes: 256 << 10, MaxServiceAttemptsPerHandshake: 20000, MaxRecordsPerService: 8,
+		MaxHandshakeBytes: 256 << 10, MaxServiceAttemptsPerHandshake: 2_000_000, MaxRecordsPerService: 8,
 	}
 }
 
 type memoryTransport struct {
-	peer   *bridgeConn
-	closed bool
+	peer       *bridgeConn
+	closed     atomic.Bool
+	eof        atomic.Bool
+	readLimit  int
+	writeLimit int
 }
 
 func (transport *memoryTransport) LocalEndpoint() nscore.Endpoint {
@@ -149,14 +154,23 @@ func (transport *memoryTransport) TryFinishConnect() (nscore.Progress, error) {
 	return nscore.ProgressDone, nil
 }
 func (transport *memoryTransport) TryRead(dst []byte) (nscore.IOResult, error) {
+	if transport.readLimit > 0 && len(dst) > transport.readLimit {
+		dst = dst[:transport.readLimit]
+	}
 	count := transport.peer.peekCipher(dst)
 	if count == 0 {
+		if transport.eof.Load() {
+			return nscore.IOResult{State: nscore.IOEOF}, nil
+		}
 		return nscore.IOResult{State: nscore.IOWouldBlock}, nil
 	}
 	transport.peer.discardCipher(count)
 	return nscore.IOResult{Bytes: count, State: nscore.IOReady}, nil
 }
 func (transport *memoryTransport) TryWrite(src []byte) (nscore.IOResult, error) {
+	if transport.writeLimit > 0 && len(src) > transport.writeLimit {
+		src = src[:transport.writeLimit]
+	}
 	count, err := transport.peer.feedCipher(src)
 	if err != nil {
 		return nscore.IOResult{}, err
@@ -170,23 +184,26 @@ func (transport *memoryTransport) TryShutdownWrite() (nscore.Progress, error) {
 	return nscore.ProgressDone, nil
 }
 func (transport *memoryTransport) Close() error {
-	if !transport.closed {
-		transport.closed = true
+	if transport.closed.CompareAndSwap(false, true) {
 		transport.peer.abort(nil)
 	}
 	return nil
 }
 
-func testCertificate(t *testing.T, dnsName string) (cryptotls.Certificate, *x509.CertPool) {
+func testCertificate(t testing.TB, dnsName string) (cryptotls.Certificate, *x509.CertPool) {
+	now := time.Unix(1_800_000_000, 0)
+	return testCertificateFields(t, []string{dnsName}, nil, now.Add(-time.Hour), now.Add(time.Hour))
+}
+
+func testCertificateFields(t testing.TB, dnsNames []string, ipAddresses []net.IP, notBefore, notAfter time.Time) (cryptotls.Certificate, *x509.CertPool) {
 	t.Helper()
 	key, err := rsa.GenerateKey(rand.Reader, 2048)
 	if err != nil {
 		t.Fatal(err)
 	}
-	now := time.Unix(1_800_000_000, 0)
 	template := &x509.Certificate{
 		SerialNumber: big.NewInt(1), Subject: pkix.Name{CommonName: "ignored-common-name"},
-		NotBefore: now.Add(-time.Hour), NotAfter: now.Add(time.Hour), DNSNames: []string{dnsName},
+		NotBefore: notBefore, NotAfter: notAfter, DNSNames: dnsNames, IPAddresses: ipAddresses,
 		KeyUsage: x509.KeyUsageDigitalSignature, ExtKeyUsage: []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
 	}
 	der, err := x509.CreateCertificate(rand.Reader, template, template, &key.PublicKey, key)

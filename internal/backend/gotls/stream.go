@@ -47,6 +47,7 @@ type Stream struct {
 
 	rxPlain       byteRing
 	txPlain       byteRing
+	readScratch   []byte
 	writeScratch  []byte
 	cipherScratch []byte
 
@@ -63,7 +64,7 @@ type Stream struct {
 }
 
 func NewClient(transport Transport, profile Profile, serverName string, identity tlsns.IdentityType, limits Limits) (*Stream, error) {
-	if transport == nil || !limits.valid() || (identity != tlsns.IdentityDNS && identity != tlsns.IdentityIP) {
+	if transport == nil || !ValidLimits(limits) || (identity != tlsns.IdentityDNS && identity != tlsns.IdentityIP) {
 		return nil, ErrInvalidConfig
 	}
 	cloned, err := profile.Clone()
@@ -81,9 +82,9 @@ func NewClient(transport Transport, profile Profile, serverName string, identity
 	stream := &Stream{
 		transport: transport, local: local, remote: remote, bridge: bridge, tls: cryptotls.Client(bridge, config), limits: limits,
 		cancel: cancel, ready: make(chan struct{}), rxPlain: newByteRing(limits.PlaintextReceiveBytes),
-		txPlain: newByteRing(limits.PlaintextTransmitBytes), writeScratch: make([]byte, 16<<10),
-		cipherScratch: make([]byte, 16<<10),
-		profile:       cloned, identity: identity,
+		txPlain: newByteRing(limits.PlaintextTransmitBytes), readScratch: make([]byte, 16<<10),
+		writeScratch: make([]byte, 16<<10), cipherScratch: make([]byte, CiphertextScratchBytes),
+		profile: cloned, identity: identity,
 	}
 	stream.cond = sync.NewCond(&stream.mu)
 	stream.wg.Add(3)
@@ -147,9 +148,8 @@ func (stream *Stream) readWorker() {
 	if failed {
 		return
 	}
-	buffer := make([]byte, 16<<10)
 	for {
-		count, err := stream.tls.Read(buffer)
+		count, err := stream.tls.Read(stream.readScratch)
 		if count != 0 {
 			stream.mu.Lock()
 			written := 0
@@ -157,16 +157,19 @@ func (stream *Stream) readWorker() {
 				for stream.rxPlain.free() == 0 && !stream.closed {
 					stream.cond.Wait()
 				}
-				written += stream.rxPlain.write(buffer[written:count])
+				written += stream.rxPlain.write(stream.readScratch[written:count])
 				stream.cond.Broadcast()
 			}
 			stream.mu.Unlock()
 		}
 		if err != nil {
 			stream.mu.Lock()
-			if errors.Is(err, io.EOF) {
+			if errors.Is(err, io.EOF) && !stream.bridge.deliveredPeerEOF() {
 				stream.cleanEOF = true
 			} else if !stream.closed {
+				if errors.Is(err, io.EOF) {
+					err = io.ErrUnexpectedEOF
+				}
 				stream.terminal = mapTLSError(err)
 			}
 			stream.cond.Broadcast()
@@ -247,6 +250,11 @@ func (stream *Stream) TryService(budget nscore.ServiceBudget) (nscore.ServiceRep
 		stream.fail(err)
 		return nscore.ServiceReport{}, 0, err
 	}
+	if !progress.Valid() {
+		err := nscore.Fail(nscore.FailureIO, ErrInvalidConfig)
+		stream.fail(err)
+		return nscore.ServiceReport{}, 0, err
+	}
 	if progress != nscore.ProgressDone {
 		return nscore.ServiceReport{}, nscore.ProgressWouldBlock, nil
 	}
@@ -282,6 +290,9 @@ func (stream *Stream) pumpOnce(byteBudget int) (bool, int, error) {
 		if err != nil {
 			return false, 0, err
 		}
+		if !result.Valid(count) {
+			return false, 0, nscore.Fail(nscore.FailureIO, ErrInvalidConfig)
+		}
 		if result.State == nscore.IOReady {
 			stream.bridge.discardCipher(result.Bytes)
 			return true, result.Bytes, nil
@@ -297,6 +308,9 @@ func (stream *Stream) pumpOnce(byteBudget int) (bool, int, error) {
 	result, err := stream.transport.TryRead(stream.cipherScratch[:free])
 	if err != nil {
 		return false, 0, err
+	}
+	if !result.Valid(free) {
+		return false, 0, nscore.Fail(nscore.FailureIO, ErrInvalidConfig)
 	}
 	switch result.State {
 	case nscore.IOReady:
@@ -468,6 +482,7 @@ func (stream *Stream) Close() error {
 	stream.mu.Lock()
 	stream.rxPlain.clear()
 	stream.txPlain.clear()
+	clear(stream.readScratch)
 	clear(stream.writeScratch)
 	clear(stream.cipherScratch)
 	stream.mu.Unlock()

@@ -100,7 +100,7 @@ func New(common *lnetocore.Namespace, config Config) (*Adapter, error) {
 func validConfig(config Config) bool {
 	return config.MaxStreams > 0 && config.MaxConcurrentHandshakes > 0 &&
 		config.MaxConcurrentHandshakes <= config.MaxStreams && config.MaxServerNameBytes > 0 &&
-		config.MaxServiceAttemptsPerHandshake > 0 && config.TCP.MaxListeners == 0 &&
+		config.MaxServiceAttemptsPerHandshake > 0 && gotls.ValidLimits(config.Engine) && config.TCP.MaxListeners == 0 &&
 		config.TCP.MaxOutboundStreams >= config.MaxStreams && len(config.Profiles) > 0
 }
 
@@ -133,8 +133,8 @@ func (adapter *Adapter) TryConnectTLS(remote nscore.Endpoint, profileID uint32, 
 	adapter.mu.Unlock()
 
 	created := &stream{owner: adapter, handshakeLive: true}
-	plaintextBytes := uint64(adapter.config.Engine.PlaintextReceiveBytes + adapter.config.Engine.PlaintextTransmitBytes)
-	ciphertextBytes := uint64(adapter.config.Engine.CiphertextReceiveBytes + adapter.config.Engine.CiphertextTransmitBytes)
+	plaintextBytes := uint64(adapter.config.Engine.PlaintextReceiveBytes + adapter.config.Engine.PlaintextTransmitBytes + gotls.PlaintextScratchBytes)
+	ciphertextBytes := uint64(adapter.config.Engine.CiphertextReceiveBytes + adapter.config.Engine.CiphertextTransmitBytes + gotls.CiphertextScratchBytes)
 	if err := adapter.quotas.AcquireTLSStream(&created.retained, plaintextBytes, ciphertextBytes); err != nil {
 		adapter.releaseHandshakeSlot(created)
 		return nil, 0, mapQuotaError(err)

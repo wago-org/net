@@ -76,11 +76,12 @@ type bridgeConn struct {
 	mu   sync.Mutex
 	cond *sync.Cond
 
-	inbound  byteRing
-	outbound byteRing
-	closed   bool
-	peerEOF  bool
-	err      error
+	inbound          byteRing
+	outbound         byteRing
+	closed           bool
+	peerEOF          bool
+	peerEOFDelivered bool
+	err              error
 
 	handshake         bool
 	handshakeBytes    int
@@ -111,6 +112,7 @@ func (conn *bridgeConn) Read(dst []byte) (int, error) {
 		return 0, conn.err
 	}
 	if conn.peerEOF {
+		conn.peerEOFDelivered = true
 		return 0, io.EOF
 	}
 	return 0, errBridgeClosed
@@ -219,6 +221,12 @@ func (conn *bridgeConn) cipherPending() int {
 	conn.mu.Lock()
 	defer conn.mu.Unlock()
 	return conn.outbound.len()
+}
+
+func (conn *bridgeConn) deliveredPeerEOF() bool {
+	conn.mu.Lock()
+	defer conn.mu.Unlock()
+	return conn.peerEOFDelivered
 }
 
 func (conn *bridgeConn) setPeerEOF() {

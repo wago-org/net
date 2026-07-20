@@ -4,8 +4,8 @@ Capability-gated networking plugins for the [Wago](https://github.com/wago-org/w
 WebAssembly runtime, backed initially by [lneto](https://github.com/soypat/lneto).
 UDP, TCP, DNS, bounded ICMPv4 echo, explicit-clock NTP, bounded IPv4 multicast
 DNS, DHCPv4, IPv4 link-local/APIPA, configured IPv6 TCP transport enablement,
-bounded ICMPv6/NDP, and the pinned bounded initial DHCPv6 acquisition subset are
-implemented today.
+bounded ICMPv6/NDP, the pinned bounded initial DHCPv6 acquisition subset, and a
+granular outbound client-only TLS capability are implemented today.
 
 > [!WARNING]
 > This module is private and experimental. Use it only with the exact Wago
@@ -17,8 +17,8 @@ implemented today.
 The repository exposes the experimental `wago_net.abi_version` core import plus
 separately capability-gated `wago_net_udp`, `wago_net_tcp`, `wago_net_dns`,
 `wago_net_icmpv4`, `wago_net_ntp`, `wago_net_mdns`, `wago_net_dhcpv4`,
-`wago_net_linklocal4`, `wago_net_ipv6`, `wago_net_icmpv6`, and
-`wago_net_dhcpv6` modules. UDP covers configured-namespace discovery, bind, send,
+`wago_net_linklocal4`, `wago_net_ipv6`, `wago_net_icmpv6`, `wago_net_dhcpv6`,
+and granular-only `wago_net_tls` modules. UDP covers configured-namespace discovery, bind, send,
 receive, close, and bounded poll. TCP covers discovery, listen, nonblocking
 connect completion, accept, partial read/write, write-half shutdown,
 kind-specific close, and its own bounded poll. DNS covers configured resolver
@@ -95,6 +95,32 @@ if err := dns.Register(network, dns.Resolver("192.0.2.53")); err != nil {
 return wago.NewRuntime().Use(network)
 ```
 
+TLS is selected separately and does not imply raw TCP:
+
+```go
+profile, err := wagonettls.NewClientProfile(
+    1,
+    hostTLSConfig,
+    wagonettls.AllowServerNames("api.example.com"),
+    wagonettls.RequireALPN("h2"),
+)
+if err != nil {
+    return err
+}
+if err := wagonettls.Register(network, wagonettls.WithClientProfile(profile)); err != nil {
+    return err
+}
+```
+
+Profiles are finite and host-defined. The guest selects only a profile ID,
+remote IP endpoint, and authorized verification name. Certificate-chain and
+DNS/IP SAN verification are mandatory; Common Name fallback, key logging,
+renegotiation, arbitrary verification/certificate callbacks, guest session
+caches, 0-RTT, STARTTLS, and wrapping guest TCP handles are absent. TLS 1.3 is
+the default and TLS 1.2 requires `EnableTLS12()`. Client private keys remain
+host-side. Clean `close_notify` maps to EOF; raw TCP EOF maps to TLS protocol
+failure. See [`docs/tls.md`](docs/tls.md).
+
 TCP defaults provide eight finite outbound streams and no listeners. UDP defaults
 provide eight finite sockets, ephemeral wildcard client binds, outbound ordinary
 unicast, and replies; server ports, privileged binds, loopback, multicast, and
@@ -164,19 +190,22 @@ and fourteen `wago_net_icmpv6` imports; without configured IPv6 identity its
 operation bitset and work operations return `NOT_SUPPORTED` without output
 mutation. Registering only DHCPv6 exposes `net.info`, `net.dhcpv6`, the shared
 ABI import, and seven `wago_net_dhcpv6` imports; it becomes operational only
-with a separately configured scoped link-local IPv6 identity. Unregistered protocol
-imports are absent and fail normal WebAssembly import resolution. The public TCP,
-UDP, DNS, ICMPv4, NTP, mDNS, DHCPv4, link-local, IPv6, ICMPv6, and DHCPv6 facades each construct
-an opaque descriptor, and all eleven checked host tables live in protocol-specific
+with a separately configured scoped link-local IPv6 identity. Registering only TLS
+exposes exactly `net.info` and `net.tls`, `wago_net.abi_version`, and nine
+`wago_net_tls` imports; it does not expose `net.tcp` or `wago_net_tcp`.
+Unregistered protocol imports are absent and fail normal WebAssembly import resolution. The public TCP,
+UDP, DNS, ICMPv4, NTP, mDNS, DHCPv4, link-local, IPv6, ICMPv6, DHCPv6, and TLS facades each construct
+an opaque descriptor, and all twelve checked host tables live in protocol-specific
 internal binding packages. The
 root package no longer imports those public or binding packages. Dependency and
-runtime-inspection fixtures cover no protocol and all 2048 combinations of the
-eleven implemented protocols. Omitted public, binding, instance-operation, and fixed ABI
+runtime-inspection fixtures cover no protocol and all 4096 combinations of the
+twelve selectively implemented protocols. TLS remains intentionally outside the
+aggregate `register` bundle pending TinyGo and complete release-signoff evidence. Omitted public, binding, instance-operation, and fixed ABI
 packages are rejected from each fixture's Go dependency graph. Shared checked
 memory, endpoint/handle codecs, and poll layouts live in `internal/abi/core`;
-TCP, UDP, DNS, ICMPv4, NTP, mDNS, DHCPv4, link-local, IPv6, ICMPv6, and DHCPv6 layouts
+TCP, UDP, DNS, ICMPv4, NTP, mDNS, DHCPv4, link-local, IPv6, ICMPv6, DHCPv6, and TLS layouts
 live only in `internal/abi/tcp`, `/udp`, `/dns`, `/icmpv4`, `/ntp`, `/mdns`,
-`/dhcpv4`, `/linklocal4`, `/ipv6`, `/icmpv6`, and `/dhcpv6`.
+`/dhcpv4`, `/linklocal4`, `/ipv6`, `/icmpv6`, `/dhcpv6`, and `/tls`.
 The dependency
 matrix also rejects each omitted protocol's namespace facet and
 `internal/backend/lneto/{tcp,udp,dns,icmpv4,ntp,mdns,dhcpv4,linklocal4,ipv6,icmpv6}`
