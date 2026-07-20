@@ -229,9 +229,15 @@ func (conn *bridgeConn) deliveredPeerEOF() bool {
 	return conn.peerEOFDelivered
 }
 
-func (conn *bridgeConn) setPeerEOF() {
+// setPeerEOF records transport EOF exactly once. The first transition wakes
+// blocked TLS reads and returns true; repeats and close races report no work.
+func (conn *bridgeConn) setPeerEOF() bool {
 	conn.mu.Lock()
+	defer conn.mu.Unlock()
+	if conn.closed || conn.peerEOF {
+		return false
+	}
 	conn.peerEOF = true
 	conn.cond.Broadcast()
-	conn.mu.Unlock()
+	return true
 }

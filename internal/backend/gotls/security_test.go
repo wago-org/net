@@ -210,8 +210,8 @@ func TestRawEOFWithoutCloseNotifyIsTLSProtocolFailure(t *testing.T) {
 	t.Fatal("truncated TLS stream did not fail")
 }
 
-func TestCloseNotifyProducesCleanEOF(t *testing.T) {
-	client, server, _ := establishedTestPair(t)
+func TestCloseNotifyProducesStableEOFWithoutRepeatedServiceWork(t *testing.T) {
+	client, server, transport := establishedTestPair(t)
 	defer client.Close()
 	closed := make(chan error, 1)
 	go func() { closed <- server.CloseWrite() }()
@@ -228,6 +228,21 @@ func TestCloseNotifyProducesCleanEOF(t *testing.T) {
 					t.Fatal(err)
 				}
 			default:
+			}
+			transport.eof.Store(true)
+			budget := nscore.ServiceBudget{Packets: 8, Bytes: 64 << 10, Operations: 8}
+			for repeat := 0; repeat < 100; repeat++ {
+				report, progress, err := client.TryService(budget)
+				if err != nil || report != (nscore.ServiceReport{}) || progress != nscore.ProgressWouldBlock || !report.ValidResult(budget, progress) {
+					t.Fatalf("clean EOF service %d = %+v, %v, %v", repeat, report, progress, err)
+				}
+				if ready := client.Readiness(); ready&nscore.ReadyReadable == 0 {
+					t.Fatalf("clean EOF readiness %d = %v", repeat, ready)
+				}
+				stable, err := client.TryRead(make([]byte, 1))
+				if err != nil || stable.State != nscore.IOEOF {
+					t.Fatalf("stable EOF read %d = %+v, %v", repeat, stable, err)
+				}
 			}
 			return
 		}

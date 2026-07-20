@@ -301,6 +301,12 @@ func (stream *Stream) pumpOnce(byteBudget int) (bool, int, error) {
 			return false, 0, nscore.Fail(nscore.FailureConnectionBroken, io.ErrUnexpectedEOF)
 		}
 	}
+	stream.mu.Lock()
+	stopInbound := stream.cleanEOF || stream.terminal != nil || stream.closed
+	stream.mu.Unlock()
+	if stopInbound {
+		return false, 0, nil
+	}
 	free := min(stream.bridge.inboundFree(), min(len(stream.cipherScratch), byteBudget))
 	if free == 0 {
 		return false, 0, nil
@@ -317,8 +323,7 @@ func (stream *Stream) pumpOnce(byteBudget int) (bool, int, error) {
 		fed, err := stream.bridge.feedCipher(stream.cipherScratch[:result.Bytes])
 		return fed != 0, fed, err
 	case nscore.IOEOF:
-		stream.bridge.setPeerEOF()
-		return true, 0, nil
+		return stream.bridge.setPeerEOF(), 0, nil
 	case nscore.IOWouldBlock:
 		return false, 0, nil
 	default:

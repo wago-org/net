@@ -10,6 +10,7 @@ import (
 	"net"
 	"net/netip"
 	"runtime"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -93,6 +94,30 @@ func TestClientHandshakeVerificationALPNAndPlaintext(t *testing.T) {
 		}
 	}
 	t.Fatal("plaintext did not reach peer")
+}
+
+func TestTransportEOFConsumesExactlyOneServiceOperation(t *testing.T) {
+	peer := newBridgeConn(32, 32, 64)
+	transport := &memoryTransport{peer: peer}
+	transport.eof.Store(true)
+	limits := testLimits()
+	stream := &Stream{
+		transport:     transport,
+		bridge:        newBridgeConn(limits.CiphertextReceiveBytes, limits.CiphertextTransmitBytes, limits.MaxHandshakeBytes),
+		limits:        limits,
+		cipherScratch: make([]byte, CiphertextScratchBytes),
+		verified:      true,
+	}
+	stream.cond = sync.NewCond(&stream.mu)
+	budget := nscore.ServiceBudget{Packets: 2, Bytes: 1024, Operations: 2}
+	report, progress, err := stream.TryService(budget)
+	if err != nil || report != (nscore.ServiceReport{Operations: 1}) || progress != nscore.ProgressDone || !report.ValidResult(budget, progress) {
+		t.Fatalf("first EOF service = %+v, %v, %v", report, progress, err)
+	}
+	report, progress, err = stream.TryService(budget)
+	if err != nil || report != (nscore.ServiceReport{}) || progress != nscore.ProgressWouldBlock || !report.ValidResult(budget, progress) {
+		t.Fatalf("repeated EOF service = %+v, %v, %v", report, progress, err)
+	}
 }
 
 func TestClientRejectsWrongHostname(t *testing.T) {

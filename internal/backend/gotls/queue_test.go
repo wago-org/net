@@ -2,6 +2,7 @@ package gotls
 
 import (
 	"bytes"
+	"sync"
 	"testing"
 )
 
@@ -30,6 +31,47 @@ func TestBridgeHandshakeLimitFailsClosed(t *testing.T) {
 	}
 	if count, err := bridge.feedCipher([]byte("5")); err != ErrHandshakeLimit || count != 0 {
 		t.Fatalf("limit feed = %d, %v", count, err)
+	}
+}
+
+func TestBridgePeerEOFIsExactlyOnceAndCloseRaceIsIdle(t *testing.T) {
+	bridge := newBridgeConn(32, 32, 64)
+	if !bridge.setPeerEOF() {
+		t.Fatal("first peer EOF was not a transition")
+	}
+	if bridge.setPeerEOF() {
+		t.Fatal("repeated peer EOF reported work")
+	}
+	if count, err := bridge.Read(make([]byte, 1)); count != 0 || err == nil {
+		t.Fatalf("peer EOF read = %d, %v", count, err)
+	}
+	bridge.abort(nil)
+	if bridge.setPeerEOF() {
+		t.Fatal("peer EOF after close reported work")
+	}
+}
+
+func TestBridgePeerEOFRacesCloseWithoutDeadlock(t *testing.T) {
+	for range 1000 {
+		bridge := newBridgeConn(32, 32, 64)
+		start := make(chan struct{})
+		var workers sync.WaitGroup
+		workers.Add(2)
+		go func() {
+			defer workers.Done()
+			<-start
+			bridge.setPeerEOF()
+		}()
+		go func() {
+			defer workers.Done()
+			<-start
+			bridge.abort(nil)
+		}()
+		close(start)
+		workers.Wait()
+		if bridge.setPeerEOF() {
+			t.Fatal("terminal bridge accepted a later EOF transition")
+		}
 	}
 }
 
