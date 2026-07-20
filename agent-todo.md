@@ -1638,7 +1638,7 @@ No repository-owned workstream or completion criterion from this hardening reque
 - Current local evidence: `go test ./...`, shuffled tests, full race/shuffle,
   vet, source boundaries, checkptr, accepted-diagnostic linux/386, all 123
   TinyGo-supported packages, all 12 custom CLI bundles, and all 17 TLS signoff
-  profiles passed. TLS signoff resolves 133 named tests. Fuzz smoke passes 47
+  profiles passed. TLS signoff resolves 135 named tests. Fuzz smoke passes 47
   targets in 33 packages, including seven TLS-owned targets. Benchmark smoke
   passes 173 top-level targets; the five-by-200 ms capture expands to 196 result
   names and includes separate client/server TLS 1.3 handshakes. Four arm64 test
