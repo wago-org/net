@@ -186,7 +186,7 @@ func TestEndpointSnapshotsSerializeWithResourceClose(t *testing.T) {
 }
 
 func TestQuotaDeniedConnectDoesNotAllocateOrRetainOutboundStorage(t *testing.T) {
-	_, adapter := newTestAdapter(t, 34, 0, 1)
+	common, adapter := newTestAdapter(t, 34, 0, 1)
 	var occupied quota.Charge
 	if err := adapter.quotas.AcquireQueuedBytes(&occupied, 16<<10); err != nil {
 		t.Fatal(err)
@@ -195,8 +195,11 @@ func TestQuotaDeniedConnectDoesNotAllocateOrRetainOutboundStorage(t *testing.T) 
 	if value, progress, err := adapter.TryConnect(remote); value != nil || progress != 0 || failureOf(t, err) != nscore.FailureResourceLimit {
 		t.Fatalf("quota denied connect = %T, %v, %v", value, progress, err)
 	}
-	if len(adapter.freeOutboundStorage) != 0 || len(adapter.streams) != 0 || len(adapter.ports) != 0 || adapter.outboundStreams != 0 {
-		t.Fatalf("quota denied connect retained state: storage=%d streams=%d ports=%d outbound=%d", len(adapter.freeOutboundStorage), len(adapter.streams), len(adapter.ports), adapter.outboundStreams)
+	common.Lock()
+	leaseCount := common.TCPPortLeaseCountLocked()
+	common.Unlock()
+	if len(adapter.freeOutboundStorage) != 0 || len(adapter.streams) != 0 || leaseCount != 0 || adapter.outboundStreams != 0 {
+		t.Fatalf("quota denied connect retained state: storage=%d streams=%d leases=%d outbound=%d", len(adapter.freeOutboundStorage), len(adapter.streams), leaseCount, adapter.outboundStreams)
 	}
 	if usage, closed := adapter.quotas.Snapshot(); closed || usage != (quota.Usage{QueuedBytes: 16 << 10}) {
 		t.Fatalf("quota denied usage = %+v, closed=%v", usage, closed)
@@ -253,7 +256,7 @@ func TestOutboundStreamCountTracksReuseAndCoreClose(t *testing.T) {
 	}
 }
 
-func TestOutboundStorageAndPortReuseClearDataAndIsolateStaleStream(t *testing.T) {
+func TestOutboundStorageReuseClearsDataAndIsolatesStaleStream(t *testing.T) {
 	_, adapter := newTestAdapter(t, 5, 0, 1)
 	remote := nscore.Endpoint{Address: netip.MustParseAddr("192.0.2.6"), Port: 4206}
 	firstValue, progress, err := adapter.TryConnect(remote)
@@ -281,14 +284,13 @@ func TestOutboundStorageAndPortReuseClearDataAndIsolateStaleStream(t *testing.T)
 			t.Fatalf("recycled storage byte %d = %d", i, value)
 		}
 	}
-	adapter.nextPort = stalePort
 	freshValue, progress, err := adapter.TryConnect(remote)
 	if err != nil || progress != nscore.ProgressInProgress {
 		t.Fatalf("fresh connect = %T, %v, %v", freshValue, progress, err)
 	}
 	fresh := freshValue.(*tcpStream)
-	if fresh == stale || fresh.local.Port != stalePort || &fresh.storage[0] != storageAddress {
-		t.Fatalf("fresh reuse = same wrapper %v, port %d want %d, storage reused %v", fresh == stale, fresh.local.Port, stalePort, &fresh.storage[0] == storageAddress)
+	if fresh == stale || fresh.local.Port == stalePort || &fresh.storage[0] != storageAddress {
+		t.Fatalf("fresh reuse = same wrapper %v, port %d stale %d, storage reused %v", fresh == stale, fresh.local.Port, stalePort, &fresh.storage[0] == storageAddress)
 	}
 	if progress, err := stale.TryFinishConnect(); progress != 0 || failureOf(t, err) != nscore.FailureClosed {
 		t.Fatalf("stale finish connect = %v, %v", progress, err)
@@ -923,13 +925,15 @@ func TestConnectRejectsNonWireUnicastDestinationsBeforeOwnership(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			adapter := test.new(t)
 			adapter.policy = allowAllTCP
-			nextPort := adapter.nextPort
 			usageBefore, closedBefore := adapter.quotas.Snapshot()
 			if resource, progress, err := adapter.TryConnect(nscore.Endpoint{Address: test.address, Port: 443}); resource != nil || progress != 0 || failureOf(t, err) != nscore.FailureInvalidArgument {
 				t.Fatalf("connect = %T, %v, %v", resource, progress, err)
 			}
-			if adapter.nextPort != nextPort || len(adapter.ports) != 0 || len(adapter.streams) != 0 || adapter.outboundStreams != 0 || len(adapter.freeOutboundStorage) != 0 {
-				t.Fatalf("rejected connect mutated state: next_port=%d ports=%d streams=%d outbound=%d storage=%d", adapter.nextPort, len(adapter.ports), len(adapter.streams), adapter.outboundStreams, len(adapter.freeOutboundStorage))
+			adapter.core.Lock()
+			leaseCount := adapter.core.TCPPortLeaseCountLocked()
+			adapter.core.Unlock()
+			if leaseCount != 0 || len(adapter.streams) != 0 || adapter.outboundStreams != 0 || len(adapter.freeOutboundStorage) != 0 {
+				t.Fatalf("rejected connect mutated state: leases=%d streams=%d outbound=%d storage=%d", leaseCount, len(adapter.streams), adapter.outboundStreams, len(adapter.freeOutboundStorage))
 			}
 			if usage, closed := adapter.quotas.Snapshot(); closed != closedBefore || usage != usageBefore {
 				t.Fatalf("rejected connect quota = %+v, closed=%v; want %+v, closed=%v", usage, closed, usageBefore, closedBefore)

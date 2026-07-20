@@ -104,6 +104,10 @@ type Namespace struct {
 	nextEgress             int
 	closers                []closeParticipant
 	udpPorts               map[uint16]*UDPPortLease
+	tcpPorts               map[uint16]*TCPPortLease
+	maxActiveTCPPorts      uint16
+	nextTCPPort            uint16
+	tcpPortOwnerSequence   uint64
 	closed                 bool
 }
 
@@ -162,6 +166,8 @@ func New(config Config) (*Namespace, error) {
 		gatewayHardwareAddress: config.GatewayHardwareAddress,
 		policy:                 config.Policy,
 		quotas:                 config.Quotas,
+		maxActiveTCPPorts:      config.MaxActiveTCPPorts,
+		nextTCPPort:            FirstEphemeralTCPPort,
 	}, nil
 }
 
@@ -308,6 +314,14 @@ func (n *Namespace) Close() error {
 	}
 	clear(n.udpPorts)
 	n.udpPorts = nil
+	for _, lease := range n.tcpPorts {
+		lease.owner = nil
+		lease.portOwner = nil
+		lease.port = 0
+		lease.active = false
+	}
+	clear(n.tcpPorts)
+	n.tcpPorts = nil
 	n.ingress = nil
 	n.egress = nil
 	n.egressActive = nil
