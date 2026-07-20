@@ -1334,6 +1334,34 @@ func TestReleaseSignoffBenchmarkCheckMatchesProvenancePolicy(t *testing.T) {
 	}
 }
 
+func TestTLSPlatformSignoffScriptsAreWiredToReleaseAndCI(t *testing.T) {
+	files := []struct {
+		path     string
+		required []string
+	}{
+		{path: "../../scripts/release-signoff.sh", required: []string{
+			"TLS_SIGNOFF_DIR=\"$out/tls\"", "scripts/tls-signoff.sh", "record_check tls-standard-go pass",
+			"TINYGO_LOG_DIR=\"$out/tinygo\"", "scripts/tinygo-supported-test.sh", "record_check tinygo-test pass",
+		}},
+		{path: "../../.github/workflows/ci.yml", required: []string{
+			"name: Standard-Go TLS signoff", "scripts/tls-signoff.sh", "name: TinyGo supported package surface",
+			"tinygo-version: \"0.41.1\"", "scripts/tinygo-supported-test.sh",
+		}},
+	}
+	for _, file := range files {
+		data, err := os.ReadFile(file.path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		contents := string(data)
+		for _, required := range file.required {
+			if !strings.Contains(contents, required) {
+				t.Fatalf("%s does not retain %q", file.path, required)
+			}
+		}
+	}
+}
+
 func validReviewFixture(t *testing.T) (string, VerifyOptions) {
 	t.Helper()
 	dir := t.TempDir()

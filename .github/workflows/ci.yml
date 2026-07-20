@@ -39,6 +39,49 @@ jobs:
       - name: Enforce source boundaries
         run: scripts/check-source-boundaries.sh
 
+  tls-standard-go:
+    name: Standard-Go TLS signoff
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.24.4"
+          cache: true
+      - name: Prepare exact dependency worktrees
+        run: scripts/ci-prepare-dependencies.sh
+      - name: Run explicit TLS signoff
+        run: TLS_SIGNOFF_DIR="$RUNNER_TEMP/tls-signoff" scripts/tls-signoff.sh
+      - name: Retain TLS evidence
+        if: failure() || github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+        uses: actions/upload-artifact@v4
+        with:
+          name: tls-standard-go
+          path: ${{ runner.temp }}/tls-signoff
+
+  tinygo-supported:
+    name: TinyGo supported package surface
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.24.4"
+          cache: true
+      - uses: acifani/setup-tinygo@v2
+        with:
+          tinygo-version: "0.41.1"
+      - name: Prepare exact dependency worktrees
+        run: scripts/ci-prepare-dependencies.sh
+      - name: Test exact supported package surface
+        run: TINYGO_LOG_DIR="$RUNNER_TEMP/tinygo-supported" scripts/tinygo-supported-test.sh
+      - name: Retain TinyGo package manifests and logs
+        if: failure() || github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+        uses: actions/upload-artifact@v4
+        with:
+          name: tinygo-supported
+          path: ${{ runner.temp }}/tinygo-supported
+
   race:
     name: Race detector
     runs-on: ubuntu-latest
