@@ -1,509 +1,1429 @@
 wago-net performance baseline
-source_head: 8bd170211da9e3d455d26aba7bdd27cd907fc08b
-source_tree: modified
+source_head: 97b2bfca08df8d3e154bf7b4bb2cc932ec359ca8
+source_tree: clean
 go: go version go1.24.4 linux/amd64
 goos: linux
 goarch: amd64
 kernel: Linux 6.12.95+deb13-amd64 x86_64 GNU/Linux
 cpu: AMD Ryzen 7 8845HS w/ Radeon 780M Graphics
 gomaxprocs: 1
-samples: 3
-benchtime: 100ms
+samples: 5
+benchtime: 200ms
 
 goos: linux
 goarch: amd64
 pkg: github.com/wago-org/net
-cpu: AMD Ryzen 7 8845HS w/ Radeon 780M Graphics     
-BenchmarkGuestDNSPoll 	 1325596	        90.70 ns/op	       0 B/op	       0 allocs/op
-BenchmarkGuestDNSPoll 	 1231605	        98.52 ns/op	       0 B/op	       0 allocs/op
-BenchmarkGuestDNSPoll 	 1264873	        94.35 ns/op	       0 B/op	       0 allocs/op
-BenchmarkGuestUDPPoll 	 1000000	       114.9 ns/op	       0 B/op	       0 allocs/op
-BenchmarkGuestUDPPoll 	 1000000	       116.9 ns/op	       0 B/op	       0 allocs/op
-BenchmarkGuestUDPPoll 	 1000000	       116.3 ns/op	       0 B/op	       0 allocs/op
-BenchmarkGuestTCPPoll 	 1000000	       112.5 ns/op	       0 B/op	       0 allocs/op
-BenchmarkGuestTCPPoll 	 1000000	       112.2 ns/op	       0 B/op	       0 allocs/op
-BenchmarkGuestTCPPoll 	 1000000	       114.7 ns/op	       0 B/op	       0 allocs/op
+cpu: AMD Ryzen 7 8845HS w/ Radeon 780M Graphics
+BenchmarkGuestDNSPoll 	 1868667	       128.0 ns/op	       0 B/op	       0 allocs/op
+BenchmarkGuestDNSPoll 	 1851199	       131.9 ns/op	       0 B/op	       0 allocs/op
+BenchmarkGuestDNSPoll 	 1795946	       132.2 ns/op	       0 B/op	       0 allocs/op
+BenchmarkGuestDNSPoll 	 1853998	       130.9 ns/op	       0 B/op	       0 allocs/op
+BenchmarkGuestDNSPoll 	 1808659	       132.7 ns/op	       0 B/op	       0 allocs/op
+BenchmarkGuestUDPPoll 	 1572007	       150.6 ns/op	       0 B/op	       0 allocs/op
+BenchmarkGuestUDPPoll 	 1615149	       148.7 ns/op	       0 B/op	       0 allocs/op
+BenchmarkGuestUDPPoll 	 1602656	       151.4 ns/op	       0 B/op	       0 allocs/op
+BenchmarkGuestUDPPoll 	 1574379	       151.5 ns/op	       0 B/op	       0 allocs/op
+BenchmarkGuestUDPPoll 	 1467414	       161.5 ns/op	       0 B/op	       0 allocs/op
+BenchmarkGuestTCPPoll 	 1600208	       152.9 ns/op	       0 B/op	       0 allocs/op
+BenchmarkGuestTCPPoll 	 1625875	       147.7 ns/op	       0 B/op	       0 allocs/op
+BenchmarkGuestTCPPoll 	 1618003	       146.9 ns/op	       0 B/op	       0 allocs/op
+BenchmarkGuestTCPPoll 	 1622242	       148.5 ns/op	       0 B/op	       0 allocs/op
+BenchmarkGuestTCPPoll 	 1641657	       145.7 ns/op	       0 B/op	       0 allocs/op
 PASS
-ok  	github.com/wago-org/net	1.065s
+ok  	github.com/wago-org/net	5.143s
 PASS
-ok  	github.com/wago-org/net/compat	0.002s
+ok  	github.com/wago-org/net/compat	0.003s
+PASS
+ok  	github.com/wago-org/net/dhcpv4	0.003s
+PASS
+ok  	github.com/wago-org/net/dhcpv4/register	0.003s
+PASS
+ok  	github.com/wago-org/net/dhcpv6	0.003s
+PASS
+ok  	github.com/wago-org/net/dhcpv6/register	0.002s
 PASS
 ok  	github.com/wago-org/net/dns	0.003s
 PASS
 ok  	github.com/wago-org/net/dns/register	0.003s
+PASS
+ok  	github.com/wago-org/net/icmpv4	0.003s
+PASS
+ok  	github.com/wago-org/net/icmpv4/register	0.003s
+PASS
+ok  	github.com/wago-org/net/icmpv6	0.003s
+PASS
+ok  	github.com/wago-org/net/icmpv6/register	0.002s
 goos: linux
 goarch: amd64
 pkg: github.com/wago-org/net/internal/abi/core
-cpu: AMD Ryzen 7 8845HS w/ Radeon 780M Graphics     
-BenchmarkSlice              	64447453	         1.749 ns/op	       0 B/op	       0 allocs/op
-BenchmarkSlice              	69612109	         1.718 ns/op	       0 B/op	       0 allocs/op
-BenchmarkSlice              	69118053	         1.705 ns/op	       0 B/op	       0 allocs/op
-BenchmarkWrite              	14247024	         8.590 ns/op	119206.91 MB/s	       0 B/op	       0 allocs/op
-BenchmarkWrite              	13694595	         8.649 ns/op	118399.79 MB/s	       0 B/op	       0 allocs/op
-BenchmarkWrite              	13907218	         8.528 ns/op	120074.27 MB/s	       0 B/op	       0 allocs/op
-BenchmarkZero               	14410406	         8.320 ns/op	123074.54 MB/s	       0 B/op	       0 allocs/op
-BenchmarkZero               	14497105	         8.301 ns/op	123365.53 MB/s	       0 B/op	       0 allocs/op
-BenchmarkZero               	14445129	         8.586 ns/op	119257.25 MB/s	       0 B/op	       0 allocs/op
-BenchmarkReadUint32LE       	95982261	         1.310 ns/op	       0 B/op	       0 allocs/op
-BenchmarkReadUint32LE       	94156268	         1.278 ns/op	       0 B/op	       0 allocs/op
-BenchmarkReadUint32LE       	94285290	         1.280 ns/op	       0 B/op	       0 allocs/op
-BenchmarkWriteUint32LE      	80198035	         1.421 ns/op	       0 B/op	       0 allocs/op
-BenchmarkWriteUint32LE      	80839436	         1.485 ns/op	       0 B/op	       0 allocs/op
-BenchmarkWriteUint32LE      	80942658	         1.484 ns/op	       0 B/op	       0 allocs/op
-BenchmarkCheckRanges        	22905501	         5.615 ns/op	       0 B/op	       0 allocs/op
-BenchmarkCheckRanges        	24961735	         5.305 ns/op	       0 B/op	       0 allocs/op
-BenchmarkCheckRanges        	22088736	         5.377 ns/op	       0 B/op	       0 allocs/op
-BenchmarkElements           	63060714	         1.906 ns/op	       0 B/op	       0 allocs/op
-BenchmarkElements           	62916592	         1.913 ns/op	       0 B/op	       0 allocs/op
-BenchmarkElements           	62329243	         1.924 ns/op	       0 B/op	       0 allocs/op
-BenchmarkEncodeAddressV1    	10036662	        11.70 ns/op	       0 B/op	       0 allocs/op
-BenchmarkEncodeAddressV1    	10335376	        11.66 ns/op	       0 B/op	       0 allocs/op
-BenchmarkEncodeAddressV1    	10291756	        11.70 ns/op	       0 B/op	       0 allocs/op
-BenchmarkDecodeAddressV1    	 5526014	        22.40 ns/op	       0 B/op	       0 allocs/op
-BenchmarkDecodeAddressV1    	 5285493	        23.00 ns/op	       0 B/op	       0 allocs/op
-BenchmarkDecodeAddressV1    	 5325633	        22.03 ns/op	       0 B/op	       0 allocs/op
-BenchmarkEncodeEndpointV1   	 5136157	        23.65 ns/op	       0 B/op	       0 allocs/op
-BenchmarkEncodeEndpointV1   	 5082224	        23.64 ns/op	       0 B/op	       0 allocs/op
-BenchmarkEncodeEndpointV1   	 5082938	        23.70 ns/op	       0 B/op	       0 allocs/op
-BenchmarkDecodeEndpointV1   	 3014936	        39.94 ns/op	       0 B/op	       0 allocs/op
-BenchmarkDecodeEndpointV1   	 3009400	        39.82 ns/op	       0 B/op	       0 allocs/op
-BenchmarkDecodeEndpointV1   	 3029742	        40.29 ns/op	       0 B/op	       0 allocs/op
-BenchmarkEncodeHandleV1     	81665041	         1.524 ns/op	       0 B/op	       0 allocs/op
-BenchmarkEncodeHandleV1     	79289670	         1.490 ns/op	       0 B/op	       0 allocs/op
-BenchmarkEncodeHandleV1     	81695674	         1.479 ns/op	       0 B/op	       0 allocs/op
-BenchmarkDecodePollBudgetV1 	44877696	         2.541 ns/op	       0 B/op	       0 allocs/op
-BenchmarkDecodePollBudgetV1 	47480318	         2.534 ns/op	       0 B/op	       0 allocs/op
-BenchmarkDecodePollBudgetV1 	47144662	         2.543 ns/op	       0 B/op	       0 allocs/op
-BenchmarkEncodePollEventsV1/events=1         	22841422	         5.268 ns/op	       0 B/op	       0 allocs/op
-BenchmarkEncodePollEventsV1/events=1         	22848438	         5.258 ns/op	       0 B/op	       0 allocs/op
-BenchmarkEncodePollEventsV1/events=1         	22902564	         5.411 ns/op	       0 B/op	       0 allocs/op
-BenchmarkEncodePollEventsV1/events=16        	 4080800	        27.88 ns/op	       0 B/op	       0 allocs/op
-BenchmarkEncodePollEventsV1/events=16        	 4451490	        26.79 ns/op	       0 B/op	       0 allocs/op
-BenchmarkEncodePollEventsV1/events=16        	 4471850	        26.85 ns/op	       0 B/op	       0 allocs/op
-BenchmarkEncodePollEventsV1/events=256       	  290514	       414.2 ns/op	       0 B/op	       0 allocs/op
-BenchmarkEncodePollEventsV1/events=256       	  291883	       411.8 ns/op	       0 B/op	       0 allocs/op
-BenchmarkEncodePollEventsV1/events=256       	  291584	       411.8 ns/op	       0 B/op	       0 allocs/op
-BenchmarkEncodePollResultV1                  	14010138	         8.474 ns/op	       0 B/op	       0 allocs/op
-BenchmarkEncodePollResultV1                  	13795668	         8.640 ns/op	       0 B/op	       0 allocs/op
-BenchmarkEncodePollResultV1                  	13786297	         8.903 ns/op	       0 B/op	       0 allocs/op
+cpu: AMD Ryzen 7 8845HS w/ Radeon 780M Graphics
+BenchmarkSlice              	133188826	         1.822 ns/op	       0 B/op	       0 allocs/op
+BenchmarkSlice              	100000000	         2.075 ns/op	       0 B/op	       0 allocs/op
+BenchmarkSlice              	122693660	         1.956 ns/op	       0 B/op	       0 allocs/op
+BenchmarkSlice              	130133347	         1.839 ns/op	       0 B/op	       0 allocs/op
+BenchmarkSlice              	131769075	         1.840 ns/op	       0 B/op	       0 allocs/op
+BenchmarkWrite              	23557387	         9.149 ns/op	111929.00 MB/s	       0 B/op	       0 allocs/op
+BenchmarkWrite              	26188798	         9.336 ns/op	109685.69 MB/s	       0 B/op	       0 allocs/op
+BenchmarkWrite              	24807860	         9.338 ns/op	109658.83 MB/s	       0 B/op	       0 allocs/op
+BenchmarkWrite              	25934079	         9.243 ns/op	110785.57 MB/s	       0 B/op	       0 allocs/op
+BenchmarkWrite              	26184507	         9.317 ns/op	109903.79 MB/s	       0 B/op	       0 allocs/op
+BenchmarkZero               	25935904	         8.835 ns/op	115904.68 MB/s	       0 B/op	       0 allocs/op
+BenchmarkZero               	27163780	         8.995 ns/op	113846.75 MB/s	       0 B/op	       0 allocs/op
+BenchmarkZero               	26877469	         9.047 ns/op	113185.85 MB/s	       0 B/op	       0 allocs/op
+BenchmarkZero               	26983710	         8.856 ns/op	115633.71 MB/s	       0 B/op	       0 allocs/op
+BenchmarkZero               	27233544	         9.013 ns/op	113609.57 MB/s	       0 B/op	       0 allocs/op
+BenchmarkReadUint32LE       	176524636	         1.369 ns/op	       0 B/op	       0 allocs/op
+BenchmarkReadUint32LE       	169436019	         1.393 ns/op	       0 B/op	       0 allocs/op
+BenchmarkReadUint32LE       	176156934	         1.361 ns/op	       0 B/op	       0 allocs/op
+BenchmarkReadUint32LE       	177204018	         1.351 ns/op	       0 B/op	       0 allocs/op
+BenchmarkReadUint32LE       	178843546	         1.345 ns/op	       0 B/op	       0 allocs/op
+BenchmarkWriteUint32LE      	164215339	         1.483 ns/op	       0 B/op	       0 allocs/op
+BenchmarkWriteUint32LE      	161485048	         1.483 ns/op	       0 B/op	       0 allocs/op
+BenchmarkWriteUint32LE      	164812436	         1.493 ns/op	       0 B/op	       0 allocs/op
+BenchmarkWriteUint32LE      	161562552	         1.489 ns/op	       0 B/op	       0 allocs/op
+BenchmarkWriteUint32LE      	159473306	         1.506 ns/op	       0 B/op	       0 allocs/op
+BenchmarkCheckRanges        	43684725	         5.098 ns/op	       0 B/op	       0 allocs/op
+BenchmarkCheckRanges        	47421120	         5.093 ns/op	       0 B/op	       0 allocs/op
+BenchmarkCheckRanges        	51627103	         5.194 ns/op	       0 B/op	       0 allocs/op
+BenchmarkCheckRanges        	44651685	         5.037 ns/op	       0 B/op	       0 allocs/op
+BenchmarkCheckRanges        	52088713	         5.029 ns/op	       0 B/op	       0 allocs/op
+BenchmarkElements           	100000000	         2.013 ns/op	       0 B/op	       0 allocs/op
+BenchmarkElements           	100000000	         2.037 ns/op	       0 B/op	       0 allocs/op
+BenchmarkElements           	100000000	         2.029 ns/op	       0 B/op	       0 allocs/op
+BenchmarkElements           	100000000	         2.031 ns/op	       0 B/op	       0 allocs/op
+BenchmarkElements           	121359523	         1.981 ns/op	       0 B/op	       0 allocs/op
+BenchmarkEncodeAddressV1    	18764114	        12.50 ns/op	       0 B/op	       0 allocs/op
+BenchmarkEncodeAddressV1    	19280875	        12.61 ns/op	       0 B/op	       0 allocs/op
+BenchmarkEncodeAddressV1    	19313661	        12.53 ns/op	       0 B/op	       0 allocs/op
+BenchmarkEncodeAddressV1    	19253170	        12.54 ns/op	       0 B/op	       0 allocs/op
+BenchmarkEncodeAddressV1    	19186443	        12.52 ns/op	       0 B/op	       0 allocs/op
+BenchmarkDecodeAddressV1    	10252687	        23.56 ns/op	       0 B/op	       0 allocs/op
+BenchmarkDecodeAddressV1    	10366514	        23.26 ns/op	       0 B/op	       0 allocs/op
+BenchmarkDecodeAddressV1    	10329043	        23.28 ns/op	       0 B/op	       0 allocs/op
+BenchmarkDecodeAddressV1    	10193340	        23.33 ns/op	       0 B/op	       0 allocs/op
+BenchmarkDecodeAddressV1    	10304468	        23.25 ns/op	       0 B/op	       0 allocs/op
+BenchmarkEncodeEndpointV1   	 9527628	        25.15 ns/op	       0 B/op	       0 allocs/op
+BenchmarkEncodeEndpointV1   	 9456321	        25.30 ns/op	       0 B/op	       0 allocs/op
+BenchmarkEncodeEndpointV1   	 9446871	        25.38 ns/op	       0 B/op	       0 allocs/op
+BenchmarkEncodeEndpointV1   	 9406467	        25.37 ns/op	       0 B/op	       0 allocs/op
+BenchmarkEncodeEndpointV1   	 9540732	        25.26 ns/op	       0 B/op	       0 allocs/op
+BenchmarkDecodeEndpointV1   	 5532268	        42.97 ns/op	       0 B/op	       0 allocs/op
+BenchmarkDecodeEndpointV1   	 5652415	        42.74 ns/op	       0 B/op	       0 allocs/op
+BenchmarkDecodeEndpointV1   	 5632036	        42.58 ns/op	       0 B/op	       0 allocs/op
+BenchmarkDecodeEndpointV1   	 5573822	        42.90 ns/op	       0 B/op	       0 allocs/op
+BenchmarkDecodeEndpointV1   	 5648792	        42.46 ns/op	       0 B/op	       0 allocs/op
+BenchmarkEncodeHandleV1     	156939622	         1.532 ns/op	       0 B/op	       0 allocs/op
+BenchmarkEncodeHandleV1     	154949209	         1.552 ns/op	       0 B/op	       0 allocs/op
+BenchmarkEncodeHandleV1     	153647610	         1.553 ns/op	       0 B/op	       0 allocs/op
+BenchmarkEncodeHandleV1     	154910269	         1.546 ns/op	       0 B/op	       0 allocs/op
+BenchmarkEncodeHandleV1     	155483268	         1.539 ns/op	       0 B/op	       0 allocs/op
+BenchmarkDecodePollBudgetV1 	91809237	         2.624 ns/op	       0 B/op	       0 allocs/op
+BenchmarkDecodePollBudgetV1 	91639603	         2.618 ns/op	       0 B/op	       0 allocs/op
+BenchmarkDecodePollBudgetV1 	91659237	         2.625 ns/op	       0 B/op	       0 allocs/op
+BenchmarkDecodePollBudgetV1 	91563980	         2.636 ns/op	       0 B/op	       0 allocs/op
+BenchmarkDecodePollBudgetV1 	91813136	         2.625 ns/op	       0 B/op	       0 allocs/op
+BenchmarkEncodePollEventsV1/events=1         	47896609	         4.880 ns/op	       0 B/op	       0 allocs/op
+BenchmarkEncodePollEventsV1/events=1         	50009865	         4.807 ns/op	       0 B/op	       0 allocs/op
+BenchmarkEncodePollEventsV1/events=1         	50034512	         4.805 ns/op	       0 B/op	       0 allocs/op
+BenchmarkEncodePollEventsV1/events=1         	50013295	         4.809 ns/op	       0 B/op	       0 allocs/op
+BenchmarkEncodePollEventsV1/events=1         	50154548	         4.802 ns/op	       0 B/op	       0 allocs/op
+BenchmarkEncodePollEventsV1/events=16        	 8611564	        27.86 ns/op	       0 B/op	       0 allocs/op
+BenchmarkEncodePollEventsV1/events=16        	 8598789	        27.87 ns/op	       0 B/op	       0 allocs/op
+BenchmarkEncodePollEventsV1/events=16        	 8543800	        27.93 ns/op	       0 B/op	       0 allocs/op
+BenchmarkEncodePollEventsV1/events=16        	 8625177	        27.88 ns/op	       0 B/op	       0 allocs/op
+BenchmarkEncodePollEventsV1/events=16        	 8627815	        27.84 ns/op	       0 B/op	       0 allocs/op
+BenchmarkEncodePollEventsV1/events=256       	  553174	       431.7 ns/op	       0 B/op	       0 allocs/op
+BenchmarkEncodePollEventsV1/events=256       	  558987	       433.6 ns/op	       0 B/op	       0 allocs/op
+BenchmarkEncodePollEventsV1/events=256       	  553825	       431.5 ns/op	       0 B/op	       0 allocs/op
+BenchmarkEncodePollEventsV1/events=256       	  552121	       429.5 ns/op	       0 B/op	       0 allocs/op
+BenchmarkEncodePollEventsV1/events=256       	  556351	       430.0 ns/op	       0 B/op	       0 allocs/op
+BenchmarkEncodePollResultV1                  	32761803	         7.352 ns/op	       0 B/op	       0 allocs/op
+BenchmarkEncodePollResultV1                  	32632144	         7.365 ns/op	       0 B/op	       0 allocs/op
+BenchmarkEncodePollResultV1                  	32675595	         7.353 ns/op	       0 B/op	       0 allocs/op
+BenchmarkEncodePollResultV1                  	32656441	         7.367 ns/op	       0 B/op	       0 allocs/op
+BenchmarkEncodePollResultV1                  	32667572	         7.382 ns/op	       0 B/op	       0 allocs/op
 PASS
-ok  	github.com/wago-org/net/internal/abi/core	6.146s
+ok  	github.com/wago-org/net/internal/abi/core	20.239s
+PASS
+ok  	github.com/wago-org/net/internal/abi/dhcpv4	0.002s
+goos: linux
+goarch: amd64
+pkg: github.com/wago-org/net/internal/abi/dhcpv6
+cpu: AMD Ryzen 7 8845HS w/ Radeon 780M Graphics
+BenchmarkEncodeConfigurationV1 	  564063	       412.0 ns/op	       0 B/op	       0 allocs/op
+BenchmarkEncodeConfigurationV1 	  595117	       407.0 ns/op	       0 B/op	       0 allocs/op
+BenchmarkEncodeConfigurationV1 	  588175	       409.0 ns/op	       0 B/op	       0 allocs/op
+BenchmarkEncodeConfigurationV1 	  582093	       411.3 ns/op	       0 B/op	       0 allocs/op
+BenchmarkEncodeConfigurationV1 	  578613	       413.5 ns/op	       0 B/op	       0 allocs/op
+PASS
+ok  	github.com/wago-org/net/internal/abi/dhcpv6	1.197s
 goos: linux
 goarch: amd64
 pkg: github.com/wago-org/net/internal/abi/dns
-cpu: AMD Ryzen 7 8845HS w/ Radeon 780M Graphics     
-BenchmarkEncodeDNSNameV1   	 1200235	        99.45 ns/op	     112 B/op	       2 allocs/op
-BenchmarkEncodeDNSNameV1   	 1211101	        99.01 ns/op	     112 B/op	       2 allocs/op
-BenchmarkEncodeDNSNameV1   	 1222554	        98.12 ns/op	     112 B/op	       2 allocs/op
-BenchmarkDecodeDNSNameV1   	  855961	       158.7 ns/op	     136 B/op	       3 allocs/op
-BenchmarkDecodeDNSNameV1   	  707636	       155.3 ns/op	     136 B/op	       3 allocs/op
-BenchmarkDecodeDNSNameV1   	  758497	       153.1 ns/op	     136 B/op	       3 allocs/op
-BenchmarkEncodeDNSQueryV1  	  659534	       205.6 ns/op	     224 B/op	       4 allocs/op
-BenchmarkEncodeDNSQueryV1  	  662845	       207.4 ns/op	     224 B/op	       4 allocs/op
-BenchmarkEncodeDNSQueryV1  	  672986	       201.4 ns/op	     224 B/op	       4 allocs/op
-BenchmarkDecodeDNSQueryV1  	  542283	       251.0 ns/op	     248 B/op	       5 allocs/op
-BenchmarkDecodeDNSQueryV1  	  540210	       247.5 ns/op	     248 B/op	       5 allocs/op
-BenchmarkDecodeDNSQueryV1  	  543651	       249.2 ns/op	     248 B/op	       5 allocs/op
-BenchmarkCheckDNSResolveV1 	33773608	         3.630 ns/op	       0 B/op	       0 allocs/op
-BenchmarkCheckDNSResolveV1 	32860389	         3.643 ns/op	       0 B/op	       0 allocs/op
-BenchmarkCheckDNSResolveV1 	32578594	         3.758 ns/op	       0 B/op	       0 allocs/op
-BenchmarkEncodeDNSRecordV1/A         	  528394	       225.5 ns/op	     224 B/op	       4 allocs/op
-BenchmarkEncodeDNSRecordV1/A         	  624800	       215.2 ns/op	     224 B/op	       4 allocs/op
-BenchmarkEncodeDNSRecordV1/A         	  628021	       215.8 ns/op	     224 B/op	       4 allocs/op
-BenchmarkEncodeDNSRecordV1/AAAA      	  600595	       224.6 ns/op	     224 B/op	       4 allocs/op
-BenchmarkEncodeDNSRecordV1/AAAA      	  602365	       222.6 ns/op	     224 B/op	       4 allocs/op
-BenchmarkEncodeDNSRecordV1/AAAA      	  595650	       224.0 ns/op	     224 B/op	       4 allocs/op
-BenchmarkEncodeDNSRecordV1/CNAME     	  338415	       381.7 ns/op	     416 B/op	       8 allocs/op
-BenchmarkEncodeDNSRecordV1/CNAME     	  314916	       386.2 ns/op	     416 B/op	       8 allocs/op
-BenchmarkEncodeDNSRecordV1/CNAME     	  326990	       377.9 ns/op	     416 B/op	       8 allocs/op
+cpu: AMD Ryzen 7 8845HS w/ Radeon 780M Graphics
+BenchmarkEncodeDNSNameV1              	 6251847	        38.41 ns/op	       0 B/op	       0 allocs/op
+BenchmarkEncodeDNSNameV1              	 6168799	        38.70 ns/op	       0 B/op	       0 allocs/op
+BenchmarkEncodeDNSNameV1              	 6156373	        38.74 ns/op	       0 B/op	       0 allocs/op
+BenchmarkEncodeDNSNameV1              	 6124015	        39.10 ns/op	       0 B/op	       0 allocs/op
+BenchmarkEncodeDNSNameV1              	 6242695	        38.31 ns/op	       0 B/op	       0 allocs/op
+BenchmarkDecodeDNSNameV1              	 2395989	        95.76 ns/op	      24 B/op	       1 allocs/op
+BenchmarkDecodeDNSNameV1              	 2542344	        93.62 ns/op	      24 B/op	       1 allocs/op
+BenchmarkDecodeDNSNameV1              	 2592276	        93.38 ns/op	      24 B/op	       1 allocs/op
+BenchmarkDecodeDNSNameV1              	 2534688	        95.50 ns/op	      24 B/op	       1 allocs/op
+BenchmarkDecodeDNSNameV1              	 2355586	       117.0 ns/op	      24 B/op	       1 allocs/op
+BenchmarkEncodeDNSQueryV1             	 3140505	        72.86 ns/op	       0 B/op	       0 allocs/op
+BenchmarkEncodeDNSQueryV1             	 3204771	        76.67 ns/op	       0 B/op	       0 allocs/op
+BenchmarkEncodeDNSQueryV1             	 3274384	        74.21 ns/op	       0 B/op	       0 allocs/op
+BenchmarkEncodeDNSQueryV1             	 3831475	        68.26 ns/op	       0 B/op	       0 allocs/op
+BenchmarkEncodeDNSQueryV1             	 3656128	        74.06 ns/op	       0 B/op	       0 allocs/op
+BenchmarkDecodeDNSQueryV1             	 1000000	       202.5 ns/op	      24 B/op	       1 allocs/op
+BenchmarkDecodeDNSQueryV1             	 1261074	       190.4 ns/op	      24 B/op	       1 allocs/op
+BenchmarkDecodeDNSQueryV1             	 1000000	       203.0 ns/op	      24 B/op	       1 allocs/op
+BenchmarkDecodeDNSQueryV1             	 1272100	       186.4 ns/op	      24 B/op	       1 allocs/op
+BenchmarkDecodeDNSQueryV1             	 1459653	       155.4 ns/op	      24 B/op	       1 allocs/op
+BenchmarkDecodeDNSQueryV1InvalidTypes 	65113722	         3.811 ns/op	       0 B/op	       0 allocs/op
+BenchmarkDecodeDNSQueryV1InvalidTypes 	56746455	         3.909 ns/op	       0 B/op	       0 allocs/op
+BenchmarkDecodeDNSQueryV1InvalidTypes 	89848134	         4.465 ns/op	       0 B/op	       0 allocs/op
+BenchmarkDecodeDNSQueryV1InvalidTypes 	78157692	         4.911 ns/op	       0 B/op	       0 allocs/op
+BenchmarkDecodeDNSQueryV1InvalidTypes 	48069421	         4.602 ns/op	       0 B/op	       0 allocs/op
+BenchmarkCheckDNSResolveV1            	55253388	         4.374 ns/op	       0 B/op	       0 allocs/op
+BenchmarkCheckDNSResolveV1            	59846179	         5.565 ns/op	       0 B/op	       0 allocs/op
+BenchmarkCheckDNSResolveV1            	59908743	         4.792 ns/op	       0 B/op	       0 allocs/op
+BenchmarkCheckDNSResolveV1            	60803163	         6.114 ns/op	       0 B/op	       0 allocs/op
+BenchmarkCheckDNSResolveV1            	45333498	         6.036 ns/op	       0 B/op	       0 allocs/op
+BenchmarkEncodeDNSRecordV1/A          	 2072752	       115.5 ns/op	       0 B/op	       0 allocs/op
+BenchmarkEncodeDNSRecordV1/A          	 2587100	        96.60 ns/op	       0 B/op	       0 allocs/op
+BenchmarkEncodeDNSRecordV1/A          	 3600950	        60.19 ns/op	       0 B/op	       0 allocs/op
+BenchmarkEncodeDNSRecordV1/A          	 3554408	        70.51 ns/op	       0 B/op	       0 allocs/op
+BenchmarkEncodeDNSRecordV1/A          	 3581245	        61.38 ns/op	       0 B/op	       0 allocs/op
+BenchmarkEncodeDNSRecordV1/AAAA       	 3616614	        66.21 ns/op	       0 B/op	       0 allocs/op
+BenchmarkEncodeDNSRecordV1/AAAA       	 3705231	        67.07 ns/op	       0 B/op	       0 allocs/op
+BenchmarkEncodeDNSRecordV1/AAAA       	 3709599	        65.34 ns/op	       0 B/op	       0 allocs/op
+BenchmarkEncodeDNSRecordV1/AAAA       	 3558092	        67.15 ns/op	       0 B/op	       0 allocs/op
+BenchmarkEncodeDNSRecordV1/AAAA       	 3724240	        64.51 ns/op	       0 B/op	       0 allocs/op
+BenchmarkEncodeDNSRecordV1/CNAME      	 3486034	        67.35 ns/op	       0 B/op	       0 allocs/op
+BenchmarkEncodeDNSRecordV1/CNAME      	 3542653	        68.48 ns/op	       0 B/op	       0 allocs/op
+BenchmarkEncodeDNSRecordV1/CNAME      	 3500512	        67.04 ns/op	       0 B/op	       0 allocs/op
+BenchmarkEncodeDNSRecordV1/CNAME      	 3614102	        66.24 ns/op	       0 B/op	       0 allocs/op
+BenchmarkEncodeDNSRecordV1/CNAME      	 3618016	        66.39 ns/op	       0 B/op	       0 allocs/op
 PASS
-ok  	github.com/wago-org/net/internal/abi/dns	3.072s
+ok  	github.com/wago-org/net/internal/abi/dns	11.358s
+PASS
+ok  	github.com/wago-org/net/internal/abi/icmpv4	0.002s
+PASS
+ok  	github.com/wago-org/net/internal/abi/icmpv6	0.002s
+PASS
+ok  	github.com/wago-org/net/internal/abi/ipv6	0.002s
+PASS
+ok  	github.com/wago-org/net/internal/abi/linklocal4	0.002s
+PASS
+ok  	github.com/wago-org/net/internal/abi/mdns	0.002s
+PASS
+ok  	github.com/wago-org/net/internal/abi/ntp	0.002s
 goos: linux
 goarch: amd64
 pkg: github.com/wago-org/net/internal/abi/tcp
-cpu: AMD Ryzen 7 8845HS w/ Radeon 780M Graphics     
-BenchmarkCheckListenV1    	30719268	         3.732 ns/op	       0 B/op	       0 allocs/op
-BenchmarkCheckListenV1    	32905352	         3.690 ns/op	       0 B/op	       0 allocs/op
-BenchmarkCheckListenV1    	33288254	         3.616 ns/op	       0 B/op	       0 allocs/op
-BenchmarkCheckCreateV1    	33518054	         3.593 ns/op	       0 B/op	       0 allocs/op
-BenchmarkCheckCreateV1    	33511960	         3.609 ns/op	       0 B/op	       0 allocs/op
-BenchmarkCheckCreateV1    	33459157	         3.634 ns/op	       0 B/op	       0 allocs/op
-BenchmarkCheckIOV1        	33549128	         3.763 ns/op	       0 B/op	       0 allocs/op
-BenchmarkCheckIOV1        	32545390	         3.666 ns/op	       0 B/op	       0 allocs/op
-BenchmarkCheckIOV1        	33599854	         3.602 ns/op	       0 B/op	       0 allocs/op
-BenchmarkEncodeStreamV1   	 2795754	        42.44 ns/op	       0 B/op	       0 allocs/op
-BenchmarkEncodeStreamV1   	 2793061	        42.32 ns/op	       0 B/op	       0 allocs/op
-BenchmarkEncodeStreamV1   	 2777970	        42.59 ns/op	       0 B/op	       0 allocs/op
-BenchmarkEncodeIOResultV1 	23673565	         4.912 ns/op	       0 B/op	       0 allocs/op
-BenchmarkEncodeIOResultV1 	24533128	         4.887 ns/op	       0 B/op	       0 allocs/op
-BenchmarkEncodeIOResultV1 	24614556	         5.084 ns/op	       0 B/op	       0 allocs/op
+cpu: AMD Ryzen 7 8845HS w/ Radeon 780M Graphics
+BenchmarkCheckListenV1    	63278256	         3.923 ns/op	       0 B/op	       0 allocs/op
+BenchmarkCheckListenV1    	62477823	         4.276 ns/op	       0 B/op	       0 allocs/op
+BenchmarkCheckListenV1    	54323997	         4.016 ns/op	       0 B/op	       0 allocs/op
+BenchmarkCheckListenV1    	54953571	         4.039 ns/op	       0 B/op	       0 allocs/op
+BenchmarkCheckListenV1    	54640964	         3.938 ns/op	       0 B/op	       0 allocs/op
+BenchmarkCheckCreateV1    	62151031	         4.003 ns/op	       0 B/op	       0 allocs/op
+BenchmarkCheckCreateV1    	59745260	         3.849 ns/op	       0 B/op	       0 allocs/op
+BenchmarkCheckCreateV1    	63612994	         3.806 ns/op	       0 B/op	       0 allocs/op
+BenchmarkCheckCreateV1    	64800693	         3.795 ns/op	       0 B/op	       0 allocs/op
+BenchmarkCheckCreateV1    	64385626	         3.771 ns/op	       0 B/op	       0 allocs/op
+BenchmarkCheckIOV1        	64620476	         3.829 ns/op	       0 B/op	       0 allocs/op
+BenchmarkCheckIOV1        	62371926	         3.790 ns/op	       0 B/op	       0 allocs/op
+BenchmarkCheckIOV1        	63146793	         3.860 ns/op	       0 B/op	       0 allocs/op
+BenchmarkCheckIOV1        	64094175	         3.789 ns/op	       0 B/op	       0 allocs/op
+BenchmarkCheckIOV1        	63761649	         3.954 ns/op	       0 B/op	       0 allocs/op
+BenchmarkEncodeStreamV1   	 5359855	        44.51 ns/op	       0 B/op	       0 allocs/op
+BenchmarkEncodeStreamV1   	 5227183	        44.90 ns/op	       0 B/op	       0 allocs/op
+BenchmarkEncodeStreamV1   	 5450412	        44.20 ns/op	       0 B/op	       0 allocs/op
+BenchmarkEncodeStreamV1   	 5322241	        44.64 ns/op	       0 B/op	       0 allocs/op
+BenchmarkEncodeStreamV1   	 5362638	        44.88 ns/op	       0 B/op	       0 allocs/op
+BenchmarkEncodeIOResultV1 	45515706	         5.217 ns/op	       0 B/op	       0 allocs/op
+BenchmarkEncodeIOResultV1 	46103229	         5.210 ns/op	       0 B/op	       0 allocs/op
+BenchmarkEncodeIOResultV1 	46008405	         5.215 ns/op	       0 B/op	       0 allocs/op
+BenchmarkEncodeIOResultV1 	46150401	         5.205 ns/op	       0 B/op	       0 allocs/op
+BenchmarkEncodeIOResultV1 	46158123	         5.216 ns/op	       0 B/op	       0 allocs/op
 PASS
-ok  	github.com/wago-org/net/internal/abi/tcp	1.807s
+ok  	github.com/wago-org/net/internal/abi/tcp	6.002s
+PASS
+ok  	github.com/wago-org/net/internal/abi/tls	0.002s
 goos: linux
 goarch: amd64
 pkg: github.com/wago-org/net/internal/abi/udp
-cpu: AMD Ryzen 7 8845HS w/ Radeon 780M Graphics     
-BenchmarkEncodeReceiveResultV1 	 3921650	        29.67 ns/op	       0 B/op	       0 allocs/op
-BenchmarkEncodeReceiveResultV1 	 4103396	        28.74 ns/op	       0 B/op	       0 allocs/op
-BenchmarkEncodeReceiveResultV1 	 4222074	        28.75 ns/op	       0 B/op	       0 allocs/op
-BenchmarkValidReceiveFlagsV1   	96799797	         1.244 ns/op	       0 B/op	       0 allocs/op
-BenchmarkValidReceiveFlagsV1   	96809169	         1.241 ns/op	       0 B/op	       0 allocs/op
-BenchmarkValidReceiveFlagsV1   	96810652	         1.242 ns/op	       0 B/op	       0 allocs/op
+cpu: AMD Ryzen 7 8845HS w/ Radeon 780M Graphics
+BenchmarkEncodeReceiveResultV1 	 7615534	        30.46 ns/op	       0 B/op	       0 allocs/op
+BenchmarkEncodeReceiveResultV1 	 7905579	        30.81 ns/op	       0 B/op	       0 allocs/op
+BenchmarkEncodeReceiveResultV1 	 7982721	        30.80 ns/op	       0 B/op	       0 allocs/op
+BenchmarkEncodeReceiveResultV1 	 7799022	        31.50 ns/op	       0 B/op	       0 allocs/op
+BenchmarkEncodeReceiveResultV1 	 7396418	        31.91 ns/op	       0 B/op	       0 allocs/op
+BenchmarkValidReceiveFlagsV1   	174261891	         1.348 ns/op	       0 B/op	       0 allocs/op
+BenchmarkValidReceiveFlagsV1   	196241733	         1.188 ns/op	       0 B/op	       0 allocs/op
+BenchmarkValidReceiveFlagsV1   	210377793	         1.146 ns/op	       0 B/op	       0 allocs/op
+BenchmarkValidReceiveFlagsV1   	197570608	         1.218 ns/op	       0 B/op	       0 allocs/op
+BenchmarkValidReceiveFlagsV1   	210350596	         1.171 ns/op	       0 B/op	       0 allocs/op
 PASS
-ok  	github.com/wago-org/net/internal/abi/udp	0.719s
+ok  	github.com/wago-org/net/internal/abi/udp	2.404s
+goos: linux
+goarch: amd64
+pkg: github.com/wago-org/net/internal/backend/gotls
+cpu: AMD Ryzen 7 8845HS w/ Radeon 780M Graphics
+BenchmarkTLS13Handshake       	     168	   1450007 ns/op	  388362 B/op	     935 allocs/op
+BenchmarkTLS13Handshake       	     151	   1560362 ns/op	  388334 B/op	     934 allocs/op
+BenchmarkTLS13Handshake       	     159	   1486610 ns/op	  388333 B/op	     935 allocs/op
+BenchmarkTLS13Handshake       	     165	   1465373 ns/op	  388338 B/op	     935 allocs/op
+BenchmarkTLS13Handshake       	     170	   1403524 ns/op	  388316 B/op	     934 allocs/op
+BenchmarkByteRingSteadyState  	 1947772	       123.5 ns/op	33154.58 MB/s	       0 B/op	       0 allocs/op
+BenchmarkByteRingSteadyState  	 1918501	       126.6 ns/op	32366.09 MB/s	       0 B/op	       0 allocs/op
+BenchmarkByteRingSteadyState  	 1909830	       125.3 ns/op	32677.78 MB/s	       0 B/op	       0 allocs/op
+BenchmarkByteRingSteadyState  	 1895918	       125.8 ns/op	32554.41 MB/s	       0 B/op	       0 allocs/op
+BenchmarkByteRingSteadyState  	 1783285	       131.0 ns/op	31261.98 MB/s	       0 B/op	       0 allocs/op
+BenchmarkProfileAuthorization 	16095154	        15.04 ns/op	       0 B/op	       0 allocs/op
+BenchmarkProfileAuthorization 	15288358	        15.18 ns/op	       0 B/op	       0 allocs/op
+BenchmarkProfileAuthorization 	16094042	        15.11 ns/op	       0 B/op	       0 allocs/op
+BenchmarkProfileAuthorization 	16006172	        14.78 ns/op	       0 B/op	       0 allocs/op
+BenchmarkProfileAuthorization 	16251309	        14.70 ns/op	       0 B/op	       0 allocs/op
 PASS
-ok  	github.com/wago-org/net/internal/backend/lneto	0.003s
+ok  	github.com/wago-org/net/internal/backend/gotls	4.476s
+goos: linux
+goarch: amd64
+pkg: github.com/wago-org/net/internal/backend/lneto
+cpu: AMD Ryzen 7 8845HS w/ Radeon 780M Graphics
+BenchmarkDisabledNamespaceNew               	   77646	      2763 ns/op	   19080 B/op	      22 allocs/op
+BenchmarkDisabledNamespaceNew               	   83893	      2914 ns/op	   19080 B/op	      22 allocs/op
+BenchmarkDisabledNamespaceNew               	   81867	      2798 ns/op	   19080 B/op	      22 allocs/op
+BenchmarkDisabledNamespaceNew               	   83438	      2967 ns/op	   19080 B/op	      22 allocs/op
+BenchmarkDisabledNamespaceNew               	   68599	      3395 ns/op	   19080 B/op	      22 allocs/op
+BenchmarkDisabledNamespaceIdleEgress        	 3539074	        68.06 ns/op	       0 B/op	       0 allocs/op
+BenchmarkDisabledNamespaceIdleEgress        	 3725419	        63.86 ns/op	       0 B/op	       0 allocs/op
+BenchmarkDisabledNamespaceIdleEgress        	 3726730	        63.16 ns/op	       0 B/op	       0 allocs/op
+BenchmarkDisabledNamespaceIdleEgress        	 3786516	        63.40 ns/op	       0 B/op	       0 allocs/op
+BenchmarkDisabledNamespaceIdleEgress        	 3705325	        65.46 ns/op	       0 B/op	       0 allocs/op
+BenchmarkDisabledSelectiveAdaptersNew       	   79504	      2983 ns/op	   20104 B/op	      24 allocs/op
+BenchmarkDisabledSelectiveAdaptersNew       	   82244	      2880 ns/op	   20104 B/op	      24 allocs/op
+BenchmarkDisabledSelectiveAdaptersNew       	   85485	      2722 ns/op	   20104 B/op	      24 allocs/op
+BenchmarkDisabledSelectiveAdaptersNew       	   84267	      2897 ns/op	   20104 B/op	      24 allocs/op
+BenchmarkDisabledSelectiveAdaptersNew       	   79920	      2946 ns/op	   20104 B/op	      24 allocs/op
+BenchmarkInoperableIPv6SelectiveAdaptersNew 	   92533	      2721 ns/op	   19272 B/op	      21 allocs/op
+BenchmarkInoperableIPv6SelectiveAdaptersNew 	   90398	      2784 ns/op	   19272 B/op	      21 allocs/op
+BenchmarkInoperableIPv6SelectiveAdaptersNew 	   74104	      2841 ns/op	   19272 B/op	      21 allocs/op
+BenchmarkInoperableIPv6SelectiveAdaptersNew 	   87682	      2730 ns/op	   19272 B/op	      21 allocs/op
+BenchmarkInoperableIPv6SelectiveAdaptersNew 	   88692	      2665 ns/op	   19272 B/op	      21 allocs/op
+PASS
+ok  	github.com/wago-org/net/internal/backend/lneto	4.749s
 goos: linux
 goarch: amd64
 pkg: github.com/wago-org/net/internal/backend/lneto/core
-cpu: AMD Ryzen 7 8845HS w/ Radeon 780M Graphics     
-BenchmarkNamespaceReadiness              	 7266495	        16.48 ns/op	       0 B/op	       0 allocs/op
-BenchmarkNamespaceReadiness              	 7237586	        17.02 ns/op	       0 B/op	       0 allocs/op
-BenchmarkNamespaceReadiness              	 7193834	        17.05 ns/op	       0 B/op	       0 allocs/op
-BenchmarkUDPPortLeaseAcquireRelease      	 2306893	        51.68 ns/op	      16 B/op	       1 allocs/op
-BenchmarkUDPPortLeaseAcquireRelease      	 2278287	        52.67 ns/op	      16 B/op	       1 allocs/op
-BenchmarkUDPPortLeaseAcquireRelease      	 2299659	        52.19 ns/op	      16 B/op	       1 allocs/op
-BenchmarkUDPPortLeaseRangeAcquireRelease 	 2180472	        54.90 ns/op	      16 B/op	       1 allocs/op
-BenchmarkUDPPortLeaseRangeAcquireRelease 	 2261761	        53.01 ns/op	      16 B/op	       1 allocs/op
-BenchmarkUDPPortLeaseRangeAcquireRelease 	 2271927	        52.97 ns/op	      16 B/op	       1 allocs/op
-BenchmarkNamespaceTryServiceIdle         	 1865988	        65.50 ns/op	       0 B/op	       0 allocs/op
-BenchmarkNamespaceTryServiceIdle         	 1782538	        66.46 ns/op	       0 B/op	       0 allocs/op
-BenchmarkNamespaceTryServiceIdle         	 1883559	        63.45 ns/op	       0 B/op	       0 allocs/op
-BenchmarkNamespaceTryServiceIngress      	 2797405	        43.02 ns/op	1487.62 MB/s	       0 B/op	       0 allocs/op
-BenchmarkNamespaceTryServiceIngress      	 2809149	        42.86 ns/op	1493.24 MB/s	       0 B/op	       0 allocs/op
-BenchmarkNamespaceTryServiceIngress      	 2804272	        43.02 ns/op	1487.77 MB/s	       0 B/op	       0 allocs/op
-BenchmarkNamespaceTryServiceEgress       	 1891003	        63.35 ns/op	1010.23 MB/s	       0 B/op	       0 allocs/op
-BenchmarkNamespaceTryServiceEgress       	 1839196	        65.25 ns/op	 980.84 MB/s	       0 B/op	       0 allocs/op
-BenchmarkNamespaceTryServiceEgress       	 1908129	        63.74 ns/op	1004.12 MB/s	       0 B/op	       0 allocs/op
+cpu: AMD Ryzen 7 8845HS w/ Radeon 780M Graphics
+BenchmarkNamespaceReadiness              	13131252	        17.71 ns/op	       0 B/op	       0 allocs/op
+BenchmarkNamespaceReadiness              	13284121	        17.99 ns/op	       0 B/op	       0 allocs/op
+BenchmarkNamespaceReadiness              	12939955	        18.02 ns/op	       0 B/op	       0 allocs/op
+BenchmarkNamespaceReadiness              	13147374	        17.94 ns/op	       0 B/op	       0 allocs/op
+BenchmarkNamespaceReadiness              	13234801	        18.28 ns/op	       0 B/op	       0 allocs/op
+BenchmarkTCPPortLeaseAcquireRelease      	 5722969	        41.78 ns/op	       0 B/op	       0 allocs/op
+BenchmarkTCPPortLeaseAcquireRelease      	 5841398	        41.32 ns/op	       0 B/op	       0 allocs/op
+BenchmarkTCPPortLeaseAcquireRelease      	 5937788	        41.49 ns/op	       0 B/op	       0 allocs/op
+BenchmarkTCPPortLeaseAcquireRelease      	 5711863	        41.79 ns/op	       0 B/op	       0 allocs/op
+BenchmarkTCPPortLeaseAcquireRelease      	 5779488	        41.08 ns/op	       0 B/op	       0 allocs/op
+BenchmarkUDPPortLeaseAcquireRelease      	 5959047	        40.09 ns/op	       0 B/op	       0 allocs/op
+BenchmarkUDPPortLeaseAcquireRelease      	 6082256	        38.98 ns/op	       0 B/op	       0 allocs/op
+BenchmarkUDPPortLeaseAcquireRelease      	 5957348	        39.41 ns/op	       0 B/op	       0 allocs/op
+BenchmarkUDPPortLeaseAcquireRelease      	 6133761	        38.82 ns/op	       0 B/op	       0 allocs/op
+BenchmarkUDPPortLeaseAcquireRelease      	 6034567	        39.72 ns/op	       0 B/op	       0 allocs/op
+BenchmarkUDPPortLeaseRangeAcquireRelease 	 5938329	        40.74 ns/op	       0 B/op	       0 allocs/op
+BenchmarkUDPPortLeaseRangeAcquireRelease 	 5880410	        40.77 ns/op	       0 B/op	       0 allocs/op
+BenchmarkUDPPortLeaseRangeAcquireRelease 	 5878275	        40.92 ns/op	       0 B/op	       0 allocs/op
+BenchmarkUDPPortLeaseRangeAcquireRelease 	 5864758	        40.64 ns/op	       0 B/op	       0 allocs/op
+BenchmarkUDPPortLeaseRangeAcquireRelease 	 5648454	        42.23 ns/op	       0 B/op	       0 allocs/op
+BenchmarkNamespaceTryServiceIdle         	 3446570	        69.62 ns/op	       0 B/op	       0 allocs/op
+BenchmarkNamespaceTryServiceIdle         	 3329512	        72.29 ns/op	       0 B/op	       0 allocs/op
+BenchmarkNamespaceTryServiceIdle         	 3523622	        69.49 ns/op	       0 B/op	       0 allocs/op
+BenchmarkNamespaceTryServiceIdle         	 3513175	        71.17 ns/op	       0 B/op	       0 allocs/op
+BenchmarkNamespaceTryServiceIdle         	 3478729	        68.47 ns/op	       0 B/op	       0 allocs/op
+BenchmarkNamespaceTryServiceIngress      	 5172711	        47.24 ns/op	1354.80 MB/s	       0 B/op	       0 allocs/op
+BenchmarkNamespaceTryServiceIngress      	 5090018	        47.03 ns/op	1360.97 MB/s	       0 B/op	       0 allocs/op
+BenchmarkNamespaceTryServiceIngress      	 5096320	        47.05 ns/op	1360.29 MB/s	       0 B/op	       0 allocs/op
+BenchmarkNamespaceTryServiceIngress      	 5012775	        47.06 ns/op	1360.08 MB/s	       0 B/op	       0 allocs/op
+BenchmarkNamespaceTryServiceIngress      	 5132230	        46.78 ns/op	1368.23 MB/s	       0 B/op	       0 allocs/op
+BenchmarkNamespaceTryServiceEgress       	 2766464	        86.63 ns/op	 738.73 MB/s	       0 B/op	       0 allocs/op
+BenchmarkNamespaceTryServiceEgress       	 2845605	        85.74 ns/op	 746.46 MB/s	       0 B/op	       0 allocs/op
+BenchmarkNamespaceTryServiceEgress       	 2737712	        87.65 ns/op	 730.21 MB/s	       0 B/op	       0 allocs/op
+BenchmarkNamespaceTryServiceEgress       	 2718414	        87.25 ns/op	 733.48 MB/s	       0 B/op	       0 allocs/op
+BenchmarkNamespaceTryServiceEgress       	 2658606	        90.14 ns/op	 710.04 MB/s	       0 B/op	       0 allocs/op
 PASS
-ok  	github.com/wago-org/net/internal/backend/lneto/core	2.174s
+ok  	github.com/wago-org/net/internal/backend/lneto/core	8.398s
+goos: linux
+goarch: amd64
+pkg: github.com/wago-org/net/internal/backend/lneto/dhcpv4
+cpu: AMD Ryzen 7 8845HS w/ Radeon 780M Graphics
+BenchmarkClientLeaseSnapshot              	 2545568	        94.88 ns/op	       0 B/op	       0 allocs/op
+BenchmarkClientLeaseSnapshot              	 2502355	        96.67 ns/op	       0 B/op	       0 allocs/op
+BenchmarkClientLeaseSnapshot              	 2477162	        96.16 ns/op	       0 B/op	       0 allocs/op
+BenchmarkClientLeaseSnapshot              	 2492683	        94.94 ns/op	       0 B/op	       0 allocs/op
+BenchmarkClientLeaseSnapshot              	 2586579	        97.28 ns/op	       0 B/op	       0 allocs/op
+BenchmarkIngressDHCPv4DiscoverKnownClient 	 1000000	       220.7 ns/op	       0 B/op	       0 allocs/op
+BenchmarkIngressDHCPv4DiscoverKnownClient 	 1000000	       229.1 ns/op	       0 B/op	       0 allocs/op
+BenchmarkIngressDHCPv4DiscoverKnownClient 	 1000000	       219.6 ns/op	       0 B/op	       0 allocs/op
+BenchmarkIngressDHCPv4DiscoverKnownClient 	 1000000	       230.2 ns/op	       0 B/op	       0 allocs/op
+BenchmarkIngressDHCPv4DiscoverKnownClient 	 1000000	       225.7 ns/op	       0 B/op	       0 allocs/op
+BenchmarkIngressDHCPv4OfferWithoutLease   	 1750898	       136.7 ns/op	       0 B/op	       0 allocs/op
+BenchmarkIngressDHCPv4OfferWithoutLease   	 1750023	       137.2 ns/op	       0 B/op	       0 allocs/op
+BenchmarkIngressDHCPv4OfferWithoutLease   	 1740319	       138.3 ns/op	       0 B/op	       0 allocs/op
+BenchmarkIngressDHCPv4OfferWithoutLease   	 1714050	       139.7 ns/op	       0 B/op	       0 allocs/op
+BenchmarkIngressDHCPv4OfferWithoutLease   	 1730298	       138.7 ns/op	       0 B/op	       0 allocs/op
+BenchmarkClientKey                        	21191967	        11.54 ns/op	       0 B/op	       0 allocs/op
+BenchmarkClientKey                        	20427320	        11.71 ns/op	       0 B/op	       0 allocs/op
+BenchmarkClientKey                        	20109207	        11.60 ns/op	       0 B/op	       0 allocs/op
+BenchmarkClientKey                        	21185691	        11.35 ns/op	       0 B/op	       0 allocs/op
+BenchmarkClientKey                        	21502530	        11.21 ns/op	       0 B/op	       0 allocs/op
+BenchmarkServerClientIdentityCanonical    	22910584	        10.48 ns/op	       0 B/op	       0 allocs/op
+BenchmarkServerClientIdentityCanonical    	22682068	        10.55 ns/op	       0 B/op	       0 allocs/op
+BenchmarkServerClientIdentityCanonical    	22932298	        10.52 ns/op	       0 B/op	       0 allocs/op
+BenchmarkServerClientIdentityCanonical    	23037254	        10.50 ns/op	       0 B/op	       0 allocs/op
+BenchmarkServerClientIdentityCanonical    	23063514	        10.45 ns/op	       0 B/op	       0 allocs/op
+PASS
+ok  	github.com/wago-org/net/internal/backend/lneto/dhcpv4	5.947s
+goos: linux
+goarch: amd64
+pkg: github.com/wago-org/net/internal/backend/lneto/dhcpv6
+cpu: AMD Ryzen 7 8845HS w/ Radeon 780M Graphics
+BenchmarkInspectMessageReply    	  562644	       433.5 ns/op	       0 B/op	       0 allocs/op
+BenchmarkInspectMessageReply    	  561199	       428.6 ns/op	       0 B/op	       0 allocs/op
+BenchmarkInspectMessageReply    	  558394	       429.7 ns/op	       0 B/op	       0 allocs/op
+BenchmarkInspectMessageReply    	  558610	       436.8 ns/op	       0 B/op	       0 allocs/op
+BenchmarkInspectMessageReply    	  562714	       431.5 ns/op	       0 B/op	       0 allocs/op
+BenchmarkAdapterTryAcquireClose 	  293767	       816.6 ns/op	    6032 B/op	       8 allocs/op
+BenchmarkAdapterTryAcquireClose 	  298080	       814.9 ns/op	    6032 B/op	       8 allocs/op
+BenchmarkAdapterTryAcquireClose 	  282607	       846.1 ns/op	    6032 B/op	       8 allocs/op
+BenchmarkAdapterTryAcquireClose 	  295836	       845.4 ns/op	    6032 B/op	       8 allocs/op
+BenchmarkAdapterTryAcquireClose 	  301770	       830.0 ns/op	    6032 B/op	       8 allocs/op
+PASS
+ok  	github.com/wago-org/net/internal/backend/lneto/dhcpv6	2.439s
 goos: linux
 goarch: amd64
 pkg: github.com/wago-org/net/internal/backend/lneto/dns
-cpu: AMD Ryzen 7 8845HS w/ Radeon 780M Graphics     
-BenchmarkBuildDNSQueryPacket    	  717885	       166.6 ns/op	     152 B/op	       4 allocs/op
-BenchmarkBuildDNSQueryPacket    	  817274	       158.2 ns/op	     152 B/op	       4 allocs/op
-BenchmarkBuildDNSQueryPacket    	  830470	       158.1 ns/op	     152 B/op	       4 allocs/op
-BenchmarkDecodeDNSName          	 1237716	        97.19 ns/op	      56 B/op	       5 allocs/op
-BenchmarkDecodeDNSName          	 1242445	        96.24 ns/op	      56 B/op	       5 allocs/op
-BenchmarkDecodeDNSName          	 1296706	        93.20 ns/op	      56 B/op	       5 allocs/op
-BenchmarkParseDNSResponse       	  114644	      1096 ns/op	 178.84 MB/s	    1048 B/op	      37 allocs/op
-BenchmarkParseDNSResponse       	  114318	      1084 ns/op	 180.84 MB/s	    1048 B/op	      37 allocs/op
-BenchmarkParseDNSResponse       	  109394	      1101 ns/op	 178.02 MB/s	    1048 B/op	      37 allocs/op
-BenchmarkSelectDNSAnswers       	  265677	       445.7 ns/op	     592 B/op	       9 allocs/op
-BenchmarkSelectDNSAnswers       	  294342	       444.2 ns/op	     592 B/op	       9 allocs/op
-BenchmarkSelectDNSAnswers       	  276460	       447.7 ns/op	     592 B/op	       9 allocs/op
-BenchmarkAdapterTryResolveClose 	  144423	       837.7 ns/op	    1072 B/op	      17 allocs/op
-BenchmarkAdapterTryResolveClose 	  145504	       837.5 ns/op	    1072 B/op	      17 allocs/op
-BenchmarkAdapterTryResolveClose 	  144886	       841.8 ns/op	    1072 B/op	      17 allocs/op
-BenchmarkQueryTryNext           	 1301307	        93.16 ns/op	      80 B/op	       2 allocs/op
-BenchmarkQueryTryNext           	 1347962	        90.56 ns/op	      80 B/op	       2 allocs/op
-BenchmarkQueryTryNext           	 1345052	        89.07 ns/op	      80 B/op	       2 allocs/op
-BenchmarkQueryReadiness         	30038764	         4.050 ns/op	       0 B/op	       0 allocs/op
-BenchmarkQueryReadiness         	29675284	         4.065 ns/op	       0 B/op	       0 allocs/op
-BenchmarkQueryReadiness         	29095860	         4.175 ns/op	       0 B/op	       0 allocs/op
+cpu: AMD Ryzen 7 8845HS w/ Radeon 780M Graphics
+BenchmarkBuildDNSQueryPacket        	 2169969	       106.8 ns/op	      96 B/op	       1 allocs/op
+BenchmarkBuildDNSQueryPacket        	 2271888	       106.1 ns/op	      96 B/op	       1 allocs/op
+BenchmarkBuildDNSQueryPacket        	 2160630	       109.5 ns/op	      96 B/op	       1 allocs/op
+BenchmarkBuildDNSQueryPacket        	 2156390	       115.0 ns/op	      96 B/op	       1 allocs/op
+BenchmarkBuildDNSQueryPacket        	 2096805	       114.8 ns/op	      96 B/op	       1 allocs/op
+BenchmarkBuildDNSQueryPacketInto    	 2594372	        91.40 ns/op	       0 B/op	       0 allocs/op
+BenchmarkBuildDNSQueryPacketInto    	 2746986	        88.67 ns/op	       0 B/op	       0 allocs/op
+BenchmarkBuildDNSQueryPacketInto    	 2755065	        87.31 ns/op	       0 B/op	       0 allocs/op
+BenchmarkBuildDNSQueryPacketInto    	 2777137	        87.11 ns/op	       0 B/op	       0 allocs/op
+BenchmarkBuildDNSQueryPacketInto    	 2783256	        88.74 ns/op	       0 B/op	       0 allocs/op
+BenchmarkDecodeDNSName              	 5994928	        39.28 ns/op	      24 B/op	       1 allocs/op
+BenchmarkDecodeDNSName              	 6648260	        37.97 ns/op	      24 B/op	       1 allocs/op
+BenchmarkDecodeDNSName              	 6267984	        37.68 ns/op	      24 B/op	       1 allocs/op
+BenchmarkDecodeDNSName              	 6646744	        37.62 ns/op	      24 B/op	       1 allocs/op
+BenchmarkDecodeDNSName              	 6438058	        37.95 ns/op	      24 B/op	       1 allocs/op
+BenchmarkDecodeDNSNameInto          	11556474	        20.22 ns/op	       0 B/op	       0 allocs/op
+BenchmarkDecodeDNSNameInto          	11011551	        20.15 ns/op	       0 B/op	       0 allocs/op
+BenchmarkDecodeDNSNameInto          	12738272	        20.96 ns/op	       0 B/op	       0 allocs/op
+BenchmarkDecodeDNSNameInto          	11541429	        21.37 ns/op	       0 B/op	       0 allocs/op
+BenchmarkDecodeDNSNameInto          	12455689	        21.60 ns/op	       0 B/op	       0 allocs/op
+BenchmarkParseDNSResponse           	  685882	       364.9 ns/op	 537.13 MB/s	      16 B/op	       1 allocs/op
+BenchmarkParseDNSResponse           	  683925	       357.3 ns/op	 548.55 MB/s	      16 B/op	       1 allocs/op
+BenchmarkParseDNSResponse           	  703381	       357.9 ns/op	 547.58 MB/s	      16 B/op	       1 allocs/op
+BenchmarkParseDNSResponse           	  692847	       372.2 ns/op	 526.64 MB/s	      16 B/op	       1 allocs/op
+BenchmarkParseDNSResponse           	  698078	       359.8 ns/op	 544.76 MB/s	      16 B/op	       1 allocs/op
+BenchmarkParseDNSResponseShapes/cname_depth=0         	 1000000	       205.3 ns/op	 662.54 MB/s	       0 B/op	       0 allocs/op
+BenchmarkParseDNSResponseShapes/cname_depth=0         	 1221769	       196.7 ns/op	 691.38 MB/s	       0 B/op	       0 allocs/op
+BenchmarkParseDNSResponseShapes/cname_depth=0         	 1000000	       202.8 ns/op	 670.76 MB/s	       0 B/op	       0 allocs/op
+BenchmarkParseDNSResponseShapes/cname_depth=0         	 1243081	       192.3 ns/op	 707.14 MB/s	       0 B/op	       0 allocs/op
+BenchmarkParseDNSResponseShapes/cname_depth=0         	 1264194	       190.1 ns/op	 715.48 MB/s	       0 B/op	       0 allocs/op
+BenchmarkParseDNSResponseShapes/cname_depth=1         	  734708	       352.9 ns/op	 538.38 MB/s	      24 B/op	       1 allocs/op
+BenchmarkParseDNSResponseShapes/cname_depth=1         	  693290	       360.4 ns/op	 527.17 MB/s	      24 B/op	       1 allocs/op
+BenchmarkParseDNSResponseShapes/cname_depth=1         	  748588	       353.6 ns/op	 537.33 MB/s	      24 B/op	       1 allocs/op
+BenchmarkParseDNSResponseShapes/cname_depth=1         	  698911	       355.6 ns/op	 534.33 MB/s	      24 B/op	       1 allocs/op
+BenchmarkParseDNSResponseShapes/cname_depth=1         	  750355	       347.0 ns/op	 547.54 MB/s	      24 B/op	       1 allocs/op
+BenchmarkParseDNSResponseShapes/cname_depth=4         	  282171	       867.2 ns/op	 398.99 MB/s	      96 B/op	       4 allocs/op
+BenchmarkParseDNSResponseShapes/cname_depth=4         	  286837	       873.0 ns/op	 396.36 MB/s	      96 B/op	       4 allocs/op
+BenchmarkParseDNSResponseShapes/cname_depth=4         	  281518	       879.2 ns/op	 393.54 MB/s	      96 B/op	       4 allocs/op
+BenchmarkParseDNSResponseShapes/cname_depth=4         	  298249	       899.2 ns/op	 384.80 MB/s	      96 B/op	       4 allocs/op
+BenchmarkParseDNSResponseShapes/cname_depth=4         	  284472	       925.1 ns/op	 374.02 MB/s	      96 B/op	       4 allocs/op
+BenchmarkSelectDNSAnswers                             	 1876046	       127.8 ns/op	       0 B/op	       0 allocs/op
+BenchmarkSelectDNSAnswers                             	 1883644	       127.6 ns/op	       0 B/op	       0 allocs/op
+BenchmarkSelectDNSAnswers                             	 1850636	       128.9 ns/op	       0 B/op	       0 allocs/op
+BenchmarkSelectDNSAnswers                             	 1858909	       129.0 ns/op	       0 B/op	       0 allocs/op
+BenchmarkSelectDNSAnswers                             	 1865488	       128.6 ns/op	       0 B/op	       0 allocs/op
+BenchmarkIngressDNSResponseMismatch                   	 2141038	       112.2 ns/op	1961.09 MB/s	       0 B/op	       0 allocs/op
+BenchmarkIngressDNSResponseMismatch                   	 2152546	       111.2 ns/op	1979.22 MB/s	       0 B/op	       0 allocs/op
+BenchmarkIngressDNSResponseMismatch                   	 2192304	       110.2 ns/op	1995.95 MB/s	       0 B/op	       0 allocs/op
+BenchmarkIngressDNSResponseMismatch                   	 2165948	       110.5 ns/op	1990.15 MB/s	       0 B/op	       0 allocs/op
+BenchmarkIngressDNSResponseMismatch                   	 2163200	       110.6 ns/op	1989.95 MB/s	       0 B/op	       0 allocs/op
+BenchmarkAdapterTryResolveClose                       	  412326	       581.4 ns/op	    1792 B/op	       1 allocs/op
+BenchmarkAdapterTryResolveClose                       	  418827	       569.9 ns/op	    1792 B/op	       1 allocs/op
+BenchmarkAdapterTryResolveClose                       	  443460	       572.6 ns/op	    1792 B/op	       1 allocs/op
+BenchmarkAdapterTryResolveClose                       	  440457	       566.3 ns/op	    1792 B/op	       1 allocs/op
+BenchmarkAdapterTryResolveClose                       	  402972	       572.6 ns/op	    1792 B/op	       1 allocs/op
+BenchmarkQueryTryNext                                 	 8738504	        26.51 ns/op	       0 B/op	       0 allocs/op
+BenchmarkQueryTryNext                                 	 9040041	        26.36 ns/op	       0 B/op	       0 allocs/op
+BenchmarkQueryTryNext                                 	 9036512	        26.28 ns/op	       0 B/op	       0 allocs/op
+BenchmarkQueryTryNext                                 	 9146250	        26.83 ns/op	       0 B/op	       0 allocs/op
+BenchmarkQueryTryNext                                 	 8999244	        26.86 ns/op	       0 B/op	       0 allocs/op
+BenchmarkQueryReadiness                               	55993378	         4.252 ns/op	       0 B/op	       0 allocs/op
+BenchmarkQueryReadiness                               	57463089	         4.218 ns/op	       0 B/op	       0 allocs/op
+BenchmarkQueryReadiness                               	56698998	         4.288 ns/op	       0 B/op	       0 allocs/op
+BenchmarkQueryReadiness                               	57659097	         4.173 ns/op	       0 B/op	       0 allocs/op
+BenchmarkQueryReadiness                               	56515068	         4.267 ns/op	       0 B/op	       0 allocs/op
 PASS
-ok  	github.com/wago-org/net/internal/backend/lneto/dns	2.582s
+ok  	github.com/wago-org/net/internal/backend/lneto/dns	15.835s
+goos: linux
+goarch: amd64
+pkg: github.com/wago-org/net/internal/backend/lneto/icmpv4
+cpu: AMD Ryzen 7 8845HS w/ Radeon 780M Graphics
+BenchmarkIngressEchoReply 	 4534207	        52.69 ns/op	       0 B/op	       0 allocs/op
+BenchmarkIngressEchoReply 	 4572520	        52.71 ns/op	       0 B/op	       0 allocs/op
+BenchmarkIngressEchoReply 	 4551900	        53.45 ns/op	       0 B/op	       0 allocs/op
+BenchmarkIngressEchoReply 	 4411831	        53.55 ns/op	       0 B/op	       0 allocs/op
+BenchmarkIngressEchoReply 	 4547156	        52.82 ns/op	       0 B/op	       0 allocs/op
+PASS
+ok  	github.com/wago-org/net/internal/backend/lneto/icmpv4	1.204s
+PASS
+ok  	github.com/wago-org/net/internal/backend/lneto/icmpv6	0.002s
+goos: linux
+goarch: amd64
+pkg: github.com/wago-org/net/internal/backend/lneto/ipv6
+cpu: AMD Ryzen 7 8845HS w/ Radeon 780M Graphics
+BenchmarkIngressLocked/accepted         	21885508	        10.71 ns/op	       0 B/op	       0 allocs/op
+BenchmarkIngressLocked/accepted         	22595227	        10.69 ns/op	       0 B/op	       0 allocs/op
+BenchmarkIngressLocked/accepted         	23338298	        10.63 ns/op	       0 B/op	       0 allocs/op
+BenchmarkIngressLocked/accepted         	22343670	        10.67 ns/op	       0 B/op	       0 allocs/op
+BenchmarkIngressLocked/accepted         	22323285	        10.67 ns/op	       0 B/op	       0 allocs/op
+BenchmarkIngressLocked/dropped          	60897321	         3.944 ns/op	       0 B/op	       0 allocs/op
+BenchmarkIngressLocked/dropped          	60773401	         3.945 ns/op	       0 B/op	       0 allocs/op
+BenchmarkIngressLocked/dropped          	60376977	         4.050 ns/op	       0 B/op	       0 allocs/op
+BenchmarkIngressLocked/dropped          	58172128	         3.975 ns/op	       0 B/op	       0 allocs/op
+BenchmarkIngressLocked/dropped          	60970017	         3.956 ns/op	       0 B/op	       0 allocs/op
+PASS
+ok  	github.com/wago-org/net/internal/backend/lneto/ipv6	2.402s
+goos: linux
+goarch: amd64
+pkg: github.com/wago-org/net/internal/backend/lneto/linklocal4
+cpu: AMD Ryzen 7 8845HS w/ Radeon 780M Graphics
+BenchmarkIngressUnrelatedARP 	 6492644	        36.38 ns/op	       0 B/op	       0 allocs/op
+BenchmarkIngressUnrelatedARP 	 6684860	        37.11 ns/op	       0 B/op	       0 allocs/op
+BenchmarkIngressUnrelatedARP 	 6681664	        35.78 ns/op	       0 B/op	       0 allocs/op
+BenchmarkIngressUnrelatedARP 	 6775267	        35.43 ns/op	       0 B/op	       0 allocs/op
+BenchmarkIngressUnrelatedARP 	 6846150	        35.02 ns/op	       0 B/op	       0 allocs/op
+PASS
+ok  	github.com/wago-org/net/internal/backend/lneto/linklocal4	1.207s
+goos: linux
+goarch: amd64
+pkg: github.com/wago-org/net/internal/backend/lneto/mdns
+cpu: AMD Ryzen 7 8845HS w/ Radeon 780M Graphics
+BenchmarkMDNSCancelClose/Query    	  298740	       801.6 ns/op	    4608 B/op	       7 allocs/op
+BenchmarkMDNSCancelClose/Query    	  299650	       794.3 ns/op	    4608 B/op	       7 allocs/op
+BenchmarkMDNSCancelClose/Query    	  310749	       800.0 ns/op	    4608 B/op	       7 allocs/op
+BenchmarkMDNSCancelClose/Query    	  281428	       810.0 ns/op	    4608 B/op	       7 allocs/op
+BenchmarkMDNSCancelClose/Query    	  294980	       801.1 ns/op	    4608 B/op	       7 allocs/op
+BenchmarkMDNSCancelClose/Announcement         	  195580	      1208 ns/op	    2392 B/op	      21 allocs/op
+BenchmarkMDNSCancelClose/Announcement         	  172515	      1224 ns/op	    2392 B/op	      21 allocs/op
+BenchmarkMDNSCancelClose/Announcement         	  199190	      1213 ns/op	    2392 B/op	      21 allocs/op
+BenchmarkMDNSCancelClose/Announcement         	  204666	      1189 ns/op	    2392 B/op	      21 allocs/op
+BenchmarkMDNSCancelClose/Announcement         	  199663	      1181 ns/op	    2392 B/op	      21 allocs/op
+BenchmarkMDNSCanceledTerminal/Readiness       	55317536	         4.379 ns/op	       0 B/op	       0 allocs/op
+BenchmarkMDNSCanceledTerminal/Readiness       	55020985	         4.397 ns/op	       0 B/op	       0 allocs/op
+BenchmarkMDNSCanceledTerminal/Readiness       	54688252	         4.471 ns/op	       0 B/op	       0 allocs/op
+BenchmarkMDNSCanceledTerminal/Readiness       	54695842	         4.461 ns/op	       0 B/op	       0 allocs/op
+BenchmarkMDNSCanceledTerminal/Readiness       	54629882	         4.434 ns/op	       0 B/op	       0 allocs/op
+BenchmarkMDNSCanceledTerminal/TryNext         	 1893345	       126.1 ns/op	       0 B/op	       0 allocs/op
+BenchmarkMDNSCanceledTerminal/TryNext         	 1941712	       123.4 ns/op	       0 B/op	       0 allocs/op
+BenchmarkMDNSCanceledTerminal/TryNext         	 1883158	       127.4 ns/op	       0 B/op	       0 allocs/op
+BenchmarkMDNSCanceledTerminal/TryNext         	 1912698	       125.4 ns/op	       0 B/op	       0 allocs/op
+BenchmarkMDNSCanceledTerminal/TryNext         	 2005867	       120.2 ns/op	       0 B/op	       0 allocs/op
+BenchmarkIngressQueryResponse                 	  893238	       254.1 ns/op	      32 B/op	       2 allocs/op
+BenchmarkIngressQueryResponse                 	 1000000	       255.9 ns/op	      32 B/op	       2 allocs/op
+BenchmarkIngressQueryResponse                 	 1000000	       261.8 ns/op	      32 B/op	       2 allocs/op
+BenchmarkIngressQueryResponse                 	  998518	       264.1 ns/op	      32 B/op	       2 allocs/op
+BenchmarkIngressQueryResponse                 	 1000000	       264.3 ns/op	      32 B/op	       2 allocs/op
+BenchmarkIngressAutomaticResponse             	  479785	       538.7 ns/op	      48 B/op	       2 allocs/op
+BenchmarkIngressAutomaticResponse             	  463636	       543.0 ns/op	      48 B/op	       2 allocs/op
+BenchmarkIngressAutomaticResponse             	  475806	       546.7 ns/op	      48 B/op	       2 allocs/op
+BenchmarkIngressAutomaticResponse             	  473376	       544.4 ns/op	      48 B/op	       2 allocs/op
+BenchmarkIngressAutomaticResponse             	  475779	       542.3 ns/op	      48 B/op	       2 allocs/op
+PASS
+ok  	github.com/wago-org/net/internal/backend/lneto/mdns	7.343s
+goos: linux
+goarch: amd64
+pkg: github.com/wago-org/net/internal/backend/lneto/ntp
+cpu: AMD Ryzen 7 8845HS w/ Radeon 780M Graphics
+BenchmarkIngressNTPOriginMismatch 	 4213387	        56.27 ns/op	1599.42 MB/s	       0 B/op	       0 allocs/op
+BenchmarkIngressNTPOriginMismatch 	 4320789	        57.10 ns/op	1576.14 MB/s	       0 B/op	       0 allocs/op
+BenchmarkIngressNTPOriginMismatch 	 4252452	        55.83 ns/op	1612.10 MB/s	       0 B/op	       0 allocs/op
+BenchmarkIngressNTPOriginMismatch 	 4314910	        55.50 ns/op	1621.56 MB/s	       0 B/op	       0 allocs/op
+BenchmarkIngressNTPOriginMismatch 	 4366149	        55.01 ns/op	1636.09 MB/s	       0 B/op	       0 allocs/op
+PASS
+ok  	github.com/wago-org/net/internal/backend/lneto/ntp	1.205s
 goos: linux
 goarch: amd64
 pkg: github.com/wago-org/net/internal/backend/lneto/tcp
-cpu: AMD Ryzen 7 8845HS w/ Radeon 780M Graphics     
-BenchmarkAdapterTryListenClose          	  222396	       536.9 ns/op	    1792 B/op	      11 allocs/op
-BenchmarkAdapterTryListenClose          	  230596	       533.0 ns/op	    1792 B/op	      11 allocs/op
-BenchmarkAdapterTryListenClose          	  231078	       529.3 ns/op	    1792 B/op	      11 allocs/op
-BenchmarkTCPStreamFinishConnect         	21674025	         5.601 ns/op	       0 B/op	       0 allocs/op
-BenchmarkTCPStreamFinishConnect         	21269901	         5.414 ns/op	       0 B/op	       0 allocs/op
-BenchmarkTCPStreamFinishConnect         	22473820	         5.390 ns/op	       0 B/op	       0 allocs/op
-BenchmarkTCPStreamReadiness             	 8850498	        13.53 ns/op	       0 B/op	       0 allocs/op
-BenchmarkTCPStreamReadiness             	 8722258	        13.38 ns/op	       0 B/op	       0 allocs/op
-BenchmarkTCPStreamReadiness             	 8996958	        13.34 ns/op	       0 B/op	       0 allocs/op
-BenchmarkTCPListenerTryAcceptWouldBlock 	 5516802	        21.90 ns/op	       0 B/op	       0 allocs/op
-BenchmarkTCPListenerTryAcceptWouldBlock 	 5397654	        22.20 ns/op	       0 B/op	       0 allocs/op
-BenchmarkTCPListenerTryAcceptWouldBlock 	 5435038	        22.66 ns/op	       0 B/op	       0 allocs/op
-BenchmarkTCPStreamRoundTrip             	   88826	      1364 ns/op	  46.91 MB/s	       0 B/op	       0 allocs/op
-BenchmarkTCPStreamRoundTrip             	   90844	      1324 ns/op	  48.32 MB/s	       0 B/op	       0 allocs/op
-BenchmarkTCPStreamRoundTrip             	   90825	      1327 ns/op	  48.24 MB/s	       0 B/op	       0 allocs/op
+cpu: AMD Ryzen 7 8845HS w/ Radeon 780M Graphics
+BenchmarkAdapterNew                     	   71641	      3175 ns/op	   20512 B/op	      38 allocs/op
+BenchmarkAdapterNew                     	   77869	      3157 ns/op	   20512 B/op	      38 allocs/op
+BenchmarkAdapterNew                     	   71803	      3250 ns/op	   20512 B/op	      38 allocs/op
+BenchmarkAdapterNew                     	   73153	      3287 ns/op	   20512 B/op	      38 allocs/op
+BenchmarkAdapterNew                     	   75052	      3204 ns/op	   20512 B/op	      38 allocs/op
+BenchmarkAdapterTryListenClose          	  612730	       406.0 ns/op	     624 B/op	       3 allocs/op
+BenchmarkAdapterTryListenClose          	  603717	       400.9 ns/op	     624 B/op	       3 allocs/op
+BenchmarkAdapterTryListenClose          	  643995	       390.7 ns/op	     624 B/op	       3 allocs/op
+BenchmarkAdapterTryListenClose          	  660541	       444.1 ns/op	     624 B/op	       3 allocs/op
+BenchmarkAdapterTryListenClose          	  574057	       460.5 ns/op	     624 B/op	       3 allocs/op
+BenchmarkAdapterTryConnectClose         	  317335	       767.3 ns/op	    1128 B/op	       4 allocs/op
+BenchmarkAdapterTryConnectClose         	  344616	       804.7 ns/op	    1128 B/op	       4 allocs/op
+BenchmarkAdapterTryConnectClose         	  324460	       791.3 ns/op	    1128 B/op	       4 allocs/op
+BenchmarkAdapterTryConnectClose         	  320686	       794.1 ns/op	    1128 B/op	       4 allocs/op
+BenchmarkAdapterTryConnectClose         	  354525	       733.3 ns/op	    1128 B/op	       4 allocs/op
+BenchmarkOutboundStreamCountScaling/streams=1         	210258537	         1.139 ns/op	       0 B/op	       0 allocs/op
+BenchmarkOutboundStreamCountScaling/streams=1         	212355578	         1.130 ns/op	       0 B/op	       0 allocs/op
+BenchmarkOutboundStreamCountScaling/streams=1         	214871995	         1.127 ns/op	       0 B/op	       0 allocs/op
+BenchmarkOutboundStreamCountScaling/streams=1         	213064322	         1.125 ns/op	       0 B/op	       0 allocs/op
+BenchmarkOutboundStreamCountScaling/streams=1         	216399133	         1.115 ns/op	       0 B/op	       0 allocs/op
+BenchmarkOutboundStreamCountScaling/streams=16        	212826907	         1.130 ns/op	       0 B/op	       0 allocs/op
+BenchmarkOutboundStreamCountScaling/streams=16        	211542196	         1.124 ns/op	       0 B/op	       0 allocs/op
+BenchmarkOutboundStreamCountScaling/streams=16        	216708090	         1.109 ns/op	       0 B/op	       0 allocs/op
+BenchmarkOutboundStreamCountScaling/streams=16        	216201654	         1.109 ns/op	       0 B/op	       0 allocs/op
+BenchmarkOutboundStreamCountScaling/streams=16        	215584351	         1.123 ns/op	       0 B/op	       0 allocs/op
+BenchmarkOutboundStreamCountScaling/streams=256       	215901028	         1.111 ns/op	       0 B/op	       0 allocs/op
+BenchmarkOutboundStreamCountScaling/streams=256       	215148580	         1.119 ns/op	       0 B/op	       0 allocs/op
+BenchmarkOutboundStreamCountScaling/streams=256       	213374199	         1.125 ns/op	       0 B/op	       0 allocs/op
+BenchmarkOutboundStreamCountScaling/streams=256       	211576926	         1.120 ns/op	       0 B/op	       0 allocs/op
+BenchmarkOutboundStreamCountScaling/streams=256       	215364192	         1.116 ns/op	       0 B/op	       0 allocs/op
+BenchmarkIngressOwnedIPv4SYN                          	 4827012	        44.93 ns/op	1335.28 MB/s	       0 B/op	       0 allocs/op
+BenchmarkIngressOwnedIPv4SYN                          	 5655438	        42.27 ns/op	1419.38 MB/s	       0 B/op	       0 allocs/op
+BenchmarkIngressOwnedIPv4SYN                          	 5704256	        42.11 ns/op	1424.83 MB/s	       0 B/op	       0 allocs/op
+BenchmarkIngressOwnedIPv4SYN                          	 5679073	        42.11 ns/op	1424.69 MB/s	       0 B/op	       0 allocs/op
+BenchmarkIngressOwnedIPv4SYN                          	 5708450	        42.09 ns/op	1425.42 MB/s	       0 B/op	       0 allocs/op
+BenchmarkTCPStreamFinishConnect                       	37774894	         6.376 ns/op	       0 B/op	       0 allocs/op
+BenchmarkTCPStreamFinishConnect                       	39664064	         6.092 ns/op	       0 B/op	       0 allocs/op
+BenchmarkTCPStreamFinishConnect                       	39654279	         6.099 ns/op	       0 B/op	       0 allocs/op
+BenchmarkTCPStreamFinishConnect                       	40067634	         6.050 ns/op	       0 B/op	       0 allocs/op
+BenchmarkTCPStreamFinishConnect                       	39546981	         6.098 ns/op	       0 B/op	       0 allocs/op
+BenchmarkTCPStreamReadiness                           	16575345	        14.68 ns/op	       0 B/op	       0 allocs/op
+BenchmarkTCPStreamReadiness                           	16459462	        14.50 ns/op	       0 B/op	       0 allocs/op
+BenchmarkTCPStreamReadiness                           	16640539	        14.43 ns/op	       0 B/op	       0 allocs/op
+BenchmarkTCPStreamReadiness                           	16688545	        14.43 ns/op	       0 B/op	       0 allocs/op
+BenchmarkTCPStreamReadiness                           	16723380	        14.37 ns/op	       0 B/op	       0 allocs/op
+BenchmarkTCPListenerTryAcceptWouldBlock               	10086346	        24.12 ns/op	       0 B/op	       0 allocs/op
+BenchmarkTCPListenerTryAcceptWouldBlock               	 9858528	        24.16 ns/op	       0 B/op	       0 allocs/op
+BenchmarkTCPListenerTryAcceptWouldBlock               	10193588	        23.89 ns/op	       0 B/op	       0 allocs/op
+BenchmarkTCPListenerTryAcceptWouldBlock               	10054455	        23.83 ns/op	       0 B/op	       0 allocs/op
+BenchmarkTCPListenerTryAcceptWouldBlock               	10015486	        23.79 ns/op	       0 B/op	       0 allocs/op
+BenchmarkTCPStreamRoundTrip                           	  147307	      1580 ns/op	  40.51 MB/s	       0 B/op	       0 allocs/op
+BenchmarkTCPStreamRoundTrip                           	  151802	      1584 ns/op	  40.41 MB/s	       0 B/op	       0 allocs/op
+BenchmarkTCPStreamRoundTrip                           	  152025	      1581 ns/op	  40.48 MB/s	       0 B/op	       0 allocs/op
+BenchmarkTCPStreamRoundTrip                           	  150421	      1617 ns/op	  39.57 MB/s	       0 B/op	       0 allocs/op
+BenchmarkTCPStreamRoundTrip                           	  148336	      1602 ns/op	  39.94 MB/s	       0 B/op	       0 allocs/op
 PASS
-ok  	github.com/wago-org/net/internal/backend/lneto/tcp	1.811s
+ok  	github.com/wago-org/net/internal/backend/lneto/tcp	13.385s
+PASS
+ok  	github.com/wago-org/net/internal/backend/lneto/tls	0.003s
 goos: linux
 goarch: amd64
 pkg: github.com/wago-org/net/internal/backend/lneto/udp
-cpu: AMD Ryzen 7 8845HS w/ Radeon 780M Graphics     
-BenchmarkAdapterTryBindClose       	  235717	       425.0 ns/op	     832 B/op	      12 allocs/op
-BenchmarkAdapterTryBindClose       	  291759	       425.4 ns/op	     832 B/op	      12 allocs/op
-BenchmarkAdapterTryBindClose       	  297116	       425.5 ns/op	     832 B/op	      12 allocs/op
-BenchmarkUDPSocketSendEgress       	  831704	       144.0 ns/op	 222.19 MB/s	       0 B/op	       0 allocs/op
-BenchmarkUDPSocketSendEgress       	  830292	       146.9 ns/op	 217.78 MB/s	       0 B/op	       0 allocs/op
-BenchmarkUDPSocketSendEgress       	  814394	       148.3 ns/op	 215.74 MB/s	       0 B/op	       0 allocs/op
-BenchmarkUDPSocketReceive          	 3481117	        34.14 ns/op	 937.35 MB/s	       0 B/op	       0 allocs/op
-BenchmarkUDPSocketReceive          	 3442696	        34.86 ns/op	 917.83 MB/s	       0 B/op	       0 allocs/op
-BenchmarkUDPSocketReceive          	 3547598	        33.69 ns/op	 949.79 MB/s	       0 B/op	       0 allocs/op
-BenchmarkUDPSocketReadiness        	27917169	         4.437 ns/op	       0 B/op	       0 allocs/op
-BenchmarkUDPSocketReadiness        	25419727	         4.404 ns/op	       0 B/op	       0 allocs/op
-BenchmarkUDPSocketReadiness        	27133231	         4.491 ns/op	       0 B/op	       0 allocs/op
-BenchmarkUDPDatagramQueueRoundTrip 	 6085543	        20.01 ns/op	       0 B/op	       0 allocs/op
-BenchmarkUDPDatagramQueueRoundTrip 	 5910685	        20.60 ns/op	       0 B/op	       0 allocs/op
-BenchmarkUDPDatagramQueueRoundTrip 	 5951505	        20.05 ns/op	       0 B/op	       0 allocs/op
+cpu: AMD Ryzen 7 8845HS w/ Radeon 780M Graphics
+BenchmarkNewSocketDatagramQueues        	  497004	       477.3 ns/op	    5088 B/op	       3 allocs/op
+BenchmarkNewSocketDatagramQueues        	  524091	       470.1 ns/op	    5088 B/op	       3 allocs/op
+BenchmarkNewSocketDatagramQueues        	  532338	       518.7 ns/op	    5088 B/op	       3 allocs/op
+BenchmarkNewSocketDatagramQueues        	  501781	       488.0 ns/op	    5088 B/op	       3 allocs/op
+BenchmarkNewSocketDatagramQueues        	  534858	       477.1 ns/op	    5088 B/op	       3 allocs/op
+BenchmarkAdapterTryBindClose            	  732710	       333.4 ns/op	     480 B/op	       1 allocs/op
+BenchmarkAdapterTryBindClose            	  772104	       338.0 ns/op	     480 B/op	       1 allocs/op
+BenchmarkAdapterTryBindClose            	  744522	       326.1 ns/op	     480 B/op	       1 allocs/op
+BenchmarkAdapterTryBindClose            	  797023	       325.9 ns/op	     480 B/op	       1 allocs/op
+BenchmarkAdapterTryBindClose            	  769968	       331.2 ns/op	     480 B/op	       1 allocs/op
+BenchmarkAdapterTryBindCloseZeroPayload 	  807308	       319.6 ns/op	     480 B/op	       1 allocs/op
+BenchmarkAdapterTryBindCloseZeroPayload 	  793143	       319.3 ns/op	     480 B/op	       1 allocs/op
+BenchmarkAdapterTryBindCloseZeroPayload 	  779331	       318.4 ns/op	     480 B/op	       1 allocs/op
+BenchmarkAdapterTryBindCloseZeroPayload 	  791532	       324.6 ns/op	     480 B/op	       1 allocs/op
+BenchmarkAdapterTryBindCloseZeroPayload 	  789745	       323.8 ns/op	     480 B/op	       1 allocs/op
+BenchmarkAdapterHasEgressScaling/sockets=1         	155040700	         1.546 ns/op	       0 B/op	       0 allocs/op
+BenchmarkAdapterHasEgressScaling/sockets=1         	155219732	         1.551 ns/op	       0 B/op	       0 allocs/op
+BenchmarkAdapterHasEgressScaling/sockets=1         	152412895	         1.571 ns/op	       0 B/op	       0 allocs/op
+BenchmarkAdapterHasEgressScaling/sockets=1         	153365301	         1.591 ns/op	       0 B/op	       0 allocs/op
+BenchmarkAdapterHasEgressScaling/sockets=1         	152820862	         1.574 ns/op	       0 B/op	       0 allocs/op
+BenchmarkAdapterHasEgressScaling/sockets=16        	34768503	         7.023 ns/op	       0 B/op	       0 allocs/op
+BenchmarkAdapterHasEgressScaling/sockets=16        	35113581	         6.962 ns/op	       0 B/op	       0 allocs/op
+BenchmarkAdapterHasEgressScaling/sockets=16        	35180365	         6.960 ns/op	       0 B/op	       0 allocs/op
+BenchmarkAdapterHasEgressScaling/sockets=16        	29620761	         7.098 ns/op	       0 B/op	       0 allocs/op
+BenchmarkAdapterHasEgressScaling/sockets=16        	35136103	         7.030 ns/op	       0 B/op	       0 allocs/op
+BenchmarkAdapterHasEgressScaling/sockets=256       	 1000000	       240.3 ns/op	       0 B/op	       0 allocs/op
+BenchmarkAdapterHasEgressScaling/sockets=256       	 1000000	       240.2 ns/op	       0 B/op	       0 allocs/op
+BenchmarkAdapterHasEgressScaling/sockets=256       	 1000000	       239.3 ns/op	       0 B/op	       0 allocs/op
+BenchmarkAdapterHasEgressScaling/sockets=256       	 1000000	       239.7 ns/op	       0 B/op	       0 allocs/op
+BenchmarkAdapterHasEgressScaling/sockets=256       	 1000000	       239.8 ns/op	       0 B/op	       0 allocs/op
+BenchmarkIngressUDPDatagram                        	 3870768	        62.05 ns/op	 515.71 MB/s	       0 B/op	       0 allocs/op
+BenchmarkIngressUDPDatagram                        	 3906321	        61.78 ns/op	 517.98 MB/s	       0 B/op	       0 allocs/op
+BenchmarkIngressUDPDatagram                        	 3945136	        61.42 ns/op	 521.02 MB/s	       0 B/op	       0 allocs/op
+BenchmarkIngressUDPDatagram                        	 3848374	        61.79 ns/op	 517.89 MB/s	       0 B/op	       0 allocs/op
+BenchmarkIngressUDPDatagram                        	 3912697	        60.95 ns/op	 525.04 MB/s	       0 B/op	       0 allocs/op
+BenchmarkUDPSocketSendEgress                       	 1408051	       170.9 ns/op	 187.20 MB/s	       0 B/op	       0 allocs/op
+BenchmarkUDPSocketSendEgress                       	 1396155	       172.5 ns/op	 185.50 MB/s	       0 B/op	       0 allocs/op
+BenchmarkUDPSocketSendEgress                       	 1387569	       172.1 ns/op	 185.89 MB/s	       0 B/op	       0 allocs/op
+BenchmarkUDPSocketSendEgress                       	 1390512	       171.8 ns/op	 186.21 MB/s	       0 B/op	       0 allocs/op
+BenchmarkUDPSocketSendEgress                       	 1396726	       171.5 ns/op	 186.64 MB/s	       0 B/op	       0 allocs/op
+BenchmarkUDPSocketReceive                          	 6524565	        35.49 ns/op	 901.77 MB/s	       0 B/op	       0 allocs/op
+BenchmarkUDPSocketReceive                          	 6182085	        35.69 ns/op	 896.58 MB/s	       0 B/op	       0 allocs/op
+BenchmarkUDPSocketReceive                          	 6827416	        35.47 ns/op	 902.20 MB/s	       0 B/op	       0 allocs/op
+BenchmarkUDPSocketReceive                          	 6756577	        35.54 ns/op	 900.45 MB/s	       0 B/op	       0 allocs/op
+BenchmarkUDPSocketReceive                          	 6792668	        36.05 ns/op	 887.76 MB/s	       0 B/op	       0 allocs/op
+BenchmarkUDPSocketReadiness                        	51180379	         5.000 ns/op	       0 B/op	       0 allocs/op
+BenchmarkUDPSocketReadiness                        	47118603	         4.999 ns/op	       0 B/op	       0 allocs/op
+BenchmarkUDPSocketReadiness                        	51275356	         4.970 ns/op	       0 B/op	       0 allocs/op
+BenchmarkUDPSocketReadiness                        	47323593	         4.961 ns/op	       0 B/op	       0 allocs/op
+BenchmarkUDPSocketReadiness                        	49705504	         4.806 ns/op	       0 B/op	       0 allocs/op
+BenchmarkUDPDatagramQueueRoundTrip                 	11309913	        20.62 ns/op	       0 B/op	       0 allocs/op
+BenchmarkUDPDatagramQueueRoundTrip                 	11831863	        20.33 ns/op	       0 B/op	       0 allocs/op
+BenchmarkUDPDatagramQueueRoundTrip                 	11581252	        20.45 ns/op	       0 B/op	       0 allocs/op
+BenchmarkUDPDatagramQueueRoundTrip                 	11724177	        20.58 ns/op	       0 B/op	       0 allocs/op
+BenchmarkUDPDatagramQueueRoundTrip                 	11720436	        20.36 ns/op	       0 B/op	       0 allocs/op
 PASS
-ok  	github.com/wago-org/net/internal/backend/lneto/udp	1.798s
-?   	github.com/wago-org/net/internal/binding/dns	[no test files]
-?   	github.com/wago-org/net/internal/binding/tcp	[no test files]
-?   	github.com/wago-org/net/internal/binding/udp	[no test files]
+ok  	github.com/wago-org/net/internal/backend/lneto/udp	13.398s
+goos: linux
+goarch: amd64
+pkg: github.com/wago-org/net/internal/binding/dhcpv4
+cpu: AMD Ryzen 7 8845HS w/ Radeon 780M Graphics
+BenchmarkResultBindingReady 	  888789	       274.6 ns/op	      32 B/op	       1 allocs/op
+BenchmarkResultBindingReady 	  851536	       276.7 ns/op	      32 B/op	       1 allocs/op
+BenchmarkResultBindingReady 	  933238	       273.4 ns/op	      32 B/op	       1 allocs/op
+BenchmarkResultBindingReady 	  921850	       273.7 ns/op	      32 B/op	       1 allocs/op
+BenchmarkResultBindingReady 	  925162	       273.4 ns/op	      32 B/op	       1 allocs/op
+PASS
+ok  	github.com/wago-org/net/internal/binding/dhcpv4	1.244s
+goos: linux
+goarch: amd64
+pkg: github.com/wago-org/net/internal/binding/dhcpv6
+cpu: AMD Ryzen 7 8845HS w/ Radeon 780M Graphics
+BenchmarkResultBindingReady 	  256330	       990.9 ns/op	      32 B/op	       1 allocs/op
+BenchmarkResultBindingReady 	  220318	       988.8 ns/op	      32 B/op	       1 allocs/op
+BenchmarkResultBindingReady 	  248402	       978.2 ns/op	      32 B/op	       1 allocs/op
+BenchmarkResultBindingReady 	  249601	      1012 ns/op	      32 B/op	       1 allocs/op
+BenchmarkResultBindingReady 	  257612	       971.5 ns/op	      32 B/op	       1 allocs/op
+PASS
+ok  	github.com/wago-org/net/internal/binding/dhcpv6	1.223s
+goos: linux
+goarch: amd64
+pkg: github.com/wago-org/net/internal/binding/dns
+cpu: AMD Ryzen 7 8845HS w/ Radeon 780M Graphics
+BenchmarkNextBindingReady 	 1651262	       145.7 ns/op	      32 B/op	       1 allocs/op
+BenchmarkNextBindingReady 	 1629159	       147.4 ns/op	      32 B/op	       1 allocs/op
+BenchmarkNextBindingReady 	 1586736	       150.2 ns/op	      32 B/op	       1 allocs/op
+BenchmarkNextBindingReady 	 1606071	       146.7 ns/op	      32 B/op	       1 allocs/op
+BenchmarkNextBindingReady 	 1622731	       149.4 ns/op	      32 B/op	       1 allocs/op
+PASS
+ok  	github.com/wago-org/net/internal/binding/dns	1.202s
+goos: linux
+goarch: amd64
+pkg: github.com/wago-org/net/internal/binding/icmpv4
+cpu: AMD Ryzen 7 8845HS w/ Radeon 780M Graphics
+BenchmarkResultBindingReady 	 2139440	       116.9 ns/op	2190.40 MB/s	      32 B/op	       1 allocs/op
+BenchmarkResultBindingReady 	 2041935	       117.9 ns/op	2171.80 MB/s	      32 B/op	       1 allocs/op
+BenchmarkResultBindingReady 	 2051193	       117.0 ns/op	2188.88 MB/s	      32 B/op	       1 allocs/op
+BenchmarkResultBindingReady 	 1900154	       127.0 ns/op	2015.90 MB/s	      32 B/op	       1 allocs/op
+BenchmarkResultBindingReady 	 1961048	       120.5 ns/op	2124.88 MB/s	      32 B/op	       1 allocs/op
+PASS
+ok  	github.com/wago-org/net/internal/binding/icmpv4	1.213s
+goos: linux
+goarch: amd64
+pkg: github.com/wago-org/net/internal/binding/icmpv6
+cpu: AMD Ryzen 7 8845HS w/ Radeon 780M Graphics
+BenchmarkEchoResultBindingReady     	 1607619	       148.7 ns/op	1722.09 MB/s	      32 B/op	       1 allocs/op
+BenchmarkEchoResultBindingReady     	 1630735	       145.7 ns/op	1756.98 MB/s	      32 B/op	       1 allocs/op
+BenchmarkEchoResultBindingReady     	 1650000	       145.8 ns/op	1755.28 MB/s	      32 B/op	       1 allocs/op
+BenchmarkEchoResultBindingReady     	 1661337	       144.6 ns/op	1770.76 MB/s	      32 B/op	       1 allocs/op
+BenchmarkEchoResultBindingReady     	 1649373	       144.6 ns/op	1771.01 MB/s	      32 B/op	       1 allocs/op
+BenchmarkNeighborResultBindingReady 	 2158419	       111.3 ns/op	      32 B/op	       1 allocs/op
+BenchmarkNeighborResultBindingReady 	 2144400	       111.9 ns/op	      32 B/op	       1 allocs/op
+BenchmarkNeighborResultBindingReady 	 2168026	       110.7 ns/op	      32 B/op	       1 allocs/op
+BenchmarkNeighborResultBindingReady 	 2175771	       110.5 ns/op	      32 B/op	       1 allocs/op
+BenchmarkNeighborResultBindingReady 	 2168119	       110.8 ns/op	      32 B/op	       1 allocs/op
+PASS
+ok  	github.com/wago-org/net/internal/binding/icmpv6	2.402s
+goos: linux
+goarch: amd64
+pkg: github.com/wago-org/net/internal/binding/ipv6
+cpu: AMD Ryzen 7 8845HS w/ Radeon 780M Graphics
+BenchmarkConfigurationBinding 	 1830603	       132.1 ns/op	      32 B/op	       1 allocs/op
+BenchmarkConfigurationBinding 	 1795969	       133.6 ns/op	      32 B/op	       1 allocs/op
+BenchmarkConfigurationBinding 	 1803454	       133.8 ns/op	      32 B/op	       1 allocs/op
+BenchmarkConfigurationBinding 	 1701675	       142.2 ns/op	      32 B/op	       1 allocs/op
+BenchmarkConfigurationBinding 	 1736118	       138.1 ns/op	      32 B/op	       1 allocs/op
+PASS
+ok  	github.com/wago-org/net/internal/binding/ipv6	1.209s
+goos: linux
+goarch: amd64
+pkg: github.com/wago-org/net/internal/binding/linklocal4
+cpu: AMD Ryzen 7 8845HS w/ Radeon 780M Graphics
+BenchmarkResultBindingReady 	 2349568	       102.3 ns/op	      32 B/op	       1 allocs/op
+BenchmarkResultBindingReady 	 2258541	       105.2 ns/op	      32 B/op	       1 allocs/op
+BenchmarkResultBindingReady 	 2377591	       107.6 ns/op	      32 B/op	       1 allocs/op
+BenchmarkResultBindingReady 	 2207083	       105.2 ns/op	      32 B/op	       1 allocs/op
+BenchmarkResultBindingReady 	 1995594	       110.8 ns/op	      32 B/op	       1 allocs/op
+PASS
+ok  	github.com/wago-org/net/internal/binding/linklocal4	1.191s
+goos: linux
+goarch: amd64
+pkg: github.com/wago-org/net/internal/binding/mdns
+cpu: AMD Ryzen 7 8845HS w/ Radeon 780M Graphics
+BenchmarkFinishAnnouncementBindingReady 	 4631517	        52.50 ns/op	      32 B/op	       1 allocs/op
+BenchmarkFinishAnnouncementBindingReady 	 4520434	        52.38 ns/op	      32 B/op	       1 allocs/op
+BenchmarkFinishAnnouncementBindingReady 	 4458600	        52.79 ns/op	      32 B/op	       1 allocs/op
+BenchmarkFinishAnnouncementBindingReady 	 4654059	        52.76 ns/op	      32 B/op	       1 allocs/op
+BenchmarkFinishAnnouncementBindingReady 	 4568677	        52.85 ns/op	      32 B/op	       1 allocs/op
+BenchmarkNextBindingReady               	 1469472	       163.7 ns/op	      32 B/op	       1 allocs/op
+BenchmarkNextBindingReady               	 1456212	       165.1 ns/op	      32 B/op	       1 allocs/op
+BenchmarkNextBindingReady               	 1484193	       162.1 ns/op	      32 B/op	       1 allocs/op
+BenchmarkNextBindingReady               	 1476711	       162.0 ns/op	      32 B/op	       1 allocs/op
+BenchmarkNextBindingReady               	 1462644	       164.0 ns/op	      32 B/op	       1 allocs/op
+PASS
+ok  	github.com/wago-org/net/internal/binding/mdns	2.408s
+goos: linux
+goarch: amd64
+pkg: github.com/wago-org/net/internal/binding/ntp
+cpu: AMD Ryzen 7 8845HS w/ Radeon 780M Graphics
+BenchmarkResultBindingReady 	 2381688	       101.5 ns/op	      32 B/op	       1 allocs/op
+BenchmarkResultBindingReady 	 2375668	       101.0 ns/op	      32 B/op	       1 allocs/op
+BenchmarkResultBindingReady 	 2371094	       101.2 ns/op	      32 B/op	       1 allocs/op
+BenchmarkResultBindingReady 	 2360299	       102.8 ns/op	      32 B/op	       1 allocs/op
+BenchmarkResultBindingReady 	 2232237	       103.9 ns/op	      32 B/op	       1 allocs/op
+PASS
+ok  	github.com/wago-org/net/internal/binding/ntp	1.200s
+goos: linux
+goarch: amd64
+pkg: github.com/wago-org/net/internal/binding/tcp
+cpu: AMD Ryzen 7 8845HS w/ Radeon 780M Graphics
+BenchmarkReadBindingReady 	 3151362	        76.24 ns/op	3357.78 MB/s	      32 B/op	       1 allocs/op
+BenchmarkReadBindingReady 	 3119486	        76.71 ns/op	3337.07 MB/s	      32 B/op	       1 allocs/op
+BenchmarkReadBindingReady 	 3176989	        75.81 ns/op	3376.71 MB/s	      32 B/op	       1 allocs/op
+BenchmarkReadBindingReady 	 3060416	        77.15 ns/op	3318.15 MB/s	      32 B/op	       1 allocs/op
+BenchmarkReadBindingReady 	 3098376	        76.18 ns/op	3360.63 MB/s	      32 B/op	       1 allocs/op
+PASS
+ok  	github.com/wago-org/net/internal/binding/tcp	1.196s
+PASS
+ok  	github.com/wago-org/net/internal/binding/tls	0.002s
+goos: linux
+goarch: amd64
+pkg: github.com/wago-org/net/internal/binding/udp
+cpu: AMD Ryzen 7 8845HS w/ Radeon 780M Graphics
+BenchmarkReceiveBindingReady 	 2209227	       109.9 ns/op	2330.00 MB/s	      32 B/op	       1 allocs/op
+BenchmarkReceiveBindingReady 	 2129697	       111.7 ns/op	2291.09 MB/s	      32 B/op	       1 allocs/op
+BenchmarkReceiveBindingReady 	 2158386	       111.0 ns/op	2305.45 MB/s	      32 B/op	       1 allocs/op
+BenchmarkReceiveBindingReady 	 2183852	       109.6 ns/op	2334.71 MB/s	      32 B/op	       1 allocs/op
+BenchmarkReceiveBindingReady 	 2202180	       109.8 ns/op	2332.16 MB/s	      32 B/op	       1 allocs/op
+PASS
+ok  	github.com/wago-org/net/internal/binding/udp	1.205s
+PASS
+ok  	github.com/wago-org/net/internal/checked	0.002s
 ?   	github.com/wago-org/net/internal/cmd/release-provenance	[no test files]
 ?   	github.com/wago-org/net/internal/cmd/release-review	[no test files]
 ?   	github.com/wago-org/net/internal/cmd/release-source-objects	[no test files]
 PASS
-ok  	github.com/wago-org/net/internal/dependencytest	0.003s
+ok  	github.com/wago-org/net/internal/dependencytest	0.002s
+PASS
+ok  	github.com/wago-org/net/internal/dnsname	0.001s
 goos: linux
 goarch: amd64
 pkg: github.com/wago-org/net/internal/guest
-cpu: AMD Ryzen 7 8845HS w/ Radeon 780M Graphics     
-BenchmarkFromProgress 	100000000	         1.039 ns/op	       0 B/op	       0 allocs/op
-BenchmarkFromProgress 	96804405	         1.247 ns/op	       0 B/op	       0 allocs/op
-BenchmarkFromProgress 	96803702	         1.242 ns/op	       0 B/op	       0 allocs/op
-BenchmarkFromIOResult 	72414966	         1.655 ns/op	       0 B/op	       0 allocs/op
-BenchmarkFromIOResult 	72443469	         1.682 ns/op	       0 B/op	       0 allocs/op
-BenchmarkFromIOResult 	72608589	         1.686 ns/op	       0 B/op	       0 allocs/op
-BenchmarkFromError/semantic         	 2406963	        50.03 ns/op	       8 B/op	       1 allocs/op
-BenchmarkFromError/semantic         	 2403850	        48.81 ns/op	       8 B/op	       1 allocs/op
-BenchmarkFromError/semantic         	 2432515	        48.90 ns/op	       8 B/op	       1 allocs/op
-BenchmarkFromError/shared           	 2328504	        51.24 ns/op	       8 B/op	       1 allocs/op
-BenchmarkFromError/shared           	 2346909	        50.38 ns/op	       8 B/op	       1 allocs/op
-BenchmarkFromError/shared           	 2364459	        50.61 ns/op	       8 B/op	       1 allocs/op
+cpu: AMD Ryzen 7 8845HS w/ Radeon 780M Graphics
+BenchmarkPollReady    	 1679516	       144.4 ns/op	      32 B/op	       1 allocs/op
+BenchmarkPollReady    	 1603094	       148.4 ns/op	      32 B/op	       1 allocs/op
+BenchmarkPollReady    	 1627932	       147.3 ns/op	      32 B/op	       1 allocs/op
+BenchmarkPollReady    	 1630956	       147.0 ns/op	      32 B/op	       1 allocs/op
+BenchmarkPollReady    	 1619164	       148.2 ns/op	      32 B/op	       1 allocs/op
+BenchmarkFromProgress 	183096656	         1.399 ns/op	       0 B/op	       0 allocs/op
+BenchmarkFromProgress 	158899526	         1.511 ns/op	       0 B/op	       0 allocs/op
+BenchmarkFromProgress 	159292137	         1.508 ns/op	       0 B/op	       0 allocs/op
+BenchmarkFromProgress 	176411922	         1.426 ns/op	       0 B/op	       0 allocs/op
+BenchmarkFromProgress 	177063469	         1.420 ns/op	       0 B/op	       0 allocs/op
+BenchmarkFromIOResult 	158334454	         1.514 ns/op	       0 B/op	       0 allocs/op
+BenchmarkFromIOResult 	158636938	         1.513 ns/op	       0 B/op	       0 allocs/op
+BenchmarkFromIOResult 	158654065	         1.513 ns/op	       0 B/op	       0 allocs/op
+BenchmarkFromIOResult 	158278150	         1.515 ns/op	       0 B/op	       0 allocs/op
+BenchmarkFromIOResult 	158902888	         1.511 ns/op	       0 B/op	       0 allocs/op
+BenchmarkFromError/semantic         	50364195	         4.762 ns/op	       0 B/op	       0 allocs/op
+BenchmarkFromError/semantic         	50281207	         4.787 ns/op	       0 B/op	       0 allocs/op
+BenchmarkFromError/semantic         	50127385	         4.792 ns/op	       0 B/op	       0 allocs/op
+BenchmarkFromError/semantic         	50229012	         4.772 ns/op	       0 B/op	       0 allocs/op
+BenchmarkFromError/semantic         	50265169	         4.765 ns/op	       0 B/op	       0 allocs/op
+BenchmarkFromError/shared           	85238653	         2.824 ns/op	       0 B/op	       0 allocs/op
+BenchmarkFromError/shared           	84747736	         2.838 ns/op	       0 B/op	       0 allocs/op
+BenchmarkFromError/shared           	84270993	         2.791 ns/op	       0 B/op	       0 allocs/op
+BenchmarkFromError/shared           	91144478	         2.623 ns/op	       0 B/op	       0 allocs/op
+BenchmarkFromError/shared           	91592670	         2.465 ns/op	       0 B/op	       0 allocs/op
 PASS
-ok  	github.com/wago-org/net/internal/guest	1.428s
+ok  	github.com/wago-org/net/internal/guest	6.028s
+PASS
+ok  	github.com/wago-org/net/internal/inspectionpolicy	0.003s
 goos: linux
 goarch: amd64
 pkg: github.com/wago-org/net/internal/instance/core
-cpu: AMD Ryzen 7 8845HS w/ Radeon 780M Graphics     
-BenchmarkManagerAttachDetach 	   85178	      1248 ns/op	   18152 B/op	      12 allocs/op
-BenchmarkManagerAttachDetach 	   96750	      1221 ns/op	   18152 B/op	      12 allocs/op
-BenchmarkManagerAttachDetach 	   97212	      1294 ns/op	   18152 B/op	      12 allocs/op
-BenchmarkManagerForInstance  	29558607	         4.070 ns/op	       0 B/op	       0 allocs/op
-BenchmarkManagerForInstance  	30065218	         4.019 ns/op	       0 B/op	       0 allocs/op
-BenchmarkManagerForInstance  	29899135	         4.023 ns/op	       0 B/op	       0 allocs/op
-BenchmarkStateWithLock       	25884801	         4.646 ns/op	       0 B/op	       0 allocs/op
-BenchmarkStateWithLock       	25713704	         4.773 ns/op	       0 B/op	       0 allocs/op
-BenchmarkStateWithLock       	25926264	         4.697 ns/op	       0 B/op	       0 allocs/op
-BenchmarkStatePollIdle       	 4755543	        25.14 ns/op	       0 B/op	       0 allocs/op
-BenchmarkStatePollIdle       	 4806703	        25.78 ns/op	       0 B/op	       0 allocs/op
-BenchmarkStatePollIdle       	 4398355	        26.02 ns/op	       0 B/op	       0 allocs/op
+cpu: AMD Ryzen 7 8845HS w/ Radeon 780M Graphics
+BenchmarkManagerAttachDetach 	  132962	      1667 ns/op	   18712 B/op	      14 allocs/op
+BenchmarkManagerAttachDetach 	  138780	      1669 ns/op	   18712 B/op	      14 allocs/op
+BenchmarkManagerAttachDetach 	  136951	      1631 ns/op	   18712 B/op	      14 allocs/op
+BenchmarkManagerAttachDetach 	  136900	      1676 ns/op	   18712 B/op	      14 allocs/op
+BenchmarkManagerAttachDetach 	  138116	      1686 ns/op	   18712 B/op	      14 allocs/op
+BenchmarkManagerForInstance  	58350390	         4.151 ns/op	       0 B/op	       0 allocs/op
+BenchmarkManagerForInstance  	57799458	         4.147 ns/op	       0 B/op	       0 allocs/op
+BenchmarkManagerForInstance  	57925246	         4.144 ns/op	       0 B/op	       0 allocs/op
+BenchmarkManagerForInstance  	57543289	         4.146 ns/op	       0 B/op	       0 allocs/op
+BenchmarkManagerForInstance  	57887175	         4.145 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStateWithLock       	50010490	         4.816 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStateWithLock       	50170422	         4.816 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStateWithLock       	50196918	         4.818 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStateWithLock       	50312366	         4.853 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStateWithLock       	48535658	         4.800 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStatePollIdle       	 9631153	        24.72 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStatePollIdle       	 9749234	        24.72 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStatePollIdle       	 9699794	        24.74 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStatePollIdle       	 9707674	        24.67 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStatePollIdle       	 9714068	        24.68 ns/op	       0 B/op	       0 allocs/op
 PASS
-ok  	github.com/wago-org/net/internal/instance/core	1.438s
+ok  	github.com/wago-org/net/internal/instance/core	4.746s
+goos: linux
+goarch: amd64
+pkg: github.com/wago-org/net/internal/instance/dhcpv4
+cpu: AMD Ryzen 7 8845HS w/ Radeon 780M Graphics
+BenchmarkResultReady 	 3273856	        72.76 ns/op	       0 B/op	       0 allocs/op
+BenchmarkResultReady 	 3319076	        72.59 ns/op	       0 B/op	       0 allocs/op
+BenchmarkResultReady 	 3309393	        72.73 ns/op	       0 B/op	       0 allocs/op
+BenchmarkResultReady 	 3268094	        73.32 ns/op	       0 B/op	       0 allocs/op
+BenchmarkResultReady 	 3265566	        73.95 ns/op	       0 B/op	       0 allocs/op
+PASS
+ok  	github.com/wago-org/net/internal/instance/dhcpv4	1.205s
+PASS
+ok  	github.com/wago-org/net/internal/instance/dhcpv6	0.002s
 goos: linux
 goarch: amd64
 pkg: github.com/wago-org/net/internal/instance/dns
-cpu: AMD Ryzen 7 8845HS w/ Radeon 780M Graphics     
-BenchmarkResolveClose 	 1400097	        85.85 ns/op	       0 B/op	       0 allocs/op
-BenchmarkResolveClose 	 1368162	        87.36 ns/op	       0 B/op	       0 allocs/op
-BenchmarkResolveClose 	 1376194	        87.02 ns/op	       0 B/op	       0 allocs/op
-BenchmarkNext         	  894555	       133.8 ns/op	     112 B/op	       2 allocs/op
-BenchmarkNext         	 1000000	       135.8 ns/op	     112 B/op	       2 allocs/op
-BenchmarkNext         	 1000000	       135.1 ns/op	     112 B/op	       2 allocs/op
-BenchmarkCancel       	 7895908	        15.68 ns/op	       0 B/op	       0 allocs/op
-BenchmarkCancel       	 7799910	        16.24 ns/op	       0 B/op	       0 allocs/op
-BenchmarkCancel       	 7832200	        15.23 ns/op	       0 B/op	       0 allocs/op
+cpu: AMD Ryzen 7 8845HS w/ Radeon 780M Graphics
+BenchmarkResolveClose 	 1950130	       127.8 ns/op	       0 B/op	       0 allocs/op
+BenchmarkResolveClose 	 2110722	       112.0 ns/op	       0 B/op	       0 allocs/op
+BenchmarkResolveClose 	 2160066	       108.3 ns/op	       0 B/op	       0 allocs/op
+BenchmarkResolveClose 	 2307890	       106.8 ns/op	       0 B/op	       0 allocs/op
+BenchmarkResolveClose 	 2296549	       108.1 ns/op	       0 B/op	       0 allocs/op
+BenchmarkNext         	 3944287	        57.88 ns/op	       0 B/op	       0 allocs/op
+BenchmarkNext         	 4101259	        57.90 ns/op	       0 B/op	       0 allocs/op
+BenchmarkNext         	 4012328	        57.31 ns/op	       0 B/op	       0 allocs/op
+BenchmarkNext         	 4119214	        56.75 ns/op	       0 B/op	       0 allocs/op
+BenchmarkNext         	 4137211	        56.55 ns/op	       0 B/op	       0 allocs/op
+BenchmarkCancel       	16910296	        14.31 ns/op	       0 B/op	       0 allocs/op
+BenchmarkCancel       	16873930	        14.36 ns/op	       0 B/op	       0 allocs/op
+BenchmarkCancel       	16854222	        14.39 ns/op	       0 B/op	       0 allocs/op
+BenchmarkCancel       	16763264	        14.22 ns/op	       0 B/op	       0 allocs/op
+BenchmarkCancel       	16929633	        14.32 ns/op	       0 B/op	       0 allocs/op
 PASS
-ok  	github.com/wago-org/net/internal/instance/dns	1.124s
+ok  	github.com/wago-org/net/internal/instance/dns	3.592s
+PASS
+ok  	github.com/wago-org/net/internal/instance/icmpv4	0.002s
+goos: linux
+goarch: amd64
+pkg: github.com/wago-org/net/internal/instance/icmpv6
+cpu: AMD Ryzen 7 8845HS w/ Radeon 780M Graphics
+BenchmarkEchoResultReady 	 4800964	        50.92 ns/op	5027.72 MB/s	       0 B/op	       0 allocs/op
+BenchmarkEchoResultReady 	 4741197	        50.21 ns/op	5098.88 MB/s	       0 B/op	       0 allocs/op
+BenchmarkEchoResultReady 	 4842657	        49.40 ns/op	5182.70 MB/s	       0 B/op	       0 allocs/op
+BenchmarkEchoResultReady 	 4912917	        49.04 ns/op	5219.72 MB/s	       0 B/op	       0 allocs/op
+BenchmarkEchoResultReady 	 4836560	        49.43 ns/op	5179.55 MB/s	       0 B/op	       0 allocs/op
+PASS
+ok  	github.com/wago-org/net/internal/instance/icmpv6	1.205s
+goos: linux
+goarch: amd64
+pkg: github.com/wago-org/net/internal/instance/ipv6
+cpu: AMD Ryzen 7 8845HS w/ Radeon 780M Graphics
+BenchmarkConfiguration 	 4273022	        55.77 ns/op	       0 B/op	       0 allocs/op
+BenchmarkConfiguration 	 4281666	        55.37 ns/op	       0 B/op	       0 allocs/op
+BenchmarkConfiguration 	 4409036	        54.41 ns/op	       0 B/op	       0 allocs/op
+BenchmarkConfiguration 	 4410192	        60.92 ns/op	       0 B/op	       0 allocs/op
+BenchmarkConfiguration 	 3090046	        83.33 ns/op	       0 B/op	       0 allocs/op
+PASS
+ok  	github.com/wago-org/net/internal/instance/ipv6	1.245s
+goos: linux
+goarch: amd64
+pkg: github.com/wago-org/net/internal/instance/linklocal4
+cpu: AMD Ryzen 7 8845HS w/ Radeon 780M Graphics
+BenchmarkResultReady 	 4519436	        49.68 ns/op	       0 B/op	       0 allocs/op
+BenchmarkResultReady 	 4892312	        49.23 ns/op	       0 B/op	       0 allocs/op
+BenchmarkResultReady 	 4223816	        47.77 ns/op	       0 B/op	       0 allocs/op
+BenchmarkResultReady 	 5927655	        40.78 ns/op	       0 B/op	       0 allocs/op
+BenchmarkResultReady 	 5718453	        40.84 ns/op	       0 B/op	       0 allocs/op
+PASS
+ok  	github.com/wago-org/net/internal/instance/linklocal4	1.147s
+goos: linux
+goarch: amd64
+pkg: github.com/wago-org/net/internal/instance/mdns
+cpu: AMD Ryzen 7 8845HS w/ Radeon 780M Graphics
+BenchmarkInstanceMDNSOperations/Next         	 3200965	        72.30 ns/op	       0 B/op	       0 allocs/op
+BenchmarkInstanceMDNSOperations/Next         	 3204297	        73.19 ns/op	       0 B/op	       0 allocs/op
+BenchmarkInstanceMDNSOperations/Next         	 3274389	        71.06 ns/op	       0 B/op	       0 allocs/op
+BenchmarkInstanceMDNSOperations/Next         	 3407836	        68.68 ns/op	       0 B/op	       0 allocs/op
+BenchmarkInstanceMDNSOperations/Next         	 3323758	        71.12 ns/op	       0 B/op	       0 allocs/op
+BenchmarkInstanceMDNSOperations/CancelQuery  	16179756	        15.58 ns/op	       0 B/op	       0 allocs/op
+BenchmarkInstanceMDNSOperations/CancelQuery  	13917518	        16.96 ns/op	       0 B/op	       0 allocs/op
+BenchmarkInstanceMDNSOperations/CancelQuery  	14842682	        15.69 ns/op	       0 B/op	       0 allocs/op
+BenchmarkInstanceMDNSOperations/CancelQuery  	15762501	        15.83 ns/op	       0 B/op	       0 allocs/op
+BenchmarkInstanceMDNSOperations/CancelQuery  	15483334	        16.05 ns/op	       0 B/op	       0 allocs/op
+BenchmarkInstanceMDNSOperations/FinishAnnouncement         	14269768	        17.46 ns/op	       0 B/op	       0 allocs/op
+BenchmarkInstanceMDNSOperations/FinishAnnouncement         	13552663	        16.59 ns/op	       0 B/op	       0 allocs/op
+BenchmarkInstanceMDNSOperations/FinishAnnouncement         	14106744	        16.72 ns/op	       0 B/op	       0 allocs/op
+BenchmarkInstanceMDNSOperations/FinishAnnouncement         	14332802	        16.86 ns/op	       0 B/op	       0 allocs/op
+BenchmarkInstanceMDNSOperations/FinishAnnouncement         	14092984	        16.60 ns/op	       0 B/op	       0 allocs/op
+BenchmarkInstanceMDNSOperations/CancelAnnouncement         	15154599	        14.87 ns/op	       0 B/op	       0 allocs/op
+BenchmarkInstanceMDNSOperations/CancelAnnouncement         	16547774	        15.41 ns/op	       0 B/op	       0 allocs/op
+BenchmarkInstanceMDNSOperations/CancelAnnouncement         	15395164	        15.15 ns/op	       0 B/op	       0 allocs/op
+BenchmarkInstanceMDNSOperations/CancelAnnouncement         	16716206	        14.47 ns/op	       0 B/op	       0 allocs/op
+BenchmarkInstanceMDNSOperations/CancelAnnouncement         	15996757	        14.99 ns/op	       0 B/op	       0 allocs/op
+PASS
+ok  	github.com/wago-org/net/internal/instance/mdns	4.777s
+PASS
+ok  	github.com/wago-org/net/internal/instance/ntp	0.002s
 goos: linux
 goarch: amd64
 pkg: github.com/wago-org/net/internal/instance/tcp
-cpu: AMD Ryzen 7 8845HS w/ Radeon 780M Graphics     
-BenchmarkConnectClose  	 1484796	        80.99 ns/op	       0 B/op	       0 allocs/op
-BenchmarkConnectClose  	 1473454	        81.50 ns/op	       0 B/op	       0 allocs/op
-BenchmarkConnectClose  	 1470895	        81.59 ns/op	       0 B/op	       0 allocs/op
-BenchmarkEndpoints     	 2718432	        44.00 ns/op	       0 B/op	       0 allocs/op
-BenchmarkEndpoints     	 2741016	        44.02 ns/op	       0 B/op	       0 allocs/op
-BenchmarkEndpoints     	 2725212	        45.22 ns/op	       0 B/op	       0 allocs/op
-BenchmarkFinishConnect 	 8258710	        14.95 ns/op	       0 B/op	       0 allocs/op
-BenchmarkFinishConnect 	 8250303	        14.42 ns/op	       0 B/op	       0 allocs/op
-BenchmarkFinishConnect 	 8329311	        14.45 ns/op	       0 B/op	       0 allocs/op
-BenchmarkRead          	 7259040	        16.76 ns/op	       0 B/op	       0 allocs/op
-BenchmarkRead          	 7280583	        16.87 ns/op	       0 B/op	       0 allocs/op
-BenchmarkRead          	 7167678	        16.68 ns/op	       0 B/op	       0 allocs/op
-BenchmarkWrite         	 7266240	        16.55 ns/op	       0 B/op	       0 allocs/op
-BenchmarkWrite         	 7141012	        16.95 ns/op	       0 B/op	       0 allocs/op
-BenchmarkWrite         	 6998707	        17.09 ns/op	       0 B/op	       0 allocs/op
-BenchmarkShutdownWrite 	 8258181	        14.44 ns/op	       0 B/op	       0 allocs/op
-BenchmarkShutdownWrite 	 8312184	        14.44 ns/op	       0 B/op	       0 allocs/op
-BenchmarkShutdownWrite 	 8233606	        14.56 ns/op	       0 B/op	       0 allocs/op
+cpu: AMD Ryzen 7 8845HS w/ Radeon 780M Graphics
+BenchmarkConnectClose  	 2193386	       113.3 ns/op	       0 B/op	       0 allocs/op
+BenchmarkConnectClose  	 1981220	       117.4 ns/op	       0 B/op	       0 allocs/op
+BenchmarkConnectClose  	 2158802	       110.9 ns/op	       0 B/op	       0 allocs/op
+BenchmarkConnectClose  	 2213578	       108.4 ns/op	       0 B/op	       0 allocs/op
+BenchmarkConnectClose  	 2244212	       107.4 ns/op	       0 B/op	       0 allocs/op
+BenchmarkEndpoints     	 5068323	        48.55 ns/op	       0 B/op	       0 allocs/op
+BenchmarkEndpoints     	 4915418	        48.30 ns/op	       0 B/op	       0 allocs/op
+BenchmarkEndpoints     	 4925629	        47.64 ns/op	       0 B/op	       0 allocs/op
+BenchmarkEndpoints     	 4938331	        48.24 ns/op	       0 B/op	       0 allocs/op
+BenchmarkEndpoints     	 4979084	        47.48 ns/op	       0 B/op	       0 allocs/op
+BenchmarkFinishConnect 	15336448	        16.65 ns/op	       0 B/op	       0 allocs/op
+BenchmarkFinishConnect 	14831260	        16.35 ns/op	       0 B/op	       0 allocs/op
+BenchmarkFinishConnect 	14796320	        16.60 ns/op	       0 B/op	       0 allocs/op
+BenchmarkFinishConnect 	14011203	        16.62 ns/op	       0 B/op	       0 allocs/op
+BenchmarkFinishConnect 	14488724	        16.25 ns/op	       0 B/op	       0 allocs/op
+BenchmarkRead          	 2724171	        88.44 ns/op	       0 B/op	       0 allocs/op
+BenchmarkRead          	 2689563	        88.78 ns/op	       0 B/op	       0 allocs/op
+BenchmarkRead          	 2720703	        88.70 ns/op	       0 B/op	       0 allocs/op
+BenchmarkRead          	 2706645	        88.37 ns/op	       0 B/op	       0 allocs/op
+BenchmarkRead          	 2772776	        86.97 ns/op	       0 B/op	       0 allocs/op
+BenchmarkWrite         	13821877	        17.79 ns/op	       0 B/op	       0 allocs/op
+BenchmarkWrite         	13368242	        17.98 ns/op	       0 B/op	       0 allocs/op
+BenchmarkWrite         	13338415	        18.19 ns/op	       0 B/op	       0 allocs/op
+BenchmarkWrite         	13336149	        18.22 ns/op	       0 B/op	       0 allocs/op
+BenchmarkWrite         	13335870	        18.33 ns/op	       0 B/op	       0 allocs/op
+BenchmarkShutdownWrite 	15065020	        16.36 ns/op	       0 B/op	       0 allocs/op
+BenchmarkShutdownWrite 	13866393	        16.66 ns/op	       0 B/op	       0 allocs/op
+BenchmarkShutdownWrite 	14422966	        16.70 ns/op	       0 B/op	       0 allocs/op
+BenchmarkShutdownWrite 	14829562	        16.59 ns/op	       0 B/op	       0 allocs/op
+BenchmarkShutdownWrite 	14278622	        16.43 ns/op	       0 B/op	       0 allocs/op
 PASS
-ok  	github.com/wago-org/net/internal/instance/tcp	2.176s
+ok  	github.com/wago-org/net/internal/instance/tcp	7.233s
+PASS
+ok  	github.com/wago-org/net/internal/instance/tls	0.002s
 goos: linux
 goarch: amd64
 pkg: github.com/wago-org/net/internal/instance/udp
-cpu: AMD Ryzen 7 8845HS w/ Radeon 780M Graphics     
-BenchmarkBindClose 	 1484409	        80.84 ns/op	       0 B/op	       0 allocs/op
-BenchmarkBindClose 	 1482774	        80.98 ns/op	       0 B/op	       0 allocs/op
-BenchmarkBindClose 	 1408479	        85.22 ns/op	       0 B/op	       0 allocs/op
-BenchmarkSend      	 6790143	        17.39 ns/op	       0 B/op	       0 allocs/op
-BenchmarkSend      	 6231738	        18.13 ns/op	       0 B/op	       0 allocs/op
-BenchmarkSend      	 6770740	        17.41 ns/op	       0 B/op	       0 allocs/op
-BenchmarkReceive   	 4157925	        28.62 ns/op	       0 B/op	       0 allocs/op
-BenchmarkReceive   	 4197327	        28.65 ns/op	       0 B/op	       0 allocs/op
-BenchmarkReceive   	 4171926	        28.64 ns/op	       0 B/op	       0 allocs/op
+cpu: AMD Ryzen 7 8845HS w/ Radeon 780M Graphics
+BenchmarkBindClose 	 2108000	       112.9 ns/op	       0 B/op	       0 allocs/op
+BenchmarkBindClose 	 2152596	       110.8 ns/op	       0 B/op	       0 allocs/op
+BenchmarkBindClose 	 2192630	       109.1 ns/op	       0 B/op	       0 allocs/op
+BenchmarkBindClose 	 2147912	       114.0 ns/op	       0 B/op	       0 allocs/op
+BenchmarkBindClose 	 2164100	       109.7 ns/op	       0 B/op	       0 allocs/op
+BenchmarkSend      	12072264	        21.61 ns/op	       0 B/op	       0 allocs/op
+BenchmarkSend      	11062185	        22.24 ns/op	       0 B/op	       0 allocs/op
+BenchmarkSend      	10694985	        21.92 ns/op	       0 B/op	       0 allocs/op
+BenchmarkSend      	11354236	        22.74 ns/op	       0 B/op	       0 allocs/op
+BenchmarkSend      	12061044	        20.01 ns/op	       0 B/op	       0 allocs/op
+BenchmarkReceive   	 4697860	        51.25 ns/op	       0 B/op	       0 allocs/op
+BenchmarkReceive   	 4795431	        53.36 ns/op	       0 B/op	       0 allocs/op
+BenchmarkReceive   	 4423110	        57.10 ns/op	       0 B/op	       0 allocs/op
+BenchmarkReceive   	 3677460	        63.90 ns/op	       0 B/op	       0 allocs/op
+BenchmarkReceive   	 3849818	        62.65 ns/op	       0 B/op	       0 allocs/op
 PASS
-ok  	github.com/wago-org/net/internal/instance/udp	1.071s
+ok  	github.com/wago-org/net/internal/instance/udp	3.673s
+goos: linux
+goarch: amd64
+pkg: github.com/wago-org/net/internal/mdnsname
+cpu: AMD Ryzen 7 8845HS w/ Radeon 780M Graphics
+BenchmarkValidCanonical 	 4246977	        56.93 ns/op	       0 B/op	       0 allocs/op
+BenchmarkValidCanonical 	 6197582	        38.45 ns/op	       0 B/op	       0 allocs/op
+BenchmarkValidCanonical 	 6924466	        35.82 ns/op	       0 B/op	       0 allocs/op
+BenchmarkValidCanonical 	 6694501	        35.31 ns/op	       0 B/op	       0 allocs/op
+BenchmarkValidCanonical 	 6906973	        35.80 ns/op	       0 B/op	       0 allocs/op
+PASS
+ok  	github.com/wago-org/net/internal/mdnsname	1.215s
 PASS
 ok  	github.com/wago-org/net/internal/namespace	0.002s
 goos: linux
 goarch: amd64
 pkg: github.com/wago-org/net/internal/namespace/core
-cpu: AMD Ryzen 7 8845HS w/ Radeon 780M Graphics     
-BenchmarkEndpointValid            	56182892	         2.134 ns/op	       0 B/op	       0 allocs/op
-BenchmarkEndpointValid            	56273696	         2.131 ns/op	       0 B/op	       0 allocs/op
-BenchmarkEndpointValid            	56152329	         2.131 ns/op	       0 B/op	       0 allocs/op
-BenchmarkIOResultValid            	69792558	         1.731 ns/op	       0 B/op	       0 allocs/op
-BenchmarkIOResultValid            	70289380	         1.686 ns/op	       0 B/op	       0 allocs/op
-BenchmarkIOResultValid            	72298737	         1.655 ns/op	       0 B/op	       0 allocs/op
-BenchmarkReadinessValid           	96379813	         1.243 ns/op	       0 B/op	       0 allocs/op
-BenchmarkReadinessValid           	96358994	         1.242 ns/op	       0 B/op	       0 allocs/op
-BenchmarkReadinessValid           	90477744	         1.248 ns/op	       0 B/op	       0 allocs/op
-BenchmarkServiceReportValidResult 	72596685	         1.677 ns/op	       0 B/op	       0 allocs/op
-BenchmarkServiceReportValidResult 	72199384	         1.707 ns/op	       0 B/op	       0 allocs/op
-BenchmarkServiceReportValidResult 	72607227	         1.711 ns/op	       0 B/op	       0 allocs/op
-BenchmarkResolveNamespaceService  	13723384	         9.104 ns/op	       0 B/op	       0 allocs/op
-BenchmarkResolveNamespaceService  	13444662	         8.900 ns/op	       0 B/op	       0 allocs/op
-BenchmarkResolveNamespaceService  	13457203	         8.930 ns/op	       0 B/op	       0 allocs/op
-BenchmarkResolveNamespaceBase     	28437110	         4.201 ns/op	       0 B/op	       0 allocs/op
-BenchmarkResolveNamespaceBase     	28824175	         4.168 ns/op	       0 B/op	       0 allocs/op
-BenchmarkResolveNamespaceBase     	28753382	         4.171 ns/op	       0 B/op	       0 allocs/op
+cpu: AMD Ryzen 7 8845HS w/ Radeon 780M Graphics
+BenchmarkEndpointValid            	102590202	         2.322 ns/op	       0 B/op	       0 allocs/op
+BenchmarkEndpointValid            	98842920	         2.377 ns/op	       0 B/op	       0 allocs/op
+BenchmarkEndpointValid            	100000000	         2.316 ns/op	       0 B/op	       0 allocs/op
+BenchmarkEndpointValid            	100000000	         2.346 ns/op	       0 B/op	       0 allocs/op
+BenchmarkEndpointValid            	100000000	         2.243 ns/op	       0 B/op	       0 allocs/op
+BenchmarkIOResultValid            	176371130	         1.348 ns/op	       0 B/op	       0 allocs/op
+BenchmarkIOResultValid            	174270214	         1.375 ns/op	       0 B/op	       0 allocs/op
+BenchmarkIOResultValid            	167693755	         1.429 ns/op	       0 B/op	       0 allocs/op
+BenchmarkIOResultValid            	172090028	         1.388 ns/op	       0 B/op	       0 allocs/op
+BenchmarkIOResultValid            	174806492	         1.381 ns/op	       0 B/op	       0 allocs/op
+BenchmarkReadinessValid           	200080558	         1.169 ns/op	       0 B/op	       0 allocs/op
+BenchmarkReadinessValid           	216549895	         1.128 ns/op	       0 B/op	       0 allocs/op
+BenchmarkReadinessValid           	216312956	         1.168 ns/op	       0 B/op	       0 allocs/op
+BenchmarkReadinessValid           	200462462	         1.163 ns/op	       0 B/op	       0 allocs/op
+BenchmarkReadinessValid           	208955894	         1.158 ns/op	       0 B/op	       0 allocs/op
+BenchmarkServiceReportValidResult 	129792226	         1.830 ns/op	       0 B/op	       0 allocs/op
+BenchmarkServiceReportValidResult 	134580574	         1.800 ns/op	       0 B/op	       0 allocs/op
+BenchmarkServiceReportValidResult 	133246764	         1.795 ns/op	       0 B/op	       0 allocs/op
+BenchmarkServiceReportValidResult 	135106398	         1.771 ns/op	       0 B/op	       0 allocs/op
+BenchmarkServiceReportValidResult 	134381097	         1.805 ns/op	       0 B/op	       0 allocs/op
+BenchmarkComposeNamespace/empty   	 3689384	        60.85 ns/op	     576 B/op	       1 allocs/op
+BenchmarkComposeNamespace/empty   	 4247665	        54.70 ns/op	     576 B/op	       1 allocs/op
+BenchmarkComposeNamespace/empty   	 4410308	        54.14 ns/op	     576 B/op	       1 allocs/op
+BenchmarkComposeNamespace/empty   	 4545304	        52.94 ns/op	     576 B/op	       1 allocs/op
+BenchmarkComposeNamespace/empty   	 4390125	        54.07 ns/op	     576 B/op	       1 allocs/op
+BenchmarkComposeNamespace/single  	 4008486	        59.08 ns/op	     576 B/op	       1 allocs/op
+BenchmarkComposeNamespace/single  	 3844120	        61.32 ns/op	     576 B/op	       1 allocs/op
+BenchmarkComposeNamespace/single  	 3802614	        61.59 ns/op	     576 B/op	       1 allocs/op
+BenchmarkComposeNamespace/single  	 4064050	        73.65 ns/op	     576 B/op	       1 allocs/op
+BenchmarkComposeNamespace/single  	 3781015	        61.21 ns/op	     576 B/op	       1 allocs/op
+BenchmarkComposeNamespace/three   	 3055437	        78.60 ns/op	     576 B/op	       1 allocs/op
+BenchmarkComposeNamespace/three   	 2928595	        80.56 ns/op	     576 B/op	       1 allocs/op
+BenchmarkComposeNamespace/three   	 3060176	        79.25 ns/op	     576 B/op	       1 allocs/op
+BenchmarkComposeNamespace/three   	 2977555	        81.20 ns/op	     576 B/op	       1 allocs/op
+BenchmarkComposeNamespace/three   	 3013533	        78.95 ns/op	     576 B/op	       1 allocs/op
+BenchmarkComposeNamespace/overflow         	 2695746	        88.21 ns/op	     576 B/op	       1 allocs/op
+BenchmarkComposeNamespace/overflow         	 2718716	        85.76 ns/op	     576 B/op	       1 allocs/op
+BenchmarkComposeNamespace/overflow         	 2865066	        84.49 ns/op	     576 B/op	       1 allocs/op
+BenchmarkComposeNamespace/overflow         	 2849334	        88.27 ns/op	     576 B/op	       1 allocs/op
+BenchmarkComposeNamespace/overflow         	 2513902	        91.92 ns/op	     576 B/op	       1 allocs/op
+BenchmarkResolveNamespaceService           	14723875	        14.99 ns/op	       0 B/op	       0 allocs/op
+BenchmarkResolveNamespaceService           	13860337	        15.86 ns/op	       0 B/op	       0 allocs/op
+BenchmarkResolveNamespaceService           	15241184	        15.11 ns/op	       0 B/op	       0 allocs/op
+BenchmarkResolveNamespaceService           	15036565	        16.17 ns/op	       0 B/op	       0 allocs/op
+BenchmarkResolveNamespaceService           	16878152	        14.93 ns/op	       0 B/op	       0 allocs/op
+BenchmarkResolveNamespaceBase              	10231576	        23.72 ns/op	       0 B/op	       0 allocs/op
+BenchmarkResolveNamespaceBase              	 8842298	        26.66 ns/op	       0 B/op	       0 allocs/op
+BenchmarkResolveNamespaceBase              	 8971408	        27.10 ns/op	       0 B/op	       0 allocs/op
+BenchmarkResolveNamespaceBase              	 8149304	        28.98 ns/op	       0 B/op	       0 allocs/op
+BenchmarkResolveNamespaceBase              	 9155113	        26.42 ns/op	       0 B/op	       0 allocs/op
 PASS
-ok  	github.com/wago-org/net/internal/namespace/core	2.169s
+ok  	github.com/wago-org/net/internal/namespace/core	11.950s
+PASS
+ok  	github.com/wago-org/net/internal/namespace/dhcpv4	0.002s
+goos: linux
+goarch: amd64
+pkg: github.com/wago-org/net/internal/namespace/dhcpv6
+cpu: AMD Ryzen 7 8845HS w/ Radeon 780M Graphics
+BenchmarkNewName            	 2061039	       108.0 ns/op	       0 B/op	       0 allocs/op
+BenchmarkNewName            	 2633046	        89.30 ns/op	       0 B/op	       0 allocs/op
+BenchmarkNewName            	 2745446	        87.58 ns/op	       0 B/op	       0 allocs/op
+BenchmarkNewName            	 2744919	        87.07 ns/op	       0 B/op	       0 allocs/op
+BenchmarkNewName            	 2781421	        86.43 ns/op	       0 B/op	       0 allocs/op
+BenchmarkNameValid          	 1896396	       126.5 ns/op	       0 B/op	       0 allocs/op
+BenchmarkNameValid          	 1885153	       127.3 ns/op	       0 B/op	       0 allocs/op
+BenchmarkNameValid          	 1871131	       128.4 ns/op	       0 B/op	       0 allocs/op
+BenchmarkNameValid          	 1894834	       126.7 ns/op	       0 B/op	       0 allocs/op
+BenchmarkNameValid          	 1893060	       126.9 ns/op	       0 B/op	       0 allocs/op
+BenchmarkConfigurationValid 	  700196	       346.5 ns/op	       0 B/op	       0 allocs/op
+BenchmarkConfigurationValid 	  688395	       349.6 ns/op	       0 B/op	       0 allocs/op
+BenchmarkConfigurationValid 	  697731	       349.7 ns/op	       0 B/op	       0 allocs/op
+BenchmarkConfigurationValid 	  690319	       349.3 ns/op	       0 B/op	       0 allocs/op
+BenchmarkConfigurationValid 	  691969	       350.0 ns/op	       0 B/op	       0 allocs/op
+PASS
+ok  	github.com/wago-org/net/internal/namespace/dhcpv6	3.594s
 goos: linux
 goarch: amd64
 pkg: github.com/wago-org/net/internal/namespace/dns
-cpu: AMD Ryzen 7 8845HS w/ Radeon 780M Graphics     
-BenchmarkRequestValid 	 1338129	        89.80 ns/op	     112 B/op	       2 allocs/op
-BenchmarkRequestValid 	 1310900	        93.35 ns/op	     112 B/op	       2 allocs/op
-BenchmarkRequestValid 	 1260811	        94.72 ns/op	     112 B/op	       2 allocs/op
-BenchmarkRecordValid  	 1279518	        93.49 ns/op	     112 B/op	       2 allocs/op
-BenchmarkRecordValid  	 1296314	        92.82 ns/op	     112 B/op	       2 allocs/op
-BenchmarkRecordValid  	 1278366	        93.91 ns/op	     112 B/op	       2 allocs/op
+cpu: AMD Ryzen 7 8845HS w/ Radeon 780M Graphics
+BenchmarkRequestValid 	 7680259	        30.08 ns/op	       0 B/op	       0 allocs/op
+BenchmarkRequestValid 	 8164675	        28.67 ns/op	       0 B/op	       0 allocs/op
+BenchmarkRequestValid 	 8399450	        28.55 ns/op	       0 B/op	       0 allocs/op
+BenchmarkRequestValid 	 8447286	        28.47 ns/op	       0 B/op	       0 allocs/op
+BenchmarkRequestValid 	 8415013	        29.15 ns/op	       0 B/op	       0 allocs/op
+BenchmarkRecordValid  	 8167059	        29.53 ns/op	       0 B/op	       0 allocs/op
+BenchmarkRecordValid  	 8191314	        29.43 ns/op	       0 B/op	       0 allocs/op
+BenchmarkRecordValid  	 8194496	        29.29 ns/op	       0 B/op	       0 allocs/op
+BenchmarkRecordValid  	 8101042	        29.48 ns/op	       0 B/op	       0 allocs/op
+BenchmarkRecordValid  	 8149126	        29.01 ns/op	       0 B/op	       0 allocs/op
 PASS
-ok  	github.com/wago-org/net/internal/namespace/dns	0.725s
+ok  	github.com/wago-org/net/internal/namespace/dns	2.392s
 PASS
-ok  	github.com/wago-org/net/internal/namespace/tcp	0.002s
+ok  	github.com/wago-org/net/internal/namespace/icmpv4	0.001s
 PASS
-ok  	github.com/wago-org/net/internal/namespace/udp	0.002s
+ok  	github.com/wago-org/net/internal/namespace/icmpv6	0.003s
+PASS
+ok  	github.com/wago-org/net/internal/namespace/ipv6	0.002s
+PASS
+ok  	github.com/wago-org/net/internal/namespace/linklocal4	0.002s
+PASS
+ok  	github.com/wago-org/net/internal/namespace/mdns	0.002s
+PASS
+ok  	github.com/wago-org/net/internal/namespace/ntp	0.002s
+PASS
+ok  	github.com/wago-org/net/internal/namespace/tcp	0.001s
+PASS
+ok  	github.com/wago-org/net/internal/namespace/tls	0.002s
+PASS
+ok  	github.com/wago-org/net/internal/namespace/udp	0.001s
 goos: linux
 goarch: amd64
 pkg: github.com/wago-org/net/internal/packetlink
-cpu: AMD Ryzen 7 8845HS w/ Radeon 780M Graphics     
-BenchmarkLinkTryEnqueueDequeue/bytes=64         	 4900585	        24.72 ns/op	2588.58 MB/s	       0 B/op	       0 allocs/op
-BenchmarkLinkTryEnqueueDequeue/bytes=64         	 4904250	        24.57 ns/op	2604.87 MB/s	       0 B/op	       0 allocs/op
-BenchmarkLinkTryEnqueueDequeue/bytes=64         	 4892854	        24.55 ns/op	2606.55 MB/s	       0 B/op	       0 allocs/op
-BenchmarkLinkTryEnqueueDequeue/bytes=512        	 3576168	        34.05 ns/op	15038.00 MB/s	       0 B/op	       0 allocs/op
-BenchmarkLinkTryEnqueueDequeue/bytes=512        	 3499981	        34.79 ns/op	14716.67 MB/s	       0 B/op	       0 allocs/op
-BenchmarkLinkTryEnqueueDequeue/bytes=512        	 3574374	        33.18 ns/op	15429.01 MB/s	       0 B/op	       0 allocs/op
-BenchmarkLinkTryEnqueueDequeue/bytes=1514       	 2455947	        49.05 ns/op	30869.06 MB/s	       0 B/op	       0 allocs/op
-BenchmarkLinkTryEnqueueDequeue/bytes=1514       	 2515879	        47.63 ns/op	31784.93 MB/s	       0 B/op	       0 allocs/op
-BenchmarkLinkTryEnqueueDequeue/bytes=1514       	 2447974	        49.25 ns/op	30739.54 MB/s	       0 B/op	       0 allocs/op
-BenchmarkLinkTryFillDequeue                     	 3167062	        37.00 ns/op	40922.13 MB/s	       0 B/op	       0 allocs/op
-BenchmarkLinkTryFillDequeue                     	 3257194	        36.93 ns/op	40993.46 MB/s	       0 B/op	       0 allocs/op
-BenchmarkLinkTryFillDequeue                     	 3232296	        37.15 ns/op	40751.66 MB/s	       0 B/op	       0 allocs/op
-BenchmarkLinkSnapshot                           	10359622	        12.32 ns/op	       0 B/op	       0 allocs/op
-BenchmarkLinkSnapshot                           	 9922046	        11.80 ns/op	       0 B/op	       0 allocs/op
-BenchmarkLinkSnapshot                           	10500094	        11.35 ns/op	       0 B/op	       0 allocs/op
+cpu: AMD Ryzen 7 8845HS w/ Radeon 780M Graphics
+BenchmarkLinkTryEnqueueDequeue/bytes=64         	 8690234	        25.81 ns/op	2479.69 MB/s	       0 B/op	       0 allocs/op
+BenchmarkLinkTryEnqueueDequeue/bytes=64         	 9541380	        25.17 ns/op	2543.09 MB/s	       0 B/op	       0 allocs/op
+BenchmarkLinkTryEnqueueDequeue/bytes=64         	 9616299	        25.35 ns/op	2525.02 MB/s	       0 B/op	       0 allocs/op
+BenchmarkLinkTryEnqueueDequeue/bytes=64         	 9594945	        25.02 ns/op	2557.63 MB/s	       0 B/op	       0 allocs/op
+BenchmarkLinkTryEnqueueDequeue/bytes=64         	 9433400	        25.04 ns/op	2555.63 MB/s	       0 B/op	       0 allocs/op
+BenchmarkLinkTryEnqueueDequeue/bytes=512        	 6874504	        35.10 ns/op	14587.91 MB/s	       0 B/op	       0 allocs/op
+BenchmarkLinkTryEnqueueDequeue/bytes=512        	 6832245	        35.14 ns/op	14570.00 MB/s	       0 B/op	       0 allocs/op
+BenchmarkLinkTryEnqueueDequeue/bytes=512        	 6895878	        34.95 ns/op	14650.83 MB/s	       0 B/op	       0 allocs/op
+BenchmarkLinkTryEnqueueDequeue/bytes=512        	 6868351	        34.89 ns/op	14672.74 MB/s	       0 B/op	       0 allocs/op
+BenchmarkLinkTryEnqueueDequeue/bytes=512        	 6861182	        34.98 ns/op	14635.93 MB/s	       0 B/op	       0 allocs/op
+BenchmarkLinkTryEnqueueDequeue/bytes=1514       	 4699365	        51.04 ns/op	29665.80 MB/s	       0 B/op	       0 allocs/op
+BenchmarkLinkTryEnqueueDequeue/bytes=1514       	 4472467	        53.42 ns/op	28340.08 MB/s	       0 B/op	       0 allocs/op
+BenchmarkLinkTryEnqueueDequeue/bytes=1514       	 4695807	        51.12 ns/op	29614.55 MB/s	       0 B/op	       0 allocs/op
+BenchmarkLinkTryEnqueueDequeue/bytes=1514       	 4691192	        51.39 ns/op	29461.24 MB/s	       0 B/op	       0 allocs/op
+BenchmarkLinkTryEnqueueDequeue/bytes=1514       	 4679076	        51.19 ns/op	29578.84 MB/s	       0 B/op	       0 allocs/op
+BenchmarkLinkTryFillDequeue                     	 6129610	        39.29 ns/op	38537.21 MB/s	       0 B/op	       0 allocs/op
+BenchmarkLinkTryFillDequeue                     	 6173420	        38.63 ns/op	39193.22 MB/s	       0 B/op	       0 allocs/op
+BenchmarkLinkTryFillDequeue                     	 6204177	        38.76 ns/op	39064.69 MB/s	       0 B/op	       0 allocs/op
+BenchmarkLinkTryFillDequeue                     	 6251440	        38.79 ns/op	39029.46 MB/s	       0 B/op	       0 allocs/op
+BenchmarkLinkTryFillDequeue                     	 6230542	        38.68 ns/op	39146.20 MB/s	       0 B/op	       0 allocs/op
+BenchmarkLinkSnapshot                           	19723640	        12.05 ns/op	       0 B/op	       0 allocs/op
+BenchmarkLinkSnapshot                           	19895610	        11.99 ns/op	       0 B/op	       0 allocs/op
+BenchmarkLinkSnapshot                           	20021527	        11.95 ns/op	       0 B/op	       0 allocs/op
+BenchmarkLinkSnapshot                           	20119594	        11.95 ns/op	       0 B/op	       0 allocs/op
+BenchmarkLinkSnapshot                           	20102342	        11.97 ns/op	       0 B/op	       0 allocs/op
 PASS
-ok  	github.com/wago-org/net/internal/packetlink	1.811s
+ok  	github.com/wago-org/net/internal/packetlink	5.993s
+goos: linux
+goarch: amd64
+pkg: github.com/wago-org/net/internal/plugin
+cpu: AMD Ryzen 7 8845HS w/ Radeon 780M Graphics
+BenchmarkHostStateAttached   	23003982	        10.50 ns/op	       0 B/op	       0 allocs/op
+BenchmarkHostStateAttached   	22742065	        10.49 ns/op	       0 B/op	       0 allocs/op
+BenchmarkHostStateAttached   	21146136	        10.67 ns/op	       0 B/op	       0 allocs/op
+BenchmarkHostStateAttached   	22927779	        10.58 ns/op	       0 B/op	       0 allocs/op
+BenchmarkHostStateAttached   	22919684	        10.49 ns/op	       0 B/op	       0 allocs/op
+BenchmarkHostStateUnattached 	25588003	         9.502 ns/op	       0 B/op	       0 allocs/op
+BenchmarkHostStateUnattached 	25480519	         9.382 ns/op	       0 B/op	       0 allocs/op
+BenchmarkHostStateUnattached 	25586637	         9.381 ns/op	       0 B/op	       0 allocs/op
+BenchmarkHostStateUnattached 	24179822	        10.17 ns/op	       0 B/op	       0 allocs/op
+BenchmarkHostStateUnattached 	25509366	         9.474 ns/op	       0 B/op	       0 allocs/op
 PASS
-ok  	github.com/wago-org/net/internal/plugin	0.002s
+ok  	github.com/wago-org/net/internal/plugin	2.403s
 goos: linux
 goarch: amd64
 pkg: github.com/wago-org/net/internal/policy
-cpu: AMD Ryzen 7 8845HS w/ Radeon 780M Graphics     
-BenchmarkMerge               	  281798	       424.6 ns/op	    1136 B/op	      16 allocs/op
-BenchmarkMerge               	  298119	       421.7 ns/op	    1136 B/op	      16 allocs/op
-BenchmarkMerge               	  289344	       420.1 ns/op	    1136 B/op	      16 allocs/op
-BenchmarkCompile             	  209263	       585.8 ns/op	     792 B/op	      17 allocs/op
-BenchmarkCompile             	  209961	       587.6 ns/op	     792 B/op	      17 allocs/op
-BenchmarkCompile             	  210702	       613.8 ns/op	     792 B/op	      17 allocs/op
-BenchmarkPolicyCheckEndpoint 	 3586604	        33.24 ns/op	       0 B/op	       0 allocs/op
-BenchmarkPolicyCheckEndpoint 	 3603109	        33.37 ns/op	       0 B/op	       0 allocs/op
-BenchmarkPolicyCheckEndpoint 	 3615538	        33.17 ns/op	       0 B/op	       0 allocs/op
-BenchmarkPolicyCheckDNS      	  869545	       137.6 ns/op	     112 B/op	       2 allocs/op
-BenchmarkPolicyCheckDNS      	  976670	       134.7 ns/op	     112 B/op	       2 allocs/op
-BenchmarkPolicyCheckDNS      	  978049	       134.5 ns/op	     112 B/op	       2 allocs/op
+cpu: AMD Ryzen 7 8845HS w/ Radeon 780M Graphics
+BenchmarkMerge                      	  503892	       476.2 ns/op	    1136 B/op	      16 allocs/op
+BenchmarkMerge                      	  516656	       478.1 ns/op	    1136 B/op	      16 allocs/op
+BenchmarkMerge                      	  527188	       472.0 ns/op	    1136 B/op	      16 allocs/op
+BenchmarkMerge                      	  511040	       468.4 ns/op	    1136 B/op	      16 allocs/op
+BenchmarkMerge                      	  528541	       481.7 ns/op	    1136 B/op	      16 allocs/op
+BenchmarkCompile                    	  438885	       516.2 ns/op	     680 B/op	      13 allocs/op
+BenchmarkCompile                    	  479970	       516.1 ns/op	     680 B/op	      13 allocs/op
+BenchmarkCompile                    	  473203	       533.5 ns/op	     680 B/op	      13 allocs/op
+BenchmarkCompile                    	  464581	       528.8 ns/op	     680 B/op	      13 allocs/op
+BenchmarkCompile                    	  465778	       529.1 ns/op	     680 B/op	      13 allocs/op
+BenchmarkPolicyCheckEndpoint        	 6483926	        36.95 ns/op	       0 B/op	       0 allocs/op
+BenchmarkPolicyCheckEndpoint        	 6385459	        37.12 ns/op	       0 B/op	       0 allocs/op
+BenchmarkPolicyCheckEndpoint        	 6461742	        36.91 ns/op	       0 B/op	       0 allocs/op
+BenchmarkPolicyCheckEndpoint        	 6597502	        36.52 ns/op	       0 B/op	       0 allocs/op
+BenchmarkPolicyCheckEndpoint        	 6466974	        36.93 ns/op	       0 B/op	       0 allocs/op
+BenchmarkPolicyCheckEndpointScaling/rules=1         	12001134	        20.01 ns/op	       0 B/op	       0 allocs/op
+BenchmarkPolicyCheckEndpointScaling/rules=1         	12002221	        20.67 ns/op	       0 B/op	       0 allocs/op
+BenchmarkPolicyCheckEndpointScaling/rules=1         	11138719	        20.95 ns/op	       0 B/op	       0 allocs/op
+BenchmarkPolicyCheckEndpointScaling/rules=1         	11726180	        20.38 ns/op	       0 B/op	       0 allocs/op
+BenchmarkPolicyCheckEndpointScaling/rules=1         	11710737	        19.85 ns/op	       0 B/op	       0 allocs/op
+BenchmarkPolicyCheckEndpointScaling/rules=16        	 1400451	       171.2 ns/op	       0 B/op	       0 allocs/op
+BenchmarkPolicyCheckEndpointScaling/rules=16        	 1403484	       170.8 ns/op	       0 B/op	       0 allocs/op
+BenchmarkPolicyCheckEndpointScaling/rules=16        	 1414780	       169.8 ns/op	       0 B/op	       0 allocs/op
+BenchmarkPolicyCheckEndpointScaling/rules=16        	 1419962	       169.0 ns/op	       0 B/op	       0 allocs/op
+BenchmarkPolicyCheckEndpointScaling/rules=16        	 1416168	       169.4 ns/op	       0 B/op	       0 allocs/op
+BenchmarkPolicyCheckEndpointScaling/rules=256       	   93778	      2561 ns/op	       0 B/op	       0 allocs/op
+BenchmarkPolicyCheckEndpointScaling/rules=256       	   93298	      2569 ns/op	       0 B/op	       0 allocs/op
+BenchmarkPolicyCheckEndpointScaling/rules=256       	   93514	      2572 ns/op	       0 B/op	       0 allocs/op
+BenchmarkPolicyCheckEndpointScaling/rules=256       	   92221	      2704 ns/op	       0 B/op	       0 allocs/op
+BenchmarkPolicyCheckEndpointScaling/rules=256       	   87819	      2704 ns/op	       0 B/op	       0 allocs/op
+BenchmarkPolicyCheckDNS                             	 3323908	        72.54 ns/op	       0 B/op	       0 allocs/op
+BenchmarkPolicyCheckDNS                             	 3101209	        75.77 ns/op	       0 B/op	       0 allocs/op
+BenchmarkPolicyCheckDNS                             	 3317082	        74.25 ns/op	       0 B/op	       0 allocs/op
+BenchmarkPolicyCheckDNS                             	 3108560	        76.99 ns/op	       0 B/op	       0 allocs/op
+BenchmarkPolicyCheckDNS                             	 3189334	        75.40 ns/op	       0 B/op	       0 allocs/op
 PASS
-ok  	github.com/wago-org/net/internal/policy	1.489s
+ok  	github.com/wago-org/net/internal/policy	8.455s
 goos: linux
 goarch: amd64
 pkg: github.com/wago-org/net/internal/quota
-cpu: AMD Ryzen 7 8845HS w/ Radeon 780M Graphics     
-BenchmarkReserveResourceRollback      	 2677158	        44.02 ns/op	      80 B/op	       1 allocs/op
-BenchmarkReserveResourceRollback      	 2608668	        45.65 ns/op	      80 B/op	       1 allocs/op
-BenchmarkReserveResourceRollback      	 2707976	        43.89 ns/op	      80 B/op	       1 allocs/op
-BenchmarkReserveResourceCommitRelease 	 1988302	        60.52 ns/op	      88 B/op	       2 allocs/op
-BenchmarkReserveResourceCommitRelease 	 1952732	        61.00 ns/op	      88 B/op	       2 allocs/op
-BenchmarkReserveResourceCommitRelease 	 1987196	        60.65 ns/op	      88 B/op	       2 allocs/op
-BenchmarkWithService                  	 5660270	        20.89 ns/op	       0 B/op	       0 allocs/op
-BenchmarkWithService                  	 5735972	        20.90 ns/op	       0 B/op	       0 allocs/op
-BenchmarkWithService                  	 5711974	        20.90 ns/op	       0 B/op	       0 allocs/op
-BenchmarkSnapshot                     	10495677	        11.69 ns/op	       0 B/op	       0 allocs/op
-BenchmarkSnapshot                     	10386103	        11.73 ns/op	       0 B/op	       0 allocs/op
-BenchmarkSnapshot                     	10565624	        11.22 ns/op	       0 B/op	       0 allocs/op
+cpu: AMD Ryzen 7 8845HS w/ Radeon 780M Graphics
+BenchmarkReserveResourceRollback              	 1922730	       122.4 ns/op	     224 B/op	       1 allocs/op
+BenchmarkReserveResourceRollback              	 2048602	       114.4 ns/op	     224 B/op	       1 allocs/op
+BenchmarkReserveResourceRollback              	 2227948	       106.9 ns/op	     224 B/op	       1 allocs/op
+BenchmarkReserveResourceRollback              	 2292273	       106.4 ns/op	     224 B/op	       1 allocs/op
+BenchmarkReserveResourceRollback              	 2338239	       103.9 ns/op	     224 B/op	       1 allocs/op
+BenchmarkReserveResourceCommitRelease         	 1956099	       125.0 ns/op	     232 B/op	       2 allocs/op
+BenchmarkReserveResourceCommitRelease         	 1832746	       127.3 ns/op	     232 B/op	       2 allocs/op
+BenchmarkReserveResourceCommitRelease         	 1860073	       128.7 ns/op	     232 B/op	       2 allocs/op
+BenchmarkReserveResourceCommitRelease         	 1957222	       124.7 ns/op	     232 B/op	       2 allocs/op
+BenchmarkReserveResourceCommitRelease         	 1925941	       126.0 ns/op	     232 B/op	       2 allocs/op
+BenchmarkAcquireResourceAndQueuedBytesRelease 	 3406876	        70.54 ns/op	       0 B/op	       0 allocs/op
+BenchmarkAcquireResourceAndQueuedBytesRelease 	 3398760	        69.88 ns/op	       0 B/op	       0 allocs/op
+BenchmarkAcquireResourceAndQueuedBytesRelease 	 3425342	        69.11 ns/op	       0 B/op	       0 allocs/op
+BenchmarkAcquireResourceAndQueuedBytesRelease 	 3466780	        69.01 ns/op	       0 B/op	       0 allocs/op
+BenchmarkAcquireResourceAndQueuedBytesRelease 	 3478832	        69.22 ns/op	       0 B/op	       0 allocs/op
+BenchmarkAcquireResourceParallel              	 3553083	        67.42 ns/op	       0 B/op	       0 allocs/op
+BenchmarkAcquireResourceParallel              	 3529212	        67.23 ns/op	       0 B/op	       0 allocs/op
+BenchmarkAcquireResourceParallel              	 3612544	        66.59 ns/op	       0 B/op	       0 allocs/op
+BenchmarkAcquireResourceParallel              	 3601980	        66.73 ns/op	       0 B/op	       0 allocs/op
+BenchmarkAcquireResourceParallel              	 3658519	        66.37 ns/op	       0 B/op	       0 allocs/op
+BenchmarkWithService                          	 5533356	        43.39 ns/op	       0 B/op	       0 allocs/op
+BenchmarkWithService                          	 5548250	        43.19 ns/op	       0 B/op	       0 allocs/op
+BenchmarkWithService                          	 5518618	        43.19 ns/op	       0 B/op	       0 allocs/op
+BenchmarkWithService                          	 5537034	        49.12 ns/op	       0 B/op	       0 allocs/op
+BenchmarkWithService                          	 4858482	        46.06 ns/op	       0 B/op	       0 allocs/op
+BenchmarkSnapshot                             	16883340	        15.98 ns/op	       0 B/op	       0 allocs/op
+BenchmarkSnapshot                             	 9613053	        23.75 ns/op	       0 B/op	       0 allocs/op
+BenchmarkSnapshot                             	 9522688	        23.92 ns/op	       0 B/op	       0 allocs/op
+BenchmarkSnapshot                             	12943604	        18.09 ns/op	       0 B/op	       0 allocs/op
+BenchmarkSnapshot                             	16763899	        15.02 ns/op	       0 B/op	       0 allocs/op
 PASS
-ok  	github.com/wago-org/net/internal/quota	1.440s
+ok  	github.com/wago-org/net/internal/quota	7.569s
 goos: linux
 goarch: amd64
 pkg: github.com/wago-org/net/internal/readiness
-cpu: AMD Ryzen 7 8845HS w/ Radeon 780M Graphics     
-BenchmarkCoordinatorRegisterUnregister 	 3317818	        36.38 ns/op	       0 B/op	       0 allocs/op
-BenchmarkCoordinatorRegisterUnregister 	 3243764	        36.67 ns/op	       0 B/op	       0 allocs/op
-BenchmarkCoordinatorRegisterUnregister 	 3297825	        36.42 ns/op	       0 B/op	       0 allocs/op
-BenchmarkCoordinatorTryPoll/registrations=1         	 4363074	        27.47 ns/op	       0 B/op	       0 allocs/op
-BenchmarkCoordinatorTryPoll/registrations=1         	 4366363	        27.47 ns/op	       0 B/op	       0 allocs/op
-BenchmarkCoordinatorTryPoll/registrations=1         	 4370724	        28.20 ns/op	       0 B/op	       0 allocs/op
-BenchmarkCoordinatorTryPoll/registrations=16        	  669217	       183.5 ns/op	       0 B/op	       0 allocs/op
-BenchmarkCoordinatorTryPoll/registrations=16        	  677859	       176.9 ns/op	       0 B/op	       0 allocs/op
-BenchmarkCoordinatorTryPoll/registrations=16        	  680061	       177.8 ns/op	       0 B/op	       0 allocs/op
-BenchmarkCoordinatorTryPoll/registrations=256       	   45979	      2607 ns/op	       0 B/op	       0 allocs/op
-BenchmarkCoordinatorTryPoll/registrations=256       	   45969	      2608 ns/op	       0 B/op	       0 allocs/op
-BenchmarkCoordinatorTryPoll/registrations=256       	   46026	      2609 ns/op	       0 B/op	       0 allocs/op
-BenchmarkCoordinatorTryPollService                  	 4422423	        27.04 ns/op	       0 B/op	       0 allocs/op
-BenchmarkCoordinatorTryPollService                  	 4430625	        27.48 ns/op	       0 B/op	       0 allocs/op
-BenchmarkCoordinatorTryPollService                  	 4289644	        28.19 ns/op	       0 B/op	       0 allocs/op
+cpu: AMD Ryzen 7 8845HS w/ Radeon 780M Graphics
+BenchmarkCoordinatorRegisterUnregister 	 5148931	        42.81 ns/op	       0 B/op	       0 allocs/op
+BenchmarkCoordinatorRegisterUnregister 	 5763424	        41.68 ns/op	       0 B/op	       0 allocs/op
+BenchmarkCoordinatorRegisterUnregister 	 5822882	        41.30 ns/op	       0 B/op	       0 allocs/op
+BenchmarkCoordinatorRegisterUnregister 	 5797778	        41.36 ns/op	       0 B/op	       0 allocs/op
+BenchmarkCoordinatorRegisterUnregister 	 5818629	        41.25 ns/op	       0 B/op	       0 allocs/op
+BenchmarkCoordinatorTryPoll/registrations=1         	 8573079	        27.93 ns/op	       0 B/op	       0 allocs/op
+BenchmarkCoordinatorTryPoll/registrations=1         	 8596964	        27.83 ns/op	       0 B/op	       0 allocs/op
+BenchmarkCoordinatorTryPoll/registrations=1         	 8607588	        28.02 ns/op	       0 B/op	       0 allocs/op
+BenchmarkCoordinatorTryPoll/registrations=1         	 8579020	        27.76 ns/op	       0 B/op	       0 allocs/op
+BenchmarkCoordinatorTryPoll/registrations=1         	 8640117	        27.72 ns/op	       0 B/op	       0 allocs/op
+BenchmarkCoordinatorTryPoll/registrations=16        	 1284450	       187.1 ns/op	       0 B/op	       0 allocs/op
+BenchmarkCoordinatorTryPoll/registrations=16        	 1278080	       187.7 ns/op	       0 B/op	       0 allocs/op
+BenchmarkCoordinatorTryPoll/registrations=16        	 1277575	       187.0 ns/op	       0 B/op	       0 allocs/op
+BenchmarkCoordinatorTryPoll/registrations=16        	 1248870	       194.7 ns/op	       0 B/op	       0 allocs/op
+BenchmarkCoordinatorTryPoll/registrations=16        	 1213581	       196.5 ns/op	       0 B/op	       0 allocs/op
+BenchmarkCoordinatorTryPoll/registrations=256       	   84123	      2856 ns/op	       0 B/op	       0 allocs/op
+BenchmarkCoordinatorTryPoll/registrations=256       	   84536	      2905 ns/op	       0 B/op	       0 allocs/op
+BenchmarkCoordinatorTryPoll/registrations=256       	   82570	      2933 ns/op	       0 B/op	       0 allocs/op
+BenchmarkCoordinatorTryPoll/registrations=256       	   79039	      2843 ns/op	       0 B/op	       0 allocs/op
+BenchmarkCoordinatorTryPoll/registrations=256       	   84128	      2819 ns/op	       0 B/op	       0 allocs/op
+BenchmarkCoordinatorTryPollParallel                 	 1235050	       189.5 ns/op	       0 B/op	       0 allocs/op
+BenchmarkCoordinatorTryPollParallel                 	 1277028	       199.9 ns/op	       0 B/op	       0 allocs/op
+BenchmarkCoordinatorTryPollParallel                 	 1261284	       192.3 ns/op	       0 B/op	       0 allocs/op
+BenchmarkCoordinatorTryPollParallel                 	 1265600	       191.3 ns/op	       0 B/op	       0 allocs/op
+BenchmarkCoordinatorTryPollParallel                 	 1266276	       188.2 ns/op	       0 B/op	       0 allocs/op
+BenchmarkCoordinatorTryPollService                  	 7829216	        30.59 ns/op	       0 B/op	       0 allocs/op
+BenchmarkCoordinatorTryPollService                  	 7881098	        31.10 ns/op	       0 B/op	       0 allocs/op
+BenchmarkCoordinatorTryPollService                  	 7640540	        30.87 ns/op	       0 B/op	       0 allocs/op
+BenchmarkCoordinatorTryPollService                  	 7816942	        30.62 ns/op	       0 B/op	       0 allocs/op
+BenchmarkCoordinatorTryPollService                  	 7825590	        30.64 ns/op	       0 B/op	       0 allocs/op
 PASS
-ok  	github.com/wago-org/net/internal/readiness	1.813s
+ok  	github.com/wago-org/net/internal/readiness	8.155s
 PASS
 ok  	github.com/wago-org/net/internal/releaseprovenance	0.002s
 goos: linux
 goarch: amd64
 pkg: github.com/wago-org/net/internal/resource
-cpu: AMD Ryzen 7 8845HS w/ Radeon 780M Graphics     
-BenchmarkNewTable             	 5060697	        22.73 ns/op	      64 B/op	       1 allocs/op
-BenchmarkNewTable             	 5383581	        22.32 ns/op	      64 B/op	       1 allocs/op
-BenchmarkNewTable             	 5289762	        22.33 ns/op	      64 B/op	       1 allocs/op
-BenchmarkTableAddCloseHandle  	 9587196	        12.37 ns/op	       0 B/op	       0 allocs/op
-BenchmarkTableAddCloseHandle  	 9743176	        12.34 ns/op	       0 B/op	       0 allocs/op
-BenchmarkTableAddCloseHandle  	 9753951	        12.34 ns/op	       0 B/op	       0 allocs/op
-BenchmarkTableLen             	30091930	         3.999 ns/op	       0 B/op	       0 allocs/op
-BenchmarkTableLen             	29881207	         4.046 ns/op	       0 B/op	       0 allocs/op
-BenchmarkTableLen             	30742318	         3.944 ns/op	       0 B/op	       0 allocs/op
-BenchmarkMakeHandle           	93480877	         1.254 ns/op	       0 B/op	       0 allocs/op
-BenchmarkMakeHandle           	94588884	         1.262 ns/op	       0 B/op	       0 allocs/op
-BenchmarkMakeHandle           	95845267	         1.256 ns/op	       0 B/op	       0 allocs/op
-BenchmarkSplitHandle          	82966551	         1.484 ns/op	       0 B/op	       0 allocs/op
-BenchmarkSplitHandle          	79651708	         1.483 ns/op	       0 B/op	       0 allocs/op
-BenchmarkSplitHandle          	81150936	         1.482 ns/op	       0 B/op	       0 allocs/op
-BenchmarkTableLookupBadHandle 	22669071	         5.552 ns/op	       0 B/op	       0 allocs/op
-BenchmarkTableLookupBadHandle 	22133838	         5.348 ns/op	       0 B/op	       0 allocs/op
-BenchmarkTableLookupBadHandle 	22622403	         5.332 ns/op	       0 B/op	       0 allocs/op
-BenchmarkTableLookup          	20291263	         5.978 ns/op	       0 B/op	       0 allocs/op
-BenchmarkTableLookup          	20009407	         5.996 ns/op	       0 B/op	       0 allocs/op
-BenchmarkTableLookup          	20205380	         5.946 ns/op	       0 B/op	       0 allocs/op
-BenchmarkTableCloseLive/resources=1         	  609157	       196.4 ns/op	     176 B/op	       4 allocs/op
-BenchmarkTableCloseLive/resources=1         	  519580	       199.6 ns/op	     176 B/op	       4 allocs/op
-BenchmarkTableCloseLive/resources=1         	  528421	       199.2 ns/op	     176 B/op	       4 allocs/op
-BenchmarkTableCloseLive/resources=64        	   38606	      2983 ns/op	   10080 B/op	      73 allocs/op
-BenchmarkTableCloseLive/resources=64        	   38953	      3014 ns/op	   10080 B/op	      73 allocs/op
-BenchmarkTableCloseLive/resources=64        	   39025	      3036 ns/op	   10080 B/op	      73 allocs/op
-BenchmarkTableCloseLive/resources=1024      	    2316	     43820 ns/op	  157408 B/op	    1037 allocs/op
-BenchmarkTableCloseLive/resources=1024      	    2516	     44806 ns/op	  157408 B/op	    1037 allocs/op
-BenchmarkTableCloseLive/resources=1024      	    2262	     44362 ns/op	  157408 B/op	    1037 allocs/op
+cpu: AMD Ryzen 7 8845HS w/ Radeon 780M Graphics
+BenchmarkNewTable             	10128804	        22.40 ns/op	      64 B/op	       1 allocs/op
+BenchmarkNewTable             	10726358	        22.37 ns/op	      64 B/op	       1 allocs/op
+BenchmarkNewTable             	10917172	        22.22 ns/op	      64 B/op	       1 allocs/op
+BenchmarkNewTable             	10256907	        22.87 ns/op	      64 B/op	       1 allocs/op
+BenchmarkNewTable             	10312850	        22.70 ns/op	      64 B/op	       1 allocs/op
+BenchmarkTableAddCloseHandle  	15792211	        14.94 ns/op	       0 B/op	       0 allocs/op
+BenchmarkTableAddCloseHandle  	16046125	        14.83 ns/op	       0 B/op	       0 allocs/op
+BenchmarkTableAddCloseHandle  	16196155	        14.83 ns/op	       0 B/op	       0 allocs/op
+BenchmarkTableAddCloseHandle  	16166457	        14.96 ns/op	       0 B/op	       0 allocs/op
+BenchmarkTableAddCloseHandle  	15715803	        15.11 ns/op	       0 B/op	       0 allocs/op
+BenchmarkTableLen             	59862510	         4.061 ns/op	       0 B/op	       0 allocs/op
+BenchmarkTableLen             	57141536	         4.103 ns/op	       0 B/op	       0 allocs/op
+BenchmarkTableLen             	59296579	         4.126 ns/op	       0 B/op	       0 allocs/op
+BenchmarkTableLen             	56834865	         4.162 ns/op	       0 B/op	       0 allocs/op
+BenchmarkTableLen             	57733581	         4.189 ns/op	       0 B/op	       0 allocs/op
+BenchmarkMakeHandle           	182049518	         1.278 ns/op	       0 B/op	       0 allocs/op
+BenchmarkMakeHandle           	207155720	         1.150 ns/op	       0 B/op	       0 allocs/op
+BenchmarkMakeHandle           	182206792	         1.316 ns/op	       0 B/op	       0 allocs/op
+BenchmarkMakeHandle           	182692167	         1.314 ns/op	       0 B/op	       0 allocs/op
+BenchmarkMakeHandle           	203243084	         1.249 ns/op	       0 B/op	       0 allocs/op
+BenchmarkSplitHandle          	182493392	         1.315 ns/op	       0 B/op	       0 allocs/op
+BenchmarkSplitHandle          	181802852	         1.325 ns/op	       0 B/op	       0 allocs/op
+BenchmarkSplitHandle          	182770380	         1.327 ns/op	       0 B/op	       0 allocs/op
+BenchmarkSplitHandle          	178537820	         1.342 ns/op	       0 B/op	       0 allocs/op
+BenchmarkSplitHandle          	175735923	         1.354 ns/op	       0 B/op	       0 allocs/op
+BenchmarkTableLookupBadHandle 	38730790	         5.555 ns/op	       0 B/op	       0 allocs/op
+BenchmarkTableLookupBadHandle 	43718704	         5.877 ns/op	       0 B/op	       0 allocs/op
+BenchmarkTableLookupBadHandle 	40812876	         5.877 ns/op	       0 B/op	       0 allocs/op
+BenchmarkTableLookupBadHandle 	38737230	         5.919 ns/op	       0 B/op	       0 allocs/op
+BenchmarkTableLookupBadHandle 	41953890	         5.707 ns/op	       0 B/op	       0 allocs/op
+BenchmarkTableLookup          	37948617	         6.323 ns/op	       0 B/op	       0 allocs/op
+BenchmarkTableLookup          	38888097	         6.302 ns/op	       0 B/op	       0 allocs/op
+BenchmarkTableLookup          	37822137	         6.276 ns/op	       0 B/op	       0 allocs/op
+BenchmarkTableLookup          	38634216	         6.300 ns/op	       0 B/op	       0 allocs/op
+BenchmarkTableLookup          	38657656	         6.341 ns/op	       0 B/op	       0 allocs/op
+BenchmarkTableLookupParallel  	37037470	         6.705 ns/op	       0 B/op	       0 allocs/op
+BenchmarkTableLookupParallel  	36678672	         6.845 ns/op	       0 B/op	       0 allocs/op
+BenchmarkTableLookupParallel  	35689408	         6.626 ns/op	       0 B/op	       0 allocs/op
+BenchmarkTableLookupParallel  	36459280	         6.623 ns/op	       0 B/op	       0 allocs/op
+BenchmarkTableLookupParallel  	37163955	         6.488 ns/op	       0 B/op	       0 allocs/op
+BenchmarkTableCloseLive/resources=1         	 1131043	       210.0 ns/op	     176 B/op	       3 allocs/op
+BenchmarkTableCloseLive/resources=1         	 1114209	       210.5 ns/op	     176 B/op	       3 allocs/op
+BenchmarkTableCloseLive/resources=1         	 1103056	       222.8 ns/op	     176 B/op	       3 allocs/op
+BenchmarkTableCloseLive/resources=1         	  961128	       216.0 ns/op	     176 B/op	       3 allocs/op
+BenchmarkTableCloseLive/resources=1         	  982972	       216.2 ns/op	     176 B/op	       3 allocs/op
+BenchmarkTableCloseLive/resources=64        	   59559	      3953 ns/op	    9952 B/op	      72 allocs/op
+BenchmarkTableCloseLive/resources=64        	   59266	      3995 ns/op	    9952 B/op	      72 allocs/op
+BenchmarkTableCloseLive/resources=64        	   61741	      4012 ns/op	    9952 B/op	      72 allocs/op
+BenchmarkTableCloseLive/resources=64        	   57625	      3909 ns/op	    9952 B/op	      72 allocs/op
+BenchmarkTableCloseLive/resources=64        	   64147	      4136 ns/op	    9952 B/op	      72 allocs/op
+BenchmarkTableCloseLive/resources=1024      	    3723	     58076 ns/op	  155360 B/op	    1036 allocs/op
+BenchmarkTableCloseLive/resources=1024      	    4050	     59123 ns/op	  155360 B/op	    1036 allocs/op
+BenchmarkTableCloseLive/resources=1024      	    3889	     57630 ns/op	  155360 B/op	    1036 allocs/op
+BenchmarkTableCloseLive/resources=1024      	    3607	     55718 ns/op	  155360 B/op	    1036 allocs/op
+BenchmarkTableCloseLive/resources=1024      	    4269	     55200 ns/op	  155360 B/op	    1036 allocs/op
+BenchmarkTableClosePreloaded/resources=1    	 5294208	        46.22 ns/op	      64 B/op	       1 allocs/op
+BenchmarkTableClosePreloaded/resources=1    	 5433408	        43.39 ns/op	      64 B/op	       1 allocs/op
+BenchmarkTableClosePreloaded/resources=1    	 5330169	        44.29 ns/op	      64 B/op	       1 allocs/op
+BenchmarkTableClosePreloaded/resources=1    	 5167270	        45.86 ns/op	      64 B/op	       1 allocs/op
+BenchmarkTableClosePreloaded/resources=1    	 5281578	        45.27 ns/op	      64 B/op	       1 allocs/op
+BenchmarkTableClosePreloaded/resources=64   	  239712	      1084 ns/op	      64 B/op	       1 allocs/op
+BenchmarkTableClosePreloaded/resources=64   	  244671	      1082 ns/op	      64 B/op	       1 allocs/op
+BenchmarkTableClosePreloaded/resources=64   	  241062	      1031 ns/op	      64 B/op	       1 allocs/op
+BenchmarkTableClosePreloaded/resources=64   	  237978	      1058 ns/op	      64 B/op	       1 allocs/op
+BenchmarkTableClosePreloaded/resources=64   	  242994	      1040 ns/op	      64 B/op	       1 allocs/op
+BenchmarkTableClosePreloaded/resources=1024 	   15657	     15641 ns/op	      66 B/op	       1 allocs/op
+BenchmarkTableClosePreloaded/resources=1024 	   14972	     15728 ns/op	      66 B/op	       1 allocs/op
+BenchmarkTableClosePreloaded/resources=1024 	   15013	     15514 ns/op	      66 B/op	       1 allocs/op
+BenchmarkTableClosePreloaded/resources=1024 	   15645	     15144 ns/op	      66 B/op	       1 allocs/op
+BenchmarkTableClosePreloaded/resources=1024 	   15210	     15624 ns/op	      66 B/op	       1 allocs/op
 PASS
-ok  	github.com/wago-org/net/internal/resource	3.756s
+ok  	github.com/wago-org/net/internal/resource	19.073s
+?   	github.com/wago-org/net/internal/tlslimits	[no test files]
+PASS
+ok  	github.com/wago-org/net/ipv6	0.003s
+PASS
+ok  	github.com/wago-org/net/ipv6/register	0.003s
+PASS
+ok  	github.com/wago-org/net/linklocal4	0.003s
+PASS
+ok  	github.com/wago-org/net/linklocal4/register	0.003s
+PASS
+ok  	github.com/wago-org/net/mdns	0.003s
+PASS
+ok  	github.com/wago-org/net/mdns/register	0.003s
+PASS
+ok  	github.com/wago-org/net/ntp	0.003s
+PASS
+ok  	github.com/wago-org/net/ntp/register	0.003s
 PASS
 ok  	github.com/wago-org/net/register	0.003s
 PASS
@@ -511,6 +1431,8 @@ ok  	github.com/wago-org/net/tcp	0.003s
 PASS
 ok  	github.com/wago-org/net/tcp/register	0.003s
 PASS
-ok  	github.com/wago-org/net/udp	0.002s
+ok  	github.com/wago-org/net/tls	0.003s
+PASS
+ok  	github.com/wago-org/net/udp	0.003s
 PASS
 ok  	github.com/wago-org/net/udp/register	0.003s
