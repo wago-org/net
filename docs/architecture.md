@@ -25,7 +25,7 @@ The suite therefore uses **protocol import modules**:
 - `wago_net` for shared core operations;
 - `wago_net_udp` for UDP;
 - `wago_net_tcp` for raw TCP;
-- `wago_net_tls` for outbound verified TLS client streams;
+- `wago_net_tls` for verified TLS client streams and explicitly authorized server listeners;
 - `wago_net_dns` for DNS;
 - `wago_net_icmpv4` for ICMPv4 echo;
 - `wago_net_ntp` for explicit-clock NTP synchronization;
@@ -83,8 +83,8 @@ invalid and unmatched requests fail closed, and separate zero-default gates are
 required for wildcard binds, loopback, multicast, limited broadcast, and local
 bind/listen ports below 1024. IPv4-mapped IPv6 values are rejected rather than
 normalized across policy families. Authority-changing operations have explicit
-UDP bind/send, TCP listen/connect, TLS connect, and DNS resolve checks. TLS
-allows are evaluated as TLS authority, while applicable TCP denies additionally
+UDP bind/send, TCP listen/connect, TLS connect/listen, and DNS resolve checks.
+TLS allows are evaluated as TLS authority, while applicable TCP denies additionally
 constrain the private byte transport without requiring any raw-TCP allow. Selected protocol
 modules contribute deep-copied grant sets through an opaque shared contract after
 registration freezes and before manager construction. Caller policy is copied
@@ -184,10 +184,11 @@ egress service probe reclaims that entry and now reports one charged service
 operation even when no frame is
 emitted. This preserves lneto's private accepted-list bookkeeping without unsafe
 direct slot reuse, while making the finite maintenance cost and reuse point
-observable. `internal/backend/gotls` owns the standard-library `crypto/tls`
-client engine over fixed plaintext/ciphertext rings and exactly three workers per
-finite stream. `internal/backend/lneto/tls` owns only lneto transport pumping and
-a private TCP adapter. TLS stream teardown joins workers before private TCP
+observable. `internal/backend/gotls` owns the standard-library `crypto/tls` client and server
+engines over fixed plaintext/ciphertext rings and exactly three workers per
+finite stream. `internal/backend/lneto/tls` owns lneto transport pumping, private
+TCP streams/listeners, bounded accept and handshake ownership, and the shared
+namespace-local port domain. TLS stream teardown joins workers before private TCP
 teardown; no raw TCP handle is published. Every pump and handshake is bounded by
 bytes, operations, record-sized attempts, queues, certificate/handshake limits,
 and service attempts. `internal/backend/lneto/icmpv4` owns immediate Ethernet/IPv4/ICMP echo codecs,
@@ -296,7 +297,7 @@ Granular `tcp/register`, `udp/register`, `dns/register`, `icmpv4/register`,
 `ipv6/register`, `icmpv6/register`, and `dhcpv6/register` packages own only their
 selected public facade and exact implementation graph. TLS intentionally has no
 self-registering package because no secure zero-configuration extension can
-invent trust roots, identities, ALPN, credentials, or profile IDs. Explicit TLS
+invent trust roots, identities, ALPN, credentials, listener authority, or profile IDs. Explicit TLS
 Go composition may compile the neutral TCP facet and private lneto TCP adapter,
 but not the public TCP facade, TCP binding, TCP instance operations, or TCP ABI.
 The root `register` package intentionally continues to compose the eleven

@@ -7,8 +7,9 @@ and build caches enabled and has seven bounded jobs:
 - **quality** runs the ordinary suite, one shuffled suite, `go vet`, and the
   backend/source-boundary guard;
 - **tls-standard-go** runs `scripts/tls-signoff.sh`, retaining the exact public
-  composition, security, ABI, dependency, mixed-transport, EOF, quota, and worker
-  lifecycle ordinary/race evidence;
+  composition, client/server security, v1/v2 ABI, live mixed-transport,
+  close-notify/truncation, quota, listener-race, and worker-lifecycle
+  ordinary/race evidence;
 - **tinygo-supported** installs pinned TinyGo 0.41.1 and runs
   `scripts/tinygo-supported-test.sh` across the exact 123-package supported
   surface while retaining the reviewed five-package TLS exclusion;
@@ -65,12 +66,13 @@ scripts/ci-checkptr.sh
 
 The script first compiles and initializes every package and test binary with
 `-gcflags=all=-d=checkptr=2`. It then runs every test under the same
-instrumentation except these two allocation-only assertions:
+instrumentation except these three allocation-only assertions:
 
 - `TestInstallNamespaceServicesAvoidsPerProtocolScratchForCommonSelections` in
   the root package;
 - `TestNamespaceCompositionAvoidsPerServiceHeapGrowthForPlannedSuite` in
-  `internal/namespace/core`.
+  `internal/namespace/core`;
+- `TestHostFacadeExactAttachedLookupDoesNotAllocate` in `internal/plugin`.
 
 Checkptr instrumentation intentionally adds allocations, so those tests cannot
 truthfully enforce their ordinary-build exact `testing.AllocsPerRun` budgets in

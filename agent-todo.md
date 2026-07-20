@@ -1610,3 +1610,40 @@ No repository-owned workstream or completion criterion from this hardening reque
   topology, so the lifecycle/preview-1 integration must be re-reviewed and
   re-ported. No provenance or review-bundle hashes were produced. Production
   readiness also still requires executed arm64 TLS evidence.
+
+## TLS client/server stream completion — July 20, 2026
+
+- Preserved `connection_info_v1` byte-for-byte: offset 68 is again only the
+  little-endian resumed boolean 0 or 1. Added the separate additive
+  `connection_info_v2` import for resumed, server-role, and peer-authenticated
+  flags; unknown flags remain reserved and invalid.
+- Changed server-profile composition so storing host credentials grants no
+  endpoint authority. `tls.AllowListeners()` is now the explicit ordinary
+  inbound TLS grant, remains separate from raw TCP, and continues to honor
+  applicable raw-TCP inbound deny rules.
+- Server profile construction now eagerly parses every certificate, verifies
+  chain linkage and leaf/signer public-key equality, clones certificate
+  metadata, rejects dynamic SNI/configuration callbacks, and documents that the
+  host retains lifetime/concurrency ownership of each `crypto.Signer`.
+- Added deterministic live two-namespace lneto TLS tests for ordinary server
+  authentication and mTLS, ALPN, role metadata, multi-queue backpressure,
+  bidirectional plaintext, clean two-way `close_notify`, abrupt raw-transport
+  truncation, listener reuse, exact quota/port release, close/accept races, and
+  concurrent namespace/resource teardown.
+- The hosted ordinary-Go failure in Actions run `29757140541`, job
+  `88402308965`, was a real final-flight test deadlock: the client reported
+  verified completion before its final TLS 1.3 flight had been pumped to the
+  standard-library server. The test and client benchmark now explicitly service
+  that bounded flight before waiting for peer completion.
+- Current local evidence: `go test ./...`, shuffled tests, full race/shuffle,
+  vet, source boundaries, checkptr, accepted-diagnostic linux/386, all 123
+  TinyGo-supported packages, all 12 custom CLI bundles, and all 17 TLS signoff
+  profiles passed. TLS signoff resolves 133 named tests. Fuzz smoke passes 47
+  targets in 33 packages, including seven TLS-owned targets. Benchmark smoke
+  passes 173 top-level targets; the five-by-200 ms capture expands to 196 result
+  names and includes separate client/server TLS 1.3 handshakes. Four arm64 test
+  binaries cross-compile, while execution remains `skipped-no-runner`.
+- Standard-Go TLS client/server streams and listeners are now implemented and
+  exercised. HTTP, HTTPS, portable TinyGo TLS, strict release adoption, and
+  executed arm64 evidence remain explicitly incomplete. PR #3 must remain a
+  draft and TLS must remain outside aggregate `register`.

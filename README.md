@@ -4,8 +4,9 @@ Capability-gated networking plugins for the [Wago](https://github.com/wago-org/w
 WebAssembly runtime, backed initially by [lneto](https://github.com/soypat/lneto).
 UDP, TCP, DNS, bounded ICMPv4 echo, explicit-clock NTP, bounded IPv4 multicast
 DNS, DHCPv4, IPv4 link-local/APIPA, configured IPv6 TCP transport enablement,
-bounded ICMPv6/NDP, the pinned bounded initial DHCPv6 acquisition subset, and a
-granular outbound client-only TLS capability are implemented today.
+bounded ICMPv6/NDP, the pinned bounded initial DHCPv6 acquisition subset, and
+granular standard-Go TLS client/server stream foundations are implemented today.
+HTTP/HTTPS APIs and portable TinyGo TLS are not implemented.
 
 > [!WARNING]
 > This module is private and experimental. Use it only with the exact Wago
@@ -112,29 +113,58 @@ if err := wagonettls.Register(network, wagonettls.WithClientProfile(profile)); e
 }
 ```
 
+Inbound TLS is also explicit and does not imply raw TCP:
+
+```go
+serverProfile, err := wagonettls.NewServerProfile(2, hostServerTLSConfig,
+    wagonettls.RequireServerALPN("h2"),
+)
+if err != nil {
+    return err
+}
+if err := wagonettls.Register(network,
+    wagonettls.WithServerProfile(serverProfile),
+    wagonettls.AllowListeners(),
+); err != nil {
+    return err
+}
+```
+
+Storing a server profile alone grants no listen authority. Certificate chains
+are parsed eagerly, leaf keys must match host-owned `crypto.Signer` values, and
+server credentials never enter guest memory. Static SNI selection is limited to
+host-supplied immutable certificates; dynamic certificate/config callbacks are
+rejected.
+
 TLS intentionally has no `tls/register` zero-configuration extension and no
-`net-tls` custom-CLI key. Trust roots, verification identities, ALPN, client
-credentials, and profile IDs are deployment authority that must be supplied by
-explicit Go composition; the repository does not invent placeholder TLS policy.
+`net-tls` custom-CLI key. Trust roots, verification identities, ALPN, client or
+server credentials, listen authority, and profile IDs are deployment authority
+that must be supplied by explicit Go composition; the repository does not invent
+placeholder TLS policy.
 
-The complete TLS implementation is standard-Go-only. TinyGo 0.41.1 lacks the
-required `crypto/tls` client APIs, so the repository provides no TinyGo stub,
-placeholder guest module, or fake handshake. `scripts/tinygo-supported-test.sh`
-tests the exact reviewed non-TLS package surface and fails closed if the five
-standard-Go-only TLS packages change without review. `scripts/tls-signoff.sh`
-retains separate ordinary and race evidence for explicit TLS composition,
-security, ABI, mixed transport, EOF, quota, and worker teardown. TLS remains
-client-only, granular-only, outside aggregate `register`, and experimental until
-the complete strict release and executed arm64 requirements are satisfied.
+The cryptographic TLS implementation is standard-Go-only. TinyGo 0.41.1 lacks
+the required arbitrary-stream `crypto/tls` APIs, so the repository provides no
+TinyGo stub, placeholder guest module, or fake handshake.
+`scripts/tinygo-supported-test.sh` tests the exact reviewed non-TLS package
+surface and fails closed if the five standard-Go-only TLS packages change
+without review. `scripts/tls-signoff.sh` retains separate ordinary and race
+evidence for explicit TLS composition, client/server handshakes, ABI
+compatibility, mixed transport, EOF, quota, and worker teardown. TLS remains
+granular-only and outside aggregate `register`; HTTP, HTTPS, portable TinyGo TLS,
+strict release adoption, and executed arm64 evidence remain incomplete.
 
-Profiles are finite and host-defined. The guest selects only a profile ID,
-remote IP endpoint, and authorized verification name. Certificate-chain and
-DNS/IP SAN verification are mandatory; Common Name fallback, key logging,
+Profiles are finite and host-defined. Outbound guests select only a profile ID,
+remote IP endpoint, and authorized verification name; inbound guests select a
+server profile ID and an explicitly authorized local endpoint. Certificate-chain
+and DNS/IP SAN verification are mandatory for clients; configured mTLS uses
+standard client-chain verification. Common Name fallback, key logging,
 renegotiation, arbitrary verification/certificate callbacks, guest session
 caches, 0-RTT, STARTTLS, and wrapping guest TCP handles are absent. TLS 1.3 is
 the default and TLS 1.2 requires `EnableTLS12()`. Client private keys remain
 host-side. Clean `close_notify` maps to EOF; raw TCP EOF maps to TLS protocol
-failure. See [`docs/tls.md`](docs/tls.md).
+failure. The additive `connection_info_v2` reports client/server role and peer
+authentication while preserving `connection_info_v1` byte-for-byte. See
+[`docs/tls.md`](docs/tls.md).
 
 TCP defaults provide eight finite outbound streams and no listeners. UDP defaults
 provide eight finite sockets, ephemeral wildcard client binds, outbound ordinary

@@ -141,14 +141,17 @@ reviewed standard-Go-only TLS closure is exactly five packages:
 - `github.com/wago-org/net/tls`.
 
 TinyGo 0.41.1 tests the remaining 123 packages individually and retains one log
-per package. The explicit standard-Go TLS signoff runs 17 package profiles
-(10 ordinary and seven race) resolving 109 named test targets. Arm64 signoff
-cross-compiles four test binaries; the current local auto profile is truthfully
+per package. On the expanded standard-Go client/server stream branch, the
+explicit TLS signoff still runs 17 package profiles (10 ordinary and seven race)
+but now resolves 133 named test targets. Arm64 signoff cross-compiles four test
+binaries whose subjects now include the standard-Go server engine, live lneto
+client/server TLS, explicit listener authority, and eager certificate/key
+validation; the current local auto profile remains truthfully
 `skipped-no-runner`, so it is not execution evidence. Benchmark discovery finds
-172 top-level targets in 50 packages, and the canonical five-by-200 ms baseline
-now includes TLS handshake, fixed-ring, profile-authorization, shared TCP-port,
-and mixed transport paths. Fuzz discovery finds 44 targets in 33 packages,
-including four TLS-owned targets.
+173 top-level targets in 50 packages and 196 expanded result names; a local
+five-by-200 ms capture includes separate TLS 1.3 client and server handshake
+benchmarks. Fuzz discovery finds 47 targets in 33 packages, including seven
+TLS-owned targets covering v1/v2 metadata and listener layouts.
 
 The exact production Wago input remains commit
 `97e6f91e6c822491577faa86f3c30aa5a8fff1e8`, tree
