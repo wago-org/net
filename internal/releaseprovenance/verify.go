@@ -290,8 +290,13 @@ func verifyDirectory(root string, opts VerifyOptions) (*Verification, error) {
 	if err := readArm64(root, &arm64); err != nil {
 		return nil, err
 	}
-	if arm64 != manifest.Targets.Arm64Execution {
+	if !reflect.DeepEqual(arm64, manifest.Targets.Arm64Execution) {
 		return nil, fmt.Errorf("release provenance: arm64 evidence does not match manifest target")
+	}
+	if manifest.Schema == SchemaV3 {
+		if err := validateTLSPlatformArtifacts(root, checks); err != nil {
+			return nil, err
+		}
 	}
 	if err := verifyRevisions(filepath.Join(root, "revisions.txt"), &manifest); err != nil {
 		return nil, err
@@ -303,8 +308,8 @@ func verifyDirectory(root string, opts VerifyOptions) (*Verification, error) {
 }
 
 func validateManifest(manifest *Manifest, opts VerifyOptions) error {
-	if manifest.Schema != SchemaV2 {
-		return fmt.Errorf("release provenance: schema %q, want %q", manifest.Schema, SchemaV2)
+	if manifest.Schema != SchemaV2 && manifest.Schema != SchemaV3 {
+		return fmt.Errorf("release provenance: schema %q, want %q or %q", manifest.Schema, SchemaV2, SchemaV3)
 	}
 	if manifest.Subject.Name != "net" || !validObjectID(manifest.Subject.Revision) || !validObjectID(manifest.Subject.Tree) || len(manifest.Subject.Parents) != 0 {
 		return fmt.Errorf("release provenance: invalid net subject identity")
@@ -371,30 +376,40 @@ func validateManifest(manifest *Manifest, opts VerifyOptions) error {
 		benchmarks.CPU != releaseBenchmarkCPU || !benchmarks.Benchmem {
 		return fmt.Errorf("release provenance: benchmark facts do not prove the required non-empty bounded run")
 	}
-	if manifest.Targets.CrossBuild != (TargetResult{GOOS: "linux", GOARCH: "arm64", Status: "pass"}) {
+	if !reflect.DeepEqual(manifest.Targets.CrossBuild, TargetResult{GOOS: "linux", GOARCH: "arm64", Status: "pass"}) {
 		return fmt.Errorf("release provenance: cross-build target is not the required linux/arm64 pass")
 	}
 	arm64 := manifest.Targets.Arm64Execution
 	if arm64.GOOS != "linux" || arm64.GOARCH != "arm64" {
 		return fmt.Errorf("release provenance: invalid arm64 execution result")
 	}
+	if arm64.BinarySHA256 != "" && len(arm64.Binaries) != 0 {
+		return fmt.Errorf("release provenance: arm64 result mixes historical and multi-binary evidence")
+	}
+	validBinaries := validArm64Binaries(arm64.Binaries)
+	hasHistoricalBinary := validSHA256(arm64.BinarySHA256)
 	switch {
 	case strings.HasPrefix(arm64.Status, "executed-"):
-		if !validSHA256(arm64.BinarySHA256) || arm64.Runner == "" || arm64.Runner == "none" {
+		if (!hasHistoricalBinary && !validBinaries) || arm64.Runner == "" || arm64.Runner == "none" {
 			return fmt.Errorf("release provenance: invalid executed arm64 result")
 		}
 	case arm64.Status == "skipped-no-runner":
-		if !validSHA256(arm64.BinarySHA256) || arm64.Runner != "none" {
+		if (!hasHistoricalBinary && !validBinaries) || arm64.Runner != "none" {
 			return fmt.Errorf("release provenance: invalid no-runner arm64 result")
 		}
 	case arm64.Status == "skipped-disabled":
-		if arm64.BinarySHA256 != "" || arm64.Runner != "none" {
+		if hasHistoricalBinary || arm64.Runner != "none" {
 			return fmt.Errorf("release provenance: disabled arm64 result retained a binary or runner")
+		}
+		// Historical evidence did not cross-compile when execution was disabled;
+		// current evidence retains the complete multi-binary cross-build set.
+		if len(arm64.Binaries) != 0 && !validBinaries {
+			return fmt.Errorf("release provenance: invalid disabled arm64 binaries")
 		}
 	default:
 		return fmt.Errorf("release provenance: invalid arm64 execution status %q", arm64.Status)
 	}
-	if err := validateChecks(manifest.Checks, arm64.Status, benchmarks); err != nil {
+	if err := validateChecks(manifest.Checks, arm64.Status, benchmarks, manifest.Schema == SchemaV3); err != nil {
 		return err
 	}
 	if err := validateArtifacts(manifest.Artifacts); err != nil {
@@ -411,10 +426,17 @@ func validateManifest(manifest *Manifest, opts VerifyOptions) error {
 	}
 	var limitations []Limitation
 	if strings.HasPrefix(arm64.Status, "skipped-") {
-		limitations = []Limitation{{
-			ID: "linux-arm64-execution", Status: arm64.Status,
-			Detail: "cross-build passed, but this release gate did not execute the arm64 smoke binary",
-		}}
+		detail := "cross-build passed, but this release gate did not execute the arm64 smoke binary"
+		if len(arm64.Binaries) != 0 {
+			detail = "cross-build passed, but this release gate did not execute the arm64 smoke binaries"
+		}
+		limitations = append(limitations, Limitation{ID: "linux-arm64-execution", Status: arm64.Status, Detail: detail})
+	}
+	if checkStatus(manifest.Checks, "tls-standard-go") == "pass" {
+		limitations = append(limitations, Limitation{
+			ID: "tls-tinygo", Status: "unsupported-explicit",
+			Detail: "outbound client TLS is tested under standard Go and intentionally unavailable under TinyGo; no stub or guest module is registered",
+		})
 	}
 	if !reflect.DeepEqual(manifest.Limitations, limitations) {
 		return fmt.Errorf("release provenance: limitations do not exactly match target truth")
@@ -450,7 +472,7 @@ func expectedReviewSourceRepositories(opts VerifyOptions) []Repository {
 
 const releaseBenchmarkCheck = "benchmark-runtime"
 
-func validateChecks(checks []Check, arm64Status string, benchmarks BenchmarkEvidence) error {
+func validateChecks(checks []Check, arm64Status string, benchmarks BenchmarkEvidence, requireTLSPlatform bool) error {
 	requiredPass := []string{
 		"pinned-revisions", "initial-clean-trees", "wago-plugin-plan-compat", "current-plugin-topology-audit", "wasi-preview1-fix-review",
 		"go-test-workspace", "go-test-module", "go-test-race", "go-vet", "go-list", "go-mod-tidy",
@@ -483,9 +505,17 @@ func validateChecks(checks []Check, arm64Status string, benchmarks BenchmarkEvid
 			}
 		}
 	}
+	if requireTLSPlatform {
+		requiredPass = append(requiredPass, "tls-standard-go")
+	}
 	for _, name := range requiredPass {
 		if seen[name].Status != "pass" {
 			return fmt.Errorf("release provenance: required check %q is %q, want pass", name, seen[name].Status)
+		}
+	}
+	if requireTLSPlatform {
+		if err := validateTLSCheckDetails(seen["tls-standard-go"].Detail, seen["tinygo-test"].Detail); err != nil {
+			return err
 		}
 	}
 	if benchmark := seen[releaseBenchmarkCheck]; benchmark.Status != "pass" || benchmark.Detail != benchmarkDetail(benchmarks) {
@@ -503,6 +533,94 @@ func validateChecks(checks []Check, arm64Status string, benchmarks BenchmarkEvid
 		return fmt.Errorf("release provenance: require exactly one pinned WASI pass or accepted preview-1 exception")
 	}
 	return nil
+}
+
+func validateTLSCheckDetails(tlsDetail, tinygoDetail string) error {
+	tlsValues, err := parseCheckDetail(tlsDetail)
+	if err != nil {
+		return fmt.Errorf("release provenance: TLS standard-Go detail: %w", err)
+	}
+	wantTLS := map[string]string{
+		"standard_go_tls": "tested", "aggregate_registration": "absent", "self_registration": "absent", "scope": "outbound-client-only",
+		"ordinary_packages": "10", "race_packages": "7", "package_runs": "17",
+	}
+	for key, want := range wantTLS {
+		if tlsValues[key] != want {
+			return fmt.Errorf("release provenance: TLS standard-Go detail %s=%q, want %q", key, tlsValues[key], want)
+		}
+	}
+	if len(tlsValues) != len(wantTLS)+1 {
+		return fmt.Errorf("release provenance: TLS standard-Go detail has unexpected fields")
+	}
+	if tests := tlsValues["test_targets"]; tests == "" || tests[0] == '0' {
+		return fmt.Errorf("release provenance: TLS standard-Go detail has no test targets")
+	}
+
+	tinygoValues, err := parseCheckDetail(tinygoDetail)
+	if err != nil {
+		return fmt.Errorf("release provenance: TinyGo detail: %w", err)
+	}
+	if len(tinygoValues) != 4 || tinygoValues["excluded_packages"] != "5" ||
+		tinygoValues["exclusion_root"] != "github.com/wago-org/net/internal/backend/gotls" {
+		return fmt.Errorf("release provenance: TinyGo detail does not describe the reviewed TLS exclusion")
+	}
+	repositoryCount, okRepository := positiveDecimal(tinygoValues["repository_packages"])
+	supportedCount, okSupported := positiveDecimal(tinygoValues["supported_packages"])
+	excludedCount, okExcluded := positiveDecimal(tinygoValues["excluded_packages"])
+	if !okRepository || !okSupported || !okExcluded || repositoryCount != supportedCount+excludedCount {
+		return fmt.Errorf("release provenance: TinyGo package counts are invalid")
+	}
+	return nil
+}
+
+func parseCheckDetail(detail string) (map[string]string, error) {
+	values := make(map[string]string)
+	for _, field := range strings.Fields(detail) {
+		key, value, ok := strings.Cut(field, "=")
+		if !ok || key == "" || value == "" {
+			return nil, fmt.Errorf("malformed field %q", field)
+		}
+		if _, duplicate := values[key]; duplicate {
+			return nil, fmt.Errorf("duplicate field %q", key)
+		}
+		values[key] = value
+	}
+	if len(values) == 0 {
+		return nil, fmt.Errorf("empty detail")
+	}
+	return values, nil
+}
+
+func positiveDecimal(value string) (int, bool) {
+	if value == "" {
+		return 0, false
+	}
+	result := 0
+	for _, digit := range value {
+		if digit < '0' || digit > '9' {
+			return 0, false
+		}
+		result = result*10 + int(digit-'0')
+	}
+	return result, result > 0
+}
+
+func validArm64Binaries(binaries []TargetBinary) bool {
+	want := []string{
+		"binaries/gotls-linux-arm64.test",
+		"binaries/lneto-tls-linux-arm64.test",
+		"binaries/net-linux-arm64.test",
+		"binaries/tls-public-linux-arm64.test",
+	}
+	if len(binaries) != len(want) {
+		return false
+	}
+	for index, binary := range binaries {
+		if binary.Name != want[index] || !validSHA256(binary.SHA256) {
+			return false
+		}
+	}
+	return true
 }
 
 func validateArtifacts(artifacts []Artifact) error {

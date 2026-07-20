@@ -21,7 +21,10 @@ import (
 	"github.com/wago-org/net/internal/inspectionpolicy"
 )
 
-const SchemaV2 = "github.com/wago-org/net/release-provenance/v2"
+const (
+	SchemaV2 = "github.com/wago-org/net/release-provenance/v2"
+	SchemaV3 = "github.com/wago-org/net/release-provenance/v3"
+)
 
 type Config struct {
 	OutputDir      string
@@ -96,11 +99,17 @@ type Targets struct {
 }
 
 type TargetResult struct {
-	GOOS         string `json:"goos"`
-	GOARCH       string `json:"goarch"`
-	Status       string `json:"status"`
-	Runner       string `json:"runner,omitempty"`
-	BinarySHA256 string `json:"binarySha256,omitempty"`
+	GOOS         string         `json:"goos"`
+	GOARCH       string         `json:"goarch"`
+	Status       string         `json:"status"`
+	Runner       string         `json:"runner,omitempty"`
+	BinarySHA256 string         `json:"binarySha256,omitempty"` // Historical single-binary evidence.
+	Binaries     []TargetBinary `json:"binaries,omitempty"`
+}
+
+type TargetBinary struct {
+	Name   string `json:"name"`
+	SHA256 string `json:"sha256"`
 }
 
 type Check struct {
@@ -134,7 +143,7 @@ func Generate(cfg Config) (*Manifest, error) {
 		return nil, err
 	}
 	manifest := &Manifest{
-		Schema:  SchemaV2,
+		Schema:  SchemaV3,
 		Subject: repo(cfg.PluginDir, "net", false),
 		Inputs: []Repository{
 			repo(cfg.WagoDir, "wago", true),
@@ -180,6 +189,9 @@ func Generate(cfg Config) (*Manifest, error) {
 	if status := manifest.Targets.Arm64Execution.Status; !strings.HasPrefix(status, "executed-") && !strings.HasPrefix(status, "skipped-") {
 		return nil, fmt.Errorf("release provenance: invalid arm64 execution status %q", status)
 	}
+	if err := validateTLSPlatformArtifacts(cfg.OutputDir, checks); err != nil {
+		return nil, err
+	}
 	manifest.Artifacts, err = scanArtifacts(cfg.OutputDir)
 	if err != nil {
 		return nil, err
@@ -192,7 +204,13 @@ func Generate(cfg Config) (*Manifest, error) {
 	if strings.HasPrefix(manifest.Targets.Arm64Execution.Status, "skipped-") {
 		manifest.Limitations = append(manifest.Limitations, Limitation{
 			ID: "linux-arm64-execution", Status: manifest.Targets.Arm64Execution.Status,
-			Detail: "cross-build passed, but this release gate did not execute the arm64 smoke binary",
+			Detail: "cross-build passed, but this release gate did not execute the arm64 smoke binaries",
+		})
+	}
+	if checkStatus(checks, "tls-standard-go") == "pass" {
+		manifest.Limitations = append(manifest.Limitations, Limitation{
+			ID: "tls-tinygo", Status: "unsupported-explicit",
+			Detail: "outbound client TLS is tested under standard Go and intentionally unavailable under TinyGo; no stub or guest module is registered",
 		})
 	}
 	return manifest, nil
@@ -513,10 +531,36 @@ func readArm64(out string, dst *TargetResult) error {
 		return err
 	}
 	dst.Status, dst.Runner = status, runner
-	checksum, err := os.ReadFile(filepath.Join(out, "arm64", "binary.sha256"))
+	multiPath := filepath.Join(out, "arm64", "binaries.sha256")
+	checksum, err := os.ReadFile(multiPath)
+	if err == nil {
+		if len(checksum) == 0 || checksum[len(checksum)-1] != '\n' {
+			return fmt.Errorf("release provenance: empty or noncanonical arm64 binary checksums")
+		}
+		previous := ""
+		scanner := bufio.NewScanner(bytes.NewReader(checksum))
+		for scanner.Scan() {
+			fields := strings.Fields(scanner.Text())
+			if len(fields) != 2 || !validSHA256(fields[0]) || !strings.HasPrefix(fields[1], "binaries/") || fields[1] <= previous {
+				return fmt.Errorf("release provenance: invalid or unsorted arm64 binary checksum %q", scanner.Text())
+			}
+			previous = fields[1]
+			dst.Binaries = append(dst.Binaries, TargetBinary{Name: fields[1], SHA256: fields[0]})
+		}
+		if err := scanner.Err(); err != nil {
+			return err
+		}
+		if len(dst.Binaries) == 0 {
+			return fmt.Errorf("release provenance: arm64 binary checksum set is empty")
+		}
+		return nil
+	} else if !os.IsNotExist(err) {
+		return err
+	}
+	checksum, err = os.ReadFile(filepath.Join(out, "arm64", "binary.sha256"))
 	if err == nil {
 		fields := strings.Fields(string(checksum))
-		if len(fields) == 0 {
+		if len(fields) == 0 || !validSHA256(fields[0]) {
 			return fmt.Errorf("release provenance: empty arm64 binary checksum")
 		}
 		dst.BinarySHA256 = fields[0]
@@ -591,6 +635,10 @@ func artifactKind(path string) string {
 		return "inspection"
 	case strings.HasPrefix(path, "arm64/"):
 		return "arm64"
+	case strings.HasPrefix(path, "tls/") || path == "tls-signoff.txt":
+		return "tls"
+	case strings.HasPrefix(path, "tinygo/") || path == "tinygo-supported-test.txt":
+		return "tinygo"
 	case path == "wasi-test.txt" || path == "wasi-status.txt" || strings.HasPrefix(path, "wasi-upstream/"):
 		return "exception"
 	case path == "checks.tsv":

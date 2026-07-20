@@ -205,7 +205,7 @@ record_check benchmark-runtime pass "$benchmark_detail"
 log "TinyGo supported surface and cross-compile"
 GOWORK=off GOFLAGS="$release_goflags" TINYGO_LOG_DIR="$out/tinygo" \
   "$root/scripts/tinygo-supported-test.sh" | tee "$out/tinygo-supported-test.txt"
-tinygo_detail=$(tr '\n' ' ' <"$out/tinygo/detail.txt" | sed 's/[[:space:]]*$//')
+tinygo_detail=$(grep -E '^(repository_packages|supported_packages|excluded_packages|exclusion_root)=' "$out/tinygo/detail.txt" | tr '\n' ' ' | sed 's/[[:space:]]*$//')
 record_check tinygo-test pass "$tinygo_detail"
 cross_goos=${CROSS_GOOS:-linux}
 cross_goarch=${CROSS_GOARCH:-arm64}
