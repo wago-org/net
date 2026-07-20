@@ -66,6 +66,9 @@ func TestClientHandshakeVerificationALPNAndPlaintext(t *testing.T) {
 	deadline := time.NewTimer(5 * time.Second)
 	defer deadline.Stop()
 	for {
+		if _, _, err := client.TryService(nscore.ServiceBudget{Packets: 8, Bytes: 64 << 10, Operations: 8}); err != nil {
+			t.Fatal(err)
+		}
 		select {
 		case err := <-serverDone:
 			if err != nil {
@@ -73,11 +76,8 @@ func TestClientHandshakeVerificationALPNAndPlaintext(t *testing.T) {
 			}
 			goto serverReady
 		case <-deadline.C:
-			t.Fatal("server handshake did not complete")
+			t.Fatalf("server handshake did not receive final client flight: client-out=%d server-out=%d", client.bridge.cipherPending(), serverBridge.cipherPending())
 		default:
-			if _, _, err := client.TryService(nscore.ServiceBudget{Packets: 8, Bytes: 64 << 10, Operations: 8}); err != nil {
-				t.Fatal(err)
-			}
 			runtime.Gosched()
 		}
 	}
