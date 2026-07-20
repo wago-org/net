@@ -87,7 +87,7 @@ func TestServerProfileDefaultsTLS13ClonesAndRequiresStaticCertificate(t *testing
 	}
 }
 
-func TestServerOnlyRegistrationAuthorityIsInboundAndProfileCompiles(t *testing.T) {
+func TestServerProfileStorageRequiresExplicitListenerAuthority(t *testing.T) {
 	profile, err := NewServerProfile(7, testServerConfig(t), RequireServerALPN("h2"))
 	if err != nil {
 		t.Fatal(err)
@@ -98,8 +98,21 @@ func TestServerOnlyRegistrationAuthorityIsInboundAndProfileCompiles(t *testing.T
 		t.Fatal(err)
 	}
 	address := netip.MustParseAddr("192.0.2.20")
+	if compiled.CheckEndpoint(policy.OperationTLSListen, address, 8443) {
+		t.Fatal("server profile storage implicitly granted inbound TLS authority")
+	}
+	if err := AllowListeners().applyTLS(&configuration); err != nil {
+		t.Fatal(err)
+	}
+	compiled, err = policy.Compile(configuration.authority())
+	if err != nil {
+		t.Fatal(err)
+	}
 	if !compiled.CheckEndpoint(policy.OperationTLSListen, address, 8443) {
-		t.Fatal("server profile did not grant inbound TLS authority")
+		t.Fatal("explicit listener authority did not grant inbound TLS")
+	}
+	if compiled.CheckEndpoint(policy.OperationTCPListen, address, 8443) {
+		t.Fatal("explicit TLS listener authority widened raw TCP listen")
 	}
 	if compiled.CheckEndpoint(policy.OperationTLSConnect, address, 8443) {
 		t.Fatal("server-only profile granted outbound TLS authority")
@@ -107,6 +120,31 @@ func TestServerOnlyRegistrationAuthorityIsInboundAndProfileCompiles(t *testing.T
 	profiles, err := compileServerProfiles(configuration.serverProfiles, configuration.config)
 	if err != nil || len(profiles) != 1 || profiles[0].ID != 7 || profiles[0].RequiredALPN != "h2" {
 		t.Fatalf("compiled server profiles = %+v, %v", profiles, err)
+	}
+}
+
+func TestServerProfileRejectsMalformedChainAndMismatchedSigner(t *testing.T) {
+	malformed := testServerConfig(t)
+	malformed.Certificates[0].Certificate[0] = []byte{1, 2, 3}
+	if _, err := NewServerProfile(1, malformed); err != ErrInvalidServerProfile {
+		t.Fatalf("malformed leaf = %v", err)
+	}
+
+	mismatched := testServerConfig(t)
+	_, otherSigner, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	mismatched.Certificates[0].PrivateKey = otherSigner
+	if _, err := NewServerProfile(1, mismatched); err != ErrInvalidServerProfile {
+		t.Fatalf("mismatched signer = %v", err)
+	}
+
+	brokenChain := testServerConfig(t)
+	other := testServerConfig(t)
+	brokenChain.Certificates[0].Certificate = append(brokenChain.Certificates[0].Certificate, other.Certificates[0].Certificate[0])
+	if _, err := NewServerProfile(1, brokenChain); err != ErrInvalidServerProfile {
+		t.Fatalf("broken chain = %v", err)
 	}
 }
 

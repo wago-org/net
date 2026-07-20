@@ -133,6 +133,9 @@ func TestRegisterRejectsMissingProfileDuplicateAndFrozen(t *testing.T) {
 	if err := wagonettls.Register(wagonet.New()); !errors.Is(err, wagonettls.ErrInvalidConfig) {
 		t.Fatalf("missing profile = %v", err)
 	}
+	if err := wagonettls.Register(wagonet.New(), wagonettls.WithClientProfile(testProfile(t)), wagonettls.AllowListeners()); !errors.Is(err, wagonettls.ErrInvalidConfig) {
+		t.Fatalf("listener authority without server profile = %v", err)
+	}
 	network := wagonet.New()
 	profile := testProfile(t)
 	if err := wagonettls.Register(network, nil); !errors.Is(err, wagonettls.ErrInvalidOption) {
