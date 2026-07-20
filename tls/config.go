@@ -14,6 +14,9 @@ type Config struct {
 	PlaintextTransmitBytes         int
 	CiphertextReceiveBytes         int
 	CiphertextTransmitBytes        int
+	TransportReceiveBytes          int
+	TransportTransmitBytes         int
+	TransportTransmitPackets       int
 	MaxHandshakeBytes              int
 	MaxCertificateChainBytes       int
 	MaxPeerCertificates            uint16
@@ -34,6 +37,9 @@ func DefaultConfig() Config {
 		PlaintextTransmitBytes:         16 << 10,
 		CiphertextReceiveBytes:         32 << 10,
 		CiphertextTransmitBytes:        32 << 10,
+		TransportReceiveBytes:          32 << 10,
+		TransportTransmitBytes:         32 << 10,
+		TransportTransmitPackets:       32,
 		MaxHandshakeBytes:              256 << 10,
 		MaxCertificateChainBytes:       192 << 10,
 		MaxPeerCertificates:            8,
@@ -50,9 +56,11 @@ func validConfig(config Config) bool {
 		config.MaxConcurrentHandshakes <= config.MaxStreams &&
 		config.PlaintextReceiveBytes >= 1024 && config.PlaintextTransmitBytes >= 1024 &&
 		config.CiphertextReceiveBytes >= 17<<10 && config.CiphertextTransmitBytes >= 17<<10 &&
+		config.TransportReceiveBytes >= 256 && config.TransportTransmitBytes >= 256 &&
+		config.TransportTransmitPackets > 0 && config.TransportTransmitPackets <= config.TransportTransmitBytes &&
 		config.MaxHandshakeBytes >= 16<<10 && config.MaxCertificateChainBytes >= 1024 &&
 		config.MaxCertificateChainBytes <= config.MaxHandshakeBytes &&
 		config.MaxPeerCertificates > 0 && config.MaxServerNameBytes > 0 && config.MaxServerNameBytes <= 253 &&
 		config.MaxALPNProtocols > 0 && config.MaxALPNAggregateBytes > 0 &&
-		config.MaxServiceAttemptsPerHandshake > 0 && config.MaxRecordsPerService > 0
+		config.MaxServiceAttemptsPerHandshake > 0 && config.MaxRecordsPerService > 0 && config.MaxRecordsPerService <= 256
 }

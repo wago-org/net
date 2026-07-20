@@ -32,6 +32,7 @@ var protocolDependencies = map[string]protocolDependency{
 	"linklocal4": {public: modulePath + "/linklocal4", register: modulePath + "/linklocal4/register", binding: modulePath + "/internal/binding/linklocal4", operation: modulePath + "/internal/instance/linklocal4", abi: modulePath + "/internal/abi/linklocal4", namespace: modulePath + "/internal/namespace/linklocal4", adapter: modulePath + "/internal/backend/lneto/linklocal4"},
 	"ipv6":       {public: modulePath + "/ipv6", register: modulePath + "/ipv6/register", binding: modulePath + "/internal/binding/ipv6", operation: modulePath + "/internal/instance/ipv6", abi: modulePath + "/internal/abi/ipv6", namespace: modulePath + "/internal/namespace/ipv6", adapter: modulePath + "/internal/backend/lneto/ipv6"},
 	"dhcpv6":     {public: modulePath + "/dhcpv6", register: modulePath + "/dhcpv6/register", binding: modulePath + "/internal/binding/dhcpv6", operation: modulePath + "/internal/instance/dhcpv6", abi: modulePath + "/internal/abi/dhcpv6", namespace: modulePath + "/internal/namespace/dhcpv6", adapter: modulePath + "/internal/backend/lneto/dhcpv6"},
+	"tls":        {public: modulePath + "/tls", register: modulePath + "/tls/register", binding: modulePath + "/internal/binding/tls", operation: modulePath + "/internal/instance/tls", abi: modulePath + "/internal/abi/tls", namespace: modulePath + "/internal/namespace/tls", adapter: modulePath + "/internal/backend/lneto/tls"},
 }
 
 func TestFixtureDependencyBoundaries(t *testing.T) {
@@ -51,7 +52,9 @@ func TestFixtureDependencyBoundaries(t *testing.T) {
 		{name: "linklocal4", selected: map[string]bool{"linklocal4": true}},
 		{name: "ipv6", selected: map[string]bool{"ipv6": true}},
 		{name: "dhcpv6", selected: map[string]bool{"dhcpv6": true}},
+		{name: "tls", selected: map[string]bool{"tls": true}},
 		{name: "tcpudp", selected: map[string]bool{"tcp": true, "udp": true}},
+		{name: "tcptls", selected: map[string]bool{"tcp": true, "tls": true}},
 		{name: "tcpdns", selected: map[string]bool{"tcp": true, "dns": true}},
 		{name: "udpdns", selected: map[string]bool{"udp": true, "dns": true}},
 		{name: "all", selected: map[string]bool{"tcp": true, "udp": true, "dns": true, "icmpv4": true, "icmpv6": true, "ntp": true, "mdns": true, "dhcpv4": true, "linklocal4": true, "ipv6": true, "dhcpv6": true}},
@@ -78,9 +81,24 @@ func TestFixtureDependencyBoundaries(t *testing.T) {
 					}
 					continue
 				}
+				if protocol == "tcp" && test.selected["tls"] {
+					if dependencies[dependency.public] || dependencies[dependency.binding] || dependencies[dependency.operation] || dependencies[dependency.abi] {
+						t.Fatalf("TLS-only reached raw TCP facade: public=%v binding=%v operation=%v ABI=%v", dependencies[dependency.public], dependencies[dependency.binding], dependencies[dependency.operation], dependencies[dependency.abi])
+					}
+					if !dependencies[dependency.namespace] || !dependencies[dependency.adapter] {
+						t.Fatal("TLS private transport seam is incomplete")
+					}
+					continue
+				}
 				if dependencies[dependency.public] || dependencies[dependency.binding] || dependencies[dependency.operation] || dependencies[dependency.abi] || dependencies[dependency.namespace] || dependencies[dependency.adapter] {
 					t.Fatalf("unselected %s compiled: public=%v binding=%v operation=%v ABI=%v namespace=%v adapter=%v", protocol, dependencies[dependency.public], dependencies[dependency.binding], dependencies[dependency.operation], dependencies[dependency.abi], dependencies[dependency.namespace], dependencies[dependency.adapter])
 				}
+			}
+			if test.selected["tls"] && !dependencies[modulePath+"/internal/backend/gotls"] {
+				t.Fatal("selected TLS graph omitted the Go TLS engine")
+			}
+			if !test.selected["tls"] && dependencies[modulePath+"/internal/backend/gotls"] {
+				t.Fatal("unselected TLS engine compiled")
 			}
 			if dependencies[modulePath+"/internal/namespace"] {
 				t.Fatal("production graph reached the temporary aggregate namespace compatibility package")
@@ -114,6 +132,7 @@ func TestSelfRegisterPackageDependencyBoundaries(t *testing.T) {
 		{name: "linklocal4", fixture: "../../linklocal4/register", selected: map[string]bool{"linklocal4": true}},
 		{name: "ipv6", fixture: "../../ipv6/register", selected: map[string]bool{"ipv6": true}},
 		{name: "dhcpv6", fixture: "../../dhcpv6/register", selected: map[string]bool{"dhcpv6": true}},
+		{name: "tls", fixture: "../../tls/register", selected: map[string]bool{"tls": true}},
 		{name: "all", fixture: "../../register", selected: map[string]bool{"tcp": true, "udp": true, "dns": true, "icmpv4": true, "icmpv6": true, "ntp": true, "mdns": true, "dhcpv4": true, "linklocal4": true, "ipv6": true, "dhcpv6": true}},
 	}
 	for _, test := range tests {
@@ -126,6 +145,15 @@ func TestSelfRegisterPackageDependencyBoundaries(t *testing.T) {
 					}
 					if test.name != "all" && !dependencies[dependency.register] {
 						t.Fatalf("selected %s granular register package absent", protocol)
+					}
+					continue
+				}
+				if protocol == "tcp" && test.selected["tls"] {
+					if dependencies[dependency.public] || dependencies[dependency.register] || dependencies[dependency.binding] || dependencies[dependency.operation] || dependencies[dependency.abi] {
+						t.Fatal("TLS self-register graph reached raw TCP facade")
+					}
+					if !dependencies[dependency.namespace] || !dependencies[dependency.adapter] {
+						t.Fatal("TLS self-register graph omitted private TCP transport")
 					}
 					continue
 				}
