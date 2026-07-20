@@ -21,12 +21,14 @@ in `docs/architecture.md`:
 - instance manager attach/lookup/locking/poll and protocol operation wrappers;
 - guest status mapping and complete UDP/TCP guest poll host calls.
 
-The checked-in capture is in `baseline.txt`; `baseline-summary.md` lists the
-median timing and allocation result for the pre-TLS 114 benchmark cases. TLS
-benchmarks are discoverable in current runs and require a refreshed retained
-baseline before TLS release signoff. The existing baseline was captured
-with three 100 ms samples to keep the initial audit bounded. The script defaults
-to the stronger five-by-200 ms profile for future comparison runs.
+The checked-in capture is in `baseline.txt`; `baseline-summary.md` records the
+TLS-aware medians and environment. Discovery now finds 172 top-level benchmark
+targets in 50 packages, with 195 distinct result names after subbenchmark
+expansion. The baseline and independent repeatability candidate both use the
+repository's full five-by-200 ms, single-CPU, `-benchmem` profile on the same Go
+1.24.4 Linux/amd64 Ryzen 7 8845HS environment. `candidate-summary.md` and
+`benchstat.txt` document the comparison without treating timing noise as a
+protocol correctness assertion.
 
 These are microbenchmarks. The adapter and guest benchmarks include the locks,
 validation, policy, accounting, and copies performed by the named path, but they
