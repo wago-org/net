@@ -1603,6 +1603,10 @@ No repository-owned workstream or completion criterion from this hardening reque
   `54499ba5135f69a062e23a7255f4a408d6cecf8c` and
   `ffd5ef4b122cbd019897eeea3503789ab5860e4a`.
 - TLS remains client-only, explicitly configured, granular-only,
-  standard-Go-only, and experimental. Production readiness remains blocked until
-  the final strict gate completes and arm64 TLS execution is retained from an
-  accepted runner.
+  standard-Go-only, and experimental. The strict `RUN_WASI=1 FUZZTIME=30s`
+  attempt with exact clean inputs stopped fail-closed in
+  `current-plugin-topology-audit`: Wago `origin/main` is now
+  `7794acc82692aac4ff98756a46a017d0d8768087`, beyond the reviewed `ff04a6b1`
+  topology, so the lifecycle/preview-1 integration must be re-reviewed and
+  re-ported. No provenance or review-bundle hashes were produced. Production
+  readiness also still requires executed arm64 TLS evidence.

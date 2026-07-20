@@ -155,9 +155,17 @@ The exact production Wago input remains commit
 `adbba31c51996f1c1d6d3c2069de8ddf0afd94ee`, with ordered parents
 `54499ba5135f69a062e23a7255f4a408d6cecf8c` and
 `ffd5ef4b122cbd019897eeea3503789ab5860e4a`. TLS remains granular-only and
-experimental. A complete strict run for the final release-readiness subject is
-still required; passing the standard-Go TLS and TinyGo-supported matrices alone
-does not establish production readiness.
+experimental.
+
+The strict `RUN_WASI=1 FUZZTIME=30s` attempt used clean exact reconstructed Wago
+and current-review worktrees, but stopped fail-closed in
+`current-plugin-topology-audit` before repository test execution. The audit
+observed Wago `origin/main` at `7794acc82692aac4ff98756a46a017d0d8768087`,
+which has moved beyond the reviewed topology rooted at `ff04a6b1`; the current
+Wago lifecycle/preview-1 integration must be re-reviewed and re-ported before
+adoption. No provenance manifest or review bundle was produced by this stopped
+attempt. Passing the separate standard-Go TLS and TinyGo-supported matrices does
+not establish production readiness.
 
 ### Current repository validation on July 15, 2026
 
