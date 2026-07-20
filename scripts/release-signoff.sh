@@ -185,6 +185,12 @@ cmp "$release_sum.after-tidy" "$release_sum"
 git diff --exit-code -- go.mod go.sum
 record_check go-mod-tidy pass 'generated release module is idempotent; repository module files unchanged'
 
+log "explicit standard-Go TLS signoff"
+GOWORK="$release_work" TLS_SIGNOFF_DIR="$out/tls" \
+  "$root/scripts/tls-signoff.sh" | tee "$out/tls-signoff.txt"
+tls_detail=$(tr '\n' ' ' <"$out/tls/detail.txt" | sed 's/[[:space:]]*$//')
+record_check tls-standard-go pass "$tls_detail"
+
 log "bounded discovered fuzz smoke ($fuzztime each)"
 GOWORK="$release_work" FUZZTIME="$fuzztime" FUZZ_LOG_DIR="$out/fuzz" \
   "$root/scripts/fuzz-smoke.sh" | tee "$out/fuzz-smoke.txt"
@@ -196,9 +202,11 @@ GOWORK="$release_work" BENCH_LOG_DIR="$out/benchmark" \
 benchmark_detail=$(cat "$out/benchmark/detail.txt")
 record_check benchmark-runtime pass "$benchmark_detail"
 
-log "TinyGo and cross-compile"
-GOWORK=off GOFLAGS="$release_goflags" tinygo test ./...
-record_check tinygo-test pass
+log "TinyGo supported surface and cross-compile"
+GOWORK=off GOFLAGS="$release_goflags" TINYGO_LOG_DIR="$out/tinygo" \
+  "$root/scripts/tinygo-supported-test.sh" | tee "$out/tinygo-supported-test.txt"
+tinygo_detail=$(grep -E '^(repository_packages|supported_packages|excluded_packages|exclusion_root)=' "$out/tinygo/detail.txt" | tr '\n' ' ' | sed 's/[[:space:]]*$//')
+record_check tinygo-test pass "$tinygo_detail"
 cross_goos=${CROSS_GOOS:-linux}
 cross_goarch=${CROSS_GOARCH:-arm64}
 GOOS=$cross_goos GOARCH=$cross_goarch CGO_ENABLED=0 GOWORK=off GOFLAGS="$release_goflags" go build ./...

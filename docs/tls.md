@@ -60,9 +60,13 @@ acknowledgements, or `close_notify`. Shared namespace teardown joins workers
 before the private TCP participant releases transport state.
 
 The current bounded bridge is intentionally granular-only and experimental. It
-has standard-Go race and lifecycle coverage, but TLS remains outside the
-aggregate `register` bundle until the full repository release-signoff and TinyGo
-policy are re-certified for `crypto/tls` and `crypto/x509`.
+has a named standard-Go ordinary/race release check in `scripts/tls-signoff.sh`.
+TinyGo 0.41.1 does not provide the `crypto/tls` client APIs required by the real
+engine, so TLS is explicitly excluded there rather than replaced by a stub.
+`scripts/tinygo-supported-test.sh` still tests all 123 supported packages and
+compares the exact five-package standard-Go-only closure with the reviewed
+manifest. TLS remains outside aggregate `register`; complete strict release and
+executed arm64 evidence are still required before production readiness.
 
 ## ABI
 

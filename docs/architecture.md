@@ -301,8 +301,10 @@ Go composition may compile the neutral TCP facet and private lneto TCP adapter,
 but not the public TCP facade, TCP binding, TCP instance operations, or TCP ABI.
 The root `register` package intentionally continues to compose the eleven
 previously signed-off protocols in one extension rather than using the aggregate
-compatibility constructor. TLS remains granular-only until TinyGo and complete
-release-signoff evidence are refreshed.
+compatibility constructor. TLS remains granular-only. Standard Go has a separate
+named TLS release matrix; TinyGo tests an exact fail-closed 123-package supported
+surface while explicitly excluding the five-package real TLS closure. No TinyGo
+TLS facade or guest module is compiled.
 
 `internal/readiness` attaches a finite coordinator to each instance resource
 table. Registrations retain opaque handle plus exact kind, level-triggered polls
@@ -385,10 +387,11 @@ and the next lease receives fresh parent and worker identities.
 ## Release gate
 
 `scripts/release-signoff.sh` is the single reproducible local/CI entry point. It
-pins the merged Wago branch and the lneto/WASI audits, runs standard Go, race,
-discovered bounded fuzz, every benchmark discovered by
-`scripts/benchmark-smoke.sh`, TinyGo, a distinct package cross-build, optional
-bounded native/QEMU arm64 execution, custom CLI inspection, source-boundary and
+pins the merged Wago branch and the lneto/WASI audits, runs complete standard Go,
+a named TLS ordinary/race signoff, discovered bounded fuzz, every benchmark
+discovered by `scripts/benchmark-smoke.sh`, the exact TinyGo-supported package
+matrix, a distinct package cross-build, optional bounded native/QEMU/custom
+arm64 execution across four root/TLS binaries, custom CLI inspection, source-boundary and
 plugin-plan compatibility and reviewed-upstream WASI audits, companion
 repository tests, and final clean checks. It then exports deterministic non-thin
 Git packs containing the exact plugin subject and pinned Wago/lneto/WASI commit

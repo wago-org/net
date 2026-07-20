@@ -1569,3 +1569,44 @@ Broad validation at recursion end:
 ### Remaining work
 
 No repository-owned workstream or completion criterion from this hardening request is currently known to remain. The only strict release-attempt prerequisite observed in this workspace is the externally owned dirty production-Wago worktree above. Re-run the exact strict command after that worktree becomes independently clean; do not recurse merely to modify external worktrees or manufacture a passing release result.
+
+## TLS release/platform integration — July 20, 2026
+
+- Added an exact fail-closed TinyGo package matrix. Discovery includes tracked
+  `testdata` directories and finds 128 repository packages: 123 are tested
+  individually under TinyGo 0.41.1 and exactly five real-TLS packages are
+  retained as standard-Go-only with reviewed reasons.
+- Added explicit standard-Go TLS signoff with ten ordinary and seven race package
+  profiles resolving 109 named tests. Evidence covers explicit composition,
+  security, ABI, dependency isolation, mixed transport, EOF/truncation, quota
+  rollback, worker exit, and deterministic teardown without public internet.
+- Extended arm64 evidence from one root smoke binary to four binaries covering
+  root networking, `internal/backend/gotls`, mixed lneto TLS transport, and the
+  public TLS registration surface. All four cross-compile; local execution is
+  currently `skipped-no-runner`, not executed support.
+- Added schema-v3 provenance verification for TLS/TinyGo manifests and logs,
+  package counts, exclusions, arm64 checksums, and the explicit TinyGo TLS
+  limitation while retaining schema-v2 historical review compatibility.
+- Added pinned TinyGo and named standard-Go TLS hosted CI jobs. Aggregate
+  `register`, all twelve canonical custom CLI bundles, and the absent
+  `tls/register` / `net-tls` surfaces remain unchanged.
+- Refreshed benchmark evidence on the same Ryzen 7 8845HS / Go 1.24.4 platform
+  with five 200 ms samples and `GOMAXPROCS=1`. Discovery finds 172 top-level
+  benchmark targets in 50 packages. The retained TLS handshake median is about
+  1.47 ms with 388,334 B and 935 allocations; fixed-ring, profile authorization,
+  TCP local-port lease, and live TCP round-trip paths remain zero-allocation.
+- Fuzz discovery finds 44 targets in 33 packages, including four TLS-owned
+  targets.
+- Reconstructed a clean exact production Wago worktree from retained immutable
+  source objects: commit `97e6f91e6c822491577faa86f3c30aa5a8fff1e8`, tree
+  `adbba31c51996f1c1d6d3c2069de8ddf0afd94ee`, ordered parents
+  `54499ba5135f69a062e23a7255f4a408d6cecf8c` and
+  `ffd5ef4b122cbd019897eeea3503789ab5860e4a`.
+- TLS remains client-only, explicitly configured, granular-only,
+  standard-Go-only, and experimental. The strict `RUN_WASI=1 FUZZTIME=30s`
+  attempt with exact clean inputs stopped fail-closed in
+  `current-plugin-topology-audit`: Wago `origin/main` is now
+  `7794acc82692aac4ff98756a46a017d0d8768087`, beyond the reviewed `ff04a6b1`
+  topology, so the lifecycle/preview-1 integration must be re-reviewed and
+  re-ported. No provenance or review-bundle hashes were produced. Production
+  readiness also still requires executed arm64 TLS evidence.

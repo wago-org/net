@@ -117,6 +117,16 @@ TLS intentionally has no `tls/register` zero-configuration extension and no
 credentials, and profile IDs are deployment authority that must be supplied by
 explicit Go composition; the repository does not invent placeholder TLS policy.
 
+The complete TLS implementation is standard-Go-only. TinyGo 0.41.1 lacks the
+required `crypto/tls` client APIs, so the repository provides no TinyGo stub,
+placeholder guest module, or fake handshake. `scripts/tinygo-supported-test.sh`
+tests the exact reviewed non-TLS package surface and fails closed if the five
+standard-Go-only TLS packages change without review. `scripts/tls-signoff.sh`
+retains separate ordinary and race evidence for explicit TLS composition,
+security, ABI, mixed transport, EOF, quota, and worker teardown. TLS remains
+client-only, granular-only, outside aggregate `register`, and experimental until
+the complete strict release and executed arm64 requirements are satisfied.
+
 Profiles are finite and host-defined. The guest selects only a profile ID,
 remote IP endpoint, and authorized verification name. Certificate-chain and
 DNS/IP SAN verification are mandatory; Common Name fallback, key logging,

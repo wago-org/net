@@ -21,10 +21,12 @@ ALPN, truncation, corruption, bounded-queue, quota, and worker-join checks apply
 to explicit `tls.Register` composition fixtures separately. TLS has no
 self-registering extension and no canonical custom-CLI policy entry because a
 zero-configuration bundle would have to invent deployment trust and identity
-authority. Aggregate completeness therefore remains exact without claiming TLS
-signoff. TLS must not be called production-ready until the complete release gate
-is regenerated with TLS-aware lifecycle evidence and a truthful TinyGo decision
-for `crypto/tls` and `crypto/x509`.
+authority. Aggregate completeness therefore remains exact without claiming aggregate TLS
+support. The release gate now retains an explicit `tls-standard-go` check and a
+machine-verified TinyGo supported/excluded package matrix. TinyGo TLS is recorded
+as `unsupported-explicit`: no stub, guest module, or fake engine exists. TLS must
+not be called production-ready until the complete strict gate passes for the
+final subject and arm64 TLS execution is retained from a suitable runner.
 
 ## Pinned inputs
 
@@ -85,9 +87,14 @@ The gate performs, in order:
    bounded run per package/target with `-benchmem`, `100ms`, `count=1`, and
    `cpu=1`; zero discovered targets, any failed target, or incomplete evidence
    fails the gate after all discovered targets have been attempted;
-5. TinyGo tests and a `linux/arm64` standard-Go package cross-build;
-6. a separately cross-compiled `linux/arm64` test binary and bounded execution
-   smoke when a native arm64 or `qemu-aarch64` runner is available; set
+5. explicit standard-Go TLS ordinary and race suites with retained package,
+   test, and log manifests; the exact TinyGo-supported package matrix with a
+   reviewed five-package TLS exclusion closure; and a `linux/arm64` standard-Go
+   package cross-build;
+6. four separately cross-compiled `linux/arm64` test binaries covering root
+   networking, the Go TLS engine, mixed lneto TCP/TLS transport, and public TLS
+   composition, with bounded execution of every binary when a native arm64,
+   `qemu-aarch64`, or explicit runner is available; set
    `ARM64_EXECUTION=skip` when arm64 execution is outside the selected release
    profile, which records `skipped-disabled` without claiming or retaining an
    execution artifact;
@@ -121,6 +128,44 @@ The gate performs, in order:
     retained evidence artifact and the manifest itself; and
 16. standalone semantic verification and deterministic export of a compressed
     downstream review bundle.
+
+### TLS platform-boundary validation on July 20, 2026
+
+The release platform matrix now discovers 128 tracked repository packages. The
+reviewed standard-Go-only TLS closure is exactly five packages:
+
+- `github.com/wago-org/net/internal/backend/gotls`;
+- `github.com/wago-org/net/internal/backend/lneto/tls`;
+- `github.com/wago-org/net/internal/dependencytest/testdata/tcptls`;
+- `github.com/wago-org/net/internal/dependencytest/testdata/tls`; and
+- `github.com/wago-org/net/tls`.
+
+TinyGo 0.41.1 tests the remaining 123 packages individually and retains one log
+per package. The explicit standard-Go TLS signoff runs 17 package profiles
+(10 ordinary and seven race) resolving 109 named test targets. Arm64 signoff
+cross-compiles four test binaries; the current local auto profile is truthfully
+`skipped-no-runner`, so it is not execution evidence. Benchmark discovery finds
+172 top-level targets in 50 packages, and the canonical five-by-200 ms baseline
+now includes TLS handshake, fixed-ring, profile-authorization, shared TCP-port,
+and mixed transport paths. Fuzz discovery finds 44 targets in 33 packages,
+including four TLS-owned targets.
+
+The exact production Wago input remains commit
+`97e6f91e6c822491577faa86f3c30aa5a8fff1e8`, tree
+`adbba31c51996f1c1d6d3c2069de8ddf0afd94ee`, with ordered parents
+`54499ba5135f69a062e23a7255f4a408d6cecf8c` and
+`ffd5ef4b122cbd019897eeea3503789ab5860e4a`. TLS remains granular-only and
+experimental.
+
+The strict `RUN_WASI=1 FUZZTIME=30s` attempt used clean exact reconstructed Wago
+and current-review worktrees, but stopped fail-closed in
+`current-plugin-topology-audit` before repository test execution. The audit
+observed Wago `origin/main` at `7794acc82692aac4ff98756a46a017d0d8768087`,
+which has moved beyond the reviewed topology rooted at `ff04a6b1`; the current
+Wago lifecycle/preview-1 integration must be re-reviewed and re-ported before
+adoption. No provenance manifest or review bundle was produced by this stopped
+attempt. Passing the separate standard-Go TLS and TinyGo-supported matrices does
+not establish production readiness.
 
 ### Current repository validation on July 15, 2026
 
@@ -254,13 +299,14 @@ selected protocol, while root `register` must contain all three without reaching
 `compat`. All selective production graphs also reject the temporary aggregate
 namespace package and aggregate lneto assembler.
 
-`scripts/arm64-execution-signoff.sh` always cross-compiles a `CGO_ENABLED=0`
-arm64 test binary before runner selection. `ARM64_EXECUTION=auto` (the release default)
+`scripts/arm64-execution-signoff.sh` always cross-compiles four `CGO_ENABLED=0`
+arm64 test binaries before runner selection. `ARM64_EXECUTION=auto` (the release default)
 records `executed-native`, `executed-qemu`, or a truthful `skipped-no-runner`
 status. Use `ARM64_EXECUTION=required` on an arm64/QEMU CI tier so absence of a
 runner is fatal; use `ARM64_EXECUTION=skip` only for an explicitly shortened job.
-The smoke runs metadata plus real UDP, TCP, and DNS backend paths under a two
-minute timeout. This executed result is intentionally distinct from the package
+The smoke runs metadata plus real UDP, TCP, DNS, standard-library TLS,
+private-TCP/TLS coexistence, and public TLS registration paths under a separate
+two-minute timeout per binary. This executed result is intentionally distinct from the package
 cross-build and must not be described as native support when skipped.
 
 The linked-worker/class integration test is standard-Go/race-only (`!tinygo`):
