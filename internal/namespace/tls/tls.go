@@ -1,4 +1,4 @@
-// Package tls defines the backend-neutral outbound TLS namespace and secure
+// Package tls defines backend-neutral TLS client, server-listener, and secure
 // stream contracts. It contains no crypto/tls or transport implementation type.
 package tls
 

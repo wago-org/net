@@ -64,8 +64,9 @@ type Config struct {
 	MaxRecordsPerService           uint16
 }
 
-// DefaultConfig returns conservative finite client-only TLS storage. The
-// underlying private TCP transport is configured separately by registration.
+// DefaultConfig returns conservative finite TLS client/server storage. Listener
+// authority remains disabled until separately granted; the underlying private
+// TCP transport is configured by registration.
 func DefaultConfig() Config {
 	return Config{
 		MaxStreams:                     8,

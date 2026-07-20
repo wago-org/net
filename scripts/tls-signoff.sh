@@ -136,7 +136,12 @@ cat >"$out/detail.txt" <<EOF
 standard_go_tls=tested
 aggregate_registration=absent
 self_registration=absent
-scope=outbound-client-only
+scope=standard-go-client-server-stream-foundation
+connection_info_v1=byte-compatible
+connection_info_v2=role-aware-additive
+listener_authority=explicit
+http_https=absent
+portable_tinygo_tls=absent
 ordinary_packages=$ordinary_packages
 race_packages=$race_packages
 test_targets=$test_targets

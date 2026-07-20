@@ -126,8 +126,10 @@ than repeatedly charging the already-known transport EOF. Raw TCP EOF without
 
 ## Default finite bounds
 
-The default registration allows eight live streams and four concurrent
-handshakes. Per stream it reserves 16 KiB receive and transmit plaintext, 32 KiB
+The default registration allows eight live streams, four TLS listeners, an
+accept backlog of four private TCP streams per listener, and four concurrent
+handshakes. Listener authority is disabled until explicitly granted. Per stream
+it reserves 16 KiB receive and transmit plaintext, 32 KiB
 receive and transmit ciphertext, and private TCP receive/transmit buffers of 32
 KiB each. Fixed 32 KiB plaintext and 16 KiB ciphertext scratch are included in
 the same checked per-stream accounting. Defaults also limit handshake bytes to
@@ -145,8 +147,9 @@ service attempts. Every field and combined allocation must fit target `int`;
 all additions and the `MaxStreams` multiplication are checked in `uint64` before
 backend construction, including simulated and actual 386 builds.
 
-TLS resources, active handshakes, plaintext bytes, ciphertext bytes, global
-retained bytes, and the underlying private TCP resource/storage are all charged
+TLS listener and stream resources, active handshakes, plaintext bytes,
+ciphertext bytes, global retained bytes, accept-backlog transport storage, and
+the underlying private TCP resource/storage are all charged
 to the exact instance quota ledger. Every setup path rolls back both layers;
 close and failed verification release each charge exactly once.
 

@@ -16,15 +16,18 @@ in `docs/architecture.md`:
   client/server round trip;
 - DNS query construction, wire-name decode, response parse/selection, query
   creation, record iteration, and readiness;
-- TLS 1.3 handshake, fixed-ring steady-state transfer, and profile-name
-  authorization with allocation reporting;
+- TLS 1.3 client and server handshakes, fixed-ring steady-state transfer, and
+  profile-name authorization with allocation reporting;
 - instance manager attach/lookup/locking/poll and protocol operation wrappers;
 - guest status mapping and complete UDP/TCP guest poll host calls.
 
 The checked-in capture is in `baseline.txt`; `baseline-summary.md` records the
-TLS-aware medians and environment. Discovery now finds 172 top-level benchmark
-targets in 50 packages, with 195 distinct result names after subbenchmark
-expansion. The baseline and independent repeatability candidate both use the
+TLS-aware medians and environment. The expanded client/server branch discovers
+173 top-level benchmark targets in 50 packages, with 196 distinct result names
+after subbenchmark expansion. A full-grid five-by-200 ms local capture includes
+both handshake roles; the checked-in release-readiness baseline remains the
+prior outbound-only evidence until this draft branch is adopted. The baseline
+and independent repeatability candidate both use the
 repository's full five-by-200 ms, single-CPU, `-benchmem` profile on the same Go
 1.24.4 Linux/amd64 Ryzen 7 8845HS environment. `candidate-summary.md` and
 `benchstat.txt` document the comparison without treating timing noise as a
