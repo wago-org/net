@@ -1,8 +1,41 @@
 package tls
 
-import "errors"
+import (
+	"errors"
+
+	"github.com/wago-org/net/internal/checked"
+	"github.com/wago-org/net/internal/tlslimits"
+)
 
 var ErrInvalidConfig = errors.New("wagonet/tls: invalid configuration")
+
+const (
+	// MaximumStreams and MaximumConcurrentHandshakes bound worker and handshake
+	// concurrency for one instance.
+	MaximumStreams               = tlslimits.MaxStreams
+	MaximumConcurrentHandshakes  = tlslimits.MaxConcurrentHandshakes
+	MaximumClientProfiles        = tlslimits.MaxProfiles
+	MaximumServerNamesPerProfile = tlslimits.MaxServerNamesPerProfile
+	MaximumPeerCertificates      = tlslimits.MaxPeerCertificates
+	MaximumALPNProtocols         = tlslimits.MaxALPNProtocols
+	MaximumALPNAggregateBytes    = tlslimits.MaxALPNAggregateBytes
+	MaximumTransportPackets      = tlslimits.MaxTransportPackets
+	MaximumServiceAttempts       = tlslimits.MaxServiceAttempts
+
+	// Maximum*Bytes are hard registration-time ceilings. In addition, all fixed
+	// per-stream storage multiplied by MaxStreams must fit
+	// MaximumAggregateRetainedBytes.
+	MaximumPlaintextQueueBytes    = tlslimits.MaxPlaintextQueueBytes
+	MaximumCiphertextQueueBytes   = tlslimits.MaxCiphertextQueueBytes
+	MaximumTransportQueueBytes    = tlslimits.MaxTransportQueueBytes
+	MaximumHandshakeBytes         = tlslimits.MaxHandshakeBytes
+	MaximumCertificateChainBytes  = tlslimits.MaxCertificateChainBytes
+	MaximumAggregateRetainedBytes = tlslimits.MaxAggregateRetainedBytes
+
+	// Fixed scratch is included exactly once in per-stream quota arithmetic.
+	FixedPlaintextScratchBytes  = tlslimits.PlaintextScratchBytes
+	FixedCiphertextScratchBytes = tlslimits.CiphertextScratchBytes
+)
 
 // Config fixes every TLS-local stream, handshake, queue, and service bound.
 // Zero values disable the corresponding resource; there is no unbounded
@@ -52,15 +85,23 @@ func DefaultConfig() Config {
 }
 
 func validConfig(config Config) bool {
-	return config.MaxStreams > 0 && config.MaxConcurrentHandshakes > 0 &&
-		config.MaxConcurrentHandshakes <= config.MaxStreams &&
-		config.PlaintextReceiveBytes >= 1024 && config.PlaintextTransmitBytes >= 1024 &&
-		config.CiphertextReceiveBytes >= 17<<10 && config.CiphertextTransmitBytes >= 17<<10 &&
-		config.TransportReceiveBytes >= 256 && config.TransportTransmitBytes >= 256 &&
-		config.TransportTransmitPackets > 0 && config.TransportTransmitPackets <= config.TransportTransmitBytes &&
-		config.MaxHandshakeBytes >= 16<<10 && config.MaxCertificateChainBytes >= 1024 &&
-		config.MaxCertificateChainBytes <= config.MaxHandshakeBytes &&
-		config.MaxPeerCertificates > 0 && config.MaxServerNameBytes > 0 && config.MaxServerNameBytes <= 253 &&
-		config.MaxALPNProtocols > 0 && config.MaxALPNAggregateBytes > 0 &&
-		config.MaxServiceAttemptsPerHandshake > 0 && config.MaxRecordsPerService > 0 && config.MaxRecordsPerService <= 256
+	_, ok := validateConfig(config, checked.MaxInt())
+	return ok
+}
+
+func validateConfig(config Config, maxIntValue uint64) (tlslimits.Plan, bool) {
+	plan, ok := tlslimits.Validate(tlslimits.Config{
+		MaxStreams: config.MaxStreams, MaxConcurrentHandshakes: config.MaxConcurrentHandshakes,
+		PlaintextReceiveBytes: config.PlaintextReceiveBytes, PlaintextTransmitBytes: config.PlaintextTransmitBytes,
+		CiphertextReceiveBytes: config.CiphertextReceiveBytes, CiphertextTransmitBytes: config.CiphertextTransmitBytes,
+		TransportReceiveBytes: config.TransportReceiveBytes, TransportTransmitBytes: config.TransportTransmitBytes,
+		MaxHandshakeBytes: config.MaxHandshakeBytes, MaxCertificateChainBytes: config.MaxCertificateChainBytes,
+	}, maxIntValue)
+	if !ok || config.TransportTransmitPackets <= 0 || config.TransportTransmitPackets > config.TransportTransmitBytes || config.TransportTransmitPackets > MaximumTransportPackets ||
+		config.MaxPeerCertificates == 0 || config.MaxPeerCertificates > MaximumPeerCertificates || config.MaxServerNameBytes == 0 || config.MaxServerNameBytes > 253 ||
+		config.MaxALPNProtocols == 0 || config.MaxALPNProtocols > MaximumALPNProtocols || config.MaxALPNAggregateBytes == 0 || config.MaxALPNAggregateBytes > MaximumALPNAggregateBytes ||
+		config.MaxServiceAttemptsPerHandshake == 0 || config.MaxServiceAttemptsPerHandshake > MaximumServiceAttempts || config.MaxRecordsPerService == 0 || config.MaxRecordsPerService > 256 {
+		return tlslimits.Plan{}, false
+	}
+	return plan, true
 }

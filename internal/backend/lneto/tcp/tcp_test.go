@@ -14,6 +14,7 @@ import (
 	lnetotcp "github.com/soypat/lneto/tcp"
 	lnetocore "github.com/wago-org/net/internal/backend/lneto/core"
 	ipv6backend "github.com/wago-org/net/internal/backend/lneto/ipv6"
+	"github.com/wago-org/net/internal/checked"
 	nscore "github.com/wago-org/net/internal/namespace/core"
 	"github.com/wago-org/net/internal/packetlink"
 	"github.com/wago-org/net/internal/policy"
@@ -66,7 +67,7 @@ func TestValidConfigRejectsOverflowAndKeepsAdapterCreationBounded(t *testing.T) 
 		{name: "simulated 32-bit outbound storage overflow", config: Config{MaxOutboundStreams: 1, ReceiveBytes: 1 << 30, TransmitBytes: 1 << 30, TransmitPackets: 4}, maxInt: uint64(^uint32(0) >> 1), wantErr: true},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			maxIntValue := maxInt()
+			maxIntValue := checked.MaxInt()
 			if test.maxInt != 0 {
 				maxIntValue = test.maxInt
 			}

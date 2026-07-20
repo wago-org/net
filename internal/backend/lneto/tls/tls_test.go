@@ -14,6 +14,7 @@ import (
 	"github.com/wago-org/net/internal/packetlink"
 	"github.com/wago-org/net/internal/policy"
 	"github.com/wago-org/net/internal/quota"
+	"github.com/wago-org/net/internal/tlslimits"
 )
 
 func TestTLSUsesPrivateTCPWithoutRawTCPAuthorityAndRollsBack(t *testing.T) {
@@ -38,6 +39,28 @@ func TestTLSUsesPrivateTCPWithoutRawTCPAuthorityAndRollsBack(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer common.Close()
+	invalidConfig := Config{
+		MaxStreams: 1, MaxConcurrentHandshakes: 1, MaxServerNameBytes: 253, MaxServiceAttemptsPerHandshake: 64,
+		TCP: tcpConfigForTest(), Engine: engineLimitsForTest(),
+		Profiles: []gotls.Profile{{
+			ID: 1, Config: &cryptotls.Config{MinVersion: cryptotls.VersionTLS13, MaxVersion: cryptotls.VersionTLS13},
+			MaxCertificateChainBytes: 64 << 10, MaxPeerCertificates: 4,
+			AllowedNames: map[string]tlsns.IdentityType{"api.example.com": tlsns.IdentityDNS},
+		}},
+	}
+	invalidConfig.Engine.PlaintextReceiveBytes = int(tlslimits.MaxPlaintextQueueBytes + 1)
+	if invalid, err := New(common, invalidConfig); invalid != nil || failureOf(t, err) != nscore.FailureInvalidArgument {
+		t.Fatalf("invalid extreme TLS config = %p, %v", invalid, err)
+	}
+	common.Lock()
+	invalidLeases := common.TCPPortLeaseCountLocked()
+	common.Unlock()
+	if invalidLeases != 0 {
+		t.Fatalf("invalid config installed private TCP leases = %d", invalidLeases)
+	}
+	if usage, _ := account.Snapshot(); usage != (quota.Usage{}) {
+		t.Fatalf("invalid config acquired quota = %+v", usage)
+	}
 	adapter, err := New(common, Config{
 		MaxStreams: 1, MaxConcurrentHandshakes: 1, MaxServerNameBytes: 253, MaxServiceAttemptsPerHandshake: 64,
 		TCP: tcpConfigForTest(), Engine: engineLimitsForTest(),

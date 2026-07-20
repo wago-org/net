@@ -44,7 +44,9 @@ and lneto as the first backend.
   TLS-scoped loopback authority, TLS quotas, fixed ABI layouts, kind-safe
   handles, a bounded three-worker `crypto/tls` bridge, shared namespace TCP-port
   leases for raw and private transports, exactly-once EOF service transitions,
-  deterministic cancellation, and exact rollback/release paths.
+  deterministic cancellation, checked target-width storage arithmetic, finite
+  per-field and 64 MiB aggregate TLS retention maxima, and exact
+  rollback/release paths.
 - Added TLS-only and TCP+TLS composition/dependency tests, standard-library peer
   security tests, race coverage, fuzz targets, and benchmarks.
 - TLS remains granular-only and outside aggregate `register` pending refreshed

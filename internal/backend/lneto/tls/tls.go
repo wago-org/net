@@ -11,12 +11,14 @@ import (
 	gotls "github.com/wago-org/net/internal/backend/gotls"
 	lnetocore "github.com/wago-org/net/internal/backend/lneto/core"
 	tcpbackend "github.com/wago-org/net/internal/backend/lneto/tcp"
+	"github.com/wago-org/net/internal/checked"
 	nscore "github.com/wago-org/net/internal/namespace/core"
 	tcpns "github.com/wago-org/net/internal/namespace/tcp"
 	tlsns "github.com/wago-org/net/internal/namespace/tls"
 	"github.com/wago-org/net/internal/policy"
 	"github.com/wago-org/net/internal/quota"
 	"github.com/wago-org/net/internal/resource"
+	"github.com/wago-org/net/internal/tlslimits"
 )
 
 const tlsCloseOrder = 19
@@ -45,6 +47,7 @@ type Adapter struct {
 	tcp      *tcpbackend.Adapter
 	quotas   *quota.Account
 	config   Config
+	storage  tlslimits.Plan
 	profiles map[uint32]gotls.Profile
 
 	mu         sync.Mutex
@@ -55,7 +58,8 @@ type Adapter struct {
 
 func New(common *lnetocore.Namespace, config Config) (*Adapter, error) {
 	config.Engine.MaxServiceAttemptsPerHandshake = config.MaxServiceAttemptsPerHandshake
-	if common == nil || !validConfig(config) {
+	storage, ok := validateConfig(config, checked.MaxInt())
+	if common == nil || !ok {
 		return nil, nscore.Fail(nscore.FailureInvalidArgument, ErrInvalidConfig)
 	}
 	common.Lock()
@@ -65,31 +69,26 @@ func New(common *lnetocore.Namespace, config Config) (*Adapter, error) {
 	}
 	quotas := common.QuotasLocked()
 	common.Unlock()
-	privateTCP, err := tcpbackend.New(common, config.TCP)
-	if err != nil {
-		return nil, err
-	}
 	adapter := &Adapter{
-		core: common, tcp: privateTCP, quotas: quotas, config: config,
+		core: common, quotas: quotas, config: config, storage: storage,
 		profiles: make(map[uint32]gotls.Profile, len(config.Profiles)),
 		streams:  make([]*stream, 0, config.MaxStreams),
 	}
 	for _, input := range config.Profiles {
 		profile, err := input.Clone()
 		if err != nil {
-			common.Lock()
-			privateTCP.CloseLocked()
-			common.Unlock()
 			return nil, nscore.Fail(nscore.FailureUnsupportedConfiguration, err)
 		}
 		if _, exists := adapter.profiles[profile.ID]; exists {
-			common.Lock()
-			privateTCP.CloseLocked()
-			common.Unlock()
 			return nil, nscore.Fail(nscore.FailureInvalidArgument, ErrInvalidConfig)
 		}
 		adapter.profiles[profile.ID] = profile
 	}
+	privateTCP, err := tcpbackend.New(common, config.TCP)
+	if err != nil {
+		return nil, err
+	}
+	adapter.tcp = privateTCP
 	if err := common.Install(lnetocore.Participant{CloseOrder: tlsCloseOrder, Close: adapter.CloseLocked}); err != nil {
 		common.Lock()
 		privateTCP.CloseLocked()
@@ -100,10 +99,38 @@ func New(common *lnetocore.Namespace, config Config) (*Adapter, error) {
 }
 
 func validConfig(config Config) bool {
-	return config.MaxStreams > 0 && config.MaxConcurrentHandshakes > 0 &&
-		config.MaxConcurrentHandshakes <= config.MaxStreams && config.MaxServerNameBytes > 0 &&
-		config.MaxServiceAttemptsPerHandshake > 0 && gotls.ValidLimits(config.Engine) && config.TCP.MaxListeners == 0 &&
-		config.TCP.MaxOutboundStreams >= config.MaxStreams && len(config.Profiles) > 0
+	_, ok := validateConfig(config, checked.MaxInt())
+	return ok
+}
+
+func validateConfig(config Config, maxIntValue uint64) (tlslimits.Plan, bool) {
+	if config.MaxServerNameBytes == 0 || config.MaxServerNameBytes > 253 || config.MaxServiceAttemptsPerHandshake == 0 || config.MaxServiceAttemptsPerHandshake > tlslimits.MaxServiceAttempts ||
+		config.TCP.MaxListeners != 0 || config.TCP.MaxOutboundStreams < config.MaxStreams || config.TCP.TransmitPackets <= 0 || config.TCP.TransmitPackets > tlslimits.MaxTransportPackets ||
+		config.TCP.TransmitPackets > config.TCP.TransmitBytes || len(config.Profiles) == 0 || len(config.Profiles) > tlslimits.MaxProfiles {
+		return tlslimits.Plan{}, false
+	}
+	for _, profile := range config.Profiles {
+		if profile.MaxPeerCertificates == 0 || profile.MaxPeerCertificates > tlslimits.MaxPeerCertificates || len(profile.AllowedNames) == 0 || len(profile.AllowedNames) > tlslimits.MaxServerNamesPerProfile {
+			return tlslimits.Plan{}, false
+		}
+	}
+	maxCertificateBytes := 0
+	for _, profile := range config.Profiles {
+		if profile.MaxCertificateChainBytes > maxCertificateBytes {
+			maxCertificateBytes = profile.MaxCertificateChainBytes
+		}
+	}
+	plan, ok := tlslimits.Validate(tlslimits.Config{
+		MaxStreams: config.MaxStreams, MaxConcurrentHandshakes: config.MaxConcurrentHandshakes,
+		PlaintextReceiveBytes: config.Engine.PlaintextReceiveBytes, PlaintextTransmitBytes: config.Engine.PlaintextTransmitBytes,
+		CiphertextReceiveBytes: config.Engine.CiphertextReceiveBytes, CiphertextTransmitBytes: config.Engine.CiphertextTransmitBytes,
+		TransportReceiveBytes: config.TCP.ReceiveBytes, TransportTransmitBytes: config.TCP.TransmitBytes,
+		MaxHandshakeBytes: config.Engine.MaxHandshakeBytes, MaxCertificateChainBytes: maxCertificateBytes,
+	}, maxIntValue)
+	if !ok || !gotls.ValidLimits(config.Engine) {
+		return tlslimits.Plan{}, false
+	}
+	return plan, true
 }
 
 func (adapter *Adapter) TryConnectTLS(remote nscore.Endpoint, profileID uint32, serverName string) (nscore.Resource, nscore.Progress, error) {
@@ -135,9 +162,7 @@ func (adapter *Adapter) TryConnectTLS(remote nscore.Endpoint, profileID uint32, 
 	adapter.mu.Unlock()
 
 	created := &stream{owner: adapter, handshakeLive: true}
-	plaintextBytes := uint64(adapter.config.Engine.PlaintextReceiveBytes + adapter.config.Engine.PlaintextTransmitBytes + gotls.PlaintextScratchBytes)
-	ciphertextBytes := uint64(adapter.config.Engine.CiphertextReceiveBytes + adapter.config.Engine.CiphertextTransmitBytes + gotls.CiphertextScratchBytes)
-	if err := adapter.quotas.AcquireTLSStream(&created.retained, plaintextBytes, ciphertextBytes); err != nil {
+	if err := adapter.quotas.AcquireTLSStream(&created.retained, adapter.storage.PlaintextBytes, adapter.storage.CiphertextBytes); err != nil {
 		adapter.releaseHandshakeSlot(created)
 		return nil, 0, mapQuotaError(err)
 	}

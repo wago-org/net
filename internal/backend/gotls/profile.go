@@ -7,13 +7,15 @@ import (
 	"strings"
 	"unicode/utf8"
 
+	"github.com/wago-org/net/internal/checked"
 	"github.com/wago-org/net/internal/dnsname"
 	tlsns "github.com/wago-org/net/internal/namespace/tls"
+	"github.com/wago-org/net/internal/tlslimits"
 )
 
 const (
-	PlaintextScratchBytes  = 32 << 10
-	CiphertextScratchBytes = 16 << 10
+	PlaintextScratchBytes  = tlslimits.PlaintextScratchBytes
+	CiphertextScratchBytes = tlslimits.CiphertextScratchBytes
 )
 
 var (
@@ -92,8 +94,23 @@ type Limits struct {
 
 // ValidLimits reports whether every engine queue and service bound is finite.
 func ValidLimits(limits Limits) bool {
-	return limits.PlaintextReceiveBytes > 0 && limits.PlaintextTransmitBytes > 0 &&
-		limits.CiphertextReceiveBytes >= 17<<10 && limits.CiphertextTransmitBytes >= 17<<10 &&
-		limits.MaxHandshakeBytes > 0 && limits.MaxServiceAttemptsPerHandshake > 0 &&
-		limits.MaxRecordsPerService > 0 && limits.MaxRecordsPerService <= 256
+	maxIntValue := checked.MaxInt()
+	return validStorage(limits.PlaintextReceiveBytes, 1024, tlslimits.MaxPlaintextQueueBytes, maxIntValue) &&
+		validStorage(limits.PlaintextTransmitBytes, 1024, tlslimits.MaxPlaintextQueueBytes, maxIntValue) &&
+		validStorage(limits.CiphertextReceiveBytes, 17<<10, tlslimits.MaxCiphertextQueueBytes, maxIntValue) &&
+		validStorage(limits.CiphertextTransmitBytes, 17<<10, tlslimits.MaxCiphertextQueueBytes, maxIntValue) &&
+		validStorage(limits.MaxHandshakeBytes, 1, tlslimits.MaxHandshakeBytes, maxIntValue) &&
+		limits.MaxServiceAttemptsPerHandshake > 0 && limits.MaxRecordsPerService > 0 && limits.MaxRecordsPerService <= 256
+}
+
+func validStorage(value, minimum int, maximum, maxIntValue uint64) bool {
+	if value < minimum {
+		return false
+	}
+	converted := uint64(value)
+	if converted > maximum {
+		return false
+	}
+	_, ok := checked.Uint64ToInt(converted, maxIntValue)
+	return ok
 }

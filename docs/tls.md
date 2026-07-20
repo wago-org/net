@@ -98,10 +98,21 @@ than repeatedly charging the already-known transport EOF. Raw TCP EOF without
 The default registration allows eight live streams and four concurrent
 handshakes. Per stream it reserves 16 KiB receive and transmit plaintext, 32 KiB
 receive and transmit ciphertext, and private TCP receive/transmit buffers of 32
-KiB each. Defaults also limit handshake bytes to 256 KiB, retained certificate
-chain bytes to 192 KiB, peer certificates to eight, server names to 253 bytes,
-ALPN to eight protocols and 256 aggregate bytes, handshake service attempts to
-4096, and TLS pump work to sixteen record-sized transport operations per call.
+KiB each. Fixed 32 KiB plaintext and 16 KiB ciphertext scratch are included in
+the same checked per-stream accounting. Defaults also limit handshake bytes to
+256 KiB, retained certificate chain bytes to 192 KiB, peer certificates to
+eight, server names to 253 bytes, ALPN to eight protocols and 256 aggregate
+bytes, handshake service attempts to 4096, and TLS pump work to sixteen
+record-sized transport operations per call.
+
+Registration rejects more than 64 streams or handshakes, any plaintext,
+ciphertext, or private-transport queue above 1 MiB, handshake input above 4 MiB,
+retained peer chains above 2 MiB, or a configuration whose checked possible
+fixed retention exceeds 64 MiB. It also caps profiles, names per profile, peer
+certificate count, ALPN dimensions, transport packet slots, and handshake
+service attempts. Every field and combined allocation must fit target `int`;
+all additions and the `MaxStreams` multiplication are checked in `uint64` before
+backend construction, including simulated and actual 386 builds.
 
 TLS resources, active handshakes, plaintext bytes, ciphertext bytes, global
 retained bytes, and the underlying private TCP resource/storage are all charged

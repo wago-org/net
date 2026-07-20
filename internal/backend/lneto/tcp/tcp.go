@@ -14,6 +14,7 @@ import (
 	lnetoipv6 "github.com/soypat/lneto/ipv6"
 	lnetotcp "github.com/soypat/lneto/tcp"
 	lnetocore "github.com/wago-org/net/internal/backend/lneto/core"
+	"github.com/wago-org/net/internal/checked"
 	nscore "github.com/wago-org/net/internal/namespace/core"
 	"github.com/wago-org/net/internal/policy"
 	"github.com/wago-org/net/internal/quota"
@@ -106,7 +107,7 @@ func New(common *lnetocore.Namespace, config Config) (*Adapter, error) {
 
 // ValidConfig validates TCP-local storage and authority without allocation.
 func ValidConfig(config Config, compiled *policy.Policy, account *quota.Account, requireAuthority bool) bool {
-	return validateConfig(config, compiled, account, requireAuthority, maxInt()) == nil
+	return validateConfig(config, compiled, account, requireAuthority, checked.MaxInt()) == nil
 }
 
 // TCPConfig fixes all lneto TCP storage and registration bounds. Each listener
@@ -142,17 +143,17 @@ func validateConfig(config Config, compiled *policy.Policy, account *quota.Accou
 	if portCount > uint64(^uint16(0)) {
 		return lneto.ErrInvalidConfig
 	}
-	if _, ok := uint64ToInt(portCount, maxIntValue); !ok {
+	if _, ok := checked.Uint64ToInt(portCount, maxIntValue); !ok {
 		return lneto.ErrInvalidConfig
 	}
 	stride, ok := tcpStreamStorageBytes(config)
 	if !ok {
 		return lneto.ErrInvalidConfig
 	}
-	if _, ok := uint64ToInt(stride, maxIntValue); !ok {
+	if _, ok := checked.Uint64ToInt(stride, maxIntValue); !ok {
 		return lneto.ErrInvalidConfig
 	}
-	listenerBytes, ok := multiplyUint64(uint64(config.AcceptBacklog), stride)
+	listenerBytes, ok := checked.MultiplyUint64(uint64(config.AcceptBacklog), stride)
 	if !ok || listenerBytes > maxIntValue || listenerBytes > maxEagerTCPListenerStorageBytes {
 		return lneto.ErrInvalidConfig
 	}
@@ -163,7 +164,7 @@ func tcpStreamStorageBytes(config Config) (uint64, bool) {
 	if config.ReceiveBytes < 0 || config.TransmitBytes < 0 {
 		return 0, false
 	}
-	return addUint64(uint64(config.ReceiveBytes), uint64(config.TransmitBytes))
+	return checked.AddUint64(uint64(config.ReceiveBytes), uint64(config.TransmitBytes))
 }
 
 func streamCapacityHint(config Config) int {
@@ -172,32 +173,6 @@ func streamCapacityHint(config Config) int {
 		hint = maxTCPStreamCapacityHint
 	}
 	return int(hint)
-}
-
-func addUint64(left, right uint64) (uint64, bool) {
-	sum := left + right
-	return sum, sum >= left
-}
-
-func multiplyUint64(left, right uint64) (uint64, bool) {
-	if left == 0 || right == 0 {
-		return 0, true
-	}
-	if left > ^uint64(0)/right {
-		return 0, false
-	}
-	return left * right, true
-}
-
-func uint64ToInt(value, maxIntValue uint64) (int, bool) {
-	if value > maxIntValue {
-		return 0, false
-	}
-	return int(value), true
-}
-
-func maxInt() uint64 {
-	return uint64(^uint(0) >> 1)
 }
 
 func (n *Adapter) prepareReusePools() {

@@ -94,7 +94,7 @@ func Register(network *wagonet.Network, options ...Option) error {
 			return err
 		}
 	}
-	if network == nil || !validConfig(config.config) || len(config.profiles) == 0 {
+	if network == nil || !validConfig(config.config) || len(config.profiles) == 0 || len(config.profiles) > MaximumClientProfiles {
 		return ErrInvalidConfig
 	}
 	profiles, err := compileProfiles(config.profiles, config.config)
@@ -173,6 +173,9 @@ func compileProfiles(input []*ClientProfile, config Config) ([]gotls.Profile, er
 			aggregate += len(protocol)
 		}
 		if aggregate > int(config.MaxALPNAggregateBytes) {
+			return nil, ErrInvalidProfile
+		}
+		if len(profile.allowedNames) == 0 || len(profile.allowedNames) > MaximumServerNamesPerProfile {
 			return nil, ErrInvalidProfile
 		}
 		allowed := make(map[string]tlsns.IdentityType, len(profile.allowedNames))
