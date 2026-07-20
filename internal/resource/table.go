@@ -34,6 +34,7 @@ const (
 	KindDHCPv6Lease
 	KindTLSStream
 	KindPollable
+	KindTLSListener
 )
 
 var (
@@ -339,6 +340,8 @@ func (k Kind) String() string {
 		return "tls_stream"
 	case KindPollable:
 		return "pollable"
+	case KindTLSListener:
+		return "tls_listener"
 	default:
 		return fmt.Sprintf("kind(%d)", uint8(k))
 	}

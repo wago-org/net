@@ -34,7 +34,7 @@ func TestRegisterExposesOnlyTLSAndSharedCore(t *testing.T) {
 	for _, spec := range runtime.ProvidedImports() {
 		imports[spec.Module]++
 	}
-	want := map[string]int{wagonet.Module: 1, wagonet.TLSModule: 9}
+	want := map[string]int{wagonet.Module: 1, wagonet.TLSModule: 12}
 	if !reflect.DeepEqual(imports, want) {
 		t.Fatalf("imports = %v, want %v", imports, want)
 	}
@@ -63,7 +63,7 @@ func TestTCPAndTLSComposeWithoutCapabilityWidening(t *testing.T) {
 	for _, spec := range runtime.ProvidedImports() {
 		imports[spec.Module]++
 	}
-	wantImports := map[string]int{wagonet.Module: 1, wagonet.TCPModule: 11, wagonet.TLSModule: 9}
+	wantImports := map[string]int{wagonet.Module: 1, wagonet.TCPModule: 11, wagonet.TLSModule: 12}
 	if !reflect.DeepEqual(imports, wantImports) {
 		t.Fatalf("imports = %v, want %v", imports, wantImports)
 	}

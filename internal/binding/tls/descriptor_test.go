@@ -35,8 +35,8 @@ func TestDescriptorInstallsExactTLSBindingsAndPreservesBackend(t *testing.T) {
 		t.Fatalf("incompatible backend = %v", err)
 	}
 	bindings := Bindings(plugin.Host{})
-	if len(bindings) != 9 {
-		t.Fatalf("bindings = %d, want 9", len(bindings))
+	if len(bindings) != 12 {
+		t.Fatalf("bindings = %d, want 12", len(bindings))
 	}
 	seen := make(map[string]struct{}, len(bindings))
 	for _, binding := range bindings {
@@ -48,7 +48,7 @@ func TestDescriptorInstallsExactTLSBindingsAndPreservesBackend(t *testing.T) {
 		}
 		seen[binding.Name] = struct{}{}
 	}
-	for _, required := range []string{"namespace_default", "connect", "finish_connect", "read", "write", "shutdown_write", "connection_info", "close", "poll"} {
+	for _, required := range []string{"namespace_default", "listen", "accept", "connect", "finish_connect", "read", "write", "shutdown_write", "connection_info", "close", "close_listener", "poll"} {
 		if _, ok := seen[required]; !ok {
 			t.Fatalf("binding %q missing", required)
 		}

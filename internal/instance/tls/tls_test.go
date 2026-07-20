@@ -16,9 +16,12 @@ import (
 )
 
 type fakeNamespace struct {
-	stream  nscore.Resource
-	profile uint32
-	name    string
+	stream        nscore.Resource
+	listener      nscore.Resource
+	profile       uint32
+	serverProfile uint32
+	name          string
+	local         nscore.Endpoint
 }
 
 func (*fakeNamespace) Close() error                { return nil }
@@ -29,6 +32,28 @@ func (*fakeNamespace) TryService(nscore.ServiceBudget) (nscore.ServiceReport, ns
 func (namespace *fakeNamespace) TryConnectTLS(_ nscore.Endpoint, profile uint32, name string) (nscore.Resource, nscore.Progress, error) {
 	namespace.profile, namespace.name = profile, name
 	return namespace.stream, nscore.ProgressInProgress, nil
+}
+func (namespace *fakeNamespace) TryListenTLS(local nscore.Endpoint, profile uint32) (nscore.Resource, nscore.Progress, error) {
+	namespace.local, namespace.serverProfile = local, profile
+	return namespace.listener, nscore.ProgressDone, nil
+}
+
+type fakeListener struct {
+	local  nscore.Endpoint
+	stream nscore.Resource
+	closed int
+}
+
+func (listener *fakeListener) Close() error                   { listener.closed++; return nil }
+func (*fakeListener) Readiness() nscore.Readiness             { return nscore.ReadyAccept }
+func (listener *fakeListener) LocalEndpoint() nscore.Endpoint { return listener.local }
+func (listener *fakeListener) TryAcceptTLS() (nscore.Resource, nscore.Progress, error) {
+	if listener.stream == nil {
+		return nil, nscore.ProgressWouldBlock, nil
+	}
+	stream := listener.stream
+	listener.stream = nil
+	return stream, nscore.ProgressInProgress, nil
 }
 
 type fakeStream struct {
@@ -98,6 +123,43 @@ func TestTLSOperationsKeepHandlesKindSpecificAndPartial(t *testing.T) {
 	}
 	if stream.closed != 1 {
 		t.Fatalf("close count = %d", stream.closed)
+	}
+}
+
+func TestTLSServerListenAcceptAndHandleKinds(t *testing.T) {
+	local := nscore.Endpoint{Address: netip.MustParseAddr("192.0.2.10"), Port: 8443}
+	remote := nscore.Endpoint{Address: netip.MustParseAddr("192.0.2.11"), Port: 49152}
+	info := tlsns.ConnectionInfo{LocalEndpoint: local, RemoteEndpoint: remote, TLSVersion: 0x304, CipherSuite: 0x1301, NegotiatedALPN: "h2", Role: tlsns.RoleServer}
+	stream := &fakeStream{local: local, remote: remote, info: info}
+	listener := &fakeListener{local: local, stream: stream}
+	namespace := &fakeNamespace{listener: listener}
+	state, manager, instance := attachState(t, namespace)
+	defer manager.Detach(instance)
+	listenerHandle, progress, err := Listen(state, state.NamespaceHandle(), local, 9)
+	if err != nil || progress != nscore.ProgressDone || listenerHandle == 0 {
+		t.Fatalf("Listen = %v, %v, %v", listenerHandle, progress, err)
+	}
+	if namespace.local != local || namespace.serverProfile != 9 {
+		t.Fatalf("listen selection = %+v, %d", namespace.local, namespace.serverProfile)
+	}
+	if endpoint, err := ListenerEndpoint(state, listenerHandle); err != nil || endpoint != local {
+		t.Fatalf("ListenerEndpoint = %+v, %v", endpoint, err)
+	}
+	streamHandle, progress, err := Accept(state, listenerHandle)
+	if err != nil || progress != nscore.ProgressInProgress || streamHandle == 0 {
+		t.Fatalf("Accept = %v, %v, %v", streamHandle, progress, err)
+	}
+	if got, progress, err := ConnectionInfo(state, streamHandle); err != nil || progress != nscore.ProgressDone || got.Role != tlsns.RoleServer {
+		t.Fatalf("server info = %+v, %v, %v", got, progress, err)
+	}
+	if _, _, err := Accept(state, listenerHandle); err != nil {
+		t.Fatalf("empty accept = %v", err)
+	}
+	if err := state.CloseHandle(listenerHandle, resource.KindTLSListener); err != nil || listener.closed != 1 {
+		t.Fatalf("listener close = %v count=%d", err, listener.closed)
+	}
+	if _, err := Read(state, listenerHandle, make([]byte, 1)); !errors.Is(err, resource.ErrBadHandle) {
+		t.Fatalf("listener used as stream = %v", err)
 	}
 }
 

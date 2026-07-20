@@ -19,8 +19,8 @@ func TestTLSFixtureRuntimeInspection(t *testing.T) {
 		capabilities []wago.Capability
 		imports      map[string]int
 	}{
-		{name: "tls", newNetwork: tlsfixture.Network, capabilities: []wago.Capability{wagonet.CapInfo, wagonet.CapTLS}, imports: map[string]int{wagonet.Module: 1, wagonet.TLSModule: 9}},
-		{name: "tcp_tls", newNetwork: tcptlsfixture.Network, capabilities: []wago.Capability{wagonet.CapInfo, wagonet.CapTCP, wagonet.CapTLS}, imports: map[string]int{wagonet.Module: 1, wagonet.TCPModule: 11, wagonet.TLSModule: 9}},
+		{name: "tls", newNetwork: tlsfixture.Network, capabilities: []wago.Capability{wagonet.CapInfo, wagonet.CapTLS}, imports: map[string]int{wagonet.Module: 1, wagonet.TLSModule: 12}},
+		{name: "tcp_tls", newNetwork: tcptlsfixture.Network, capabilities: []wago.Capability{wagonet.CapInfo, wagonet.CapTCP, wagonet.CapTLS}, imports: map[string]int{wagonet.Module: 1, wagonet.TCPModule: 11, wagonet.TLSModule: 12}},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			network, err := test.newNetwork()

@@ -23,7 +23,7 @@ const (
 
 func Descriptor(backend ...plugin.Backend) plugin.Module {
 	return plugin.NewModule(plugin.ModuleTLS, func(registry *wago.Registry, host plugin.Host) {
-		registry.Capability(Capability, wago.CapabilityDocs("use checked outbound verified TLS client streams for the exact calling instance"))
+		registry.Capability(Capability, wago.CapabilityDocs("use checked verified TLS client streams and host-profiled TLS server listeners for the exact calling instance"))
 		plugin.RegisterBindings(registry.ImportModule(Module), Bindings(host))
 	}, backend...)
 }
@@ -33,13 +33,16 @@ func Bindings(host plugin.Host) []plugin.Binding {
 		{Name: "namespace_default", Func: func(module wago.HostModule, params, results []uint64) {
 			namespaceDefault(host, module, params, results)
 		}, Params: []wago.ValType{wago.ValI32}, Results: []wago.ValType{wago.ValI32}, Capability: Capability, Docs: "discover the calling instance's TLS namespace"},
+		{Name: "listen", Func: func(module wago.HostModule, params, results []uint64) { listen(host, module, params, results) }, Params: []wago.ValType{wago.ValI64, wago.ValI32, wago.ValI32, wago.ValI32}, Results: []wago.ValType{wago.ValI32}, Capability: Capability, Docs: "create one host-profiled TLS server listener"},
+		{Name: "accept", Func: func(module wago.HostModule, params, results []uint64) { accept(host, module, params, results) }, Params: []wago.ValType{wago.ValI64, wago.ValI32}, Results: []wago.ValType{wago.ValI32}, Capability: Capability, Docs: "accept private TCP and begin one bounded TLS server handshake"},
 		{Name: "connect", Func: func(module wago.HostModule, params, results []uint64) { connect(host, module, params, results) }, Params: []wago.ValType{wago.ValI64, wago.ValI32, wago.ValI32, wago.ValI32, wago.ValI32, wago.ValI32}, Results: []wago.ValType{wago.ValI32}, Capability: Capability, Docs: "start one host-profiled verified TLS client connection"},
-		{Name: "finish_connect", Func: func(module wago.HostModule, params, results []uint64) { finishConnect(host, module, params, results) }, Params: []wago.ValType{wago.ValI64}, Results: []wago.ValType{wago.ValI32}, Capability: Capability, Docs: "advance TCP, TLS handshake, verification, and required ALPN"},
+		{Name: "finish_connect", Func: func(module wago.HostModule, params, results []uint64) { finishConnect(host, module, params, results) }, Params: []wago.ValType{wago.ValI64}, Results: []wago.ValType{wago.ValI32}, Capability: Capability, Docs: "advance client connection or accepted server handshake and required ALPN"},
 		{Name: "read", Func: func(module wago.HostModule, params, results []uint64) { read(host, module, params, results) }, Params: []wago.ValType{wago.ValI64, wago.ValI32, wago.ValI32, wago.ValI32}, Results: []wago.ValType{wago.ValI32}, Capability: Capability, Docs: "perform one checked partial decrypted read"},
 		{Name: "write", Func: func(module wago.HostModule, params, results []uint64) { write(host, module, params, results) }, Params: []wago.ValType{wago.ValI64, wago.ValI32, wago.ValI32, wago.ValI32}, Results: []wago.ValType{wago.ValI32}, Capability: Capability, Docs: "perform one checked partial plaintext write"},
 		{Name: "shutdown_write", Func: func(module wago.HostModule, params, results []uint64) { shutdownWrite(host, module, params, results) }, Params: []wago.ValType{wago.ValI64}, Results: []wago.ValType{wago.ValI32}, Capability: Capability, Docs: "queue TLS close_notify and reject later plaintext writes"},
 		{Name: "connection_info", Func: func(module wago.HostModule, params, results []uint64) { connectionInfo(host, module, params, results) }, Params: []wago.ValType{wago.ValI64, wago.ValI32}, Results: []wago.ValType{wago.ValI32}, Capability: Capability, Docs: "return bounded verified TLS connection metadata"},
 		{Name: "close", Func: func(module wago.HostModule, params, results []uint64) { closeStream(host, module, params, results) }, Params: []wago.ValType{wago.ValI64}, Results: []wago.ValType{wago.ValI32}, Capability: Capability, Docs: "abort and close one exact TLS stream without waiting for the peer"},
+		{Name: "close_listener", Func: func(module wago.HostModule, params, results []uint64) { closeListener(host, module, params, results) }, Params: []wago.ValType{wago.ValI64}, Results: []wago.ValType{wago.ValI32}, Capability: Capability, Docs: "close one exact TLS server listener"},
 		{Name: "poll", Func: func(module wago.HostModule, params, results []uint64) { guest.Poll(host, module, params, results) }, Params: []wago.ValType{wago.ValI32, wago.ValI32, wago.ValI32, wago.ValI32}, Results: []wago.ValType{wago.ValI32}, Capability: Capability, Docs: "perform one bounded TLS readiness and transport-service pass"},
 	}
 }
@@ -70,6 +73,100 @@ func namespaceDefault(host plugin.Host, module wago.HostModule, params, results 
 		return
 	}
 	guest.SetStatus(results, guest.StatusOK)
+}
+
+func listen(host plugin.Host, module wago.HostModule, params, results []uint64) {
+	if len(params) != 4 || len(results) != 1 {
+		guest.SetStatus(results, guest.StatusInvalidArgument)
+		return
+	}
+	memory := guest.Memory(module)
+	profileID, profileOK := abicore.NarrowUint32(params[1])
+	endpointPtr, endpointOK := abicore.NarrowUint32(params[2])
+	out, outOK := abicore.NarrowUint32(params[3])
+	if !profileOK || !endpointOK || !outOK || profileID == 0 || !tlsabi.CheckListenV1(memory, endpointPtr, out) {
+		guest.SetStatus(results, guest.StatusInvalidArgument)
+		return
+	}
+	local, ok := abicore.DecodeEndpointV1(memory, endpointPtr)
+	if !ok {
+		guest.SetStatus(results, guest.StatusInvalidArgument)
+		return
+	}
+	state, status := instanceState(host, module)
+	if status != guest.StatusOK {
+		guest.SetStatus(results, status)
+		return
+	}
+	handle, progress, err := tlsinstance.Listen(state, resource.Handle(params[0]), local, profileID)
+	if err != nil {
+		guest.SetStatus(results, guest.FromError(err))
+		return
+	}
+	if progress != nscore.ProgressDone {
+		if handle != 0 {
+			_ = state.CloseHandle(handle, resource.KindTLSListener)
+		}
+		guest.SetStatus(results, guest.StatusOther)
+		return
+	}
+	actual, err := tlsinstance.ListenerEndpoint(state, handle)
+	if err != nil || !tlsabi.EncodeListenerV1(memory, out, handle, actual) {
+		_ = state.CloseHandle(handle, resource.KindTLSListener)
+		if err != nil {
+			guest.SetStatus(results, guest.FromError(err))
+		} else {
+			guest.SetStatus(results, guest.StatusOther)
+		}
+		return
+	}
+	guest.SetStatus(results, guest.StatusOK)
+}
+
+func accept(host plugin.Host, module wago.HostModule, params, results []uint64) {
+	if len(params) != 2 || len(results) != 1 {
+		guest.SetStatus(results, guest.StatusInvalidArgument)
+		return
+	}
+	memory := guest.Memory(module)
+	out, ok := abicore.NarrowUint32(params[1])
+	if !ok || !abicore.CheckRanges(memory, false, abicore.Range{Ptr: out, Length: tlsabi.StreamV1Size}) {
+		guest.SetStatus(results, guest.StatusInvalidArgument)
+		return
+	}
+	state, status := instanceState(host, module)
+	if status != guest.StatusOK {
+		guest.SetStatus(results, status)
+		return
+	}
+	handle, progress, err := tlsinstance.Accept(state, resource.Handle(params[0]))
+	if err != nil {
+		guest.SetStatus(results, guest.FromError(err))
+		return
+	}
+	status = guest.FromProgress(progress)
+	if progress == nscore.ProgressWouldBlock {
+		guest.SetStatus(results, status)
+		return
+	}
+	if status != guest.StatusOK && status != guest.StatusInProgress {
+		if handle != 0 {
+			_ = state.CloseHandle(handle, resource.KindTLSStream)
+		}
+		guest.SetStatus(results, guest.StatusOther)
+		return
+	}
+	local, remote, err := tlsinstance.Endpoints(state, handle)
+	if err != nil || !tlsabi.EncodeStreamV1(memory, out, handle, local, remote) {
+		_ = state.CloseHandle(handle, resource.KindTLSStream)
+		if err != nil {
+			guest.SetStatus(results, guest.FromError(err))
+		} else {
+			guest.SetStatus(results, guest.StatusOther)
+		}
+		return
+	}
+	guest.SetStatus(results, status)
 }
 
 func connect(host plugin.Host, module wago.HostModule, params, results []uint64) {
@@ -240,6 +337,19 @@ func connectionInfo(host plugin.Host, module wago.HostModule, params, results []
 		return
 	}
 	guest.SetStatus(results, guest.StatusOK)
+}
+
+func closeListener(host plugin.Host, module wago.HostModule, params, results []uint64) {
+	if len(params) != 1 || len(results) != 1 {
+		guest.SetStatus(results, guest.StatusInvalidArgument)
+		return
+	}
+	state, status := instanceState(host, module)
+	if status != guest.StatusOK {
+		guest.SetStatus(results, status)
+		return
+	}
+	guest.SetStatus(results, guest.FromError(state.CloseHandle(resource.Handle(params[0]), resource.KindTLSListener)))
 }
 
 func closeStream(host plugin.Host, module wago.HostModule, params, results []uint64) {
