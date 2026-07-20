@@ -125,6 +125,26 @@ func TestEncodeConnectionInfoV2FlagsAndBounds(t *testing.T) {
 	}
 }
 
+func FuzzCheckListenV1(f *testing.F) {
+	f.Add(uint32(0), uint32(32), uint32(128))
+	f.Fuzz(func(t *testing.T, endpointPtr, listenerPtr, memoryLength uint32) {
+		if memoryLength > 4096 {
+			memoryLength = 4096
+		}
+		_ = CheckListenV1(make([]byte, memoryLength), endpointPtr, listenerPtr)
+	})
+}
+
+func FuzzEncodeListenerV1(f *testing.F) {
+	f.Add(uint32(0), uint64(1), uint16(443), uint32(128))
+	f.Fuzz(func(t *testing.T, ptr uint32, handle uint64, port uint16, memoryLength uint32) {
+		if memoryLength > 4096 {
+			memoryLength = 4096
+		}
+		_ = EncodeListenerV1(make([]byte, memoryLength), ptr, resource.Handle(handle), nscore.Endpoint{Address: netip.MustParseAddr("192.0.2.1"), Port: port})
+	})
+}
+
 func FuzzCheckCreateV1(f *testing.F) {
 	f.Add(uint32(0), uint32(32), uint32(4), uint32(64), uint32(256))
 	f.Fuzz(func(t *testing.T, endpointPtr, namePtr, nameLength, streamPtr, memoryLength uint32) {

@@ -283,6 +283,7 @@ func (adapter *Adapter) TryConnectTLS(remote nscore.Endpoint, profileID uint32, 
 		return nil, 0, nscore.Fail(nscore.FailureUnsupportedConfiguration, err)
 	}
 	created.engine = engine
+	created.transport = transport
 	adapter.mu.Lock()
 	if adapter.closed {
 		adapter.mu.Unlock()
@@ -400,6 +401,7 @@ func (listener *listener) TryAcceptTLS() (nscore.Resource, nscore.Progress, erro
 		return nil, 0, nscore.Fail(nscore.FailureUnsupportedConfiguration, err)
 	}
 	created.engine = engine
+	created.transport = transport
 	owner.mu.Lock()
 	if owner.closed || len(owner.streams) >= int(owner.config.MaxStreams) {
 		owner.mu.Unlock()
@@ -441,6 +443,7 @@ func (listener *listener) Close() error {
 type stream struct {
 	owner         *Adapter
 	engine        *gotls.Stream
+	transport     tcpns.Stream
 	retained      quota.Charge
 	handshake     quota.Charge
 	handshakeLive bool
@@ -537,6 +540,7 @@ func (stream *stream) Close() error {
 	}
 	stream.closed = true
 	engine := stream.engine
+	stream.transport = nil
 	stream.mu.Unlock()
 	var err error
 	if engine != nil {
@@ -626,6 +630,7 @@ func (adapter *Adapter) CloseLocked() {
 		stream.mu.Lock()
 		stream.closed = true
 		engine := stream.engine
+		stream.transport = nil
 		stream.mu.Unlock()
 		if engine != nil {
 			engine.CloseWorkersLocked()
