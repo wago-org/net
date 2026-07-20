@@ -614,12 +614,13 @@ func (n *Adapter) TryListen(local nscore.Endpoint) (nscore.Resource, nscore.Prog
 	return listener, nscore.ProgressDone, nil
 }
 
-// ConnectAuthorizer decides whether one already validated remote endpoint may
-// consume this private TCP transport. It runs while the shared core lock is
-// held and must not block, retain either argument, or call back into the
-// adapter. Protocol adapters use this seam to apply their own authority kind
-// without publishing a raw-TCP guest capability.
-type ConnectAuthorizer func(*policy.Policy, nscore.Endpoint) bool
+// ConnectAuthorizer decides whether one structurally valid remote endpoint may
+// consume this private TCP transport and returns a stable classified failure
+// when denied or unsupported. It runs while the shared core lock is held and
+// must not block, retain either argument, or call back into the adapter.
+// Protocol adapters use this seam to apply their own authority kind without
+// publishing a raw-TCP guest capability.
+type ConnectAuthorizer func(*policy.Policy, nscore.Endpoint) error
 
 // TryConnectTCP implements the narrow raw-TCP namespace facet.
 func (n *Adapter) TryConnectTCP(remote nscore.Endpoint) (nscore.Resource, nscore.Progress, error) {
@@ -628,8 +629,11 @@ func (n *Adapter) TryConnectTCP(remote nscore.Endpoint) (nscore.Resource, nscore
 
 // TryConnect preserves the public raw-TCP policy behavior.
 func (n *Adapter) TryConnect(remote nscore.Endpoint) (nscore.Resource, nscore.Progress, error) {
-	return n.TryConnectAuthorized(remote, func(compiled *policy.Policy, endpoint nscore.Endpoint) bool {
-		return compiled.CheckEndpoint(policy.OperationTCPConnect, endpoint.Address, endpoint.Port)
+	return n.TryConnectAuthorized(remote, func(compiled *policy.Policy, endpoint nscore.Endpoint) error {
+		if !compiled.CheckEndpoint(policy.OperationTCPConnect, endpoint.Address, endpoint.Port) {
+			return nscore.Fail(nscore.FailureAccessDenied, ErrPolicyDenied)
+		}
+		return nil
 	})
 }
 
@@ -646,7 +650,7 @@ func (n *Adapter) TryConnectAuthorized(remote nscore.Endpoint, authorize Connect
 	if n.core.ClosedLocked() || n.stack == nil {
 		return nil, 0, nscore.Fail(nscore.FailureClosed, net.ErrClosed)
 	}
-	if !remote.Valid() || remote.Address.IsUnspecified() || remote.Address.IsLoopback() || remote.Address.IsMulticast() || remote.Address == limitedBroadcastAddress || remote.Port == 0 || (!remote.Address.Is4() && !remote.Address.Is6()) {
+	if !remote.Valid() || remote.Address.IsUnspecified() || remote.Port == 0 || (!remote.Address.Is4() && !remote.Address.Is6()) {
 		return nil, 0, nscore.Fail(nscore.FailureInvalidArgument, lneto.ErrInvalidAddr)
 	}
 	if remote.Address.Is6() && !n.core.IPv6EnabledLocked() {
@@ -658,8 +662,11 @@ func (n *Adapter) TryConnectAuthorized(remote nscore.Endpoint, authorize Connect
 	if n.config.MaxOutboundStreams == 0 {
 		return nil, 0, nscore.Fail(nscore.FailureNotSupported, lneto.ErrUnsupported)
 	}
-	if authorize == nil || !authorize(n.policy, remote) {
+	if authorize == nil {
 		return nil, 0, nscore.Fail(nscore.FailureAccessDenied, ErrPolicyDenied)
+	}
+	if err := authorize(n.policy, remote); err != nil {
+		return nil, 0, err
 	}
 	if n.outboundTCPStreamsLocked() >= int(n.config.MaxOutboundStreams) {
 		return nil, 0, nscore.Fail(nscore.FailureResourceLimit, lneto.ErrExhausted)

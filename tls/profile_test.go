@@ -2,7 +2,10 @@ package tls
 
 import (
 	cryptotls "crypto/tls"
+	"net/netip"
 	"testing"
+
+	"github.com/wago-org/net/internal/policy"
 )
 
 func TestClientProfileDefaultsTLS13AndClones(t *testing.T) {
@@ -55,6 +58,24 @@ func TestClientProfileRequiresTLS12OptInAndExactIdentity(t *testing.T) {
 	}
 	if _, _, err := profile.authorizeServerName("example.com"); err != ErrUnauthorizedName {
 		t.Fatalf("wrong identity: %v", err)
+	}
+}
+
+func TestAllowLoopbackRegistrationAuthorityIsTLSScoped(t *testing.T) {
+	configuration := registration{config: DefaultConfig(), defaultAuthority: true}
+	if err := AllowLoopback().applyTLS(&configuration); err != nil {
+		t.Fatal(err)
+	}
+	compiled, err := policy.Compile(configuration.authority())
+	if err != nil {
+		t.Fatal(err)
+	}
+	loopback := netip.MustParseAddr("127.0.0.1")
+	if !compiled.CheckEndpoint(policy.OperationTLSConnect, loopback, 443) {
+		t.Fatal("public TLS registration option did not grant TLS loopback")
+	}
+	if compiled.CheckEndpoint(policy.OperationTCPConnect, loopback, 443) {
+		t.Fatal("public TLS registration option widened raw TCP loopback")
 	}
 }
 

@@ -891,15 +891,14 @@ func TestIPv6EndpointScopeAndFlowFailClosed(t *testing.T) {
 	}
 }
 
-func TestConnectRejectsNonWireUnicastDestinationsBeforeOwnership(t *testing.T) {
-	allowAllTCP, err := policy.Compile(policy.Config{
+func TestTCPConnectLoopbackRequiresTCPScopedAuthority(t *testing.T) {
+	allowLoopbackTCP, err := policy.Compile(policy.Config{
 		Rules: []policy.Rule{{
 			Action: policy.ActionAllow, Transports: []policy.Transport{policy.TransportTCP},
 			Directions: []policy.Direction{policy.DirectionOutbound},
 			Prefixes:   []netip.Prefix{netip.MustParsePrefix("0.0.0.0/0"), netip.MustParsePrefix("::/0")},
 		}},
-		LoopbackTransports:  []policy.Transport{policy.TransportTCP},
-		BroadcastTransports: []policy.Transport{policy.TransportTCP},
+		LoopbackTransports: []policy.Transport{policy.TransportTCP},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -909,34 +908,34 @@ func TestConnectRejectsNonWireUnicastDestinationsBeforeOwnership(t *testing.T) {
 		address netip.Addr
 		new     func(testing.TB) *Adapter
 	}{
-		{name: "IPv4 loopback", address: netip.MustParseAddr("127.0.0.1"), new: func(t testing.TB) *Adapter {
+		{name: "IPv4", address: netip.MustParseAddr("127.0.0.1"), new: func(t testing.TB) *Adapter {
 			_, adapter := newTestAdapter(t, 44, 0, 1)
 			return adapter
 		}},
-		{name: "IPv4 limited broadcast", address: netip.AddrFrom4([4]byte{255, 255, 255, 255}), new: func(t testing.TB) *Adapter {
-			_, adapter := newTestAdapter(t, 45, 0, 1)
-			return adapter
-		}},
-		{name: "IPv6 loopback", address: netip.IPv6Loopback(), new: func(t testing.TB) *Adapter {
+		{name: "IPv6", address: netip.IPv6Loopback(), new: func(t testing.TB) *Adapter {
 			_, adapter := newIPv6TestAdapter(t, 46, netip.MustParseAddr("2001:db8::46"), 0, 1)
 			return adapter
 		}},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			adapter := test.new(t)
-			adapter.policy = allowAllTCP
-			usageBefore, closedBefore := adapter.quotas.Snapshot()
-			if resource, progress, err := adapter.TryConnect(nscore.Endpoint{Address: test.address, Port: 443}); resource != nil || progress != 0 || failureOf(t, err) != nscore.FailureInvalidArgument {
-				t.Fatalf("connect = %T, %v, %v", resource, progress, err)
+			remote := nscore.Endpoint{Address: test.address, Port: 443}
+			if resource, progress, err := adapter.TryConnect(remote); resource != nil || progress != 0 || failureOf(t, err) != nscore.FailureAccessDenied {
+				t.Fatalf("default loopback connect = %T, %v, %v", resource, progress, err)
+			}
+			adapter.policy = allowLoopbackTCP
+			resource, progress, err := adapter.TryConnect(remote)
+			if err != nil || resource == nil || progress != nscore.ProgressInProgress {
+				t.Fatalf("granted loopback connect = %T, %v, %v", resource, progress, err)
+			}
+			if err := resource.Close(); err != nil {
+				t.Fatal(err)
 			}
 			adapter.core.Lock()
 			leaseCount := adapter.core.TCPPortLeaseCountLocked()
 			adapter.core.Unlock()
-			if leaseCount != 0 || len(adapter.streams) != 0 || adapter.outboundStreams != 0 || len(adapter.freeOutboundStorage) != 0 {
-				t.Fatalf("rejected connect mutated state: leases=%d streams=%d outbound=%d storage=%d", leaseCount, len(adapter.streams), adapter.outboundStreams, len(adapter.freeOutboundStorage))
-			}
-			if usage, closed := adapter.quotas.Snapshot(); closed != closedBefore || usage != usageBefore {
-				t.Fatalf("rejected connect quota = %+v, closed=%v; want %+v, closed=%v", usage, closed, usageBefore, closedBefore)
+			if leaseCount != 0 {
+				t.Fatalf("closed loopback retained %d leases", leaseCount)
 			}
 		})
 	}

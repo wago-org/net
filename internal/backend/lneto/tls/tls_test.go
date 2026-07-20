@@ -70,6 +70,70 @@ func TestTLSUsesPrivateTCPWithoutRawTCPAuthorityAndRollsBack(t *testing.T) {
 	}
 }
 
+func TestTLSLoopbackAuthorityIsScopedAndFunctional(t *testing.T) {
+	for _, test := range []struct {
+		name  string
+		allow bool
+	}{
+		{name: "denied by default"},
+		{name: "TLS scoped grant", allow: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			policyConfig := policy.Config{Rules: []policy.Rule{
+				{Action: policy.ActionAllow, Transports: []policy.Transport{policy.TransportTLS}, Directions: []policy.Direction{policy.DirectionOutbound}},
+				{Action: policy.ActionAllow, Transports: []policy.Transport{policy.TransportTCP}, Directions: []policy.Direction{policy.DirectionOutbound}},
+			}}
+			if test.allow {
+				policyConfig.LoopbackTransports = []policy.Transport{policy.TransportTLS}
+			}
+			compiled, err := policy.Compile(policyConfig)
+			if err != nil {
+				t.Fatal(err)
+			}
+			mtu := uint16(ethernet.MaxMTU)
+			common, err := lnetocore.New(lnetocore.Config{
+				Hostname: "tls-loopback", RandSeed: 2,
+				HardwareAddress: [6]byte{0x02, 0, 0, 0, 0, 2}, GatewayHardwareAddress: [6]byte{0x02, 0, 0, 0, 0, 3},
+				IPv4Address: netip.MustParseAddr("192.0.2.2"), MTU: mtu,
+				Link:              packetlink.Config{MaxFrameBytes: int(mtu) + 14, IngressFrames: 4, EgressFrames: 4},
+				MaxActiveTCPPorts: 2, Policy: compiled,
+				Quotas: quota.NewAccount(quota.Limits{Resources: 8, TCPResources: 4, TLSResources: 2, TLSHandshakes: 2, QueuedBytes: 1 << 20, TLSPlaintextBytes: 128 << 10, TLSCiphertextBytes: 128 << 10}),
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer common.Close()
+			raw, err := tcpbackend.New(common, tcpConfigForTest())
+			if err != nil {
+				t.Fatal(err)
+			}
+			adapter, err := New(common, Config{
+				MaxStreams: 1, MaxConcurrentHandshakes: 1, MaxServerNameBytes: 253, MaxServiceAttemptsPerHandshake: 64,
+				TCP: tcpConfigForTest(), Engine: engineLimitsForTest(),
+				Profiles: []gotls.Profile{{ID: 1, Config: &cryptotls.Config{MinVersion: cryptotls.VersionTLS13, MaxVersion: cryptotls.VersionTLS13}, MaxCertificateChainBytes: 64 << 10, MaxPeerCertificates: 4, AllowedNames: map[string]tlsns.IdentityType{"localhost": tlsns.IdentityDNS}}},
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			remote := nscore.Endpoint{Address: netip.MustParseAddr("127.0.0.1"), Port: 443}
+			resource, progress, connectErr := adapter.TryConnectTLS(remote, 1, "localhost")
+			if !test.allow {
+				if resource != nil || progress != 0 || failureOf(t, connectErr) != nscore.FailureAccessDenied {
+					t.Fatalf("default TLS loopback = %T, %v, %v", resource, progress, connectErr)
+				}
+				return
+			}
+			if connectErr != nil || resource == nil || progress != nscore.ProgressInProgress {
+				t.Fatalf("granted TLS loopback = %T, %v, %v", resource, progress, connectErr)
+			}
+			defer resource.Close()
+			if rawResource, rawProgress, rawErr := raw.TryConnect(remote); rawResource != nil || rawProgress != 0 || failureOf(t, rawErr) != nscore.FailureAccessDenied {
+				t.Fatalf("TLS grant widened raw TCP = %T, %v, %v", rawResource, rawProgress, rawErr)
+			}
+		})
+	}
+}
+
 func tcpConfigForTest() tcpbackend.Config {
 	return tcpbackend.Config{MaxOutboundStreams: 1, ReceiveBytes: 512, TransmitBytes: 512, TransmitPackets: 4}
 }

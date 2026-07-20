@@ -5,6 +5,7 @@ package tls
 import (
 	"errors"
 	"net"
+	"net/netip"
 	"sync"
 
 	gotls "github.com/wago-org/net/internal/backend/gotls"
@@ -21,9 +22,10 @@ import (
 const tlsCloseOrder = 19
 
 var (
-	ErrInvalidConfig    = errors.New("net/tls: invalid lneto TLS configuration")
-	ErrUnknownProfile   = errors.New("net/tls: unknown client profile")
-	ErrUnauthorizedName = errors.New("net/tls: unauthorized server name")
+	ErrInvalidConfig        = errors.New("net/tls: invalid lneto TLS configuration")
+	ErrUnknownProfile       = errors.New("net/tls: unknown client profile")
+	ErrUnauthorizedName     = errors.New("net/tls: unauthorized server name")
+	limitedBroadcastAddress = netip.AddrFrom4([4]byte{255, 255, 255, 255})
 )
 
 // Config fixes private TCP storage, TLS queues, and immutable client profiles.
@@ -145,8 +147,16 @@ func (adapter *Adapter) TryConnectTLS(remote nscore.Endpoint, profileID uint32, 
 		return nil, 0, mapQuotaError(err)
 	}
 
-	private, progress, err := adapter.tcp.TryConnectAuthorized(remote, func(compiled *policy.Policy, endpoint nscore.Endpoint) bool {
-		return compiled.CheckEndpoint(policy.OperationTLSConnect, endpoint.Address, endpoint.Port)
+	private, progress, err := adapter.tcp.TryConnectAuthorized(remote, func(compiled *policy.Policy, endpoint nscore.Endpoint) error {
+		if !compiled.CheckEndpoint(policy.OperationTLSConnect, endpoint.Address, endpoint.Port) {
+			return nscore.Fail(nscore.FailureAccessDenied, tcpbackend.ErrPolicyDenied)
+		}
+		// TLS is a unicast client surface. Even advanced policy cannot turn
+		// multicast or limited broadcast into a meaningful TLS destination.
+		if endpoint.Address.IsMulticast() || endpoint.Address == limitedBroadcastAddress {
+			return nscore.Fail(nscore.FailureNotSupported, ErrInvalidConfig)
+		}
+		return nil
 	})
 	if err != nil {
 		created.release()
