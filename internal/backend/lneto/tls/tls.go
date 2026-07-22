@@ -26,6 +26,7 @@ const tlsCloseOrder = 19
 var (
 	ErrInvalidConfig        = errors.New("net/tls: invalid lneto TLS configuration")
 	ErrUnknownProfile       = errors.New("net/tls: unknown client profile")
+	ErrUnknownServerProfile = errors.New("net/tls: unknown server profile")
 	ErrUnauthorizedName     = errors.New("net/tls: unauthorized server name")
 	limitedBroadcastAddress = netip.AddrFrom4([4]byte{255, 255, 255, 255})
 )
@@ -33,24 +34,29 @@ var (
 // Config fixes private TCP storage, TLS queues, and immutable client profiles.
 type Config struct {
 	MaxStreams                     uint16
+	MaxListeners                   uint16
+	AcceptBacklog                  uint16
 	MaxConcurrentHandshakes        uint16
 	MaxServerNameBytes             uint16
 	MaxServiceAttemptsPerHandshake uint32
 	TCP                            tcpbackend.Config
 	Engine                         gotls.Limits
 	Profiles                       []gotls.Profile
+	ServerProfiles                 []gotls.ServerProfile
 }
 
 // Adapter owns TLS streams and one private raw-byte TCP adapter.
 type Adapter struct {
-	core     *lnetocore.Namespace
-	tcp      *tcpbackend.Adapter
-	quotas   *quota.Account
-	config   Config
-	storage  tlslimits.Plan
-	profiles map[uint32]gotls.Profile
+	core           *lnetocore.Namespace
+	tcp            *tcpbackend.Adapter
+	quotas         *quota.Account
+	config         Config
+	storage        tlslimits.Plan
+	profiles       map[uint32]gotls.Profile
+	serverProfiles map[uint32]gotls.ServerProfile
 
 	mu         sync.Mutex
+	listeners  []*listener
 	streams    []*stream
 	handshakes int
 	closed     bool
@@ -71,8 +77,10 @@ func New(common *lnetocore.Namespace, config Config) (*Adapter, error) {
 	common.Unlock()
 	adapter := &Adapter{
 		core: common, quotas: quotas, config: config, storage: storage,
-		profiles: make(map[uint32]gotls.Profile, len(config.Profiles)),
-		streams:  make([]*stream, 0, config.MaxStreams),
+		profiles:       make(map[uint32]gotls.Profile, len(config.Profiles)),
+		serverProfiles: make(map[uint32]gotls.ServerProfile, len(config.ServerProfiles)),
+		listeners:      make([]*listener, 0, config.MaxListeners),
+		streams:        make([]*stream, 0, config.MaxStreams),
 	}
 	for _, input := range config.Profiles {
 		profile, err := input.Clone()
@@ -83,6 +91,16 @@ func New(common *lnetocore.Namespace, config Config) (*Adapter, error) {
 			return nil, nscore.Fail(nscore.FailureInvalidArgument, ErrInvalidConfig)
 		}
 		adapter.profiles[profile.ID] = profile
+	}
+	for _, input := range config.ServerProfiles {
+		profile, err := input.Clone()
+		if err != nil {
+			return nil, nscore.Fail(nscore.FailureUnsupportedConfiguration, err)
+		}
+		if _, exists := adapter.serverProfiles[profile.ID]; exists {
+			return nil, nscore.Fail(nscore.FailureInvalidArgument, ErrInvalidConfig)
+		}
+		adapter.serverProfiles[profile.ID] = profile
 	}
 	privateTCP, err := tcpbackend.New(common, config.TCP)
 	if err != nil {
@@ -105,8 +123,8 @@ func validConfig(config Config) bool {
 
 func validateConfig(config Config, maxIntValue uint64) (tlslimits.Plan, bool) {
 	if config.MaxServerNameBytes == 0 || config.MaxServerNameBytes > 253 || config.MaxServiceAttemptsPerHandshake == 0 || config.MaxServiceAttemptsPerHandshake > tlslimits.MaxServiceAttempts ||
-		config.TCP.MaxListeners != 0 || config.TCP.MaxOutboundStreams < config.MaxStreams || config.TCP.TransmitPackets <= 0 || config.TCP.TransmitPackets > tlslimits.MaxTransportPackets ||
-		config.TCP.TransmitPackets > config.TCP.TransmitBytes || len(config.Profiles) == 0 || len(config.Profiles) > tlslimits.MaxProfiles {
+		config.TCP.MaxListeners < config.MaxListeners || config.TCP.MaxOutboundStreams < config.MaxStreams || config.TCP.AcceptBacklog != config.AcceptBacklog || config.TCP.TransmitPackets <= 0 || config.TCP.TransmitPackets > tlslimits.MaxTransportPackets ||
+		config.TCP.TransmitPackets > config.TCP.TransmitBytes || (len(config.Profiles) == 0 && len(config.ServerProfiles) == 0) || len(config.Profiles) > tlslimits.MaxProfiles || len(config.ServerProfiles) > tlslimits.MaxProfiles {
 		return tlslimits.Plan{}, false
 	}
 	for _, profile := range config.Profiles {
@@ -120,8 +138,16 @@ func validateConfig(config Config, maxIntValue uint64) (tlslimits.Plan, bool) {
 			maxCertificateBytes = profile.MaxCertificateChainBytes
 		}
 	}
+	for _, profile := range config.ServerProfiles {
+		if profile.MaxPeerCertificates == 0 || profile.MaxPeerCertificates > tlslimits.MaxPeerCertificates {
+			return tlslimits.Plan{}, false
+		}
+		if profile.MaxCertificateChainBytes > maxCertificateBytes {
+			maxCertificateBytes = profile.MaxCertificateChainBytes
+		}
+	}
 	plan, ok := tlslimits.Validate(tlslimits.Config{
-		MaxStreams: config.MaxStreams, MaxConcurrentHandshakes: config.MaxConcurrentHandshakes,
+		MaxStreams: config.MaxStreams, MaxListeners: config.MaxListeners, AcceptBacklog: config.AcceptBacklog, MaxConcurrentHandshakes: config.MaxConcurrentHandshakes,
 		PlaintextReceiveBytes: config.Engine.PlaintextReceiveBytes, PlaintextTransmitBytes: config.Engine.PlaintextTransmitBytes,
 		CiphertextReceiveBytes: config.Engine.CiphertextReceiveBytes, CiphertextTransmitBytes: config.Engine.CiphertextTransmitBytes,
 		TransportReceiveBytes: config.TCP.ReceiveBytes, TransportTransmitBytes: config.TCP.TransmitBytes,
@@ -131,6 +157,61 @@ func validateConfig(config Config, maxIntValue uint64) (tlslimits.Plan, bool) {
 		return tlslimits.Plan{}, false
 	}
 	return plan, true
+}
+
+func (adapter *Adapter) TryListenTLS(local nscore.Endpoint, profileID uint32) (nscore.Resource, nscore.Progress, error) {
+	if adapter == nil {
+		return nil, 0, nscore.Fail(nscore.FailureClosed, net.ErrClosed)
+	}
+	profile, exists := adapter.serverProfiles[profileID]
+	if !exists {
+		return nil, 0, nscore.Fail(nscore.FailureInvalidArgument, ErrUnknownServerProfile)
+	}
+	adapter.mu.Lock()
+	if adapter.closed {
+		adapter.mu.Unlock()
+		return nil, 0, nscore.Fail(nscore.FailureClosed, net.ErrClosed)
+	}
+	if len(adapter.listeners) >= int(adapter.config.MaxListeners) {
+		adapter.mu.Unlock()
+		return nil, 0, nscore.Fail(nscore.FailureResourceLimit, quota.ErrLimit)
+	}
+	adapter.mu.Unlock()
+
+	private, progress, err := adapter.tcp.TryListenAuthorized(local, func(compiled *policy.Policy, endpoint nscore.Endpoint) error {
+		if !compiled.CheckEndpoint(policy.OperationTLSListen, endpoint.Address, endpoint.Port) {
+			return nscore.Fail(nscore.FailureAccessDenied, tcpbackend.ErrPolicyDenied)
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, 0, err
+	}
+	transport, ok := private.(tcpns.Listener)
+	if !ok || resource.IsNil(transport) {
+		if !resource.IsNil(private) {
+			_ = private.Close()
+		}
+		return nil, 0, nscore.Fail(nscore.FailureIO, ErrInvalidConfig)
+	}
+	created := &listener{owner: adapter, transport: transport, profile: profile}
+	if err := adapter.quotas.AcquireResource(&created.retained, quota.ResourceTLS, 1); err != nil {
+		_ = transport.Close()
+		return nil, 0, mapQuotaError(err)
+	}
+	adapter.mu.Lock()
+	if adapter.closed || len(adapter.listeners) >= int(adapter.config.MaxListeners) {
+		adapter.mu.Unlock()
+		_ = transport.Close()
+		created.retained.Release()
+		if adapter.closed {
+			return nil, 0, nscore.Fail(nscore.FailureClosed, net.ErrClosed)
+		}
+		return nil, 0, nscore.Fail(nscore.FailureResourceLimit, quota.ErrLimit)
+	}
+	adapter.listeners = append(adapter.listeners, created)
+	adapter.mu.Unlock()
+	return created, progress, nil
 }
 
 func (adapter *Adapter) TryConnectTLS(remote nscore.Endpoint, profileID uint32, serverName string) (nscore.Resource, nscore.Progress, error) {
@@ -202,6 +283,7 @@ func (adapter *Adapter) TryConnectTLS(remote nscore.Endpoint, profileID uint32, 
 		return nil, 0, nscore.Fail(nscore.FailureUnsupportedConfiguration, err)
 	}
 	created.engine = engine
+	created.transport = transport
 	adapter.mu.Lock()
 	if adapter.closed {
 		adapter.mu.Unlock()
@@ -227,9 +309,141 @@ func mapQuotaError(err error) error {
 	return nscore.Fail(nscore.FailureInvalidArgument, err)
 }
 
+type listener struct {
+	owner     *Adapter
+	transport tcpns.Listener
+	profile   gotls.ServerProfile
+	retained  quota.Charge
+	closed    bool
+	mu        sync.Mutex
+}
+
+func (listener *listener) LocalEndpoint() nscore.Endpoint {
+	if listener == nil || resource.IsNil(listener.transport) {
+		return nscore.Endpoint{}
+	}
+	return listener.transport.LocalEndpoint()
+}
+
+func (listener *listener) Readiness() nscore.Readiness {
+	if listener == nil || resource.IsNil(listener.transport) {
+		return nscore.ReadyClosed
+	}
+	listener.mu.Lock()
+	closed := listener.closed
+	listener.mu.Unlock()
+	if closed {
+		return nscore.ReadyClosed
+	}
+	return listener.transport.Readiness()
+}
+
+func (listener *listener) TryAcceptTLS() (nscore.Resource, nscore.Progress, error) {
+	if listener == nil || listener.owner == nil || resource.IsNil(listener.transport) {
+		return nil, 0, nscore.Fail(nscore.FailureClosed, net.ErrClosed)
+	}
+	listener.mu.Lock()
+	if listener.closed {
+		listener.mu.Unlock()
+		return nil, 0, nscore.Fail(nscore.FailureClosed, net.ErrClosed)
+	}
+	listener.mu.Unlock()
+	owner := listener.owner
+	owner.mu.Lock()
+	if owner.closed {
+		owner.mu.Unlock()
+		return nil, 0, nscore.Fail(nscore.FailureClosed, net.ErrClosed)
+	}
+	if len(owner.streams) >= int(owner.config.MaxStreams) || owner.handshakes >= int(owner.config.MaxConcurrentHandshakes) {
+		owner.mu.Unlock()
+		return nil, 0, nscore.Fail(nscore.FailureResourceLimit, quota.ErrLimit)
+	}
+	owner.handshakes++
+	owner.mu.Unlock()
+
+	private, progress, err := listener.transport.TryAccept()
+	if err != nil {
+		owner.releaseHandshakeSlot(nil)
+		return nil, 0, err
+	}
+	if progress == nscore.ProgressWouldBlock {
+		owner.releaseHandshakeSlot(nil)
+		if !resource.IsNil(private) {
+			_ = private.Close()
+			return nil, 0, nscore.Fail(nscore.FailureIO, ErrInvalidConfig)
+		}
+		return nil, progress, nil
+	}
+	transport, ok := private.(tcpns.Stream)
+	if progress != nscore.ProgressDone || !ok || resource.IsNil(transport) {
+		owner.releaseHandshakeSlot(nil)
+		if !resource.IsNil(private) {
+			_ = private.Close()
+		}
+		return nil, 0, nscore.Fail(nscore.FailureIO, ErrInvalidConfig)
+	}
+	created := &stream{owner: owner, handshakeLive: true}
+	if err := owner.quotas.AcquireTLSStream(&created.retained, owner.storage.PlaintextBytes, owner.storage.CiphertextBytes); err != nil {
+		_ = transport.Close()
+		owner.releaseHandshakeSlot(created)
+		return nil, 0, mapQuotaError(err)
+	}
+	if err := owner.quotas.AcquireTLSHandshake(&created.handshake, 1); err != nil {
+		_ = transport.Close()
+		created.retained.Release()
+		owner.releaseHandshakeSlot(created)
+		return nil, 0, mapQuotaError(err)
+	}
+	engine, err := gotls.NewServer(transport, listener.profile, owner.config.Engine)
+	if err != nil {
+		_ = transport.Close()
+		created.release()
+		return nil, 0, nscore.Fail(nscore.FailureUnsupportedConfiguration, err)
+	}
+	created.engine = engine
+	created.transport = transport
+	owner.mu.Lock()
+	if owner.closed || len(owner.streams) >= int(owner.config.MaxStreams) {
+		owner.mu.Unlock()
+		_ = engine.Close()
+		created.release()
+		if owner.closed {
+			return nil, 0, nscore.Fail(nscore.FailureClosed, net.ErrClosed)
+		}
+		return nil, 0, nscore.Fail(nscore.FailureResourceLimit, quota.ErrLimit)
+	}
+	owner.streams = append(owner.streams, created)
+	owner.mu.Unlock()
+	return created, nscore.ProgressInProgress, nil
+}
+
+func (listener *listener) Close() error {
+	if listener == nil {
+		return nil
+	}
+	listener.mu.Lock()
+	if listener.closed {
+		listener.mu.Unlock()
+		return nil
+	}
+	listener.closed = true
+	transport := listener.transport
+	listener.mu.Unlock()
+	var err error
+	if !resource.IsNil(transport) {
+		err = transport.Close()
+	}
+	listener.retained.Release()
+	if listener.owner != nil {
+		listener.owner.removeListener(listener)
+	}
+	return err
+}
+
 type stream struct {
 	owner         *Adapter
 	engine        *gotls.Stream
+	transport     tcpns.Stream
 	retained      quota.Charge
 	handshake     quota.Charge
 	handshakeLive bool
@@ -326,6 +540,7 @@ func (stream *stream) Close() error {
 	}
 	stream.closed = true
 	engine := stream.engine
+	stream.transport = nil
 	stream.mu.Unlock()
 	var err error
 	if engine != nil {
@@ -359,6 +574,20 @@ func (adapter *Adapter) releaseHandshakeSlot(created *stream) {
 	adapter.mu.Unlock()
 }
 
+func (adapter *Adapter) removeListener(target *listener) {
+	adapter.mu.Lock()
+	defer adapter.mu.Unlock()
+	for index, candidate := range adapter.listeners {
+		if candidate != target {
+			continue
+		}
+		copy(adapter.listeners[index:], adapter.listeners[index+1:])
+		adapter.listeners[len(adapter.listeners)-1] = nil
+		adapter.listeners = adapter.listeners[:len(adapter.listeners)-1]
+		return
+	}
+}
+
 func (adapter *Adapter) remove(target *stream) {
 	adapter.mu.Lock()
 	defer adapter.mu.Unlock()
@@ -386,13 +615,22 @@ func (adapter *Adapter) CloseLocked() {
 		return
 	}
 	adapter.closed = true
+	listeners := append([]*listener(nil), adapter.listeners...)
 	streams := append([]*stream(nil), adapter.streams...)
+	adapter.listeners = nil
 	adapter.streams = nil
 	adapter.mu.Unlock()
+	for _, listener := range listeners {
+		listener.mu.Lock()
+		listener.closed = true
+		listener.mu.Unlock()
+		listener.retained.Release()
+	}
 	for _, stream := range streams {
 		stream.mu.Lock()
 		stream.closed = true
 		engine := stream.engine
+		stream.transport = nil
 		stream.mu.Unlock()
 		if engine != nil {
 			engine.CloseWorkersLocked()

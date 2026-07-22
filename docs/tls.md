@@ -1,10 +1,11 @@
-# Outbound TLS client capability
+# Bounded TLS client and server capability
 
-`github.com/wago-org/net/tls` is a separately selectable, client-only secure
-stream protocol. It declares `net.tls` and `wago_net_tls`; it does not declare
-`net.tcp` or install `wago_net_tcp`. The lneto implementation privately owns an
-internal TCP stream, never publishes that stream in the guest resource table,
-and closes both TLS and TCP ownership exactly once.
+`github.com/wago-org/net/tls` is a separately selectable secure stream protocol
+with outbound clients and explicitly authorized inbound listeners. It declares
+`net.tls` and `wago_net_tls`; it does not declare `net.tcp` or install
+`wago_net_tcp`. The lneto implementation privately owns internal TCP streams and
+listeners, never publishes them in the guest resource table, and closes TLS and
+TCP ownership exactly once.
 
 ## Public API and authority
 
@@ -36,10 +37,28 @@ loopback gate; raw TCP still requires its own TCP-scoped grant. Multicast and
 limited broadcast remain unsupported TLS destinations even if advanced policy
 mentions those endpoint classes.
 
+Hosts construct server profiles with `NewServerProfile` and static certificate
+chains. Every DER certificate is parsed during profile construction, each chain
+link is signature-checked, and each leaf public key must match its
+`crypto.Signer`. Certificate DER, OCSP staples, SCTs, ALPN, and CA pools are
+cloned. The signer itself remains a host-owned interface value and must remain
+available, immutable, and concurrency-safe for the profile lifetime; it never
+enters guest memory. Dynamic certificate/config selection and verification
+callbacks are rejected. Client SNI may select only among the immutable static
+certificates supplied by the host; it cannot select a new configuration or
+credential source. Server session tickets remain disabled.
+
+A stored server profile grants no endpoint authority. Hosts must separately opt
+in with `tls.AllowListeners()` or supply explicit advanced inbound TLS policy.
+That authority does not grant raw-TCP listen, and applicable raw-TCP inbound deny
+rules continue to constrain the private listener. Listener handles and accepted
+TLS streams remain kind-separated and finite.
+
 TLS intentionally has no `tls/register` package or zero-configuration extension.
 A self-registering package cannot safely invent trust roots, profile IDs,
-verification identities, ALPN, or client credentials. Hosts must call
-`tls.NewClientProfile` and `tls.Register` explicitly in Go composition.
+verification identities, ALPN, server certificates, private keys, or listen
+policy. Hosts must call profile constructors and `tls.Register` explicitly in Go
+composition.
 
 ## Nonblocking engine
 
@@ -70,24 +89,32 @@ executed arm64 evidence are still required before production readiness.
 
 ## ABI
 
-`wago_net_tls` exports nine operations:
+`wago_net_tls` exports thirteen operations on the server-foundation branch:
 
 - `namespace_default`
+- `listen`
+- `accept`
 - `connect`
 - `finish_connect`
 - `read`
 - `write`
 - `shutdown_write`
 - `connection_info`
+- `connection_info_v2`
 - `close`
+- `close_listener`
 - `poll`
 
 `finish_connect` reports success only after TCP establishment, TLS handshake,
 certificate-chain validation, DNS/IP identity validation, and required ALPN.
 No plaintext is readable or writable before that point. `connection_info`
-returns only local/remote endpoints, TLS version, cipher-suite number,
-negotiated ALPN (maximum 32 bytes in ABI v1), resumption flag, peer leaf SPKI
-SHA-256, and verified identity type. Arbitrary certificate DER is not exported.
+retains the exact client-era v1 byte contract: offset 68 is only the resumed
+boolean 0 or 1. `connection_info_v2` additively reports resumed, local server
+role, and peer-authenticated flags without reinterpreting v1. Both versions
+return only bounded local/remote endpoints, TLS version, cipher-suite number,
+negotiated ALPN (maximum 32 bytes), optional peer leaf SPKI SHA-256, and the
+client-side verified server identity type. Arbitrary certificate DER is not
+exported.
 
 All input/output ranges are checked before backend work. Server-name bytes are
 copied during the host call. Outputs remain unchanged on errors, would-block,
@@ -99,8 +126,10 @@ than repeatedly charging the already-known transport EOF. Raw TCP EOF without
 
 ## Default finite bounds
 
-The default registration allows eight live streams and four concurrent
-handshakes. Per stream it reserves 16 KiB receive and transmit plaintext, 32 KiB
+The default registration allows eight live streams, four TLS listeners, an
+accept backlog of four private TCP streams per listener, and four concurrent
+handshakes. Listener authority is disabled until explicitly granted. Per stream
+it reserves 16 KiB receive and transmit plaintext, 32 KiB
 receive and transmit ciphertext, and private TCP receive/transmit buffers of 32
 KiB each. Fixed 32 KiB plaintext and 16 KiB ciphertext scratch are included in
 the same checked per-stream accounting. Defaults also limit handshake bytes to
@@ -118,15 +147,17 @@ service attempts. Every field and combined allocation must fit target `int`;
 all additions and the `MaxStreams` multiplication are checked in `uint64` before
 backend construction, including simulated and actual 386 builds.
 
-TLS resources, active handshakes, plaintext bytes, ciphertext bytes, global
-retained bytes, and the underlying private TCP resource/storage are all charged
+TLS listener and stream resources, active handshakes, plaintext bytes,
+ciphertext bytes, global retained bytes, accept-backlog transport storage, and
+the underlying private TCP resource/storage are all charged
 to the exact instance quota ledger. Every setup path rolls back both layers;
 close and failed verification release each charge exactly once.
 
 ## Unsupported scope
 
-There are no listeners, server handshakes, incoming client authentication,
-DTLS, QUIC TLS, STARTTLS upgrades, guest-handle wrapping, arbitrary guest TLS
-configuration, session-ticket key rotation, or inbound handshake queues. The
-certificate-validation clock is the cloned host `tls.Config.Time` function when
-provided, otherwise Go's standard clock.
+There is no HTTP/HTTPS request API, DTLS, QUIC TLS, STARTTLS upgrade,
+guest-handle wrapping, arbitrary guest TLS configuration, or session-ticket key
+rotation. Server listeners and bounded inbound handshakes are available only
+through explicit granular TLS registration and authority; they do not place TLS
+in aggregate `register`. The certificate-validation clock is the cloned host
+`tls.Config.Time` function when provided, otherwise Go's standard clock.

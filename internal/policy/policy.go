@@ -84,6 +84,7 @@ const (
 	OperationDHCPv6ClientSend
 	OperationDHCPv6ClientReceive
 	OperationTLSConnect
+	OperationTLSListen
 )
 
 // PortRange is an inclusive port selector.
@@ -518,6 +519,8 @@ func operationEndpoint(operation Operation) (Transport, Direction, bool) {
 		return TransportTCP, DirectionOutbound, true
 	case OperationTLSConnect:
 		return TransportTLS, DirectionOutbound, true
+	case OperationTLSListen:
+		return TransportTLS, DirectionInbound, true
 	case OperationNTPSync:
 		return TransportNTP, DirectionOutbound, true
 	case OperationMDNSSend:
