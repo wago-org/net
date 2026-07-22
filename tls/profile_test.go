@@ -14,14 +14,19 @@ import (
 )
 
 func TestClientProfileDefaultsTLS13AndClones(t *testing.T) {
-	config := &cryptotls.Config{NextProtos: []string{"h2"}}
+	config := &cryptotls.Config{
+		NextProtos:   []string{"h2"},
+		Certificates: []cryptotls.Certificate{{SupportedSignatureAlgorithms: []cryptotls.SignatureScheme{cryptotls.Ed25519}}},
+	}
 	profile, err := NewClientProfile(1, config, AllowServerNames("API.Example.com."), RequireALPN("h2"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	config.NextProtos[0] = "mutated"
+	config.Certificates[0].SupportedSignatureAlgorithms[0] = cryptotls.ECDSAWithP256AndSHA256
 	config.InsecureSkipVerify = true
-	if profile.config.NextProtos[0] != "h2" || profile.config.InsecureSkipVerify {
+	if profile.config.NextProtos[0] != "h2" || profile.config.InsecureSkipVerify ||
+		profile.config.Certificates[0].SupportedSignatureAlgorithms[0] != cryptotls.Ed25519 {
 		t.Fatal("profile retained caller mutation")
 	}
 	if profile.config.MinVersion != cryptotls.VersionTLS13 || profile.config.MaxVersion != cryptotls.VersionTLS13 {
@@ -68,6 +73,7 @@ func TestClientProfileRequiresTLS12OptInAndExactIdentity(t *testing.T) {
 
 func TestServerProfileDefaultsTLS13ClonesAndRequiresStaticCertificate(t *testing.T) {
 	config := testServerConfig(t)
+	config.Certificates[0].SupportedSignatureAlgorithms = []cryptotls.SignatureScheme{cryptotls.Ed25519}
 	profile, err := NewServerProfile(7, config, RequireServerALPN("h2"))
 	if err != nil {
 		t.Fatal(err)
@@ -75,8 +81,10 @@ func TestServerProfileDefaultsTLS13ClonesAndRequiresStaticCertificate(t *testing
 	originalDER := append([]byte(nil), profile.config.Certificates[0].Certificate[0]...)
 	config.NextProtos[0] = "mutated"
 	config.Certificates[0].Certificate[0][0] ^= 0xff
+	config.Certificates[0].SupportedSignatureAlgorithms[0] = cryptotls.ECDSAWithP256AndSHA256
 	config.SessionTicketsDisabled = false
-	if profile.ID() != 7 || profile.config.NextProtos[0] != "h2" || string(profile.config.Certificates[0].Certificate[0]) != string(originalDER) {
+	if profile.ID() != 7 || profile.config.NextProtos[0] != "h2" || string(profile.config.Certificates[0].Certificate[0]) != string(originalDER) ||
+		profile.config.Certificates[0].SupportedSignatureAlgorithms[0] != cryptotls.Ed25519 {
 		t.Fatal("server profile retained caller mutation")
 	}
 	if profile.config.MinVersion != cryptotls.VersionTLS13 || profile.config.MaxVersion != cryptotls.VersionTLS13 || !profile.config.SessionTicketsDisabled {

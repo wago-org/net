@@ -102,6 +102,7 @@ func cloneTLSCertificates(input []cryptotls.Certificate) []cryptotls.Certificate
 			output[index].Certificate[certificateIndex] = append([]byte(nil), input[index].Certificate[certificateIndex]...)
 		}
 		output[index].OCSPStaple = append([]byte(nil), input[index].OCSPStaple...)
+		output[index].SupportedSignatureAlgorithms = append([]cryptotls.SignatureScheme(nil), input[index].SupportedSignatureAlgorithms...)
 		output[index].SignedCertificateTimestamps = make([][]byte, len(input[index].SignedCertificateTimestamps))
 		for timestampIndex := range input[index].SignedCertificateTimestamps {
 			output[index].SignedCertificateTimestamps[timestampIndex] = append([]byte(nil), input[index].SignedCertificateTimestamps[timestampIndex]...)

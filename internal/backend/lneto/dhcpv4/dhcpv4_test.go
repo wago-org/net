@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/netip"
 	"testing"
+	"time"
 
 	lneto "github.com/soypat/lneto"
 	lnetodhcp "github.com/soypat/lneto/dhcp/dhcpv4"
@@ -788,6 +789,36 @@ func TestServerPendingResponseLifecyclePreservesRetryReleasePolicyAndClose(t *te
 	})
 }
 
+func TestServerClientCapacityExpiresWithLease(t *testing.T) {
+	firstCore, first := newClient(t, false)
+	secondCore, second := newAdapter(t, netip.IPv4Unspecified(), [6]byte{2, 0, 0, 0, 0, 3}, defaultConfig(), clientPolicy())
+	serverCore, server := newServer(t, 1)
+	now := time.Unix(1_800_000_000, 0)
+	server.now = func() time.Time { return now }
+
+	if _, _, err := first.TryAcquire(dhcpns.Request{}); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := second.TryAcquire(dhcpns.Request{}); err != nil {
+		t.Fatal(err)
+	}
+	serviceIngress(t, serverCore, serviceEgress(t, firstCore))
+	if len(server.serverClients) != 1 || server.serverPending != 1 {
+		t.Fatalf("first discover = clients:%d pending:%d", len(server.serverClients), server.serverPending)
+	}
+	firstKey := server.serverClients[0].key
+	_ = serviceEgress(t, serverCore)
+
+	now = now.Add(time.Duration(server.config.Server.LeaseSeconds) * time.Second)
+	serviceIngress(t, serverCore, serviceEgress(t, secondCore))
+	if len(server.serverClients) != 1 || server.serverPending != 1 {
+		t.Fatalf("discover after expiry = clients:%d pending:%d", len(server.serverClients), server.serverPending)
+	}
+	if server.serverClients[0].key == firstKey {
+		t.Fatal("expired client retained server capacity")
+	}
+}
+
 func TestCombinedClientServerEgressBoundsClientSchedulingDelay(t *testing.T) {
 	config := defaultConfig()
 	config.Server = ServerConfig{ServerAddr: netip.MustParseAddr("192.0.2.1"), Gateway: netip.MustParseAddr("192.0.2.1"), DNS: netip.MustParseAddr("192.0.2.53"), Subnet: netip.MustParsePrefix("192.0.2.0/24"), LeaseSeconds: 3600, MaxClients: 1}
@@ -885,6 +916,7 @@ func TestServerRejectsSubnetNetworkAndBroadcastIdentities(t *testing.T) {
 		{name: "server broadcast", mutate: func(server *ServerConfig) { server.ServerAddr = netip.MustParseAddr("192.0.2.255") }},
 		{name: "gateway network", mutate: func(server *ServerConfig) { server.Gateway = netip.MustParseAddr("192.0.2.0") }},
 		{name: "gateway broadcast", mutate: func(server *ServerConfig) { server.Gateway = netip.MustParseAddr("192.0.2.255") }},
+		{name: "gateway outside subnet", mutate: func(server *ServerConfig) { server.Gateway = netip.MustParseAddr("198.51.100.1") }},
 		{name: "DNS network", mutate: func(server *ServerConfig) { server.DNS = netip.MustParseAddr("192.0.2.0") }},
 		{name: "DNS broadcast", mutate: func(server *ServerConfig) { server.DNS = netip.MustParseAddr("192.0.2.255") }},
 	} {
@@ -895,6 +927,17 @@ func TestServerRejectsSubnetNetworkAndBroadcastIdentities(t *testing.T) {
 				t.Fatalf("accepted non-host server configuration: %+v", config.Server)
 			}
 		})
+	}
+}
+
+func TestServerAllowsOffSubnetDNS(t *testing.T) {
+	config := defaultConfig()
+	config.Server = ServerConfig{
+		ServerAddr: netip.MustParseAddr("192.0.2.1"), Gateway: netip.MustParseAddr("192.0.2.1"), DNS: netip.MustParseAddr("198.51.100.53"),
+		Subnet: netip.MustParsePrefix("192.0.2.0/24"), LeaseSeconds: 3600, MaxClients: 1,
+	}
+	if !ValidConfig(config, 1500, new(policy.Policy), quota.NewAccount(quota.DefaultLimits()), true) {
+		t.Fatal("valid off-subnet DNS server rejected")
 	}
 }
 
