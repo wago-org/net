@@ -550,6 +550,12 @@ func (stream *stream) ConnectionInfo() (tlsns.ConnectionInfo, bool) {
 	}
 	return stream.engine.ConnectionInfo()
 }
+func (stream *stream) ChannelBinding() ([tlsns.ChannelBindingBytes]byte, bool) {
+	if stream == nil || stream.engine == nil {
+		return [tlsns.ChannelBindingBytes]byte{}, false
+	}
+	return stream.engine.ChannelBinding()
+}
 
 func (stream *stream) settleHandshake(ready nscore.Readiness) {
 	if ready&(nscore.ReadyConnected|nscore.ReadyError|nscore.ReadyClosed) == 0 {

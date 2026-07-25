@@ -1638,8 +1638,8 @@ No repository-owned workstream or completion criterion from this hardening reque
 - Current local evidence: `go test ./...`, shuffled tests, full race/shuffle,
   vet, source boundaries, checkptr, accepted-diagnostic linux/386, all 123
   TinyGo-supported packages, all 12 custom CLI bundles, and all 17 TLS signoff
-  profiles passed. TLS signoff now resolves 151 named tests after the bounded
-  resumption coverage. Fuzz smoke passes 47
+  profiles passed. TLS signoff now resolves 154 named tests after bounded
+  resumption and channel-binding coverage. Fuzz smoke passes 47
   targets in 33 packages, including seven TLS-owned targets. Benchmark smoke
   passes 173 top-level targets; the five-by-200 ms capture expands to 196 result
   names and includes separate client/server TLS 1.3 handshakes. Four arm64 test
@@ -1696,10 +1696,15 @@ No repository-owned workstream or completion criterion from this hardening reque
   plaintext and emits `close_notify`, while peer `close_notify` becomes stable
   EOF. Resource `close` deliberately remains the deterministic abort path and
   never waits for peer packets.
+- Added the fixed `channel_binding` import for the 32-byte RFC 9266
+  `tls-exporter` binding. The label, context, and length are not guest-selectable;
+  it becomes available only after authenticated completion and preserves the
+  complete output on `AGAIN` or failure. Standard-library peers prove both sides
+  derive identical bytes.
 - STARTTLS/existing-handle transfer, DTLS, QUIC TLS, 0-RTT, arbitrary dynamic
   callbacks, and live mutation of immutable profiles remain separate authority
   or transport designs rather than incomplete behavior in the bounded TLS
   stream module.
 - Current validation passes `go test ./...`, focused TLS race tests, `go vet
   ./...`, source-boundary checks, shell syntax, diff checks, and all 17 TLS
-  signoff package runs resolving 151 named tests.
+  signoff package runs resolving 154 named tests.

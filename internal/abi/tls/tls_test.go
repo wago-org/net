@@ -26,6 +26,26 @@ func TestCheckCreateRejectsOverlapAndOverflow(t *testing.T) {
 	}
 }
 
+func TestEncodeChannelBindingV1IsFixedAndAtomic(t *testing.T) {
+	memory := bytes.Repeat([]byte{0xa5}, 40)
+	binding := [tlsns.ChannelBindingBytes]byte{}
+	for index := range binding {
+		binding[index] = byte(index + 1)
+	}
+	if EncodeChannelBindingV1(memory, 9, binding) {
+		t.Fatal("out-of-range channel binding accepted")
+	}
+	if !bytes.Equal(memory, bytes.Repeat([]byte{0xa5}, 40)) {
+		t.Fatal("failed channel binding encode mutated output")
+	}
+	if !EncodeChannelBindingV1(memory, 4, binding) {
+		t.Fatal("valid channel binding rejected")
+	}
+	if !bytes.Equal(memory[:4], bytes.Repeat([]byte{0xa5}, 4)) || !bytes.Equal(memory[4:36], binding[:]) || !bytes.Equal(memory[36:], bytes.Repeat([]byte{0xa5}, 4)) {
+		t.Fatal("channel binding encoding escaped its fixed output")
+	}
+}
+
 func TestEncodeConnectionInfoAtomicAndBounded(t *testing.T) {
 	memory := bytes.Repeat([]byte{0xaa}, 200)
 	before := append([]byte(nil), memory...)

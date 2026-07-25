@@ -15,6 +15,7 @@ const (
 	TLSIOResultV1Size       uint32 = 8
 	TLSConnectionInfoV1Size uint32 = 144
 	TLSConnectionInfoV2Size uint32 = 144
+	TLSChannelBindingV1Size uint32 = 32
 	TLSMaxALPNV1Bytes       uint32 = 32
 
 	TLSConnectionInfoV2FlagResumed           uint32 = 1 << 0

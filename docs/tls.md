@@ -102,7 +102,7 @@ executed arm64 evidence are still required before production readiness.
 
 ## ABI
 
-`wago_net_tls` exports thirteen operations on the server-foundation branch:
+`wago_net_tls` exports fourteen operations on the standard-Go stream branch:
 
 - `namespace_default`
 - `listen`
@@ -114,6 +114,7 @@ executed arm64 evidence are still required before production readiness.
 - `shutdown_write`
 - `connection_info`
 - `connection_info_v2`
+- `channel_binding`
 - `close`
 - `close_listener`
 - `poll`
@@ -127,7 +128,10 @@ role, and peer-authenticated flags without reinterpreting v1. Both versions
 return only bounded local/remote endpoints, TLS version, cipher-suite number,
 negotiated ALPN (maximum 32 bytes), optional peer leaf SPKI SHA-256, and the
 client-side verified server identity type. Arbitrary certificate DER is not
-exported.
+exported. `channel_binding` additively returns the fixed 32-byte RFC 9266
+`tls-exporter` channel binding after verified completion. Its label and length
+are not guest-selectable, and it returns `AGAIN` without output mutation while
+the handshake is incomplete.
 
 All input/output ranges are checked before backend work. Server-name bytes are
 copied during the host call. Outputs remain unchanged on errors, would-block,

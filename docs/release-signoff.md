@@ -143,9 +143,10 @@ reviewed standard-Go-only TLS closure is exactly five packages:
 TinyGo 0.41.1 tests the remaining 123 packages individually and retains one log
 per package. On the expanded standard-Go client/server stream branch, the
 explicit TLS signoff still runs 17 package profiles (10 ordinary and seven race)
-and now resolves 151 named test targets, including bounded per-instance client
-resumption, explicit server ticket-key rotation, cache isolation, and exact
-cache quota teardown. Arm64 signoff cross-compiles four test
+and now resolves 154 named test targets, including bounded per-instance client
+resumption, explicit server ticket-key rotation, cache isolation, exact cache
+quota teardown, and fixed RFC 9266 channel-binding derivation/output atomicity.
+Arm64 signoff cross-compiles four test
 binaries whose subjects now include the standard-Go server engine, live lneto
 client/server TLS, explicit listener authority, and eager certificate/key
 validation; the current local auto profile remains truthfully

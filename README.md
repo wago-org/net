@@ -167,7 +167,9 @@ arbitrary verification/certificate callbacks, guest-supplied session caches,
 default and TLS 1.2 requires `EnableTLS12()`. Client private keys remain
 host-side. Clean `close_notify` maps to EOF; raw TCP EOF maps to TLS protocol
 failure. The additive `connection_info_v2` reports client/server role and peer
-authentication while preserving `connection_info_v1` byte-for-byte. See
+authentication while preserving `connection_info_v1` byte-for-byte; the fixed
+`channel_binding` import returns the 32-byte RFC 9266 `tls-exporter` binding only
+after authenticated completion. See
 [`docs/tls.md`](docs/tls.md).
 
 TCP defaults provide eight finite outbound streams and no listeners. UDP defaults

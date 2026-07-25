@@ -309,6 +309,29 @@ func ConnectionInfo(state *core.State, handle resource.Handle) (info tlsns.Conne
 	return
 }
 
+// ChannelBinding returns the fixed RFC 9266 tls-exporter binding only after
+// the authenticated handshake has completed.
+func ChannelBinding(state *core.State, handle resource.Handle) (binding [tlsns.ChannelBindingBytes]byte, progress nscore.Progress, err error) {
+	err = state.WithLock(func(locked core.LockedState) error {
+		stream, lookupErr := lookupStream(locked, handle)
+		if lookupErr != nil {
+			return lookupErr
+		}
+		var ok bool
+		binding, ok = stream.ChannelBinding()
+		if !ok {
+			progress = nscore.ProgressWouldBlock
+			return nil
+		}
+		progress = nscore.ProgressDone
+		return nil
+	})
+	if err != nil {
+		binding, progress = [tlsns.ChannelBindingBytes]byte{}, 0
+	}
+	return
+}
+
 func lookupStream(locked core.LockedState, handle resource.Handle) (tlsns.Stream, error) {
 	value, err := locked.Resources.Lookup(handle, resource.KindTLSStream)
 	if err != nil {

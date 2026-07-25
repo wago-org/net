@@ -1,6 +1,7 @@
 package gotls
 
 import (
+	"bytes"
 	"crypto/rand"
 	"crypto/rsa"
 	cryptotls "crypto/tls"
@@ -87,6 +88,12 @@ serverHandshakeComplete:
 	if !ok || info.NegotiatedALPN != "h2" || info.TLSVersion != cryptotls.VersionTLS13 || info.PeerLeafSPKI256 == ([32]byte{}) {
 		t.Fatalf("connection info = %+v, %v", info, ok)
 	}
+	binding, ok := client.ChannelBinding()
+	peerState := server.ConnectionState()
+	peerBinding, exportErr := peerState.ExportKeyingMaterial("EXPORTER-Channel-Binding", nil, tlsns.ChannelBindingBytes)
+	if !ok || exportErr != nil || !bytes.Equal(binding[:], peerBinding) {
+		t.Fatalf("channel binding = %x, %v; peer=%x, %v", binding, ok, peerBinding, exportErr)
+	}
 
 	serverRead := make(chan string, 1)
 	go func() {
@@ -162,6 +169,12 @@ func TestServerHandshakeALPNAndPlaintext(t *testing.T) {
 	info, ok := server.ConnectionInfo()
 	if !ok || info.Role != tlsns.RoleServer || info.PeerAuthenticated || info.NegotiatedALPN != "h2" || info.LocalEndpoint != local || info.RemoteEndpoint != remote {
 		t.Fatalf("server connection info = %+v, %v", info, ok)
+	}
+	binding, ok := server.ChannelBinding()
+	peerState := client.ConnectionState()
+	peerBinding, exportErr := peerState.ExportKeyingMaterial("EXPORTER-Channel-Binding", nil, tlsns.ChannelBindingBytes)
+	if !ok || exportErr != nil || !bytes.Equal(binding[:], peerBinding) {
+		t.Fatalf("server channel binding = %x, %v; peer=%x, %v", binding, ok, peerBinding, exportErr)
 	}
 
 	clientWrite := make(chan error, 1)
