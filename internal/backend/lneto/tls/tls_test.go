@@ -93,6 +93,68 @@ func TestTLSUsesPrivateTCPWithoutRawTCPAuthorityAndRollsBack(t *testing.T) {
 	}
 }
 
+func TestTLSClientSessionCacheQuotaIsReservedAndReleasedPerInstance(t *testing.T) {
+	compiled, err := policy.Compile(policy.Config{Rules: []policy.Rule{{
+		Action: policy.ActionAllow, Transports: []policy.Transport{policy.TransportTLS}, Directions: []policy.Direction{policy.DirectionOutbound},
+	}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, test := range []struct {
+		name       string
+		queued     uint64
+		wantFail   bool
+		wantRetain uint64
+	}{
+		{name: "quota denied before cache allocation", queued: 1023, wantFail: true},
+		{name: "exact cache reservation", queued: 1024, wantRetain: 1024},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			account := quota.NewAccount(quota.Limits{QueuedBytes: test.queued})
+			mtu := uint16(ethernet.MaxMTU)
+			common, err := lnetocore.New(lnetocore.Config{
+				Hostname: "tls-session", RandSeed: 4, HardwareAddress: [6]byte{0x02, 0, 0, 0, 0, 4},
+				GatewayHardwareAddress: [6]byte{0x02, 0, 0, 0, 0, 5}, IPv4Address: netip.MustParseAddr("192.0.2.4"), MTU: mtu,
+				Link: packetlink.Config{MaxFrameBytes: int(mtu) + 14, IngressFrames: 4, EgressFrames: 4}, MaxActiveTCPPorts: 1, Policy: compiled, Quotas: account,
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			config := Config{
+				MaxStreams: 1, MaxConcurrentHandshakes: 1, MaxServerNameBytes: 253, MaxServiceAttemptsPerHandshake: 64,
+				TCP: tcpConfigForTest(), Engine: engineLimitsForTest(),
+				Profiles: []gotls.Profile{{
+					ID: 1, Config: &cryptotls.Config{MinVersion: cryptotls.VersionTLS13, MaxVersion: cryptotls.VersionTLS13},
+					MaxCertificateChainBytes: 64 << 10, MaxPeerCertificates: 4,
+					AllowedNames:            map[string]tlsns.IdentityType{"api.example.com": tlsns.IdentityDNS},
+					MaxClientSessionEntries: 1, MaxClientSessionBytes: 1024,
+				}},
+			}
+			adapter, createErr := New(common, config)
+			if test.wantFail {
+				if adapter != nil || failureOf(t, createErr) != nscore.FailureResourceLimit {
+					t.Fatalf("quota-denied adapter = %p, %v", adapter, createErr)
+				}
+				if usage, _ := account.Snapshot(); usage != (quota.Usage{}) {
+					t.Fatalf("failed cache reservation retained quota = %+v", usage)
+				}
+				_ = common.Close()
+				return
+			}
+			if createErr != nil || adapter == nil {
+				t.Fatalf("adapter = %p, %v", adapter, createErr)
+			}
+			if usage, _ := account.Snapshot(); usage.QueuedBytes != test.wantRetain {
+				t.Fatalf("cache reservation = %+v", usage)
+			}
+			_ = common.Close()
+			if usage, _ := account.Snapshot(); usage != (quota.Usage{}) {
+				t.Fatalf("cache reservation leaked after close = %+v", usage)
+			}
+		})
+	}
+}
+
 func TestTLSServerListenerUsesInboundTLSAuthorityWithoutRawTCPGrant(t *testing.T) {
 	compiled, err := policy.Compile(policy.Config{Rules: []policy.Rule{{
 		Action: policy.ActionAllow, Transports: []policy.Transport{policy.TransportTLS}, Directions: []policy.Direction{policy.DirectionInbound}, Prefixes: []netip.Prefix{netip.MustParsePrefix("192.0.2.0/24")},

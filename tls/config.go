@@ -12,17 +12,20 @@ var ErrInvalidConfig = errors.New("wagonet/tls: invalid configuration")
 const (
 	// MaximumStreams and MaximumConcurrentHandshakes bound worker and handshake
 	// concurrency for one instance.
-	MaximumStreams               = tlslimits.MaxStreams
-	MaximumListeners             = tlslimits.MaxListeners
-	MaximumAcceptBacklog         = tlslimits.MaxAcceptBacklog
-	MaximumConcurrentHandshakes  = tlslimits.MaxConcurrentHandshakes
-	MaximumClientProfiles        = tlslimits.MaxProfiles
-	MaximumServerNamesPerProfile = tlslimits.MaxServerNamesPerProfile
-	MaximumPeerCertificates      = tlslimits.MaxPeerCertificates
-	MaximumALPNProtocols         = tlslimits.MaxALPNProtocols
-	MaximumALPNAggregateBytes    = tlslimits.MaxALPNAggregateBytes
-	MaximumTransportPackets      = tlslimits.MaxTransportPackets
-	MaximumServiceAttempts       = tlslimits.MaxServiceAttempts
+	MaximumStreams                 = tlslimits.MaxStreams
+	MaximumListeners               = tlslimits.MaxListeners
+	MaximumAcceptBacklog           = tlslimits.MaxAcceptBacklog
+	MaximumConcurrentHandshakes    = tlslimits.MaxConcurrentHandshakes
+	MaximumClientProfiles          = tlslimits.MaxProfiles
+	MaximumServerNamesPerProfile   = tlslimits.MaxServerNamesPerProfile
+	MaximumPeerCertificates        = tlslimits.MaxPeerCertificates
+	MaximumALPNProtocols           = tlslimits.MaxALPNProtocols
+	MaximumALPNAggregateBytes      = tlslimits.MaxALPNAggregateBytes
+	MaximumTransportPackets        = tlslimits.MaxTransportPackets
+	MaximumClientSessionEntries    = tlslimits.MaxClientSessionEntries
+	MaximumClientSessionBytes      = tlslimits.MaxClientSessionBytes
+	MaximumServerSessionTicketKeys = tlslimits.MaxServerSessionTicketKeys
+	MaximumServiceAttempts         = tlslimits.MaxServiceAttempts
 
 	// Maximum*Bytes are hard registration-time ceilings. In addition, all fixed
 	// per-stream storage multiplied by MaxStreams must fit

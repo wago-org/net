@@ -25,11 +25,13 @@ var (
 // ClientProfile is an effectively immutable host-defined TLS client profile.
 // It never becomes guest memory; guests select only its numeric ID.
 type ClientProfile struct {
-	id           uint32
-	config       *cryptotls.Config
-	allowedNames map[string]identityKind
-	requiredALPN string
-	allowTLS12   bool
+	id                      uint32
+	config                  *cryptotls.Config
+	allowedNames            map[string]identityKind
+	requiredALPN            string
+	allowTLS12              bool
+	maxClientSessionEntries uint16
+	maxClientSessionBytes   int
 }
 
 // ServerProfile is an effectively immutable host-defined TLS server profile.
@@ -59,9 +61,11 @@ func (option clientProfileOptionFunc) applyClientProfile(builder *profileBuilder
 }
 
 type profileBuilder struct {
-	allowedNames map[string]identityKind
-	requiredALPN string
-	allowTLS12   bool
+	allowedNames            map[string]identityKind
+	requiredALPN            string
+	allowTLS12              bool
+	maxClientSessionEntries uint16
+	maxClientSessionBytes   int
 }
 
 // ServerProfileOption constrains one host-owned server profile.
@@ -76,8 +80,9 @@ func (option serverProfileOptionFunc) applyServerProfile(builder *serverProfileB
 }
 
 type serverProfileBuilder struct {
-	requiredALPN string
-	allowTLS12   bool
+	requiredALPN      string
+	allowTLS12        bool
+	sessionTicketKeys [][32]byte
 }
 
 // AllowServerNames authorizes exact normalized DNS names or canonical IP
@@ -124,6 +129,22 @@ func EnableTLS12() ClientProfileOption {
 	})
 }
 
+// EnableClientSessionResumption installs a profile-local, bounded TLS session
+// cache. The cache is instantiated separately for every Wago network instance,
+// retains at most maxEntries and maxBytes of serialized session state, and
+// never enables 0-RTT.
+func EnableClientSessionResumption(maxEntries uint16, maxBytes int) ClientProfileOption {
+	return clientProfileOptionFunc(func(builder *profileBuilder) error {
+		if builder.maxClientSessionEntries != 0 || maxEntries == 0 || maxEntries > MaximumClientSessionEntries ||
+			maxBytes <= 0 || uint64(maxBytes) > MaximumClientSessionBytes {
+			return ErrInvalidProfile
+		}
+		builder.maxClientSessionEntries = maxEntries
+		builder.maxClientSessionBytes = maxBytes
+		return nil
+	})
+}
+
 // RequireServerALPN requires an accepted client to negotiate exactly protocol.
 // The offered protocol list remains immutable host configuration.
 func RequireServerALPN(protocol string) ServerProfileOption {
@@ -141,6 +162,31 @@ func RequireServerALPN(protocol string) ServerProfileOption {
 func EnableServerTLS12() ServerProfileOption {
 	return serverProfileOptionFunc(func(builder *serverProfileBuilder) error {
 		builder.allowTLS12 = true
+		return nil
+	})
+}
+
+// EnableServerSessionTickets enables stateless TLS session tickets with an
+// explicit ordered key set. The first key encrypts new tickets and every key
+// may decrypt existing tickets, allowing bounded host-controlled rotation.
+// Automatic ambient key generation and rotation remain disabled.
+func EnableServerSessionTickets(keys ...[32]byte) ServerProfileOption {
+	copied := append([][32]byte(nil), keys...)
+	return serverProfileOptionFunc(func(builder *serverProfileBuilder) error {
+		if len(builder.sessionTicketKeys) != 0 || len(copied) == 0 || len(copied) > MaximumServerSessionTicketKeys {
+			return ErrInvalidServerProfile
+		}
+		seen := make(map[[32]byte]struct{}, len(copied))
+		for _, key := range copied {
+			if key == ([32]byte{}) {
+				return ErrInvalidServerProfile
+			}
+			if _, exists := seen[key]; exists {
+				return ErrInvalidServerProfile
+			}
+			seen[key] = struct{}{}
+		}
+		builder.sessionTicketKeys = append([][32]byte(nil), copied...)
 		return nil
 	})
 }
@@ -175,7 +221,10 @@ func NewClientProfile(id uint32, config *cryptotls.Config, options ...ClientProf
 			return nil, ErrInvalidProfile
 		}
 	}
-	return &ClientProfile{id: id, config: cloned, allowedNames: builder.allowedNames, requiredALPN: builder.requiredALPN, allowTLS12: builder.allowTLS12}, nil
+	return &ClientProfile{
+		id: id, config: cloned, allowedNames: builder.allowedNames, requiredALPN: builder.requiredALPN, allowTLS12: builder.allowTLS12,
+		maxClientSessionEntries: builder.maxClientSessionEntries, maxClientSessionBytes: builder.maxClientSessionBytes,
+	}, nil
 }
 
 // NewServerProfile validates and clones a caller-owned crypto/tls server
@@ -208,6 +257,10 @@ func NewServerProfile(id uint32, config *cryptotls.Config, options ...ServerProf
 		} else if !slices.Contains(cloned.NextProtos, builder.requiredALPN) {
 			return nil, ErrInvalidServerProfile
 		}
+	}
+	if len(builder.sessionTicketKeys) != 0 {
+		cloned.SessionTicketsDisabled = false
+		cloned.SetSessionTicketKeys(append([][32]byte(nil), builder.sessionTicketKeys...))
 	}
 	return &ServerProfile{id: id, config: cloned, requiredALPN: builder.requiredALPN, allowTLS12: builder.allowTLS12}, nil
 }

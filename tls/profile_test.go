@@ -54,6 +54,31 @@ func TestClientProfileRejectsUnsafeConfiguration(t *testing.T) {
 	}
 }
 
+func TestClientProfileEnablesOnlyBoundedInternalSessionResumption(t *testing.T) {
+	profile, err := NewClientProfile(1, &cryptotls.Config{}, AllowServerNames("example.com"), EnableClientSessionResumption(4, 128<<10))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if profile.config.ClientSessionCache != nil || profile.maxClientSessionEntries != 4 || profile.maxClientSessionBytes != 128<<10 {
+		t.Fatalf("resumption profile = cache %T entries %d bytes %d", profile.config.ClientSessionCache, profile.maxClientSessionEntries, profile.maxClientSessionBytes)
+	}
+	for name, option := range map[string]ClientProfileOption{
+		"zero entries":     EnableClientSessionResumption(0, 1),
+		"zero bytes":       EnableClientSessionResumption(1, 0),
+		"too many entries": EnableClientSessionResumption(MaximumClientSessionEntries+1, 1),
+		"too many bytes":   EnableClientSessionResumption(1, int(MaximumClientSessionBytes+1)),
+	} {
+		t.Run(name, func(t *testing.T) {
+			if _, err := NewClientProfile(1, &cryptotls.Config{}, AllowServerNames("example.com"), option); err != ErrInvalidProfile {
+				t.Fatalf("invalid resumption bounds = %v", err)
+			}
+		})
+	}
+	if _, err := NewClientProfile(1, &cryptotls.Config{}, AllowServerNames("example.com"), EnableClientSessionResumption(1, 1024), EnableClientSessionResumption(1, 1024)); err != ErrInvalidProfile {
+		t.Fatalf("duplicate resumption option = %v", err)
+	}
+}
+
 func TestClientProfileRequiresTLS12OptInAndExactIdentity(t *testing.T) {
 	config := &cryptotls.Config{MinVersion: cryptotls.VersionTLS12}
 	if _, err := NewClientProfile(1, config, AllowServerNames("192.0.2.10")); err != ErrTLS12RequiresOptIn {
@@ -92,6 +117,32 @@ func TestServerProfileDefaultsTLS13ClonesAndRequiresStaticCertificate(t *testing
 	}
 	if _, err := NewServerProfile(8, &cryptotls.Config{}); err != ErrInvalidServerProfile {
 		t.Fatalf("missing certificate = %v", err)
+	}
+}
+
+func TestServerProfileEnablesExplicitBoundedSessionTicketKeys(t *testing.T) {
+	first, second := [32]byte{1}, [32]byte{2}
+	profile, err := NewServerProfile(7, testServerConfig(t), EnableServerSessionTickets(first, second))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if profile.config.SessionTicketsDisabled {
+		t.Fatal("explicit server session tickets remained disabled")
+	}
+	for name, option := range map[string]ServerProfileOption{
+		"empty":     EnableServerSessionTickets(),
+		"zero key":  EnableServerSessionTickets([32]byte{}),
+		"duplicate": EnableServerSessionTickets(first, first),
+		"too many":  EnableServerSessionTickets(first, second, [32]byte{3}, [32]byte{4}, [32]byte{5}),
+	} {
+		t.Run(name, func(t *testing.T) {
+			if _, err := NewServerProfile(7, testServerConfig(t), option); err != ErrInvalidServerProfile {
+				t.Fatalf("invalid ticket keys = %v", err)
+			}
+		})
+	}
+	if _, err := NewServerProfile(7, testServerConfig(t), EnableServerSessionTickets(first), EnableServerSessionTickets(second)); err != ErrInvalidServerProfile {
+		t.Fatalf("duplicate ticket option = %v", err)
 	}
 }
 

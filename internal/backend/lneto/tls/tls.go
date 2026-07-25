@@ -54,6 +54,7 @@ type Adapter struct {
 	storage        tlslimits.Plan
 	profiles       map[uint32]gotls.Profile
 	serverProfiles map[uint32]gotls.ServerProfile
+	sessionCache   quota.Charge
 
 	mu         sync.Mutex
 	listeners  []*listener
@@ -75,6 +76,10 @@ func New(common *lnetocore.Namespace, config Config) (*Adapter, error) {
 	}
 	quotas := common.QuotasLocked()
 	common.Unlock()
+	sessionBytes, ok := clientSessionBytes(config.Profiles)
+	if !ok {
+		return nil, nscore.Fail(nscore.FailureInvalidArgument, ErrInvalidConfig)
+	}
 	adapter := &Adapter{
 		core: common, quotas: quotas, config: config, storage: storage,
 		profiles:       make(map[uint32]gotls.Profile, len(config.Profiles)),
@@ -82,8 +87,19 @@ func New(common *lnetocore.Namespace, config Config) (*Adapter, error) {
 		listeners:      make([]*listener, 0, config.MaxListeners),
 		streams:        make([]*stream, 0, config.MaxStreams),
 	}
+	if sessionBytes != 0 {
+		if err := quotas.AcquireQueuedBytes(&adapter.sessionCache, sessionBytes); err != nil {
+			return nil, mapQuotaError(err)
+		}
+	}
+	releaseSessionCache := true
+	defer func() {
+		if releaseSessionCache {
+			adapter.sessionCache.Release()
+		}
+	}()
 	for _, input := range config.Profiles {
-		profile, err := input.Clone()
+		profile, err := input.Instantiate()
 		if err != nil {
 			return nil, nscore.Fail(nscore.FailureUnsupportedConfiguration, err)
 		}
@@ -113,6 +129,7 @@ func New(common *lnetocore.Namespace, config Config) (*Adapter, error) {
 		common.Unlock()
 		return nil, err
 	}
+	releaseSessionCache = false
 	return adapter, nil
 }
 
@@ -128,9 +145,14 @@ func validateConfig(config Config, maxIntValue uint64) (tlslimits.Plan, bool) {
 		return tlslimits.Plan{}, false
 	}
 	for _, profile := range config.Profiles {
-		if profile.MaxPeerCertificates == 0 || profile.MaxPeerCertificates > tlslimits.MaxPeerCertificates || len(profile.AllowedNames) == 0 || len(profile.AllowedNames) > tlslimits.MaxServerNamesPerProfile {
+		if profile.MaxPeerCertificates == 0 || profile.MaxPeerCertificates > tlslimits.MaxPeerCertificates || len(profile.AllowedNames) == 0 || len(profile.AllowedNames) > tlslimits.MaxServerNamesPerProfile ||
+			(profile.MaxClientSessionEntries == 0) != (profile.MaxClientSessionBytes == 0) || profile.MaxClientSessionEntries > tlslimits.MaxClientSessionEntries ||
+			profile.MaxClientSessionBytes < 0 || uint64(profile.MaxClientSessionBytes) > tlslimits.MaxClientSessionBytes {
 			return tlslimits.Plan{}, false
 		}
+	}
+	if _, ok := clientSessionBytes(config.Profiles); !ok {
+		return tlslimits.Plan{}, false
 	}
 	maxCertificateBytes := 0
 	for _, profile := range config.Profiles {
@@ -157,6 +179,21 @@ func validateConfig(config Config, maxIntValue uint64) (tlslimits.Plan, bool) {
 		return tlslimits.Plan{}, false
 	}
 	return plan, true
+}
+
+func clientSessionBytes(profiles []gotls.Profile) (uint64, bool) {
+	var total uint64
+	for _, profile := range profiles {
+		if profile.MaxClientSessionBytes < 0 {
+			return 0, false
+		}
+		var ok bool
+		total, ok = checked.AddUint64(total, uint64(profile.MaxClientSessionBytes))
+		if !ok || total > tlslimits.MaxAggregateRetainedBytes {
+			return 0, false
+		}
+	}
+	return total, true
 }
 
 func (adapter *Adapter) TryListenTLS(local nscore.Endpoint, profileID uint32) (nscore.Resource, nscore.Progress, error) {
@@ -637,4 +674,10 @@ func (adapter *Adapter) CloseLocked() {
 		}
 		stream.release()
 	}
+	for id, profile := range adapter.profiles {
+		profile.ClearSessionCache()
+		delete(adapter.profiles, id)
+	}
+	adapter.serverProfiles = nil
+	adapter.sessionCache.Release()
 }
