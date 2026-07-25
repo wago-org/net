@@ -12,7 +12,9 @@ and build caches enabled and has seven bounded jobs:
   ordinary/race evidence;
 - **tinygo-supported** installs pinned TinyGo 0.41.1 and runs
   `scripts/tinygo-supported-test.sh` across the exact 123-package supported
-  surface while retaining the reviewed five-package TLS exclusion;
+  surface while retaining the reviewed five-package TLS exclusion; each package
+  has a ten-minute watchdog and one timeout-only retry so a wedged TinyGo test
+  cannot consume the six-hour hosted-job limit;
 - **race** runs the complete suite with the race detector and shuffle, with five
   repetitions only for scheduled or manually requested deep checks;
 - **fuzz-smoke** runs all targets discovered by `scripts/fuzz-smoke.sh` on weekly
@@ -25,7 +27,9 @@ and build caches enabled and has seven bounded jobs:
 
 TLS is intentionally absent from TinyGo rather than represented by a stub. The
 TinyGo job uploads its supported and excluded manifests, canonical detail, and
-per-package logs on failure and for scheduled/manual runs. The standard-Go TLS
+per-package verbose logs on failure and for scheduled/manual runs. A timed-out
+attempt is printed before the bounded retry, leaving the final attempt in the
+canonical package log. The standard-Go TLS
 job similarly retains its package/test manifests and logs. Static repository
 tests require both script invocations and the pinned TinyGo version to remain in
 the workflow.

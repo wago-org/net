@@ -1647,3 +1647,23 @@ No repository-owned workstream or completion criterion from this hardening reque
   exercised. HTTP, HTTPS, portable TinyGo TLS, strict release adoption, and
   executed arm64 evidence remain explicitly incomplete. PR #3 must remain a
   draft and TLS must remain outside aggregate `register`.
+
+## PR #3 TinyGo CI watchdog — July 25, 2026
+
+- Actions run `29883882777`, job `88810323462`, reached GitHub's six-hour job
+  limit while the first supported package (`github.com/wago-org/net`) was still
+  running under TinyGo. The previous hosted TinyGo matrix had completed in about
+  45 minutes, and the same root package completed locally under TinyGo 0.41.1,
+  so the observed run is treated as a wedged package attempt rather than evidence
+  that the supported-package boundary changed.
+- `scripts/tinygo-supported-test.sh` now runs every package verbosely behind a
+  ten-minute watchdog, prints a timed-out attempt, retries a timeout once, and
+  preserves only the final attempt in the canonical per-package log inventory.
+  Non-timeout failures are not retried. The timeout and retry bounds are
+  configurable for focused validation but remain finite and fail closed.
+- Added a regression with a fake TinyGo process that wedges the root package on
+  its first attempt, proving the watchdog retries exactly once and still covers
+  all 123 supported packages.
+- The remaining feature backlog is unchanged: HTTP/HTTPS APIs, portable TinyGo
+  TLS, executed arm64 evidence, strict release adoption, and the separately
+  documented protocol-expansion exclusions remain incomplete.
