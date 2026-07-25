@@ -10,6 +10,8 @@ cd "$root"
 out=$(realpath -m "${TINYGO_LOG_DIR:-$root/.wago/tinygo-supported}")
 manifest=$(realpath -m "${TINYGO_EXCLUSION_MANIFEST:-$root/scripts/tinygo-excluded-packages.tsv}")
 validate_only=${TINYGO_VALIDATE_ONLY:-0}
+package_timeout=${TINYGO_PACKAGE_TIMEOUT:-10m}
+timeout_retries=${TINYGO_TIMEOUT_RETRIES:-1}
 module=github.com/wago-org/net
 engine=$module/internal/backend/gotls
 policy=$root/internal/inspectionpolicy/policy.json
@@ -19,13 +21,15 @@ fail() {
   exit 1
 }
 
-for command in git go tinygo python3 realpath; do
+for command in git go tinygo python3 realpath timeout; do
   command -v "$command" >/dev/null || fail "missing required command: $command"
 done
 [[ -f $manifest ]] || fail "missing exclusion manifest: $manifest"
 [[ -f $policy ]] || fail "missing inspection policy: $policy"
 [[ $out != / && $out != "$root" && $out != "$root/scripts" ]] || fail "unsafe output directory: $out"
 case "$validate_only" in 0|1) ;; *) fail "TINYGO_VALIDATE_ONLY must be 0 or 1" ;; esac
+[[ $package_timeout =~ ^[1-9][0-9]*[smh]$ ]] || fail "TINYGO_PACKAGE_TIMEOUT must be a positive integer followed by s, m, or h"
+[[ $timeout_retries =~ ^[0-3]$ ]] || fail "TINYGO_TIMEOUT_RETRIES must be between 0 and 3"
 
 rm -rf "$out"
 mkdir -p "$out/logs"
@@ -197,11 +201,34 @@ while IFS= read -r package; do
   log="$out/logs/$relative/test.log"
   mkdir -p "$(dirname "$log")"
   printf '\n==> tinygo-supported-test [%d/%d] %s\n' "$attempted" "$supported_packages" "$package"
-  if tinygo test "$package" >"$log" 2>&1; then
-    printf 'tinygo-supported-test: PASS %s\n' "$package"
-  else
+  attempt=0
+  passed=0
+  while ((attempt <= timeout_retries)); do
+    attempt=$((attempt + 1))
+    if timeout --signal=TERM --kill-after=30s "$package_timeout" tinygo test -v "$package" >"$log" 2>&1; then
+      passed=1
+      break
+    else
+      status=$?
+    fi
     cat "$log" >&2
-    printf 'tinygo-supported-test: FAIL %s\n' "$package" >&2
+    if ((status == 124 || status == 137)) && ((attempt <= timeout_retries)); then
+      printf 'tinygo-supported-test: TIMEOUT %s after %s (attempt %d/%d); retrying\n' \
+        "$package" "$package_timeout" "$attempt" "$((timeout_retries + 1))" >&2
+      continue
+    fi
+    if ((status == 124 || status == 137)); then
+      printf 'tinygo-supported-test: TIMEOUT %s after %s (attempt %d/%d)\n' \
+        "$package" "$package_timeout" "$attempt" "$((timeout_retries + 1))" >&2
+    else
+      printf 'tinygo-supported-test: FAIL %s with status %d (attempt %d/%d)\n' \
+        "$package" "$status" "$attempt" "$((timeout_retries + 1))" >&2
+    fi
+    break
+  done
+  if ((passed)); then
+    printf 'tinygo-supported-test: PASS %s (attempt %d/%d)\n' "$package" "$attempt" "$((timeout_retries + 1))"
+  else
     failures=$((failures + 1))
   fi
 done <"$out/supported-packages.tsv"

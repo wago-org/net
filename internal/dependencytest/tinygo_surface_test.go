@@ -66,6 +66,56 @@ func TestTinyGoExclusionManifestIsReviewedAndFailClosed(t *testing.T) {
 	runTinyGoBoundaryValidation(t, root, writeTinyGoManifest(t, withUnrelated), false)
 }
 
+func TestTinyGoSupportedSurfaceBoundsAndRetriesTimedOutPackages(t *testing.T) {
+	root, err := filepath.Abs(filepath.Join("..", ".."))
+	if err != nil {
+		t.Fatal(err)
+	}
+	bin := t.TempDir()
+	state := filepath.Join(t.TempDir(), "root-attempted")
+	fakeTinyGo := filepath.Join(bin, "tinygo")
+	fake := `#!/bin/sh
+set -eu
+if [ "$1" = version ]; then
+	echo 'tinygo version timeout-retry-fixture'
+	exit 0
+fi
+if [ "$1" != test ]; then
+	exit 2
+fi
+if [ "$3" = 'github.com/wago-org/net' ] && [ ! -f "$FAKE_TINYGO_STATE" ]; then
+	: > "$FAKE_TINYGO_STATE"
+	sleep 30
+fi
+echo "ok  $3  0.001s"
+`
+	if err := os.WriteFile(fakeTinyGo, []byte(fake), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	command := exec.Command(filepath.Join(root, "scripts", "tinygo-supported-test.sh"))
+	command.Dir = root
+	command.Env = append(os.Environ(),
+		"PATH="+bin+string(os.PathListSeparator)+os.Getenv("PATH"),
+		"FAKE_TINYGO_STATE="+state,
+		"TINYGO_LOG_DIR="+filepath.Join(t.TempDir(), "evidence"),
+		"TINYGO_PACKAGE_TIMEOUT=1s",
+		"TINYGO_TIMEOUT_RETRIES=1",
+	)
+	output, err := command.CombinedOutput()
+	if err != nil {
+		t.Fatalf("TinyGo timeout retry failed: %v\n%s", err, output)
+	}
+	for _, want := range []string{
+		"TIMEOUT github.com/wago-org/net after 1s (attempt 1/2); retrying",
+		"PASS github.com/wago-org/net (attempt 2/2)",
+		"all 123 supported packages passed",
+	} {
+		if !bytes.Contains(output, []byte(want)) {
+			t.Fatalf("TinyGo timeout retry output omits %q\n%s", want, output)
+		}
+	}
+}
+
 func parseTinyGoManifest(t testing.TB, data []byte) [][]string {
 	t.Helper()
 	var rows [][]string
