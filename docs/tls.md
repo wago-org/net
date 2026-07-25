@@ -17,10 +17,15 @@ objects stay in host memory and no certificate chain or private key appears in
 the guest ABI.
 
 The first release rejects `InsecureSkipVerify`, `KeyLogWriter`, renegotiation,
-verification callbacks, certificate-selection callbacks, client session caches,
-and Encrypted ClientHello callbacks/configuration. Session resumption and 0-RTT
-are disabled by the absence of a client session cache and any early-data API.
-TLS 1.3 is the default minimum and maximum. TLS 1.2 is available only when the
+verification callbacks, certificate-selection callbacks, caller-supplied client
+session caches, and Encrypted ClientHello callbacks/configuration. Hosts may
+explicitly add `EnableClientSessionResumption(maxEntries, maxBytes)`. That option
+creates a separate cache for every Wago instance, retains only serialized
+standard-library session state under exact entry and byte bounds, reserves its
+maximum against the instance queued-byte quota before allocation, and clears
+retained tickets and state during deterministic teardown. Early-data state is
+forced off and the guest ABI exposes no 0-RTT operation. TLS 1.3 is the default
+minimum and maximum. TLS 1.2 is available only when the
 host combines an explicit TLS 1.2 minimum with `EnableTLS12`; Go's standard safe
 cipher-suite defaults remain in effect. Manual cipher, signature, curve,
 record, key-derivation, and certificate-verification implementations are absent.
@@ -46,7 +51,11 @@ available, immutable, and concurrency-safe for the profile lifetime; it never
 enters guest memory. Dynamic certificate/config selection and verification
 callbacks are rejected. Client SNI may select only among the immutable static
 certificates supplied by the host; it cannot select a new configuration or
-credential source. Server session tickets remain disabled.
+credential source. Server session tickets remain disabled by default.
+`EnableServerSessionTickets` accepts one to four explicit nonzero, unique
+32-byte keys. The first key encrypts new stateless tickets and every supplied
+key may decrypt, supporting bounded deployment rotation from `[new, old]` to
+`[new]` without ambient key generation or mutable guest authority.
 
 A stored server profile grants no endpoint authority. Hosts must separately opt
 in with `tls.AllowListeners()` or supply explicit advanced inbound TLS policy.
@@ -72,11 +81,15 @@ pumps; they never wait for network packets or worker completion.
 Each pump is bounded by caller packet/byte/operation budgets and
 `MaxRecordsPerService`. Handshakes additionally stop after
 `MaxServiceAttemptsPerHandshake` or `MaxHandshakeBytes`. Ciphertext and
-plaintext queues are fixed at registration. Close cancels the handshake, closes
-the bridge, wakes every condition wait, joins all three workers, clears retained
-plaintext, and aborts the private TCP stream without waiting for peer packets,
-acknowledgements, or `close_notify`. Shared namespace teardown joins workers
-before the private TCP participant releases transport state.
+plaintext queues are fixed at registration. `shutdown_write` already provides
+the graceful TLS stream path: it drains accepted plaintext and emits
+`close_notify`, while peer `close_notify` becomes stable EOF. Resource `close`
+remains the bounded abort path: it cancels the handshake, closes the bridge,
+wakes every condition wait, joins all three workers, clears retained plaintext,
+and aborts the private TCP stream without waiting for peer packets or
+acknowledgements. Shared namespace teardown joins workers, clears any bounded
+client resumption cache, and releases its quota before the private TCP
+participant releases transport state.
 
 The current bounded bridge is intentionally granular-only and experimental. It
 has a named standard-Go ordinary/race release check in `scripts/tls-signoff.sh`.
@@ -136,7 +149,11 @@ the same checked per-stream accounting. Defaults also limit handshake bytes to
 256 KiB, retained certificate chain bytes to 192 KiB, peer certificates to
 eight, server names to 253 bytes, ALPN to eight protocols and 256 aggregate
 bytes, handshake service attempts to 4096, and TLS pump work to sixteen
-record-sized transport operations per call.
+record-sized transport operations per call. Session resumption is off by
+default. When enabled, one client profile may retain at most 64 entries and 4
+MiB of serialized state; all enabled profile caches together remain under the
+64 MiB aggregate TLS retention ceiling. A server profile accepts at most four
+ordered ticket keys.
 
 Registration rejects more than 64 streams or handshakes, any plaintext,
 ciphertext, or private-transport queue above 1 MiB, handshake input above 4 MiB,
@@ -148,16 +165,21 @@ all additions and the `MaxStreams` multiplication are checked in `uint64` before
 backend construction, including simulated and actual 386 builds.
 
 TLS listener and stream resources, active handshakes, plaintext bytes,
-ciphertext bytes, global retained bytes, accept-backlog transport storage, and
-the underlying private TCP resource/storage are all charged
-to the exact instance quota ledger. Every setup path rolls back both layers;
-close and failed verification release each charge exactly once.
+ciphertext bytes, optional resumption-cache bytes, global retained bytes,
+accept-backlog transport storage, and the underlying private TCP
+resource/storage are all charged to the exact instance quota ledger. Cache
+capacity is conservatively reserved before cache allocation. Every setup path
+rolls back both layers; close and failed verification release each charge
+exactly once.
 
 ## Unsupported scope
 
 There is no HTTP/HTTPS request API, DTLS, QUIC TLS, STARTTLS upgrade,
-guest-handle wrapping, arbitrary guest TLS configuration, or session-ticket key
-rotation. Server listeners and bounded inbound handshakes are available only
-through explicit granular TLS registration and authority; they do not place TLS
-in aggregate `register`. The certificate-validation clock is the cloned host
+guest-handle wrapping, arbitrary guest TLS configuration, live mutation of an
+already registered profile, or 0-RTT. Certificate rotation uses immutable
+profiles/static SNI certificates and listener replacement; session-ticket key
+rotation uses an ordered bounded key set supplied when constructing a new
+immutable server profile. Server listeners and bounded inbound handshakes are
+available only through explicit granular TLS registration and authority; they
+do not place TLS in aggregate `register`. The certificate-validation clock is the cloned host
 `tls.Config.Time` function when provided, otherwise Go's standard clock.

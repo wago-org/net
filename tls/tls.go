@@ -239,6 +239,7 @@ func compileServerProfiles(input []*ServerProfile, config Config) ([]gotls.Serve
 func compileProfiles(input []*ClientProfile, config Config) ([]gotls.Profile, error) {
 	profiles := make([]gotls.Profile, 0, len(input))
 	seen := make(map[uint32]struct{}, len(input))
+	var sessionBytes uint64
 	for _, profile := range input {
 		if profile == nil || profile.id == 0 {
 			return nil, ErrInvalidProfile
@@ -277,10 +278,16 @@ func compileProfiles(input []*ClientProfile, config Config) ([]gotls.Profile, er
 				return nil, ErrInvalidProfile
 			}
 		}
+		if uint64(profile.maxClientSessionBytes) > MaximumAggregateRetainedBytes-sessionBytes {
+			return nil, ErrInvalidProfile
+		}
+		sessionBytes += uint64(profile.maxClientSessionBytes)
 		profiles = append(profiles, gotls.Profile{
 			ID: profile.id, Config: profile.config.Clone(), RequiredALPN: profile.requiredALPN,
 			MaxCertificateChainBytes: config.MaxCertificateChainBytes,
 			MaxPeerCertificates:      config.MaxPeerCertificates, AllowedNames: allowed,
+			MaxClientSessionEntries: profile.maxClientSessionEntries,
+			MaxClientSessionBytes:   profile.maxClientSessionBytes,
 		})
 	}
 	return profiles, nil

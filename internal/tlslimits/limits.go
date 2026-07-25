@@ -5,17 +5,20 @@ package tlslimits
 import "github.com/wago-org/net/internal/checked"
 
 const (
-	MaxStreams               uint16 = 64
-	MaxListeners             uint16 = 64
-	MaxAcceptBacklog         uint16 = 64
-	MaxConcurrentHandshakes  uint16 = 64
-	MaxProfiles                     = 256
-	MaxServerNamesPerProfile        = 256
-	MaxPeerCertificates      uint16 = 64
-	MaxALPNProtocols         uint16 = 64
-	MaxALPNAggregateBytes    uint16 = 4096
-	MaxTransportPackets             = 4096
-	MaxServiceAttempts       uint32 = 1 << 20
+	MaxStreams                 uint16 = 64
+	MaxListeners               uint16 = 64
+	MaxAcceptBacklog           uint16 = 64
+	MaxConcurrentHandshakes    uint16 = 64
+	MaxProfiles                       = 256
+	MaxServerNamesPerProfile          = 256
+	MaxPeerCertificates        uint16 = 64
+	MaxALPNProtocols           uint16 = 64
+	MaxALPNAggregateBytes      uint16 = 4096
+	MaxTransportPackets               = 4096
+	MaxClientSessionEntries    uint16 = 64
+	MaxClientSessionBytes      uint64 = 4 << 20
+	MaxServerSessionTicketKeys        = 4
+	MaxServiceAttempts         uint32 = 1 << 20
 
 	MaxPlaintextQueueBytes   uint64 = 1 << 20
 	MaxCiphertextQueueBytes  uint64 = 1 << 20

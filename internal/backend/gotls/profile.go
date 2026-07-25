@@ -34,6 +34,8 @@ type Profile struct {
 	MaxCertificateChainBytes int
 	MaxPeerCertificates      uint16
 	AllowedNames             map[string]tlsns.IdentityType
+	MaxClientSessionEntries  uint16
+	MaxClientSessionBytes    int
 }
 
 // ServerProfile is an internal immutable crypto/tls server profile. It owns
@@ -48,8 +50,25 @@ type ServerProfile struct {
 }
 
 func (profile Profile) Clone() (Profile, error) {
-	if profile.ID == 0 || profile.Config == nil || profile.MaxCertificateChainBytes <= 0 || profile.MaxPeerCertificates == 0 {
+	return profile.clone(false)
+}
+
+// Instantiate creates one adapter-owned profile instance. Resumption state is
+// shared by streams using this profile inside the adapter, but never crosses
+// adapter or Wago instance ownership boundaries.
+func (profile Profile) Instantiate() (Profile, error) {
+	return profile.clone(true)
+}
+
+func (profile Profile) clone(instantiate bool) (Profile, error) {
+	if profile.ID == 0 || profile.Config == nil || profile.MaxCertificateChainBytes <= 0 || profile.MaxPeerCertificates == 0 ||
+		(profile.MaxClientSessionEntries == 0) != (profile.MaxClientSessionBytes == 0) {
 		return Profile{}, ErrInvalidConfig
+	}
+	if profile.Config.ClientSessionCache != nil {
+		if _, ok := profile.Config.ClientSessionCache.(*boundedClientSessionCache); !ok {
+			return Profile{}, ErrInvalidConfig
+		}
 	}
 	cloned := profile
 	cloned.Config = profile.Config.Clone()
@@ -67,7 +86,31 @@ func (profile Profile) Clone() (Profile, error) {
 	if profile.Config.RootCAs != nil {
 		cloned.Config.RootCAs = profile.Config.RootCAs.Clone()
 	}
+	if profile.MaxClientSessionEntries != 0 {
+		if instantiate {
+			cache, err := newBoundedClientSessionCache(profile.MaxClientSessionEntries, profile.MaxClientSessionBytes)
+			if err != nil {
+				return Profile{}, err
+			}
+			cloned.Config.ClientSessionCache = cache
+		} else if cloned.Config.ClientSessionCache == nil {
+			return Profile{}, ErrInvalidConfig
+		}
+	} else if cloned.Config.ClientSessionCache != nil {
+		return Profile{}, ErrInvalidConfig
+	}
 	return cloned, nil
+}
+
+// ClearSessionCache removes and zeroes adapter-owned resumable state during
+// deterministic instance teardown.
+func (profile Profile) ClearSessionCache() {
+	if profile.Config == nil || profile.Config.ClientSessionCache == nil {
+		return
+	}
+	if cache, ok := profile.Config.ClientSessionCache.(*boundedClientSessionCache); ok {
+		cache.clear()
+	}
 }
 
 // Clone validates and deeply clones one server profile. Dynamic certificate,

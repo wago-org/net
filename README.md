@@ -157,10 +157,14 @@ Profiles are finite and host-defined. Outbound guests select only a profile ID,
 remote IP endpoint, and authorized verification name; inbound guests select a
 server profile ID and an explicitly authorized local endpoint. Certificate-chain
 and DNS/IP SAN verification are mandatory for clients; configured mTLS uses
-standard client-chain verification. Common Name fallback, key logging,
-renegotiation, arbitrary verification/certificate callbacks, guest session
-caches, 0-RTT, STARTTLS, and wrapping guest TCP handles are absent. TLS 1.3 is
-the default and TLS 1.2 requires `EnableTLS12()`. Client private keys remain
+standard client-chain verification. Hosts may explicitly enable a finite,
+per-instance client resumption cache with `EnableClientSessionResumption` and
+ordered stateless server ticket keys with `EnableServerSessionTickets`; cache
+entries and serialized bytes are bounded, quota-reserved, cleared at teardown,
+and never enable 0-RTT. Common Name fallback, key logging, renegotiation,
+arbitrary verification/certificate callbacks, guest-supplied session caches,
+0-RTT, STARTTLS, and wrapping guest TCP handles are absent. TLS 1.3 is the
+default and TLS 1.2 requires `EnableTLS12()`. Client private keys remain
 host-side. Clean `close_notify` maps to EOF; raw TCP EOF maps to TLS protocol
 failure. The additive `connection_info_v2` reports client/server role and peer
 authentication while preserving `connection_info_v1` byte-for-byte. See

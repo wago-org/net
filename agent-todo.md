@@ -1638,7 +1638,8 @@ No repository-owned workstream or completion criterion from this hardening reque
 - Current local evidence: `go test ./...`, shuffled tests, full race/shuffle,
   vet, source boundaries, checkptr, accepted-diagnostic linux/386, all 123
   TinyGo-supported packages, all 12 custom CLI bundles, and all 17 TLS signoff
-  profiles passed. TLS signoff resolves 135 named tests. Fuzz smoke passes 47
+  profiles passed. TLS signoff now resolves 151 named tests after the bounded
+  resumption coverage. Fuzz smoke passes 47
   targets in 33 packages, including seven TLS-owned targets. Benchmark smoke
   passes 173 top-level targets; the five-by-200 ms capture expands to 196 result
   names and includes separate client/server TLS 1.3 handshakes. Four arm64 test
@@ -1664,6 +1665,41 @@ No repository-owned workstream or completion criterion from this hardening reque
 - Added a regression with a fake TinyGo process that wedges the root package on
   its first attempt, proving the watchdog retries exactly once and still covers
   all 123 supported packages.
-- The remaining feature backlog is unchanged: HTTP/HTTPS APIs, portable TinyGo
-  TLS, executed arm64 evidence, strict release adoption, and the separately
-  documented protocol-expansion exclusions remain incomplete.
+- The remaining feature backlog at that point was HTTP/HTTPS APIs, portable
+  TinyGo TLS, executed arm64 evidence, strict release adoption, and the
+  separately documented protocol-expansion exclusions.
+
+## Bounded standard-Go TLS resumption — July 25, 2026
+
+- TinyGo TLS remains explicitly unsupported; no compatibility shim, plaintext
+  wrapper, or alternative cryptographic engine was added.
+- Added opt-in `EnableClientSessionResumption(maxEntries, maxBytes)`. Every
+  backend instance constructs its own cache, so tickets never cross Wago
+  instance ownership. The cache stores serialized standard-library state under
+  exact entry/byte bounds, uses bounded LRU eviction, forces early-data state
+  off, clears retained ticket/state bytes on eviction and teardown, and rejects
+  caller-supplied arbitrary cache implementations.
+- Added opt-in `EnableServerSessionTickets(keys...)` with one to four explicit,
+  unique, nonzero 32-byte keys. The first key issues tickets and the bounded
+  ordered set accepts retained rotation keys; ambient generation and mutable
+  guest key authority remain absent.
+- Resumption cache capacity is conservatively reserved from the exact
+  per-instance queued-byte quota before cache allocation and released exactly
+  once on teardown. Aggregate configured cache capacity remains under the 64 MiB
+  TLS retention ceiling.
+- Added standard-Go TLS 1.3 tests proving a full first handshake, resumed second
+  handshake through `[new, old]` key rotation, resumed third handshake with only
+  the new key, per-instance cache isolation, LRU/byte rejection, and exact quota
+  rollback/release. Existing `connection_info` and `connection_info_v2` already
+  expose the resumed bit without an ABI change.
+- Graceful stream shutdown was already complete: `shutdown_write` drains accepted
+  plaintext and emits `close_notify`, while peer `close_notify` becomes stable
+  EOF. Resource `close` deliberately remains the deterministic abort path and
+  never waits for peer packets.
+- STARTTLS/existing-handle transfer, DTLS, QUIC TLS, 0-RTT, arbitrary dynamic
+  callbacks, and live mutation of immutable profiles remain separate authority
+  or transport designs rather than incomplete behavior in the bounded TLS
+  stream module.
+- Current validation passes `go test ./...`, focused TLS race tests, `go vet
+  ./...`, source-boundary checks, shell syntax, diff checks, and all 17 TLS
+  signoff package runs resolving 151 named tests.
