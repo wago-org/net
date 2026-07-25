@@ -44,6 +44,9 @@ func Bindings(host plugin.Host) []plugin.Binding {
 		{Name: "connection_info_v2", Func: func(module wago.HostModule, params, results []uint64) {
 			connectionInfoV2(host, module, params, results)
 		}, Params: []wago.ValType{wago.ValI64, wago.ValI32}, Results: []wago.ValType{wago.ValI32}, Capability: Capability, Docs: "return role-aware TLS connection-info v2 metadata"},
+		{Name: "channel_binding", Func: func(module wago.HostModule, params, results []uint64) {
+			channelBinding(host, module, params, results)
+		}, Params: []wago.ValType{wago.ValI64, wago.ValI32}, Results: []wago.ValType{wago.ValI32}, Capability: Capability, Docs: "return the fixed 32-byte RFC 9266 tls-exporter channel binding"},
 		{Name: "close", Func: func(module wago.HostModule, params, results []uint64) { closeStream(host, module, params, results) }, Params: []wago.ValType{wago.ValI64}, Results: []wago.ValType{wago.ValI32}, Capability: Capability, Docs: "abort and close one exact TLS stream without waiting for the peer"},
 		{Name: "close_listener", Func: func(module wago.HostModule, params, results []uint64) { closeListener(host, module, params, results) }, Params: []wago.ValType{wago.ValI64}, Results: []wago.ValType{wago.ValI32}, Capability: Capability, Docs: "close one exact TLS server listener"},
 		{Name: "poll", Func: func(module wago.HostModule, params, results []uint64) { guest.Poll(host, module, params, results) }, Params: []wago.ValType{wago.ValI32, wago.ValI32, wago.ValI32, wago.ValI32}, Results: []wago.ValType{wago.ValI32}, Capability: Capability, Docs: "perform one bounded TLS readiness and transport-service pass"},
@@ -352,6 +355,39 @@ func connectionInfoCall(host plugin.Host, module wago.HostModule, params, result
 		encoded = tlsabi.EncodeConnectionInfoV2(memory, out, info)
 	}
 	if !encoded {
+		guest.SetStatus(results, guest.StatusIO)
+		return
+	}
+	guest.SetStatus(results, guest.StatusOK)
+}
+
+func channelBinding(host plugin.Host, module wago.HostModule, params, results []uint64) {
+	if len(params) != 2 || len(results) != 1 {
+		guest.SetStatus(results, guest.StatusInvalidArgument)
+		return
+	}
+	memory := guest.Memory(module)
+	out, ok := abicore.NarrowUint32(params[1])
+	if !ok || !abicore.CheckRanges(memory, false, abicore.Range{Ptr: out, Length: tlsabi.ChannelBindingV1Size}) {
+		guest.SetStatus(results, guest.StatusInvalidArgument)
+		return
+	}
+	state, status := instanceState(host, module)
+	if status != guest.StatusOK {
+		guest.SetStatus(results, status)
+		return
+	}
+	binding, progress, err := tlsinstance.ChannelBinding(state, resource.Handle(params[0]))
+	if err != nil {
+		guest.SetStatus(results, guest.FromError(err))
+		return
+	}
+	status = guest.FromProgress(progress)
+	if status != guest.StatusOK {
+		guest.SetStatus(results, status)
+		return
+	}
+	if !tlsabi.EncodeChannelBindingV1(memory, out, binding) {
 		guest.SetStatus(results, guest.StatusIO)
 		return
 	}

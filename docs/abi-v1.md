@@ -693,6 +693,7 @@ write(stream: i64, src_ptr: i32, src_len: i32, out_result_ptr: i32) -> i32
 shutdown_write(stream: i64) -> i32
 connection_info(stream: i64, out_info_ptr: i32) -> i32
 connection_info_v2(stream: i64, out_info_ptr: i32) -> i32
+channel_binding(stream: i64, out_binding_ptr: i32) -> i32
 close(stream: i64) -> i32
 close_listener(listener: i64) -> i32
 poll(events_ptr: i32, events_capacity: i32, budget_ptr: i32, result_ptr: i32) -> i32
@@ -749,6 +750,12 @@ authenticated server stream, the flag and digest are present while
 The shared `wago_net.abi_version` remains 1.0: the existing v1 import and bytes
 are unchanged, while role-aware metadata is feature-detected through the
 separately named additive `connection_info_v2` import.
+
+The additive `channel_binding` import writes exactly 32 bytes from the RFC 9266
+`tls-exporter` channel binding (`EXPORTER-Channel-Binding`, no context). The
+label, context, and output length are fixed by the ABI rather than guest input.
+It is available only after authenticated handshake completion; `AGAIN`, errors,
+and invalid handles leave the complete 32-byte output unchanged.
 
 Connection metadata is available only after verified completion. Certificate
 DER, chains, private keys, and error strings are never guest output. Clean

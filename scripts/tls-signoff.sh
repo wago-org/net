@@ -139,6 +139,7 @@ self_registration=absent
 scope=standard-go-client-server-stream-foundation
 connection_info_v1=byte-compatible
 connection_info_v2=role-aware-additive
+channel_binding=rfc9266-fixed-32-byte
 listener_authority=explicit
 client_session_resumption=bounded-opt-in-per-instance
 server_session_ticket_rotation=bounded-explicit-key-set

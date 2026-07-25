@@ -9,6 +9,9 @@ const ServiceKey nscore.ServiceKey = "tls"
 // MaxReadBytes bounds one checked guest read and reusable ABI scratch.
 const MaxReadBytes = 64 << 10
 
+// ChannelBindingBytes is the fixed RFC 9266 tls-exporter channel binding size.
+const ChannelBindingBytes = 32
+
 // IdentityType records which standard x509 identity rule verified the peer.
 type IdentityType uint8
 
@@ -89,4 +92,5 @@ type Stream interface {
 	TryWrite(src []byte) (nscore.IOResult, error)
 	TryShutdownWrite() (nscore.Progress, error)
 	ConnectionInfo() (ConnectionInfo, bool)
+	ChannelBinding() ([ChannelBindingBytes]byte, bool)
 }

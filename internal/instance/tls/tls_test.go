@@ -62,6 +62,7 @@ type fakeStream struct {
 	written       []byte
 	closed        int
 	info          tlsns.ConnectionInfo
+	binding       [tlsns.ChannelBindingBytes]byte
 }
 
 func (stream *fakeStream) Close() error { stream.closed++; return nil }
@@ -86,12 +87,15 @@ func (stream *fakeStream) TryWrite(src []byte) (nscore.IOResult, error) {
 }
 func (*fakeStream) TryShutdownWrite() (nscore.Progress, error)          { return nscore.ProgressDone, nil }
 func (stream *fakeStream) ConnectionInfo() (tlsns.ConnectionInfo, bool) { return stream.info, true }
+func (stream *fakeStream) ChannelBinding() ([tlsns.ChannelBindingBytes]byte, bool) {
+	return stream.binding, true
+}
 
 func TestTLSOperationsKeepHandlesKindSpecificAndPartial(t *testing.T) {
 	local := nscore.Endpoint{Address: netip.MustParseAddr("192.0.2.1"), Port: 49152}
 	remote := nscore.Endpoint{Address: netip.MustParseAddr("192.0.2.2"), Port: 443}
 	info := tlsns.ConnectionInfo{LocalEndpoint: local, RemoteEndpoint: remote, TLSVersion: 0x304, CipherSuite: 0x1301, NegotiatedALPN: "h2", Role: tlsns.RoleClient, PeerAuthenticated: true, PeerLeafSPKI256: [32]byte{1}, VerifiedIdentity: tlsns.IdentityDNS}
-	stream := &fakeStream{local: local, remote: remote, input: []byte("reply"), info: info}
+	stream := &fakeStream{local: local, remote: remote, input: []byte("reply"), info: info, binding: [tlsns.ChannelBindingBytes]byte{7}}
 	namespace := &fakeNamespace{stream: stream}
 	state, manager, instance := attachState(t, namespace)
 	defer manager.Detach(instance)
@@ -114,6 +118,9 @@ func TestTLSOperationsKeepHandlesKindSpecificAndPartial(t *testing.T) {
 	}
 	if got, progress, err := ConnectionInfo(state, handle); err != nil || progress != nscore.ProgressDone || got.NegotiatedALPN != "h2" {
 		t.Fatalf("Info = %+v %v %v", got, progress, err)
+	}
+	if got, progress, err := ChannelBinding(state, handle); err != nil || progress != nscore.ProgressDone || got[0] != 7 {
+		t.Fatalf("ChannelBinding = %x %v %v", got, progress, err)
 	}
 	if err := state.CloseHandle(handle, resource.KindTLSStream); err != nil {
 		t.Fatal(err)

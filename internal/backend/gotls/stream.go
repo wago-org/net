@@ -59,6 +59,7 @@ type Stream struct {
 	closed          bool
 	terminal        error
 	info            tlsns.ConnectionInfo
+	channelBinding  [tlsns.ChannelBindingBytes]byte
 	role            tlsns.Role
 	profile         Profile
 	serverProfile   ServerProfile
@@ -188,6 +189,16 @@ func (stream *Stream) validateConnection() error {
 	if !info.Valid(255) {
 		return ErrInvalidConfig
 	}
+	exported, err := state.ExportKeyingMaterial("EXPORTER-Channel-Binding", nil, tlsns.ChannelBindingBytes)
+	if err != nil || len(exported) != tlsns.ChannelBindingBytes {
+		clear(exported)
+		if err != nil {
+			return err
+		}
+		return ErrInvalidConfig
+	}
+	copy(stream.channelBinding[:], exported)
+	clear(exported)
 	stream.info = info
 	return nil
 }
@@ -521,6 +532,12 @@ func (stream *Stream) ConnectionInfo() (tlsns.ConnectionInfo, bool) {
 	return stream.info, stream.verified && stream.terminal == nil && !stream.closed
 }
 
+func (stream *Stream) ChannelBinding() ([tlsns.ChannelBindingBytes]byte, bool) {
+	stream.mu.Lock()
+	defer stream.mu.Unlock()
+	return stream.channelBinding, stream.verified && stream.terminal == nil && !stream.closed
+}
+
 func (stream *Stream) Readiness() nscore.Readiness {
 	stream.mu.Lock()
 	defer stream.mu.Unlock()
@@ -566,6 +583,7 @@ func (stream *Stream) Close() error {
 	clear(stream.readScratch)
 	clear(stream.writeScratch)
 	clear(stream.cipherScratch)
+	clear(stream.channelBinding[:])
 	stream.mu.Unlock()
 	return stream.transport.Close()
 }
@@ -586,6 +604,9 @@ func (stream *Stream) CloseWorkersLocked() {
 	stream.cancel()
 	stream.bridge.abort(context.Canceled)
 	stream.wg.Wait()
+	stream.mu.Lock()
+	clear(stream.channelBinding[:])
+	stream.mu.Unlock()
 }
 
 func mapTLSError(err error) error {

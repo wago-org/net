@@ -16,6 +16,7 @@ const (
 	IOResultV1Size       uint32 = 8
 	ConnectionInfoV1Size uint32 = 144
 	ConnectionInfoV2Size uint32 = 144
+	ChannelBindingV1Size uint32 = tlsns.ChannelBindingBytes
 	MaxALPNV1Bytes       uint32 = 32
 
 	ConnectionInfoV2FlagResumed           uint32 = 1 << 0
@@ -91,6 +92,15 @@ func EncodeIOResultV1(memory []byte, ptr uint32, result nscore.IOResult, bufferS
 	var encoded [IOResultV1Size]byte
 	binary.LittleEndian.PutUint32(encoded[0:4], uint32(result.Bytes))
 	copy(output, encoded[:])
+	return true
+}
+
+func EncodeChannelBindingV1(memory []byte, ptr uint32, binding [tlsns.ChannelBindingBytes]byte) bool {
+	output, ok := abicore.Slice(memory, ptr, ChannelBindingV1Size)
+	if !ok {
+		return false
+	}
+	copy(output, binding[:])
 	return true
 }
 
