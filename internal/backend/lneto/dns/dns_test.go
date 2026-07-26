@@ -297,8 +297,8 @@ func TestDNSTruncatedUDPUsesBoundedPrivateTCPFallback(t *testing.T) {
 		}
 		runtime.Gosched()
 	}
-	if query.state != dnsQueryDone || query.tcpStream != nil || query.txid != 0 {
-		t.Fatalf("TCP fallback completion = state:%v stream:%T txid:%d failure:%v", query.state, query.tcpStream, query.txid, query.failure)
+	if query.state != dnsQueryDone || query.tcpStream != nil || query.tcpResponse != nil || query.txid != 0 {
+		t.Fatalf("TCP fallback completion = state:%v stream:%T response:%d txid:%d failure:%v", query.state, query.tcpStream, len(query.tcpResponse), query.txid, query.failure)
 	}
 	var records []namespace.DNSRecord
 	for {
@@ -331,6 +331,73 @@ func TestDNSTruncatedUDPUsesBoundedPrivateTCPFallback(t *testing.T) {
 	}
 	if usage, _ := serverAccount.Snapshot(); usage != (quota.Usage{}) {
 		t.Fatalf("server fallback quota = %+v", usage)
+	}
+}
+
+func TestDNSTCPFallbackDefersResponseStorageUntilCorrelatedTruncation(t *testing.T) {
+	config := dnsTestConfig(t, 61)
+	config.MaxActiveTCPPorts = 1
+	config.DNS.MaxTCPResponseBytes = 16 << 10
+	config.DNS.MaxTCPServiceAttempts = 32
+	baseRetained := dnsRetainedBytes(config.DNS)
+	tcpStorage := uint64(dnsTCPReceiveBytes + dnsTCPTransmitBytes)
+	config.Quotas = quota.NewAccount(quota.Limits{
+		Resources: 4, TCPResources: 2, DNSResources: 2,
+		QueuedBytes: baseRetained + tcpStorage, DNSWork: 4,
+	})
+	ns := newTestNamespace(t, config)
+	if got, want := len(ns.adapter.candidates), config.DNS.MaxResponseBytes/11; got != want {
+		t.Fatalf("eager parser candidate storage = %d, want UDP-only bound %d", got, want)
+	}
+	if got, want := len(ns.adapter.names), 2*(config.DNS.MaxResponseBytes/11); got != want {
+		t.Fatalf("eager parser name storage = %d, want UDP-only bound %d", got, want)
+	}
+	largeTCPResponse := make([]byte, 2048)
+	binary.BigEndian.PutUint16(largeTCPResponse[6:8], 60)
+	candidates, names := ns.adapter.parserScratchLocked(largeTCPResponse)
+	if len(candidates) != 60 || len(names) != 120 || len(ns.adapter.candidates) != config.DNS.MaxResponseBytes/11 {
+		t.Fatalf("temporary TCP parser scratch = candidates:%d names:%d eager:%d", len(candidates), len(names), len(ns.adapter.candidates))
+	}
+	request := namespace.DNSRequest{Name: "example.com", Types: namespace.DNSRecordsA | namespace.DNSRecordsAAAA}
+	value, _, err := ns.TryResolve(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	query := value.(*dnsQuery)
+	if query.tcpResponse != nil {
+		t.Fatal("resolve eagerly allocated TCP fallback response storage")
+	}
+	if usage, _ := config.Quotas.Snapshot(); usage.QueuedBytes != baseRetained || usage.DNSWork != 2 {
+		t.Fatalf("pre-fallback quota = %+v, want queued=%d work=2", usage, baseRetained)
+	}
+	outgoing := serviceDNSPacket(t, ns)
+	txid, localPort := dnsPacketIdentity(t, outgoing)
+	name := lnetodns.MustNewName(request.Name)
+	truncated := buildDNSFrame(t, config, txid, localPort, lnetodns.Message{Questions: []lnetodns.Question{
+		{Name: name, Type: lnetodns.TypeA, Class: lnetodns.ClassINET},
+		{Name: name, Type: lnetodns.TypeAAAA, Class: lnetodns.ClassINET},
+	}}, lnetodns.HeaderFlags(1<<15|1<<9|1<<8|1<<7))
+	serviceDNSIngressFrame(t, ns, truncated)
+	if query.state != dnsQueryTCPConnecting || len(query.tcpResponse) != config.DNS.MaxTCPResponseBytes || query.tcpStream == nil {
+		t.Fatalf("started fallback = state:%v response:%d stream:%T", query.state, len(query.tcpResponse), query.tcpStream)
+	}
+	if usage, _ := config.Quotas.Snapshot(); usage.QueuedBytes != baseRetained+tcpStorage || usage.DNSWork != 2 || usage.TCPResources != 1 {
+		t.Fatalf("active fallback quota = %+v", usage)
+	}
+	if err := query.Cancel(); err != nil {
+		t.Fatal(err)
+	}
+	if query.tcpResponse != nil || query.tcpStream != nil {
+		t.Fatalf("canceled fallback retained response=%d stream=%T", len(query.tcpResponse), query.tcpStream)
+	}
+	if usage, _ := config.Quotas.Snapshot(); usage.QueuedBytes != baseRetained || usage.DNSWork != 0 || usage.TCPResources != 0 {
+		t.Fatalf("canceled fallback quota = %+v, want only query retention", usage)
+	}
+	if err := query.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if usage, _ := config.Quotas.Snapshot(); usage != (quota.Usage{}) {
+		t.Fatalf("closed fallback retained quota = %+v", usage)
 	}
 }
 

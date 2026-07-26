@@ -106,9 +106,9 @@ func New(common *lnetocore.Namespace, config Config) (*Adapter, error) {
 	}
 	n.queries = make([]*dnsQuery, 0, config.MaxQueries)
 	n.byPort = make(map[uint16]*dnsQuery, config.MaxQueries)
-	parserBytes := max(config.MaxResponseBytes, config.MaxTCPResponseBytes)
-	n.candidates = make([]dnsns.Record, parserBytes/11)
-	n.names = make([]string, 2*(parserBytes/11))
+	parserRecords := config.MaxResponseBytes / 11
+	n.candidates = make([]dnsns.Record, parserRecords)
+	n.names = make([]string, 2*parserRecords)
 	if int(config.MaxRecords) > inlineDNSRecordCapacity {
 		n.freeRecordOverflow = make([][]dnsns.Record, 0, config.MaxQueries)
 	}
@@ -257,9 +257,6 @@ func (n *Adapter) TryResolve(request dnsns.Request) (nscore.Resource, nscore.Pro
 		n.recycleRecordOverflowLocked(query.recordOverflow)
 		return nil, 0, lnetocore.MapError(err)
 	}
-	if tcpFallbackEnabled(n.config) {
-		query.tcpResponse = make([]byte, n.config.MaxTCPResponseBytes)
-	}
 	workUnits := uint64(1)
 	if request.Types == dnsns.RecordsA|dnsns.RecordsAAAA {
 		workUnits = 2
@@ -267,8 +264,6 @@ func (n *Adapter) TryResolve(request dnsns.Request) (nscore.Resource, nscore.Pro
 	if err := n.quotas.AcquireDNSWork(&query.work, workUnits); err != nil {
 		query.retained.Release()
 		query.retained.ResetReleased()
-		clear(query.tcpResponse)
-		query.tcpResponse = nil
 		query.portLease.ReleaseLocked()
 		n.recycleRecordOverflowLocked(query.recordOverflow)
 		return nil, 0, lnetocore.MapError(err)
@@ -412,6 +407,7 @@ func (q *dnsQuery) retireTCPTransportLocked() {
 	q.tcpServiceAttempts = 0
 	clear(q.tcpPrefix[:])
 	clear(q.tcpResponse)
+	q.tcpResponse = nil
 }
 
 func (q *dnsQuery) retireTransportLocked() {
@@ -586,6 +582,7 @@ func (q *dnsQuery) beginTCPFallbackLocked() {
 		return
 	}
 	q.retireUDPTransportLocked()
+	q.tcpResponse = make([]byte, q.owner.config.MaxTCPResponseBytes)
 	remote := nscore.Endpoint{Address: q.owner.config.Server, Port: lnetodns.ServerPort}
 	private, progress, err := q.owner.tcp.TryConnectAuthorizedLocked(remote, func(compiled *policy.Policy, endpoint nscore.Endpoint) error {
 		if endpoint != remote || !compiled.AllowsPrivateTCPTransport(policy.DirectionOutbound, endpoint.Address, endpoint.Port) {
@@ -697,7 +694,8 @@ func (q *dnsQuery) serviceTCPFallbackLocked() error {
 		if q.tcpResponseBytes != expected {
 			return nil
 		}
-		records, response, failure, err := parseDNSResponseInto(q.records[:0], q.owner.candidates, q.owner.names, q.tcpResponse[:expected], q.txid, q.request, int(q.owner.config.MaxRecords))
+		candidates, names := q.owner.parserScratchLocked(q.tcpResponse[:expected])
+		records, response, failure, err := parseDNSResponseInto(q.records[:0], candidates, names, q.tcpResponse[:expected], q.txid, q.request, int(q.owner.config.MaxRecords))
 		if !response {
 			q.failLocked(nscore.FailureIO, lneto.ErrMismatch)
 		} else if err != nil {
@@ -884,7 +882,7 @@ func appendDNSQuestion(packet []byte, offset int, name string, typ lnetodns.Type
 
 func parseDNSResponse(payload []byte, txid uint16, request dnsns.Request, maxRecords int) ([]dnsns.Record, bool, nscore.Failure, error) {
 	records := make([]dnsns.Record, 0, maxRecords)
-	candidates := make([]dnsns.Record, len(payload)/11)
+	candidates := make([]dnsns.Record, dnsCandidateScratchCount(payload))
 	names := make([]string, 2*len(candidates))
 	return parseDNSResponseInto(records, candidates, names, payload, txid, request, maxRecords)
 }
@@ -1261,6 +1259,22 @@ func decodeDNSNameInto(decoded, message []byte, offset int) (int, int, error) {
 
 func dnsRetainedBytes(config Config) uint64 {
 	return uint64(config.MaxResponseBytes) + uint64(config.MaxTCPResponseBytes) + uint64(config.MaxRecords)*(2*254+16) + 2*254
+}
+
+func dnsCandidateScratchCount(payload []byte) int {
+	candidateCount := len(payload) / 11
+	if len(payload) >= lnetodns.SizeHeader {
+		candidateCount = min(candidateCount, int(binary.BigEndian.Uint16(payload[6:8])))
+	}
+	return candidateCount
+}
+
+func (n *Adapter) parserScratchLocked(payload []byte) ([]dnsns.Record, []string) {
+	candidateCount := dnsCandidateScratchCount(payload)
+	if candidateCount <= len(n.candidates) {
+		return n.candidates[:candidateCount], n.names[:2*candidateCount]
+	}
+	return make([]dnsns.Record, candidateCount), make([]string, 2*candidateCount)
 }
 
 func tcpFallbackEnabled(config Config) bool {
