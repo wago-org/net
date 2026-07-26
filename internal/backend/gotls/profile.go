@@ -61,27 +61,15 @@ func (profile Profile) Instantiate() (Profile, error) {
 }
 
 func (profile Profile) clone(instantiate bool) (Profile, error) {
-	if profile.ID == 0 || profile.Config == nil || profile.MaxCertificateChainBytes <= 0 || profile.MaxPeerCertificates == 0 ||
-		(profile.MaxClientSessionEntries == 0) != (profile.MaxClientSessionBytes == 0) {
+	if !profile.valid(instantiate) {
 		return Profile{}, ErrInvalidConfig
-	}
-	if profile.Config.ClientSessionCache != nil {
-		if _, ok := profile.Config.ClientSessionCache.(*boundedClientSessionCache); !ok {
-			return Profile{}, ErrInvalidConfig
-		}
 	}
 	cloned := profile
 	cloned.Config = profile.Config.Clone()
 	cloned.Config.NextProtos = append([]string(nil), profile.Config.NextProtos...)
 	cloned.AllowedNames = make(map[string]tlsns.IdentityType, len(profile.AllowedNames))
 	for name, identity := range profile.AllowedNames {
-		if identity != tlsns.IdentityDNS && identity != tlsns.IdentityIP {
-			return Profile{}, ErrInvalidConfig
-		}
 		cloned.AllowedNames[name] = identity
-	}
-	if len(cloned.AllowedNames) == 0 {
-		return Profile{}, ErrInvalidConfig
 	}
 	if profile.Config.RootCAs != nil {
 		cloned.Config.RootCAs = profile.Config.RootCAs.Clone()
@@ -102,6 +90,28 @@ func (profile Profile) clone(instantiate bool) (Profile, error) {
 	return cloned, nil
 }
 
+func (profile Profile) valid(instantiate bool) bool {
+	if profile.ID == 0 || profile.Config == nil || profile.MaxCertificateChainBytes <= 0 || profile.MaxPeerCertificates == 0 ||
+		(profile.MaxClientSessionEntries == 0) != (profile.MaxClientSessionBytes == 0) || len(profile.AllowedNames) == 0 {
+		return false
+	}
+	for _, identity := range profile.AllowedNames {
+		if identity != tlsns.IdentityDNS && identity != tlsns.IdentityIP {
+			return false
+		}
+	}
+	cache := profile.Config.ClientSessionCache
+	if cache != nil {
+		if _, ok := cache.(*boundedClientSessionCache); !ok {
+			return false
+		}
+	}
+	if profile.MaxClientSessionEntries == 0 {
+		return cache == nil
+	}
+	return instantiate || cache != nil
+}
+
 // ClearSessionCache removes and zeroes adapter-owned resumable state during
 // deterministic instance teardown.
 func (profile Profile) ClearSessionCache() {
@@ -117,13 +127,7 @@ func (profile Profile) ClearSessionCache() {
 // verification, and session callbacks are rejected by the public profile layer
 // before this internal boundary.
 func (profile ServerProfile) Clone() (ServerProfile, error) {
-	if profile.ID == 0 || profile.Config == nil || len(profile.Config.Certificates) == 0 || profile.MaxCertificateChainBytes <= 0 || profile.MaxPeerCertificates == 0 {
-		return ServerProfile{}, ErrInvalidConfig
-	}
-	if profile.Config.ClientAuth != cryptotls.NoClientCert && profile.Config.ClientAuth != cryptotls.RequireAndVerifyClientCert {
-		return ServerProfile{}, ErrInvalidConfig
-	}
-	if profile.Config.ClientAuth == cryptotls.RequireAndVerifyClientCert && profile.Config.ClientCAs == nil {
+	if !profile.valid() {
 		return ServerProfile{}, ErrInvalidConfig
 	}
 	cloned := profile
@@ -134,6 +138,16 @@ func (profile ServerProfile) Clone() (ServerProfile, error) {
 		cloned.Config.ClientCAs = profile.Config.ClientCAs.Clone()
 	}
 	return cloned, nil
+}
+
+func (profile ServerProfile) valid() bool {
+	if profile.ID == 0 || profile.Config == nil || len(profile.Config.Certificates) == 0 || profile.MaxCertificateChainBytes <= 0 || profile.MaxPeerCertificates == 0 {
+		return false
+	}
+	if profile.Config.ClientAuth != cryptotls.NoClientCert && profile.Config.ClientAuth != cryptotls.RequireAndVerifyClientCert {
+		return false
+	}
+	return profile.Config.ClientAuth != cryptotls.RequireAndVerifyClientCert || profile.Config.ClientCAs != nil
 }
 
 func cloneTLSCertificates(input []cryptotls.Certificate) []cryptotls.Certificate {

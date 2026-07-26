@@ -143,18 +143,19 @@ reviewed standard-Go-only TLS closure is exactly five packages:
 TinyGo 0.41.1 tests the remaining 123 packages individually and retains one log
 per package. On the expanded standard-Go client/server stream branch, the
 explicit TLS signoff still runs 17 package profiles (10 ordinary and seven race)
-and now resolves 164 named test targets, including bounded per-instance client
+and now resolves 168 named test targets, including bounded per-instance client
 resumption, explicit server ticket-key rotation, cache isolation, exact cache
 quota teardown, fixed RFC 9266 channel-binding derivation/output atomicity,
-eager client-certificate validation, package-owned frozen validation time, and
+eager client-certificate validation, package-owned frozen validation time,
 rejection of externally delegated signer callbacks, immutable static SNI
-selection, and drain-before-listener-replacement certificate rotation.
+selection, drain-before-listener-replacement certificate rotation,
+immutable-profile borrowing, and concurrent shared-server-profile handshakes.
 Arm64 signoff cross-compiles four test
 binaries whose subjects now include the standard-Go server engine, live lneto
 client/server TLS, explicit listener authority, and eager certificate/key
 validation; the current local auto profile remains truthfully
 `skipped-no-runner`, so it is not execution evidence. Benchmark discovery finds
-173 top-level targets in 50 packages and 196 expanded result names; a local
+174 top-level targets in 50 packages and 204 expanded result names; a local
 five-by-200 ms capture includes separate TLS 1.3 client and server handshake
 benchmarks. Fuzz discovery finds 47 targets in 33 packages, including seven
 TLS-owned targets covering v1/v2 metadata and listener layouts.

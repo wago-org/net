@@ -9,6 +9,7 @@ import (
 	"math/big"
 	"net"
 	"runtime"
+	"sync"
 	"testing"
 	"time"
 
@@ -32,6 +33,102 @@ func TestServerProfileCloneOwnsSupportedSignatureAlgorithms(t *testing.T) {
 	profile.Config.Certificates[0].SupportedSignatureAlgorithms[0] = cryptotls.ECDSAWithP256AndSHA256
 	if got := cloned.Config.Certificates[0].SupportedSignatureAlgorithms[0]; got != cryptotls.PSSWithSHA256 {
 		t.Fatalf("cloned signature algorithm = %v, want %v", got, cryptotls.PSSWithSHA256)
+	}
+}
+
+func TestStreamsBorrowValidatedAdapterOwnedProfileSnapshots(t *testing.T) {
+	certificate, roots := testCertificate(t, "snapshot.example.com")
+	clientProfile := secureTestProfile(roots, "snapshot.example.com")
+	client, err := NewClient(&memoryTransport{peer: newBridgeConn(64<<10, 64<<10, 1<<20)}, clientProfile, "snapshot.example.com", tlsns.IdentityDNS, testLimits())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if client.profile.Config != clientProfile.Config || client.profile.Config.RootCAs != clientProfile.Config.RootCAs {
+		t.Fatal("client stream deep-cloned an already immutable adapter profile")
+	}
+	if err := client.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	serverProfile := ServerProfile{
+		ID: 2,
+		Config: &cryptotls.Config{
+			Certificates:           []cryptotls.Certificate{certificate},
+			MinVersion:             cryptotls.VersionTLS13,
+			MaxVersion:             cryptotls.VersionTLS13,
+			SessionTicketsDisabled: true,
+		},
+		MaxCertificateChainBytes: 64 << 10,
+		MaxPeerCertificates:      4,
+	}
+	server, err := NewServer(&memoryTransport{peer: newBridgeConn(64<<10, 64<<10, 1<<20)}, serverProfile, testLimits())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if server.serverProfile.Config != serverProfile.Config || &server.serverProfile.Config.Certificates[0].Certificate[0][0] != &serverProfile.Config.Certificates[0].Certificate[0][0] {
+		t.Fatal("server stream deep-cloned an already immutable adapter profile")
+	}
+	if err := server.Close(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestConcurrentServersShareImmutableProfile(t *testing.T) {
+	certificate, roots := testCertificate(t, "shared.example.com")
+	profile := ServerProfile{
+		ID: 3,
+		Config: &cryptotls.Config{
+			Certificates:           []cryptotls.Certificate{certificate},
+			MinVersion:             cryptotls.VersionTLS13,
+			MaxVersion:             cryptotls.VersionTLS13,
+			SessionTicketsDisabled: true,
+		},
+		MaxCertificateChainBytes: 64 << 10,
+		MaxPeerCertificates:      4,
+	}
+	const connections = 4
+	errors := make(chan error, connections)
+	var workers sync.WaitGroup
+	workers.Add(connections)
+	for range connections {
+		go func() {
+			defer workers.Done()
+			clientBridge := newBridgeConn(64<<10, 64<<10, 1<<20)
+			client := cryptotls.Client(clientBridge, &cryptotls.Config{
+				RootCAs: roots, ServerName: "shared.example.com", Time: func() time.Time { return time.Unix(1_800_000_000, 0) },
+				MinVersion: cryptotls.VersionTLS13, MaxVersion: cryptotls.VersionTLS13,
+			})
+			clientDone := make(chan error, 1)
+			go func() { clientDone <- client.Handshake() }()
+			server, err := NewServer(&memoryTransport{peer: clientBridge}, profile, testLimits())
+			if err != nil {
+				errors <- err
+				return
+			}
+			defer server.Close()
+			for attempt := 0; attempt < 1_000_000; attempt++ {
+				progress, err := server.TryFinishConnect()
+				if err != nil {
+					errors <- err
+					return
+				}
+				if progress == nscore.ProgressDone {
+					if err := <-clientDone; err != nil {
+						errors <- err
+					}
+					return
+				}
+				runtime.Gosched()
+			}
+			errors <- ErrHandshakeLimit
+		}()
+	}
+	workers.Wait()
+	close(errors)
+	for err := range errors {
+		if err != nil {
+			t.Fatal(err)
+		}
 	}
 }
 

@@ -12,9 +12,13 @@ TCP ownership exactly once.
 Hosts construct immutable profiles with `NewClientProfile`, exact profile IDs,
 `AllowServerNames`, optional `RequireALPN`, and an ordinary `*crypto/tls.Config`.
 The configuration, roots, certificate DER, ALPN list, and name authority are
-cloned. Later caller mutation cannot change registration. Client certificate
-chains and leaf/key correspondence are parsed eagerly. Private keys stay in host
-memory and no certificate chain or private key appears in the guest ABI.
+cloned into an immutable registration/instance snapshot. Later caller mutation
+cannot change registration. Streams borrow that adapter-owned snapshot rather
+than deep-cloning trust pools, authority maps, and certificate data again; a
+client creates only the shallow per-connection `crypto/tls.Config` shell needed
+to set its authorized `ServerName`. Client certificate chains and leaf/key
+correspondence are parsed eagerly. Private keys stay in host memory and no
+certificate chain or private key appears in the guest ABI.
 
 The first release rejects `InsecureSkipVerify`, `KeyLogWriter`, renegotiation,
 verification callbacks, certificate-selection callbacks, caller-supplied clock
@@ -48,9 +52,13 @@ mentions those endpoint classes.
 Hosts construct server profiles with `NewServerProfile` and static certificate
 chains. Every DER certificate is parsed during profile construction, each chain
 link is signature-checked, and each leaf public key must match its private key.
-Certificate DER, OCSP staples, SCTs, ALPN, and CA pools are cloned. Private keys
-remain host-owned but are restricted to standard in-memory RSA, NIST ECDSA, and
-Ed25519 implementations. Arbitrary `crypto.Signer` wrappers and HSM callbacks are
+Certificate DER, OCSP staples, SCTs, ALPN, and CA pools are cloned into the
+immutable adapter snapshot. Accepted streams share that read-only snapshot;
+they do not recopy certificate chains, OCSP/SCT data, or client CA pools.
+Concurrent-handshake race coverage verifies the shared standard-library server
+configuration. Private keys remain host-owned but are restricted to standard
+in-memory RSA, NIST ECDSA, and Ed25519 implementations. Arbitrary
+`crypto.Signer` wrappers and HSM callbacks are
 rejected because `crypto.Signer.Sign` has no cancellation contract and could
 otherwise prevent deterministic worker teardown. Dynamic certificate/config
 selection and verification callbacks are also rejected. Client SNI may select
