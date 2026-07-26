@@ -23,7 +23,7 @@ in `docs/architecture.md`:
 
 The checked-in capture is in `baseline.txt`; `baseline-summary.md` records the
 TLS-aware medians and environment. The expanded client/server branch discovers
-173 top-level benchmark targets in 50 packages, with 196 distinct result names
+174 top-level benchmark targets in 50 packages, with 204 distinct result names
 after subbenchmark expansion. A full-grid five-by-200 ms local capture includes
 both handshake roles; the checked-in release-readiness baseline remains the
 prior outbound-only evidence until this draft branch is adopted. The baseline

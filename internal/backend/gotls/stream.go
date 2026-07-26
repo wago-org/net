@@ -67,15 +67,17 @@ type Stream struct {
 	identity           tlsns.IdentityType
 }
 
+// NewClient borrows one already validated, adapter-owned immutable profile.
+// Only crypto/tls.Config's shallow per-connection shell is cloned so ServerName
+// can differ without recopying trust pools, authority maps, or certificate DER.
 func NewClient(transport Transport, profile Profile, serverName string, identity tlsns.IdentityType, limits Limits) (*Stream, error) {
 	if transport == nil || !ValidLimits(limits) || (identity != tlsns.IdentityDNS && identity != tlsns.IdentityIP) {
 		return nil, ErrInvalidConfig
 	}
-	cloned, err := profile.Clone()
-	if err != nil {
-		return nil, err
+	if !profile.valid(false) {
+		return nil, ErrInvalidConfig
 	}
-	config := cloned.Config.Clone()
+	config := profile.Config.Clone()
 	config.ServerName = serverName
 	stream, err := newStream(transport, limits, tlsns.RoleClient, func(bridge *bridgeConn) *cryptotls.Conn {
 		return cryptotls.Client(bridge, config)
@@ -83,29 +85,29 @@ func NewClient(transport Transport, profile Profile, serverName string, identity
 	if err != nil {
 		return nil, err
 	}
-	stream.profile = cloned
+	stream.profile = profile
 	stream.identity = identity
 	return stream, nil
 }
 
 // NewServer starts one bounded server handshake over an already accepted,
-// private transport. The accepted TCP stream remains solely owned by the TLS
-// stream and never becomes guest-visible.
+// private transport and borrows one validated adapter-owned immutable profile.
+// The accepted TCP stream remains solely owned by TLS and never becomes
+// guest-visible; static certificate and CA material is not recopied per stream.
 func NewServer(transport Transport, profile ServerProfile, limits Limits) (*Stream, error) {
 	if transport == nil || !ValidLimits(limits) {
 		return nil, ErrInvalidConfig
 	}
-	cloned, err := profile.Clone()
-	if err != nil {
-		return nil, err
+	if !profile.valid() {
+		return nil, ErrInvalidConfig
 	}
 	stream, err := newStream(transport, limits, tlsns.RoleServer, func(bridge *bridgeConn) *cryptotls.Conn {
-		return cryptotls.Server(bridge, cloned.Config)
+		return cryptotls.Server(bridge, profile.Config)
 	})
 	if err != nil {
 		return nil, err
 	}
-	stream.serverProfile = cloned
+	stream.serverProfile = profile
 	return stream, nil
 }
 
