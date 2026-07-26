@@ -208,8 +208,9 @@ resource/retained-storage quota, bounded readiness, port reuse, and abort cleanu
 are covered. Closed listener/outbound bytes are zeroed, and idle reuse retains
 at most one listener pool capped at 256 slots and 1 MiB plus one outbound buffer
 capped at 1 MiB; excess high-water storage is dropped after quota release.
-Adapter creation no longer allocates reuse-index arrays proportional to maximum
-listener/outbound counts. Accepted-stream close releases resource quota immediately; lneto's
+Adapter creation now uses small listener/stream registry hints and no longer
+allocates registries or reuse-index arrays proportional to maximum listener or
+outbound counts. Accepted-stream close releases resource quota immediately; lneto's
 private accepted list is preserved until the next bounded egress service probe,
 which reclaims the pool slot and now reports one charged maintenance operation
 even when it emits no frame. DNS uses adapter-owned immediate IPv4 UDP packets plus lneto DNS codecs,

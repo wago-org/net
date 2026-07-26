@@ -97,7 +97,7 @@ func New(common *lnetocore.Namespace, config Config) (*Adapter, error) {
 		common.Unlock()
 		return n, nil
 	}
-	n.listeners = make([]*tcpListener, 0, config.MaxListeners)
+	n.listeners = make([]*tcpListener, 0, listenerCapacityHint(config))
 	n.streams = make([]*tcpStream, 0, streamCapacityHint(config))
 	common.Unlock()
 	if err := common.Install(lnetocore.Participant{IngressOrder: ingressOrder, Ingress: n.ingressLocked, CloseOrder: closeOrder, Close: n.CloseLocked}); err != nil {
@@ -166,6 +166,14 @@ func tcpStreamStorageBytes(config Config) (uint64, bool) {
 		return 0, false
 	}
 	return checked.AddUint64(uint64(config.ReceiveBytes), uint64(config.TransmitBytes))
+}
+
+func listenerCapacityHint(config Config) int {
+	hint := uint64(config.MaxListeners)
+	if hint > maxTCPStreamCapacityHint {
+		hint = maxTCPStreamCapacityHint
+	}
+	return int(hint)
 }
 
 func streamCapacityHint(config Config) int {

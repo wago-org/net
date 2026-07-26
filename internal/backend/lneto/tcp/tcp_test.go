@@ -94,11 +94,14 @@ func TestValidConfigRejectsOverflowAndKeepsAdapterCreationBounded(t *testing.T) 
 			t.Fatalf("New error = %v", err)
 		}
 	}()
+	if cap(adapter.listeners) != maxTCPStreamCapacityHint {
+		t.Fatalf("listener capacity hint = %d, want %d", cap(adapter.listeners), maxTCPStreamCapacityHint)
+	}
 	if cap(adapter.streams) != maxTCPStreamCapacityHint {
 		t.Fatalf("stream capacity hint = %d, want %d", cap(adapter.streams), maxTCPStreamCapacityHint)
 	}
-	if len(adapter.streams) != 0 {
-		t.Fatalf("new adapter eagerly populated streams = %d", len(adapter.streams))
+	if len(adapter.listeners) != 0 || len(adapter.streams) != 0 || adapter.freeListenerPool.slots != nil || adapter.freeOutboundStorage != nil {
+		t.Fatalf("new adapter eagerly populated state: listeners=%d streams=%d listener-cache=%v outbound-cache=%d", len(adapter.listeners), len(adapter.streams), adapter.freeListenerPool.slots != nil, len(adapter.freeOutboundStorage))
 	}
 }
 
