@@ -346,6 +346,7 @@ func TestDNSQueryReusesClearedPacketAndInlineRecordStorage(t *testing.T) {
 		t.Fatal(err)
 	}
 	first := value.(*dnsQuery)
+	accounting := first.accounting
 	packetStorage := first.packetStorage
 	recordStorage := first.recordStorage
 	first.records = first.recordStorage[:1]
@@ -353,8 +354,11 @@ func TestDNSQueryReusesClearedPacketAndInlineRecordStorage(t *testing.T) {
 	if err := first.Close(); err != nil {
 		t.Fatal(err)
 	}
-	if first.packetStorage != nil || first.recordStorage != nil || ns.adapter.freePacket == nil || ns.adapter.freeRecordInline == nil {
-		t.Fatalf("closed query storage = packet:%p records:%p free-packet:%p free-records:%p", first.packetStorage, first.recordStorage, ns.adapter.freePacket, ns.adapter.freeRecordInline)
+	if first.accounting != nil || first.packetStorage != nil || first.recordStorage != nil || ns.adapter.freeAccounting == nil || ns.adapter.freePacket == nil || ns.adapter.freeRecordInline == nil {
+		t.Fatalf("closed query storage = accounting:%p packet:%p records:%p free-accounting:%p free-packet:%p free-records:%p", first.accounting, first.packetStorage, first.recordStorage, ns.adapter.freeAccounting, ns.adapter.freePacket, ns.adapter.freeRecordInline)
+	}
+	if ns.adapter.freeAccounting != accounting {
+		t.Fatalf("recycled accounting = got:%p want:%p", ns.adapter.freeAccounting, accounting)
 	}
 	if ns.adapter.freePacket != packetStorage || ns.adapter.freePacket[0] != 0 {
 		t.Fatalf("cleared packet storage = stored:%p want:%p first:%d", ns.adapter.freePacket, packetStorage, ns.adapter.freePacket[0])
@@ -367,8 +371,8 @@ func TestDNSQueryReusesClearedPacketAndInlineRecordStorage(t *testing.T) {
 		t.Fatal(err)
 	}
 	second := value.(*dnsQuery)
-	if second.packetStorage != packetStorage || second.recordStorage != recordStorage || ns.adapter.freePacket != nil || ns.adapter.freeRecordInline != nil {
-		t.Fatalf("reused query storage = packet:%p want:%p records:%p want:%p free-packet:%p free-records:%p", second.packetStorage, packetStorage, second.recordStorage, recordStorage, ns.adapter.freePacket, ns.adapter.freeRecordInline)
+	if second.accounting != accounting || second.packetStorage != packetStorage || second.recordStorage != recordStorage || ns.adapter.freeAccounting != nil || ns.adapter.freePacket != nil || ns.adapter.freeRecordInline != nil {
+		t.Fatalf("reused query storage = accounting:%p want:%p packet:%p want:%p records:%p want:%p free-accounting:%p free-packet:%p free-records:%p", second.accounting, accounting, second.packetStorage, packetStorage, second.recordStorage, recordStorage, ns.adapter.freeAccounting, ns.adapter.freePacket, ns.adapter.freeRecordInline)
 	}
 	if err := second.Close(); err != nil {
 		t.Fatal(err)
@@ -376,8 +380,8 @@ func TestDNSQueryReusesClearedPacketAndInlineRecordStorage(t *testing.T) {
 	ns.core.Lock()
 	ns.adapter.CloseLocked()
 	ns.core.Unlock()
-	if ns.adapter.freePacket != nil || ns.adapter.freeRecordInline != nil {
-		t.Fatalf("namespace close retained query storage packet=%p records=%p", ns.adapter.freePacket, ns.adapter.freeRecordInline)
+	if ns.adapter.freeAccounting != nil || ns.adapter.freePacket != nil || ns.adapter.freeRecordInline != nil {
+		t.Fatalf("namespace close retained query storage accounting=%p packet=%p records=%p", ns.adapter.freeAccounting, ns.adapter.freePacket, ns.adapter.freeRecordInline)
 	}
 }
 
@@ -858,7 +862,8 @@ func TestDNSBoundedQueryRecordsAndQuotaLifecycle(t *testing.T) {
 	if usage.DNSWork != 0 || usage.Resources != 1 || usage.DNSResources != 1 || usage.QueuedBytes == 0 {
 		t.Fatalf("completed quota = %+v", usage)
 	}
-	workReset := query.work.ResetReleased()
+	accounting := query.accounting
+	workReset := accounting.work.ResetReleased()
 	if workReset {
 		t.Fatalf("completed query retained work graph state: reset=%v", workReset)
 	}
@@ -868,9 +873,9 @@ func TestDNSBoundedQueryRecordsAndQuotaLifecycle(t *testing.T) {
 	if usage, _ := config.Quotas.Snapshot(); usage != (quota.Usage{}) {
 		t.Fatalf("closed query retained quota = %+v", usage)
 	}
-	retainedReset := query.retained.ResetReleased()
-	workReset = query.work.ResetReleased()
-	if retainedReset || workReset || query.request != (namespace.DNSRequest{}) || query.packet != nil || query.records != nil || query.failure != nil || query.cursor != 0 {
+	retainedReset := accounting.retained.ResetReleased()
+	workReset = accounting.work.ResetReleased()
+	if retainedReset || workReset || query.accounting != nil || query.request != (namespace.DNSRequest{}) || query.packet != nil || query.records != nil || query.failure != nil || query.cursor != 0 {
 		t.Fatalf("closed query retained graph state: retained_reset=%v work_reset=%v request=%+v packet=%v records=%v failure=%v cursor=%d", retainedReset, workReset, query.request, query.packet != nil, query.records != nil, query.failure, query.cursor)
 	}
 	if got := query.Readiness(); got != namespace.ReadyClosed {
