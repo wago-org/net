@@ -67,15 +67,17 @@ type Stream struct {
 	identity           tlsns.IdentityType
 }
 
+// NewClient borrows one already validated, adapter-owned immutable profile.
+// Only crypto/tls.Config's shallow per-connection shell is cloned so ServerName
+// can differ without recopying trust pools, authority maps, or certificate DER.
 func NewClient(transport Transport, profile Profile, serverName string, identity tlsns.IdentityType, limits Limits) (*Stream, error) {
 	if transport == nil || !ValidLimits(limits) || (identity != tlsns.IdentityDNS && identity != tlsns.IdentityIP) {
 		return nil, ErrInvalidConfig
 	}
-	cloned, err := profile.Clone()
-	if err != nil {
-		return nil, err
+	if !profile.valid(false) {
+		return nil, ErrInvalidConfig
 	}
-	config := cloned.Config.Clone()
+	config := profile.Config.Clone()
 	config.ServerName = serverName
 	stream, err := newStream(transport, limits, tlsns.RoleClient, func(bridge *bridgeConn) *cryptotls.Conn {
 		return cryptotls.Client(bridge, config)
@@ -83,29 +85,29 @@ func NewClient(transport Transport, profile Profile, serverName string, identity
 	if err != nil {
 		return nil, err
 	}
-	stream.profile = cloned
+	stream.profile = profile
 	stream.identity = identity
 	return stream, nil
 }
 
 // NewServer starts one bounded server handshake over an already accepted,
-// private transport. The accepted TCP stream remains solely owned by the TLS
-// stream and never becomes guest-visible.
+// private transport and borrows one validated adapter-owned immutable profile.
+// The accepted TCP stream remains solely owned by TLS and never becomes
+// guest-visible; static certificate and CA material is not recopied per stream.
 func NewServer(transport Transport, profile ServerProfile, limits Limits) (*Stream, error) {
 	if transport == nil || !ValidLimits(limits) {
 		return nil, ErrInvalidConfig
 	}
-	cloned, err := profile.Clone()
-	if err != nil {
-		return nil, err
+	if !profile.valid() {
+		return nil, ErrInvalidConfig
 	}
 	stream, err := newStream(transport, limits, tlsns.RoleServer, func(bridge *bridgeConn) *cryptotls.Conn {
-		return cryptotls.Server(bridge, cloned.Config)
+		return cryptotls.Server(bridge, profile.Config)
 	})
 	if err != nil {
 		return nil, err
 	}
-	stream.serverProfile = cloned
+	stream.serverProfile = profile
 	return stream, nil
 }
 
@@ -588,15 +590,15 @@ func (stream *Stream) Close() error {
 	stream.cancel()
 	stream.bridge.abort(context.Canceled)
 	stream.wg.Wait()
+	stream.bridge.release()
 	stream.mu.Lock()
-	stream.rxPlain.clear()
-	stream.txPlain.clear()
-	clear(stream.readScratch)
-	clear(stream.writeScratch)
-	clear(stream.cipherScratch)
-	clear(stream.channelBinding[:])
+	transport := stream.transport
+	stream.releaseRetainedLocked()
 	stream.mu.Unlock()
-	return stream.transport.Close()
+	if transport == nil {
+		return nil
+	}
+	return transport.Close()
 }
 
 // CloseWorkersLocked is used only by shared-backend teardown while the private
@@ -615,9 +617,28 @@ func (stream *Stream) CloseWorkersLocked() {
 	stream.cancel()
 	stream.bridge.abort(context.Canceled)
 	stream.wg.Wait()
+	stream.bridge.release()
 	stream.mu.Lock()
-	clear(stream.channelBinding[:])
+	stream.releaseRetainedLocked()
 	stream.mu.Unlock()
+}
+
+func (stream *Stream) releaseRetainedLocked() {
+	stream.rxPlain.release()
+	stream.txPlain.release()
+	clear(stream.readScratch)
+	clear(stream.writeScratch)
+	clear(stream.cipherScratch)
+	stream.readScratch = nil
+	stream.writeScratch = nil
+	stream.cipherScratch = nil
+	clear(stream.channelBinding[:])
+	stream.info = tlsns.ConnectionInfo{}
+	stream.tls = nil
+	stream.profile = Profile{}
+	stream.serverProfile = ServerProfile{}
+	stream.transport = nil
+	stream.terminal = nil
 }
 
 func mapTLSError(err error) error {

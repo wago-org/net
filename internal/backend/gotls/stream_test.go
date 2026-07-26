@@ -128,6 +128,62 @@ serverHandshakeComplete:
 	t.Fatal("plaintext did not reach peer")
 }
 
+func TestCloseReleasesRetainedBuffersAndProfileReferences(t *testing.T) {
+	_, roots := testCertificate(t, "release.example.com")
+	clientProfile := secureTestProfile(roots, "release.example.com")
+	client, err := NewClient(&memoryTransport{peer: newBridgeConn(64<<10, 64<<10, 1<<20)}, clientProfile, "release.example.com", tlsns.IdentityDNS, testLimits())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := client.Close(); err != nil {
+		t.Fatal(err)
+	}
+	assertTLSStreamReleased(t, client)
+
+	certificate, _ := testCertificate(t, "release.example.com")
+	transport := &memoryTransport{peer: newBridgeConn(64<<10, 64<<10, 1<<20)}
+	server, err := NewServer(transport, ServerProfile{
+		ID: 2,
+		Config: &cryptotls.Config{
+			Certificates:           []cryptotls.Certificate{certificate},
+			MinVersion:             cryptotls.VersionTLS13,
+			MaxVersion:             cryptotls.VersionTLS13,
+			SessionTicketsDisabled: true,
+		},
+		MaxCertificateChainBytes: 64 << 10,
+		MaxPeerCertificates:      4,
+	}, testLimits())
+	if err != nil {
+		t.Fatal(err)
+	}
+	server.CloseWorkersLocked()
+	assertTLSStreamReleased(t, server)
+	if transport.closed.Load() {
+		t.Fatal("worker-only close unexpectedly closed owner-managed transport")
+	}
+	if err := transport.Close(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func assertTLSStreamReleased(t testing.TB, stream *Stream) {
+	t.Helper()
+	stream.mu.Lock()
+	defer stream.mu.Unlock()
+	if stream.tls != nil || stream.transport != nil || stream.profile.Config != nil || stream.serverProfile.Config != nil ||
+		stream.rxPlain.buffer != nil || stream.txPlain.buffer != nil || stream.readScratch != nil || stream.writeScratch != nil || stream.cipherScratch != nil ||
+		stream.info != (tlsns.ConnectionInfo{}) || stream.terminal != nil || stream.channelBinding != ([tlsns.ChannelBindingBytes]byte{}) {
+		t.Fatalf("closed stream retained state: tls=%p transport=%T profile=%p server-profile=%p rx=%d tx=%d read=%d write=%d cipher=%d info=%+v terminal=%v binding=%x",
+			stream.tls, stream.transport, stream.profile.Config, stream.serverProfile.Config, cap(stream.rxPlain.buffer), cap(stream.txPlain.buffer),
+			cap(stream.readScratch), cap(stream.writeScratch), cap(stream.cipherScratch), stream.info, stream.terminal, stream.channelBinding)
+	}
+	stream.bridge.mu.Lock()
+	defer stream.bridge.mu.Unlock()
+	if stream.bridge.inbound.buffer != nil || stream.bridge.outbound.buffer != nil || stream.bridge.err != nil || stream.bridge.handshakeBytes != 0 || stream.bridge.maxHandshakeBytes != 0 {
+		t.Fatalf("closed bridge retained state: inbound=%d outbound=%d err=%v handshake=%d max=%d", cap(stream.bridge.inbound.buffer), cap(stream.bridge.outbound.buffer), stream.bridge.err, stream.bridge.handshakeBytes, stream.bridge.maxHandshakeBytes)
+	}
+}
+
 func TestServerHandshakeALPNAndPlaintext(t *testing.T) {
 	certificate, roots := testCertificate(t, "server.example.com")
 	clientBridge := newBridgeConn(64<<10, 64<<10, 1<<20)
