@@ -175,9 +175,12 @@ pools and
 outbound streams have bounded receive/transmit storage, partial I/O, connect and
 accept progress, half-close, level readiness, endpoint policy, quota ownership,
 port reuse, and deterministic abort cleanup. Closed listener and outbound
-buffers are zeroed before reuse or release. The adapter retains at most one idle
-listener pool of no more than 256 slots and 1 MiB of storage plus one idle
-outbound buffer of no more than 1 MiB; concurrent high-water buffers and larger
+buffers are zeroed before reuse or release. The outbound buffer cache also owns
+one released/reset quota charge, reducing steady wrapper garbage while each
+`tcp.Conn` remains generation-distinct because lneto may retain its registration
+pointer after abort. The adapter retains at most one idle listener pool of no
+more than 256 slots and 1 MiB of storage plus one idle outbound buffer/accounting
+slot of no more than 1 MiB; concurrent high-water buffers and larger
 configurations are dropped after close rather than remaining as uncharged cache.
 Adapter creation seeds only small listener/stream registry capacity hints and no
 longer allocates registries or reuse-index arrays proportional to configured

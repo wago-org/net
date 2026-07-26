@@ -101,7 +101,7 @@ func TestValidConfigRejectsOverflowAndKeepsAdapterCreationBounded(t *testing.T) 
 		t.Fatalf("stream capacity hint = %d, want %d", cap(adapter.streams), maxTCPStreamCapacityHint)
 	}
 	if len(adapter.listeners) != 0 || len(adapter.streams) != 0 || adapter.freeListenerPool.slots != nil || adapter.freeOutboundStorage != nil {
-		t.Fatalf("new adapter eagerly populated state: listeners=%d streams=%d listener-cache=%v outbound-cache=%d", len(adapter.listeners), len(adapter.streams), adapter.freeListenerPool.slots != nil, len(adapter.freeOutboundStorage))
+		t.Fatalf("new adapter eagerly populated state: listeners=%d streams=%d listener-cache=%v outbound-cache=%d", len(adapter.listeners), len(adapter.streams), adapter.freeListenerPool.slots != nil, len(cachedOutboundBytes(adapter)))
 	}
 }
 
@@ -231,10 +231,54 @@ func TestQuotaDeniedConnectDoesNotAllocateOrRetainOutboundStorage(t *testing.T) 
 	leaseCount := common.TCPPortLeaseCountLocked()
 	common.Unlock()
 	if adapter.freeOutboundStorage != nil || len(adapter.streams) != 0 || leaseCount != 0 || adapter.outboundStreams != 0 {
-		t.Fatalf("quota denied connect retained state: storage=%d streams=%d leases=%d outbound=%d", len(adapter.freeOutboundStorage), len(adapter.streams), leaseCount, adapter.outboundStreams)
+		t.Fatalf("quota denied connect retained state: storage=%d streams=%d leases=%d outbound=%d", len(cachedOutboundBytes(adapter)), len(adapter.streams), leaseCount, adapter.outboundStreams)
 	}
 	if usage, closed := adapter.quotas.Snapshot(); closed || usage != (quota.Usage{QueuedBytes: 16 << 10}) {
 		t.Fatalf("quota denied usage = %+v, closed=%v", usage, closed)
+	}
+	if !occupied.Release() || !occupied.ResetReleased() {
+		t.Fatal("release occupied quota")
+	}
+}
+
+func TestQuotaDeniedConnectPreservesClearedIdleOutboundStorage(t *testing.T) {
+	common, adapter := newTestAdapter(t, 36, 0, 1)
+	remote := nscore.Endpoint{Address: netip.MustParseAddr("192.0.2.37"), Port: 4037}
+	value, progress, err := adapter.TryConnect(remote)
+	if err != nil || progress != nscore.ProgressInProgress {
+		t.Fatalf("initial connect = %T, %v, %v", value, progress, err)
+	}
+	if err := value.Close(); err != nil {
+		t.Fatal(err)
+	}
+	cached := adapter.freeOutboundStorage
+	if cached == nil || len(cached.bytes) != 512 {
+		t.Fatalf("initial cache = %p bytes=%d", cached, len(cachedOutboundBytes(adapter)))
+	}
+	cachedAddress := &cached.bytes[0]
+	var occupied quota.Charge
+	if err := adapter.quotas.AcquireQueuedBytes(&occupied, 16<<10); err != nil {
+		t.Fatal(err)
+	}
+	if value, progress, err := adapter.TryConnect(remote); value != nil || progress != 0 || failureOf(t, err) != nscore.FailureResourceLimit {
+		t.Fatalf("quota denied reuse = %T, %v, %v", value, progress, err)
+	}
+	if adapter.freeOutboundStorage != cached || len(cached.bytes) != 512 || &cached.bytes[0] != cachedAddress {
+		t.Fatalf("quota denial replaced cache = got:%p want:%p bytes:%d", adapter.freeOutboundStorage, cached, len(cached.bytes))
+	}
+	for i, value := range cached.bytes {
+		if value != 0 {
+			t.Fatalf("cache byte %d = %d", i, value)
+		}
+	}
+	common.Lock()
+	leaseCount := common.TCPPortLeaseCountLocked()
+	common.Unlock()
+	if leaseCount != 0 || len(adapter.streams) != 0 || adapter.outboundStreams != 0 {
+		t.Fatalf("quota denial retained state: leases=%d streams=%d outbound=%d", leaseCount, len(adapter.streams), adapter.outboundStreams)
+	}
+	if usage, _ := adapter.quotas.Snapshot(); usage != (quota.Usage{QueuedBytes: 16 << 10}) {
+		t.Fatalf("quota denied usage = %+v", usage)
 	}
 	if !occupied.Release() || !occupied.ResetReleased() {
 		t.Fatal("release occupied quota")
@@ -297,6 +341,8 @@ func TestOutboundStorageReuseClearsDataAndIsolatesStaleStream(t *testing.T) {
 	}
 	stale := firstValue.(*tcpStream)
 	stalePort := stale.local.Port
+	storageOwner := stale.outboundStorage
+	connAddress := stale.conn
 	storage := stale.storage
 	for i := range storage {
 		storage[i] = byte(i | 1)
@@ -305,13 +351,14 @@ func TestOutboundStorageReuseClearsDataAndIsolatesStaleStream(t *testing.T) {
 	if err := stale.Close(); err != nil {
 		t.Fatal(err)
 	}
-	if stale.storage != nil || stale.conn != nil || stale.allocation != nil || !stale.closed {
-		t.Fatalf("closed stale stream retained state: storage=%v conn=%p allocation=%p closed=%v", stale.storage, stale.conn, stale.allocation, stale.closed)
+	if stale.storage != nil || stale.conn != nil || stale.outboundStorage != nil || stale.allocation != nil || !stale.closed {
+		t.Fatalf("closed stale stream retained state: storage=%v owner=%p conn=%p allocation=%p closed=%v", stale.storage, stale.outboundStorage, stale.conn, stale.allocation, stale.closed)
 	}
-	if len(adapter.freeOutboundStorage) != len(storage) || &adapter.freeOutboundStorage[0] != storageAddress {
-		t.Fatalf("outbound storage was not retained for bounded reuse: bytes=%d", len(adapter.freeOutboundStorage))
+	cached := cachedOutboundBytes(adapter)
+	if adapter.freeOutboundStorage != storageOwner || len(cached) != len(storage) || &cached[0] != storageAddress {
+		t.Fatalf("outbound storage was not retained for bounded reuse: owner=%p want:%p bytes=%d", adapter.freeOutboundStorage, storageOwner, len(cached))
 	}
-	for i, value := range adapter.freeOutboundStorage {
+	for i, value := range cached {
 		if value != 0 {
 			t.Fatalf("recycled storage byte %d = %d", i, value)
 		}
@@ -321,8 +368,8 @@ func TestOutboundStorageReuseClearsDataAndIsolatesStaleStream(t *testing.T) {
 		t.Fatalf("fresh connect = %T, %v, %v", freshValue, progress, err)
 	}
 	fresh := freshValue.(*tcpStream)
-	if fresh == stale || fresh.local.Port == stalePort || &fresh.storage[0] != storageAddress {
-		t.Fatalf("fresh reuse = same wrapper %v, port %d stale %d, storage reused %v", fresh == stale, fresh.local.Port, stalePort, &fresh.storage[0] == storageAddress)
+	if fresh == stale || fresh.conn == connAddress || fresh.local.Port == stalePort || fresh.outboundStorage != storageOwner || &fresh.storage[0] != storageAddress {
+		t.Fatalf("fresh reuse = same wrapper %v, conn reused %v, port %d stale %d, owner reused %v, storage reused %v", fresh == stale, fresh.conn == connAddress, fresh.local.Port, stalePort, fresh.outboundStorage == storageOwner, &fresh.storage[0] == storageAddress)
 	}
 	if progress, err := stale.TryFinishConnect(); progress != 0 || failureOf(t, err) != nscore.FailureClosed {
 		t.Fatalf("stale finish connect = %v, %v", progress, err)
@@ -373,8 +420,9 @@ func TestOutboundStorageReuseRetainsAtMostOneIdleBuffer(t *testing.T) {
 			t.Fatalf("close %d: %v", i, err)
 		}
 	}
-	if len(adapter.freeOutboundStorage) != 512 || &adapter.freeOutboundStorage[0] != wantCached {
-		t.Fatalf("idle outbound cache = bytes:%d address:%p want:%p", len(adapter.freeOutboundStorage), firstByte(adapter.freeOutboundStorage), wantCached)
+	cached := cachedOutboundBytes(adapter)
+	if len(cached) != 512 || &cached[0] != wantCached {
+		t.Fatalf("idle outbound cache = bytes:%d address:%p want:%p", len(cached), firstByte(cached), wantCached)
 	}
 	for i, storage := range storages {
 		for j, value := range storage {
@@ -393,7 +441,7 @@ func TestOutboundStorageReuseRetainsAtMostOneIdleBuffer(t *testing.T) {
 		t.Fatal(err)
 	}
 	if adapter.freeOutboundStorage != nil {
-		t.Fatalf("namespace close retained %d outbound bytes", len(adapter.freeOutboundStorage))
+		t.Fatalf("namespace close retained %d outbound bytes", len(cachedOutboundBytes(adapter)))
 	}
 }
 
@@ -453,10 +501,10 @@ func TestIdleReuseDropsOversizedTCPStorageAndListenerMetadata(t *testing.T) {
 	for i := range outboundStorage {
 		outboundStorage[i] = 0xff
 	}
-	stream := &tcpStream{owner: adapter, storage: outboundStorage}
+	stream := &tcpStream{owner: adapter, storage: outboundStorage, outboundStorage: &tcpOutboundStorage{bytes: outboundStorage}}
 	adapter.recycleOutboundStreamLocked(stream)
-	if adapter.freeOutboundStorage != nil || stream.storage != nil {
-		t.Fatalf("oversized outbound storage retained: cache=%d stream=%d", len(adapter.freeOutboundStorage), len(stream.storage))
+	if adapter.freeOutboundStorage != nil || stream.storage != nil || stream.outboundStorage != nil {
+		t.Fatalf("oversized outbound storage retained: cache=%d stream=%d owner=%p", len(cachedOutboundBytes(adapter)), len(stream.storage), stream.outboundStorage)
 	}
 	for i, value := range outboundStorage {
 		if value != 0 {
@@ -494,6 +542,13 @@ func TestIdleReuseDropsOversizedTCPStorageAndListenerMetadata(t *testing.T) {
 	if adapter.freeListenerPool.slots != nil || adapter.freeListenerPool.storage != nil || metadataListener.pool.slots != nil || metadataListener.pool.storage != nil {
 		t.Fatal("oversized listener metadata retained")
 	}
+}
+
+func cachedOutboundBytes(adapter *Adapter) []byte {
+	if adapter == nil || adapter.freeOutboundStorage == nil {
+		return nil
+	}
+	return adapter.freeOutboundStorage.bytes
 }
 
 func firstByte(storage []byte) *byte {
@@ -1396,6 +1451,7 @@ func TestConnectResetBeforeEstablishment(t *testing.T) {
 		t.Fatalf("connect = %T, %v, %v", resource, progress, err)
 	}
 	stream := resource.(*tcpStream)
+	storageOwner := stream.outboundStorage
 	if usage, closed := adapter.quotas.Snapshot(); closed || usage != (quota.Usage{Resources: 1, TCPResources: 1, QueuedBytes: 512}) {
 		t.Fatalf("outbound quota = %+v, closed=%v", usage, closed)
 	}
@@ -1411,9 +1467,9 @@ func TestConnectResetBeforeEstablishment(t *testing.T) {
 	if err := stream.Close(); err != nil {
 		t.Fatal(err)
 	}
-	streamRetainedReset := stream.retained.ResetReleased()
-	if stream.conn != nil || streamRetainedReset {
-		t.Fatalf("closed outbound stream retained graph state: conn=%p retained_reset=%v", stream.conn, streamRetainedReset)
+	streamRetainedReset := storageOwner.retained.ResetReleased()
+	if stream.conn != nil || stream.outboundStorage != nil || streamRetainedReset {
+		t.Fatalf("closed outbound stream retained graph state: conn=%p owner=%p retained_reset=%v", stream.conn, stream.outboundStorage, streamRetainedReset)
 	}
 	if usage, _ := adapter.quotas.Snapshot(); usage != (quota.Usage{}) {
 		t.Fatalf("outbound close quota = %+v", usage)
