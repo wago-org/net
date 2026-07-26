@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/binary"
 	"errors"
+	"fmt"
 	"net/netip"
 	"reflect"
 	"runtime"
@@ -331,6 +332,77 @@ func TestDNSTruncatedUDPUsesBoundedPrivateTCPFallback(t *testing.T) {
 	}
 	if usage, _ := serverAccount.Snapshot(); usage != (quota.Usage{}) {
 		t.Fatalf("server fallback quota = %+v", usage)
+	}
+}
+
+func TestDNSQueryReusesClearedInlineRecordStorage(t *testing.T) {
+	config := dnsTestConfig(t, 60)
+	config.DNS.MaxQueries = 2
+	config.DNS.MaxRecords = inlineDNSRecordCapacity
+	ns := newTestNamespace(t, config)
+	request := namespace.DNSRequest{Name: "example.com", Types: namespace.DNSRecordsA}
+	value, _, err := ns.TryResolve(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	first := value.(*dnsQuery)
+	storage := first.recordStorage
+	first.records = first.recordStorage[:1]
+	first.records[0] = namespace.DNSRecord{Name: request.Name, Type: namespace.DNSRecordA, TTLSeconds: 60, Address: netip.MustParseAddr("192.0.2.60")}
+	if err := first.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if first.recordStorage != nil || ns.adapter.freeRecordInline == nil {
+		t.Fatalf("closed inline storage = query:%p free:%p", first.recordStorage, ns.adapter.freeRecordInline)
+	}
+	if ns.adapter.freeRecordInline != storage || ns.adapter.freeRecordInline[0] != (namespace.DNSRecord{}) {
+		t.Fatalf("cleared inline storage = stored:%p want:%p record:%+v", ns.adapter.freeRecordInline, storage, ns.adapter.freeRecordInline[0])
+	}
+	value, _, err = ns.TryResolve(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	second := value.(*dnsQuery)
+	if second.recordStorage != storage || ns.adapter.freeRecordInline != nil {
+		t.Fatalf("reused inline storage = got:%p want:%p free:%p", second.recordStorage, storage, ns.adapter.freeRecordInline)
+	}
+	if err := second.Close(); err != nil {
+		t.Fatal(err)
+	}
+	ns.core.Lock()
+	ns.adapter.CloseLocked()
+	ns.core.Unlock()
+	if ns.adapter.freeRecordInline != nil {
+		t.Fatalf("namespace close retained inline record storage %p", ns.adapter.freeRecordInline)
+	}
+}
+
+func TestDNSRecordOverflowCacheHasOneFiniteCeiling(t *testing.T) {
+	for index, maxRecords := range []uint16{maximumCachedDNSRecordOverflow, maximumCachedDNSRecordOverflow + 1} {
+		t.Run(fmt.Sprintf("records=%d", maxRecords), func(t *testing.T) {
+			config := dnsTestConfig(t, byte(90+index))
+			config.DNS.MaxQueries = 2
+			config.DNS.MaxRecords = maxRecords
+			config.Quotas = quota.NewAccount(quota.Limits{Resources: 4, DNSResources: 4, QueuedBytes: 1 << 20, DNSWork: 4})
+			ns := newTestNamespace(t, config)
+			request := namespace.DNSRequest{Name: "example.com", Types: namespace.DNSRecordsA}
+			for range 2 {
+				value, _, err := ns.TryResolve(request)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if err := value.Close(); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if maxRecords <= maximumCachedDNSRecordOverflow {
+				if cap(ns.adapter.freeRecordOverflow) != int(maxRecords) {
+					t.Fatalf("cached overflow capacity = %d, want %d", cap(ns.adapter.freeRecordOverflow), maxRecords)
+				}
+			} else if ns.adapter.freeRecordOverflow != nil {
+				t.Fatalf("oversized overflow capacity %d was retained", cap(ns.adapter.freeRecordOverflow))
+			}
+		})
 	}
 }
 
