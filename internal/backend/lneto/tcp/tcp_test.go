@@ -3,6 +3,7 @@ package tcp
 import (
 	"bytes"
 	"encoding/binary"
+	"errors"
 	"net/netip"
 	"sync"
 	"testing"
@@ -98,6 +99,33 @@ func TestValidConfigRejectsOverflowAndKeepsAdapterCreationBounded(t *testing.T) 
 	}
 	if len(adapter.streams) != 0 {
 		t.Fatalf("new adapter eagerly populated streams = %d", len(adapter.streams))
+	}
+}
+
+func TestTryListenAuthorizedUsesProtocolSpecificAuthority(t *testing.T) {
+	_, adapter := newTestAdapter(t, 2, 1, 0)
+	endpoint := nscore.Endpoint{Address: netip.MustParseAddr("192.0.2.2"), Port: 4202}
+	called := false
+	denied := nscore.Fail(nscore.FailureAccessDenied, ErrPolicyDenied)
+	resourceValue, progress, err := adapter.TryListenAuthorized(endpoint, func(compiled *policy.Policy, got nscore.Endpoint) error {
+		called = true
+		if compiled == nil || got != endpoint {
+			t.Fatalf("authorizer input = %p, %+v", compiled, got)
+		}
+		return denied
+	})
+	if !called || resourceValue != nil || progress != 0 || !errors.Is(err, denied) {
+		t.Fatalf("denied private listen = called=%v resource=%T progress=%v err=%v", called, resourceValue, progress, err)
+	}
+	resourceValue, progress, err = adapter.TryListenAuthorized(endpoint, func(*policy.Policy, nscore.Endpoint) error { return nil })
+	if err != nil || progress != nscore.ProgressDone || resourceValue == nil {
+		t.Fatalf("authorized private listen = %T, %v, %v", resourceValue, progress, err)
+	}
+	if err := resourceValue.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if value, progress, err := adapter.TryListenAuthorized(endpoint, nil); value != nil || progress != 0 || err == nil {
+		t.Fatalf("nil-authorizer listen = %T, %v, %v", value, progress, err)
 	}
 }
 

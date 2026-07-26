@@ -1,6 +1,7 @@
 package gotls
 
 import (
+	"bytes"
 	"crypto/rand"
 	"crypto/rsa"
 	cryptotls "crypto/tls"
@@ -40,7 +41,15 @@ func TestClientHandshakeVerificationALPNAndPlaintext(t *testing.T) {
 		RequiredALPN: "h2", MaxCertificateChainBytes: 64 << 10, MaxPeerCertificates: 4,
 		AllowedNames: map[string]tlsns.IdentityType{"api.example.com": tlsns.IdentityDNS},
 	}
-	transport := &memoryTransport{peer: serverBridge, readLimit: 13, writeLimit: 11}
+	transport := &memoryTransport{
+		peer: serverBridge, readLimit: 13, writeLimit: 11,
+		finishErrorAfterReady: nscore.Fail(nscore.FailureConnectionRefused, net.ErrClosed),
+	}
+	t.Cleanup(func() {
+		if calls := transport.finishCalls.Load(); calls != 1 {
+			t.Errorf("transport finish-connect calls = %d, want 1", calls)
+		}
+	})
 	client, err := NewClient(transport, profile, "api.example.com", tlsns.IdentityDNS, testLimits())
 	if err != nil {
 		t.Fatal(err)
@@ -63,12 +72,35 @@ func TestClientHandshakeVerificationALPNAndPlaintext(t *testing.T) {
 			t.Fatalf("handshake did not complete: ready=%v terminal=%v verified=%v client-out=%d server-out=%d", client.Readiness(), terminal, verified, client.bridge.cipherPending(), serverBridge.cipherPending())
 		}
 	}
-	if err := <-serverDone; err != nil {
-		t.Fatal(err)
+	serverDeadline := time.NewTimer(2 * time.Second)
+	defer serverDeadline.Stop()
+	for {
+		if _, _, err := client.TryService(nscore.ServiceBudget{Packets: 8, Bytes: 64 << 10, Operations: 8}); err != nil {
+			t.Fatal(err)
+		}
+		select {
+		case err := <-serverDone:
+			if err != nil {
+				t.Fatal(err)
+			}
+			goto serverHandshakeComplete
+		case <-serverDeadline.C:
+			t.Fatalf("server handshake did not receive final client flight: client-out=%d server-out=%d", client.bridge.cipherPending(), serverBridge.cipherPending())
+		default:
+			runtime.Gosched()
+		}
 	}
+
+serverHandshakeComplete:
 	info, ok := client.ConnectionInfo()
 	if !ok || info.NegotiatedALPN != "h2" || info.TLSVersion != cryptotls.VersionTLS13 || info.PeerLeafSPKI256 == ([32]byte{}) {
 		t.Fatalf("connection info = %+v, %v", info, ok)
+	}
+	binding, ok := client.ChannelBinding()
+	peerState := server.ConnectionState()
+	peerBinding, exportErr := peerState.ExportKeyingMaterial("EXPORTER-Channel-Binding", nil, tlsns.ChannelBindingBytes)
+	if !ok || exportErr != nil || !bytes.Equal(binding[:], peerBinding) {
+		t.Fatalf("channel binding = %x, %v; peer=%x, %v", binding, ok, peerBinding, exportErr)
 	}
 
 	serverRead := make(chan string, 1)
@@ -94,6 +126,156 @@ func TestClientHandshakeVerificationALPNAndPlaintext(t *testing.T) {
 		}
 	}
 	t.Fatal("plaintext did not reach peer")
+}
+
+func TestServerHandshakeALPNAndPlaintext(t *testing.T) {
+	certificate, roots := testCertificate(t, "server.example.com")
+	clientBridge := newBridgeConn(64<<10, 64<<10, 1<<20)
+	client := cryptotls.Client(clientBridge, &cryptotls.Config{
+		RootCAs: roots, ServerName: "server.example.com", Time: func() time.Time { return time.Unix(1_800_000_000, 0) }, MinVersion: cryptotls.VersionTLS13,
+		MaxVersion: cryptotls.VersionTLS13, NextProtos: []string{"h2"},
+	})
+	clientDone := make(chan error, 1)
+	go func() {
+		err := client.Handshake()
+		clientBridge.finishHandshake()
+		clientDone <- err
+	}()
+
+	local := nscore.Endpoint{Address: netip.MustParseAddr("192.0.2.2"), Port: 443}
+	remote := nscore.Endpoint{Address: netip.MustParseAddr("192.0.2.1"), Port: 49152}
+	profile := ServerProfile{
+		ID: 9,
+		Config: &cryptotls.Config{
+			Certificates: []cryptotls.Certificate{certificate}, MinVersion: cryptotls.VersionTLS13,
+			MaxVersion: cryptotls.VersionTLS13, NextProtos: []string{"h2"},
+		},
+		RequiredALPN: "h2", MaxCertificateChainBytes: 64 << 10, MaxPeerCertificates: 4,
+	}
+	transport := &memoryTransport{
+		peer: clientBridge, local: local, remote: remote, readLimit: 13, writeLimit: 11,
+		finishErrorAfterReady: nscore.Fail(nscore.FailureConnectionRefused, net.ErrClosed),
+	}
+	t.Cleanup(func() {
+		if calls := transport.finishCalls.Load(); calls != 1 {
+			t.Errorf("transport finish-connect calls = %d, want 1", calls)
+		}
+	})
+	server, err := NewServer(transport, profile, testLimits())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer server.Close()
+
+	for attempt := 0; attempt < 1000000; attempt++ {
+		progress, err := server.TryFinishConnect()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if progress == nscore.ProgressDone {
+			break
+		}
+		runtime.Gosched()
+		if attempt == 999999 {
+			t.Fatal("server handshake did not complete")
+		}
+	}
+	if err := <-clientDone; err != nil {
+		t.Fatal(err)
+	}
+	info, ok := server.ConnectionInfo()
+	if !ok || info.Role != tlsns.RoleServer || info.PeerAuthenticated || info.NegotiatedALPN != "h2" || info.LocalEndpoint != local || info.RemoteEndpoint != remote {
+		t.Fatalf("server connection info = %+v, %v", info, ok)
+	}
+	binding, ok := server.ChannelBinding()
+	peerState := client.ConnectionState()
+	peerBinding, exportErr := peerState.ExportKeyingMaterial("EXPORTER-Channel-Binding", nil, tlsns.ChannelBindingBytes)
+	if !ok || exportErr != nil || !bytes.Equal(binding[:], peerBinding) {
+		t.Fatalf("server channel binding = %x, %v; peer=%x, %v", binding, ok, peerBinding, exportErr)
+	}
+
+	clientWrite := make(chan error, 1)
+	go func() {
+		_, err := client.Write([]byte("hello"))
+		clientWrite <- err
+	}()
+	buffer := make([]byte, 5)
+	for attempt := 0; attempt < 100000; attempt++ {
+		_, _, _ = server.TryService(nscore.ServiceBudget{Packets: 8, Bytes: 64 << 10, Operations: 8})
+		result, err := server.TryRead(buffer)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if result.State == nscore.IOReady && result.Bytes != 0 {
+			if string(buffer[:result.Bytes]) != "hello" {
+				t.Fatalf("server plaintext = %q", buffer[:result.Bytes])
+			}
+			if err := <-clientWrite; err != nil {
+				t.Fatal(err)
+			}
+			return
+		}
+		runtime.Gosched()
+	}
+	t.Fatal("client plaintext did not reach bounded TLS server")
+}
+
+func TestServerStaticSNISelectsMatchingImmutableCertificate(t *testing.T) {
+	alpha, _ := testCertificate(t, "alpha.example.com")
+	beta, _ := testCertificate(t, "beta.example.com")
+	roots := x509.NewCertPool()
+	for _, certificate := range []cryptotls.Certificate{alpha, beta} {
+		parsed, err := x509.ParseCertificate(certificate.Certificate[0])
+		if err != nil {
+			t.Fatal(err)
+		}
+		roots.AddCert(parsed)
+	}
+	clientBridge := newBridgeConn(64<<10, 64<<10, 1<<20)
+	client := cryptotls.Client(clientBridge, &cryptotls.Config{
+		RootCAs: roots, ServerName: "beta.example.com", Time: func() time.Time { return time.Unix(1_800_000_000, 0) },
+		MinVersion: cryptotls.VersionTLS13, MaxVersion: cryptotls.VersionTLS13,
+	})
+	clientDone := make(chan error, 1)
+	go func() {
+		err := client.Handshake()
+		clientBridge.finishHandshake()
+		clientDone <- err
+	}()
+	server, err := NewServer(&memoryTransport{peer: clientBridge}, ServerProfile{
+		ID: 1,
+		Config: &cryptotls.Config{
+			Certificates: []cryptotls.Certificate{alpha, beta},
+			MinVersion:   cryptotls.VersionTLS13,
+			MaxVersion:   cryptotls.VersionTLS13,
+		},
+		MaxCertificateChainBytes: 64 << 10,
+		MaxPeerCertificates:      4,
+	}, testLimits())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer server.Close()
+	for attempt := 0; attempt < 1000000; attempt++ {
+		progress, err := server.TryFinishConnect()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if progress == nscore.ProgressDone {
+			break
+		}
+		runtime.Gosched()
+		if attempt == 999999 {
+			t.Fatal("SNI handshake did not complete")
+		}
+	}
+	if err := <-clientDone; err != nil {
+		t.Fatal(err)
+	}
+	state := client.ConnectionState()
+	if len(state.PeerCertificates) == 0 || !bytes.Equal(state.PeerCertificates[0].Raw, beta.Certificate[0]) {
+		t.Fatalf("SNI selected peer certificates = %d", len(state.PeerCertificates))
+	}
 }
 
 func TestTransportEOFConsumesExactlyOneServiceOperation(t *testing.T) {
@@ -159,23 +341,35 @@ func testLimits() Limits {
 }
 
 type memoryTransport struct {
-	peer       *bridgeConn
-	closed     atomic.Bool
-	eof        atomic.Bool
-	readLimit  int
-	writeLimit int
+	peer                  *bridgeConn
+	closed                atomic.Bool
+	eof                   atomic.Bool
+	finishCalls           atomic.Uint32
+	finishErrorAfterReady error
+	readLimit             int
+	writeLimit            int
+	local, remote         nscore.Endpoint
 }
 
 func (transport *memoryTransport) LocalEndpoint() nscore.Endpoint {
+	if transport.local.Valid() {
+		return transport.local
+	}
 	return nscore.Endpoint{Address: netip.MustParseAddr("192.0.2.1"), Port: 49152}
 }
 func (transport *memoryTransport) RemoteEndpoint() nscore.Endpoint {
+	if transport.remote.Valid() {
+		return transport.remote
+	}
 	return nscore.Endpoint{Address: netip.MustParseAddr("192.0.2.2"), Port: 443}
 }
 func (transport *memoryTransport) Readiness() nscore.Readiness {
 	return nscore.ReadyConnected | nscore.ReadyReadable | nscore.ReadyWritable
 }
 func (transport *memoryTransport) TryFinishConnect() (nscore.Progress, error) {
+	if transport.finishCalls.Add(1) > 1 && transport.finishErrorAfterReady != nil {
+		return 0, transport.finishErrorAfterReady
+	}
 	return nscore.ProgressDone, nil
 }
 func (transport *memoryTransport) TryRead(dst []byte) (nscore.IOResult, error) {

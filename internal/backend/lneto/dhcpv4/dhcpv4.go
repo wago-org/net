@@ -7,6 +7,7 @@ import (
 	"errors"
 	"net"
 	"net/netip"
+	"time"
 
 	lneto "github.com/soypat/lneto"
 	lnetodhcp "github.com/soypat/lneto/dhcp/dhcpv4"
@@ -72,9 +73,10 @@ type Adapter struct {
 
 	server           lnetodhcp.Server
 	serverEnabled    bool
-	serverClients    []serverClientKey
+	serverClients    []serverClient
 	serverPending    uint16
 	clientEgressTurn bool
+	now              func() time.Time
 }
 
 type leaseState uint8
@@ -112,7 +114,7 @@ func New(common *lnetocore.Namespace, config Config) (*Adapter, error) {
 		common.Unlock()
 		return nil, nscore.Fail(nscore.FailureInvalidArgument, lneto.ErrInvalidConfig)
 	}
-	a := &Adapter{core: common, config: config, hardwareAddress: common.HardwareAddressLocked(), policy: common.PolicyLocked(), quotas: common.QuotasLocked(), nextXID: uint32(common.RandSeedLocked()) | 1}
+	a := &Adapter{core: common, config: config, hardwareAddress: common.HardwareAddressLocked(), policy: common.PolicyLocked(), quotas: common.QuotasLocked(), nextXID: uint32(common.RandSeedLocked()) | 1, now: time.Now}
 	if config == (Config{}) {
 		common.Unlock()
 		return a, nil
@@ -155,7 +157,7 @@ func New(common *lnetocore.Namespace, config Config) (*Adapter, error) {
 			return nil, lnetocore.MapError(err)
 		}
 		a.serverEnabled = true
-		a.serverClients = make([]serverClientKey, 0, sv.MaxClients)
+		a.serverClients = make([]serverClient, 0, sv.MaxClients)
 	}
 	common.Unlock()
 	if err := common.Install(lnetocore.Participant{IngressOrder: serviceOrder, Ingress: a.ingressLocked, EgressOrder: serviceOrder, HasEgress: a.hasWorkLocked, Egress: a.egressLocked, CloseOrder: closeOrder, Close: a.CloseLocked}); err != nil {
@@ -191,11 +193,11 @@ func validServer(config ServerConfig) bool {
 	}
 	subnet := config.Subnet.Masked()
 	return validIPv4(config.ServerAddr) && usableSubnetHost(config.ServerAddr, subnet) && config.LeaseSeconds > 0 && config.MaxClients > 0 &&
-		validOptionalAdvertisedIPv4(config.Gateway) && usableOptionalSubnetHost(config.Gateway, subnet) &&
-		validOptionalAdvertisedIPv4(config.DNS) && usableOptionalSubnetHost(config.DNS, subnet)
+		validOptionalAdvertisedIPv4(config.Gateway) && (!config.Gateway.IsValid() || usableSubnetHost(config.Gateway, subnet)) &&
+		validOptionalAdvertisedIPv4(config.DNS) && usableOptionalDNSHost(config.DNS, subnet)
 }
 
-func usableOptionalSubnetHost(address netip.Addr, subnet netip.Prefix) bool {
+func usableOptionalDNSHost(address netip.Addr, subnet netip.Prefix) bool {
 	return !address.IsValid() || !subnet.Contains(address) || usableSubnetHost(address, subnet)
 }
 
@@ -797,7 +799,10 @@ func (a *Adapter) acceptServerLocked(payload []byte) {
 	if !identityOK {
 		return
 	}
-	known := keyIndex(a.serverClients, key) >= 0
+	now := a.now()
+	a.expireServerClientsLocked(now)
+	clientIndex := serverClientIndex(a.serverClients, key)
+	known := clientIndex >= 0
 	newClient := message == lnetodhcp.MsgDiscover && !known
 	if newClient && len(a.serverClients) == cap(a.serverClients) {
 		return
@@ -818,20 +823,40 @@ func (a *Adapter) acceptServerLocked(payload []byte) {
 	if err != nil {
 		return
 	}
+	leaseExpiry := now.Add(time.Duration(a.config.Server.LeaseSeconds) * time.Second)
 	if newClient {
-		a.serverClients = append(a.serverClients, key)
+		a.serverClients = append(a.serverClients, serverClient{key: key, expires: leaseExpiry})
+		clientIndex = len(a.serverClients) - 1
 	}
 	switch message {
 	case lnetodhcp.MsgDiscover, lnetodhcp.MsgRequest:
+		a.serverClients[clientIndex].expires = leaseExpiry
 		if a.serverPending < a.config.Server.MaxClients {
 			a.serverPending++
 		}
 	case lnetodhcp.MsgRelease:
-		if index := keyIndex(a.serverClients, key); index >= 0 {
-			copy(a.serverClients[index:], a.serverClients[index+1:])
-			a.serverClients = a.serverClients[:len(a.serverClients)-1]
+		a.removeServerClientLocked(clientIndex)
+	}
+}
+
+func (a *Adapter) expireServerClientsLocked(now time.Time) {
+	for index := len(a.serverClients) - 1; index >= 0; index-- {
+		if !a.serverClients[index].expires.After(now) {
+			a.removeServerClientLocked(index)
 		}
 	}
+}
+
+func (a *Adapter) removeServerClientLocked(index int) {
+	copy(a.serverClients[index:], a.serverClients[index+1:])
+	last := len(a.serverClients) - 1
+	a.serverClients[last] = serverClient{}
+	a.serverClients = a.serverClients[:last]
+}
+
+type serverClient struct {
+	key     serverClientKey
+	expires time.Time
 }
 
 type serverClientKey struct {
@@ -919,9 +944,9 @@ func validUnicastMAC(mac [6]byte) bool {
 	return mac != ([6]byte{}) && mac != broadcastMAC && mac[0]&1 == 0
 }
 
-func keyIndex(keys []serverClientKey, key serverClientKey) int {
-	for i := range keys {
-		if keys[i] == key {
+func serverClientIndex(clients []serverClient, key serverClientKey) int {
+	for i := range clients {
+		if clients[i].key == key {
 			return i
 		}
 	}

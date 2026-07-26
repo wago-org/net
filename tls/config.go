@@ -12,15 +12,20 @@ var ErrInvalidConfig = errors.New("wagonet/tls: invalid configuration")
 const (
 	// MaximumStreams and MaximumConcurrentHandshakes bound worker and handshake
 	// concurrency for one instance.
-	MaximumStreams               = tlslimits.MaxStreams
-	MaximumConcurrentHandshakes  = tlslimits.MaxConcurrentHandshakes
-	MaximumClientProfiles        = tlslimits.MaxProfiles
-	MaximumServerNamesPerProfile = tlslimits.MaxServerNamesPerProfile
-	MaximumPeerCertificates      = tlslimits.MaxPeerCertificates
-	MaximumALPNProtocols         = tlslimits.MaxALPNProtocols
-	MaximumALPNAggregateBytes    = tlslimits.MaxALPNAggregateBytes
-	MaximumTransportPackets      = tlslimits.MaxTransportPackets
-	MaximumServiceAttempts       = tlslimits.MaxServiceAttempts
+	MaximumStreams                 = tlslimits.MaxStreams
+	MaximumListeners               = tlslimits.MaxListeners
+	MaximumAcceptBacklog           = tlslimits.MaxAcceptBacklog
+	MaximumConcurrentHandshakes    = tlslimits.MaxConcurrentHandshakes
+	MaximumClientProfiles          = tlslimits.MaxProfiles
+	MaximumServerNamesPerProfile   = tlslimits.MaxServerNamesPerProfile
+	MaximumPeerCertificates        = tlslimits.MaxPeerCertificates
+	MaximumALPNProtocols           = tlslimits.MaxALPNProtocols
+	MaximumALPNAggregateBytes      = tlslimits.MaxALPNAggregateBytes
+	MaximumTransportPackets        = tlslimits.MaxTransportPackets
+	MaximumClientSessionEntries    = tlslimits.MaxClientSessionEntries
+	MaximumClientSessionBytes      = tlslimits.MaxClientSessionBytes
+	MaximumServerSessionTicketKeys = tlslimits.MaxServerSessionTicketKeys
+	MaximumServiceAttempts         = tlslimits.MaxServiceAttempts
 
 	// Maximum*Bytes are hard registration-time ceilings. In addition, all fixed
 	// per-stream storage multiplied by MaxStreams must fit
@@ -42,6 +47,8 @@ const (
 // sentinel.
 type Config struct {
 	MaxStreams                     uint16
+	MaxListeners                   uint16
+	AcceptBacklog                  uint16
 	MaxConcurrentHandshakes        uint16
 	PlaintextReceiveBytes          int
 	PlaintextTransmitBytes         int
@@ -60,11 +67,14 @@ type Config struct {
 	MaxRecordsPerService           uint16
 }
 
-// DefaultConfig returns conservative finite client-only TLS storage. The
-// underlying private TCP transport is configured separately by registration.
+// DefaultConfig returns conservative finite TLS client/server storage. Listener
+// authority remains disabled until separately granted; the underlying private
+// TCP transport is configured by registration.
 func DefaultConfig() Config {
 	return Config{
 		MaxStreams:                     8,
+		MaxListeners:                   4,
+		AcceptBacklog:                  4,
 		MaxConcurrentHandshakes:        4,
 		PlaintextReceiveBytes:          16 << 10,
 		PlaintextTransmitBytes:         16 << 10,
@@ -91,7 +101,7 @@ func validConfig(config Config) bool {
 
 func validateConfig(config Config, maxIntValue uint64) (tlslimits.Plan, bool) {
 	plan, ok := tlslimits.Validate(tlslimits.Config{
-		MaxStreams: config.MaxStreams, MaxConcurrentHandshakes: config.MaxConcurrentHandshakes,
+		MaxStreams: config.MaxStreams, MaxListeners: config.MaxListeners, AcceptBacklog: config.AcceptBacklog, MaxConcurrentHandshakes: config.MaxConcurrentHandshakes,
 		PlaintextReceiveBytes: config.PlaintextReceiveBytes, PlaintextTransmitBytes: config.PlaintextTransmitBytes,
 		CiphertextReceiveBytes: config.CiphertextReceiveBytes, CiphertextTransmitBytes: config.CiphertextTransmitBytes,
 		TransportReceiveBytes: config.TransportReceiveBytes, TransportTransmitBytes: config.TransportTransmitBytes,

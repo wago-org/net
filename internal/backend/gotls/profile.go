@@ -34,11 +34,41 @@ type Profile struct {
 	MaxCertificateChainBytes int
 	MaxPeerCertificates      uint16
 	AllowedNames             map[string]tlsns.IdentityType
+	MaxClientSessionEntries  uint16
+	MaxClientSessionBytes    int
+}
+
+// ServerProfile is an internal immutable crypto/tls server profile. It owns
+// host-selected certificate material, ALPN policy, and optional verified client
+// authentication policy; guests select only its numeric ID.
+type ServerProfile struct {
+	ID                       uint32
+	Config                   *cryptotls.Config
+	RequiredALPN             string
+	MaxCertificateChainBytes int
+	MaxPeerCertificates      uint16
 }
 
 func (profile Profile) Clone() (Profile, error) {
-	if profile.ID == 0 || profile.Config == nil || profile.MaxCertificateChainBytes <= 0 || profile.MaxPeerCertificates == 0 {
+	return profile.clone(false)
+}
+
+// Instantiate creates one adapter-owned profile instance. Resumption state is
+// shared by streams using this profile inside the adapter, but never crosses
+// adapter or Wago instance ownership boundaries.
+func (profile Profile) Instantiate() (Profile, error) {
+	return profile.clone(true)
+}
+
+func (profile Profile) clone(instantiate bool) (Profile, error) {
+	if profile.ID == 0 || profile.Config == nil || profile.MaxCertificateChainBytes <= 0 || profile.MaxPeerCertificates == 0 ||
+		(profile.MaxClientSessionEntries == 0) != (profile.MaxClientSessionBytes == 0) {
 		return Profile{}, ErrInvalidConfig
+	}
+	if profile.Config.ClientSessionCache != nil {
+		if _, ok := profile.Config.ClientSessionCache.(*boundedClientSessionCache); !ok {
+			return Profile{}, ErrInvalidConfig
+		}
 	}
 	cloned := profile
 	cloned.Config = profile.Config.Clone()
@@ -56,7 +86,72 @@ func (profile Profile) Clone() (Profile, error) {
 	if profile.Config.RootCAs != nil {
 		cloned.Config.RootCAs = profile.Config.RootCAs.Clone()
 	}
+	if profile.MaxClientSessionEntries != 0 {
+		if instantiate {
+			cache, err := newBoundedClientSessionCache(profile.MaxClientSessionEntries, profile.MaxClientSessionBytes)
+			if err != nil {
+				return Profile{}, err
+			}
+			cloned.Config.ClientSessionCache = cache
+		} else if cloned.Config.ClientSessionCache == nil {
+			return Profile{}, ErrInvalidConfig
+		}
+	} else if cloned.Config.ClientSessionCache != nil {
+		return Profile{}, ErrInvalidConfig
+	}
 	return cloned, nil
+}
+
+// ClearSessionCache removes and zeroes adapter-owned resumable state during
+// deterministic instance teardown.
+func (profile Profile) ClearSessionCache() {
+	if profile.Config == nil || profile.Config.ClientSessionCache == nil {
+		return
+	}
+	if cache, ok := profile.Config.ClientSessionCache.(*boundedClientSessionCache); ok {
+		cache.clear()
+	}
+}
+
+// Clone validates and deeply clones one server profile. Dynamic certificate,
+// verification, and session callbacks are rejected by the public profile layer
+// before this internal boundary.
+func (profile ServerProfile) Clone() (ServerProfile, error) {
+	if profile.ID == 0 || profile.Config == nil || len(profile.Config.Certificates) == 0 || profile.MaxCertificateChainBytes <= 0 || profile.MaxPeerCertificates == 0 {
+		return ServerProfile{}, ErrInvalidConfig
+	}
+	if profile.Config.ClientAuth != cryptotls.NoClientCert && profile.Config.ClientAuth != cryptotls.RequireAndVerifyClientCert {
+		return ServerProfile{}, ErrInvalidConfig
+	}
+	if profile.Config.ClientAuth == cryptotls.RequireAndVerifyClientCert && profile.Config.ClientCAs == nil {
+		return ServerProfile{}, ErrInvalidConfig
+	}
+	cloned := profile
+	cloned.Config = profile.Config.Clone()
+	cloned.Config.NextProtos = append([]string(nil), profile.Config.NextProtos...)
+	cloned.Config.Certificates = cloneTLSCertificates(profile.Config.Certificates)
+	if profile.Config.ClientCAs != nil {
+		cloned.Config.ClientCAs = profile.Config.ClientCAs.Clone()
+	}
+	return cloned, nil
+}
+
+func cloneTLSCertificates(input []cryptotls.Certificate) []cryptotls.Certificate {
+	output := make([]cryptotls.Certificate, len(input))
+	for index := range input {
+		output[index] = input[index]
+		output[index].Certificate = make([][]byte, len(input[index].Certificate))
+		for certificateIndex := range input[index].Certificate {
+			output[index].Certificate[certificateIndex] = append([]byte(nil), input[index].Certificate[certificateIndex]...)
+		}
+		output[index].OCSPStaple = append([]byte(nil), input[index].OCSPStaple...)
+		output[index].SupportedSignatureAlgorithms = append([]cryptotls.SignatureScheme(nil), input[index].SupportedSignatureAlgorithms...)
+		output[index].SignedCertificateTimestamps = make([][]byte, len(input[index].SignedCertificateTimestamps))
+		for timestampIndex := range input[index].SignedCertificateTimestamps {
+			output[index].SignedCertificateTimestamps[timestampIndex] = append([]byte(nil), input[index].SignedCertificateTimestamps[timestampIndex]...)
+		}
+	}
+	return output
 }
 
 // AuthorizeServerName normalizes one guest-selected verification identity and

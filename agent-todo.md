@@ -1610,3 +1610,129 @@ No repository-owned workstream or completion criterion from this hardening reque
   topology, so the lifecycle/preview-1 integration must be re-reviewed and
   re-ported. No provenance or review-bundle hashes were produced. Production
   readiness also still requires executed arm64 TLS evidence.
+
+## TLS client/server stream completion — July 20, 2026
+
+- Preserved `connection_info_v1` byte-for-byte: offset 68 is again only the
+  little-endian resumed boolean 0 or 1. Added the separate additive
+  `connection_info_v2` import for resumed, server-role, and peer-authenticated
+  flags; unknown flags remain reserved and invalid.
+- Changed server-profile composition so storing host credentials grants no
+  endpoint authority. `tls.AllowListeners()` is now the explicit ordinary
+  inbound TLS grant, remains separate from raw TCP, and continues to honor
+  applicable raw-TCP inbound deny rules.
+- Server profile construction now eagerly parses every certificate, verifies
+  chain linkage and leaf/signer public-key equality, clones certificate
+  metadata, rejects dynamic SNI/configuration callbacks, and documents that the
+  host retains lifetime/concurrency ownership of each `crypto.Signer`.
+- Added deterministic live two-namespace lneto TLS tests for ordinary server
+  authentication and mTLS, ALPN, role metadata, multi-queue backpressure,
+  bidirectional plaintext, clean two-way `close_notify`, abrupt raw-transport
+  truncation, listener reuse, exact quota/port release, close/accept races, and
+  concurrent namespace/resource teardown.
+- The hosted ordinary-Go failure in Actions run `29757140541`, job
+  `88402308965`, was a real final-flight test deadlock: the client reported
+  verified completion before its final TLS 1.3 flight had been pumped to the
+  standard-library server. The test and client benchmark now explicitly service
+  that bounded flight before waiting for peer completion.
+- Current local evidence: `go test ./...`, shuffled tests, full race/shuffle,
+  vet, source boundaries, checkptr, accepted-diagnostic linux/386, all 123
+  TinyGo-supported packages, all 12 custom CLI bundles, and all 17 TLS signoff
+  profiles passed. TLS signoff now resolves 164 named tests after bounded
+  resumption, channel-binding, client-certificate, frozen-clock,
+  software-signer, static-SNI, and certificate-rotation coverage. Fuzz smoke
+  passes 47
+  targets in 33 packages, including seven TLS-owned targets. Benchmark smoke
+  passes 173 top-level targets; the five-by-200 ms capture expands to 196 result
+  names and includes separate client/server TLS 1.3 handshakes. Four arm64 test
+  binaries cross-compile, while execution remains `skipped-no-runner`.
+- Standard-Go TLS client/server streams and listeners are now implemented and
+  exercised. HTTP, HTTPS, portable TinyGo TLS, strict release adoption, and
+  executed arm64 evidence remain explicitly incomplete. PR #3 must remain a
+  draft and TLS must remain outside aggregate `register`.
+
+## PR #3 TinyGo CI watchdog — July 25, 2026
+
+- Actions run `29883882777`, job `88810323462`, reached GitHub's six-hour job
+  limit while the first supported package (`github.com/wago-org/net`) was still
+  running under TinyGo. The previous hosted TinyGo matrix had completed in about
+  45 minutes, and the same root package completed locally under TinyGo 0.41.1,
+  so the observed run is treated as a wedged package attempt rather than evidence
+  that the supported-package boundary changed.
+- `scripts/tinygo-supported-test.sh` now runs every package verbosely behind a
+  ten-minute watchdog, prints a timed-out attempt, retries a timeout once, and
+  preserves only the final attempt in the canonical per-package log inventory.
+  Non-timeout failures are not retried. The timeout and retry bounds are
+  configurable for focused validation but remain finite and fail closed.
+- Added a regression with a fake TinyGo process that wedges the root package on
+  its first attempt, proving the watchdog retries exactly once and still covers
+  all 123 supported packages.
+- The remaining feature backlog at that point was HTTP/HTTPS APIs, portable
+  TinyGo TLS, executed arm64 evidence, strict release adoption, and the
+  separately documented protocol-expansion exclusions.
+
+## Bounded standard-Go TLS resumption — July 25, 2026
+
+- TinyGo TLS remains explicitly unsupported; no compatibility shim, plaintext
+  wrapper, or alternative cryptographic engine was added.
+- Added opt-in `EnableClientSessionResumption(maxEntries, maxBytes)`. Every
+  backend instance constructs its own cache, so tickets never cross Wago
+  instance ownership. The cache stores serialized standard-library state under
+  exact entry/byte bounds, uses bounded LRU eviction, forces early-data state
+  off, clears retained ticket/state bytes on eviction and teardown, and rejects
+  caller-supplied arbitrary cache implementations.
+- Added opt-in `EnableServerSessionTickets(keys...)` with one to four explicit,
+  unique, nonzero 32-byte keys. The first key issues tickets and the bounded
+  ordered set accepts retained rotation keys; ambient generation and mutable
+  guest key authority remain absent.
+- Resumption cache capacity is conservatively reserved from the exact
+  per-instance queued-byte quota before cache allocation and released exactly
+  once on teardown. Aggregate configured cache capacity remains under the 64 MiB
+  TLS retention ceiling.
+- Added standard-Go TLS 1.3 tests proving a full first handshake, resumed second
+  handshake through `[new, old]` key rotation, resumed third handshake with only
+  the new key, per-instance cache isolation, LRU/byte rejection, and exact quota
+  rollback/release. Existing `connection_info` and `connection_info_v2` already
+  expose the resumed bit without an ABI change.
+- Graceful stream shutdown was already complete: `shutdown_write` drains accepted
+  plaintext and emits `close_notify`, while peer `close_notify` becomes stable
+  EOF. Resource `close` deliberately remains the deterministic abort path and
+  never waits for peer packets.
+- Added the fixed `channel_binding` import for the 32-byte RFC 9266
+  `tls-exporter` binding. The label, context, and length are not guest-selectable;
+  it becomes available only after authenticated completion and preserves the
+  complete output on `AGAIN` or failure. Standard-library peers prove both sides
+  derive identical bytes.
+- STARTTLS/existing-handle transfer, DTLS, QUIC TLS, 0-RTT, arbitrary dynamic
+  callbacks, and live mutation of immutable profiles remain separate authority
+  or transport designs rather than incomplete behavior in the bounded TLS
+  stream module.
+- Current validation passes `go test ./...`, focused TLS race tests, `go vet
+  ./...`, source-boundary checks, shell syntax, diff checks, and all 17 TLS
+  signoff package runs resolving 164 named tests.
+
+## Bounded TLS host-call hardening — July 26, 2026
+
+- Client and server profile construction now rejects caller-supplied
+  `tls.Config.Time` callbacks. Hosts may use `tls.ValidationTime` to install one
+  immutable UTC-normalized validation instant through package-owned code, or
+  omit it to use Go's system clock.
+- Client certificate chains now receive the same eager DER parsing, chain-link
+  signature checks, and leaf/private-key correspondence validation as server
+  certificates before a profile can be registered.
+- Client and server private keys are restricted to standard in-memory RSA,
+  NIST ECDSA, and Ed25519 implementations. Arbitrary `crypto.Signer` wrappers,
+  including HSM/delegated signers without a cancellable `Sign` contract, fail
+  closed before guest traffic can start a TLS worker.
+- This closes the in-process teardown gap where an arbitrary signer or clock
+  callback could block inside `crypto/tls` while stream close waited for its
+  bounded worker set to exit. External signer support remains intentionally
+  unsupported until it can use a killable, finite host operation boundary.
+- Static SNI selection is proven against multiple immutable certificates.
+  Certificate rotation is proven through a drain-close-relisten sequence: old
+  streams complete first, then a listener using the new profile presents a
+  different peer SPKI on the same endpoint. Closing the pinned lneto listener
+  before accepted streams drain remains an explicit abort boundary rather than
+  a zero-downtime handoff claim.
+- Standard Go passes across the complete repository, and all 17 TLS signoff
+  package runs now resolve and pass 164 named test targets.

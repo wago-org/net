@@ -2,8 +2,8 @@
 // suite. The guest ABI is backend-neutral; lneto is the first backend and is
 // not part of the public contract. Complete UDP, TCP, bounded DNS, ICMPv4 echo,
 // explicit-clock NTP, bounded mDNS, DHCPv4, IPv4 link-local, configured IPv6,
-// bounded ICMPv6/NDP, bounded initial DHCPv6 acquisition, and granular outbound
-// TLS client modules are independently capability-gated. Runtime registration requires physical
+// bounded ICMPv6/NDP, bounded initial DHCPv6 acquisition, and granular TLS
+// client/server modules are independently capability-gated. Runtime registration requires physical
 // reinstantiation between class leases so instance-owned network state cannot
 // survive an in-place Wasm memory reset.
 package net
@@ -50,7 +50,7 @@ const (
 	ICMPv6Module = "wago_net_icmpv6"
 	// DHCPv6Module owns the bounded initial DHCPv6 acquisition subset.
 	DHCPv6Module = "wago_net_dhcpv6"
-	// TLSModule owns the outbound verified TLS client surface.
+	// TLSModule owns verified TLS clients and explicitly authorized server listeners.
 	TLSModule = "wago_net_tls"
 
 	// ABIVersion1 encodes ABI version 1.0 as major in the upper 16 bits and minor
@@ -81,7 +81,7 @@ const (
 	CapICMPv6 wago.Capability = "net.icmpv6"
 	// CapDHCPv6 permits the checked bounded initial DHCPv6 acquisition subset.
 	CapDHCPv6 wago.Capability = "net.dhcpv6"
-	// CapTLS permits checked outbound verified TLS client streams.
+	// CapTLS permits checked verified TLS clients and host-profiled server listeners.
 	CapTLS wago.Capability = "net.tls"
 )
 

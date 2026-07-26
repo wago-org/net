@@ -16,6 +16,25 @@ import (
 	tlsns "github.com/wago-org/net/internal/namespace/tls"
 )
 
+func TestServerProfileCloneOwnsSupportedSignatureAlgorithms(t *testing.T) {
+	certificate, _ := testCertificate(t, "server.example.com")
+	certificate.SupportedSignatureAlgorithms = []cryptotls.SignatureScheme{cryptotls.PSSWithSHA256}
+	profile := ServerProfile{
+		ID:                       1,
+		Config:                   &cryptotls.Config{Certificates: []cryptotls.Certificate{certificate}},
+		MaxCertificateChainBytes: 64 << 10,
+		MaxPeerCertificates:      4,
+	}
+	cloned, err := profile.Clone()
+	if err != nil {
+		t.Fatal(err)
+	}
+	profile.Config.Certificates[0].SupportedSignatureAlgorithms[0] = cryptotls.ECDSAWithP256AndSHA256
+	if got := cloned.Config.Certificates[0].SupportedSignatureAlgorithms[0]; got != cryptotls.PSSWithSHA256 {
+		t.Fatalf("cloned signature algorithm = %v, want %v", got, cryptotls.PSSWithSHA256)
+	}
+}
+
 func TestRequiredALPNMissingFailsAuthentication(t *testing.T) {
 	certificate, roots := testCertificate(t, "api.example.com")
 	serverBridge := newBridgeConn(64<<10, 64<<10, 1<<20)

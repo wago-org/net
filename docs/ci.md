@@ -7,11 +7,14 @@ and build caches enabled and has seven bounded jobs:
 - **quality** runs the ordinary suite, one shuffled suite, `go vet`, and the
   backend/source-boundary guard;
 - **tls-standard-go** runs `scripts/tls-signoff.sh`, retaining the exact public
-  composition, security, ABI, dependency, mixed-transport, EOF, quota, and worker
-  lifecycle ordinary/race evidence;
+  composition, client/server security, v1/v2 ABI, live mixed-transport,
+  close-notify/truncation, quota, listener-race, and worker-lifecycle
+  ordinary/race evidence;
 - **tinygo-supported** installs pinned TinyGo 0.41.1 and runs
   `scripts/tinygo-supported-test.sh` across the exact 123-package supported
-  surface while retaining the reviewed five-package TLS exclusion;
+  surface while retaining the reviewed five-package TLS exclusion; each package
+  has a ten-minute watchdog and one timeout-only retry so a wedged TinyGo test
+  cannot consume the six-hour hosted-job limit;
 - **race** runs the complete suite with the race detector and shuffle, with five
   repetitions only for scheduled or manually requested deep checks;
 - **fuzz-smoke** runs all targets discovered by `scripts/fuzz-smoke.sh` on weekly
@@ -24,7 +27,9 @@ and build caches enabled and has seven bounded jobs:
 
 TLS is intentionally absent from TinyGo rather than represented by a stub. The
 TinyGo job uploads its supported and excluded manifests, canonical detail, and
-per-package logs on failure and for scheduled/manual runs. The standard-Go TLS
+per-package verbose logs on failure and for scheduled/manual runs. A timed-out
+attempt is printed before the bounded retry, leaving the final attempt in the
+canonical package log. The standard-Go TLS
 job similarly retains its package/test manifests and logs. Static repository
 tests require both script invocations and the pinned TinyGo version to remain in
 the workflow.
@@ -65,12 +70,13 @@ scripts/ci-checkptr.sh
 
 The script first compiles and initializes every package and test binary with
 `-gcflags=all=-d=checkptr=2`. It then runs every test under the same
-instrumentation except these two allocation-only assertions:
+instrumentation except these three allocation-only assertions:
 
 - `TestInstallNamespaceServicesAvoidsPerProtocolScratchForCommonSelections` in
   the root package;
 - `TestNamespaceCompositionAvoidsPerServiceHeapGrowthForPlannedSuite` in
-  `internal/namespace/core`.
+  `internal/namespace/core`;
+- `TestHostFacadeExactAttachedLookupDoesNotAllocate` in `internal/plugin`.
 
 Checkptr instrumentation intentionally adds allocations, so those tests cannot
 truthfully enforce their ordinary-build exact `testing.AllocsPerRun` budgets in

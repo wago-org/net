@@ -4,6 +4,7 @@ import (
 	cryptotls "crypto/tls"
 	"runtime"
 	"testing"
+	"time"
 
 	nscore "github.com/wago-org/net/internal/namespace/core"
 	tlsns "github.com/wago-org/net/internal/namespace/tls"
@@ -34,10 +35,64 @@ func BenchmarkTLS13Handshake(b *testing.B) {
 			}
 			runtime.Gosched()
 		}
-		if err := <-serverDone; err != nil {
+		for {
+			if _, _, err := client.TryService(nscore.ServiceBudget{Packets: 8, Bytes: 64 << 10, Operations: 8}); err != nil {
+				b.Fatal(err)
+			}
+			select {
+			case err := <-serverDone:
+				if err != nil {
+					b.Fatal(err)
+				}
+				goto serverHandshakeComplete
+			default:
+				runtime.Gosched()
+			}
+		}
+	serverHandshakeComplete:
+		if err := client.Close(); err != nil {
 			b.Fatal(err)
 		}
-		if err := client.Close(); err != nil {
+	}
+}
+
+func BenchmarkTLS13ServerHandshake(b *testing.B) {
+	certificate, roots := testCertificate(b, "server.example.com")
+	profile := ServerProfile{
+		ID: 9,
+		Config: &cryptotls.Config{
+			Certificates: []cryptotls.Certificate{certificate}, MinVersion: cryptotls.VersionTLS13,
+			MaxVersion: cryptotls.VersionTLS13, NextProtos: []string{"h2"}, SessionTicketsDisabled: true,
+		},
+		RequiredALPN: "h2", MaxCertificateChainBytes: 64 << 10, MaxPeerCertificates: 4,
+	}
+	b.ReportAllocs()
+	for b.Loop() {
+		clientBridge := newBridgeConn(64<<10, 64<<10, 1<<20)
+		client := cryptotls.Client(clientBridge, &cryptotls.Config{
+			RootCAs: roots, ServerName: "server.example.com", Time: func() time.Time { return time.Unix(1_800_000_000, 0) }, MinVersion: cryptotls.VersionTLS13,
+			MaxVersion: cryptotls.VersionTLS13, NextProtos: []string{"h2"},
+		})
+		clientDone := make(chan error, 1)
+		go func() { clientDone <- client.Handshake() }()
+		server, err := NewServer(&memoryTransport{peer: clientBridge}, profile, testLimits())
+		if err != nil {
+			b.Fatal(err)
+		}
+		for {
+			progress, err := server.TryFinishConnect()
+			if err != nil {
+				b.Fatal(err)
+			}
+			if progress == nscore.ProgressDone {
+				break
+			}
+			runtime.Gosched()
+		}
+		if err := <-clientDone; err != nil {
+			b.Fatal(err)
+		}
+		if err := server.Close(); err != nil {
 			b.Fatal(err)
 		}
 	}
