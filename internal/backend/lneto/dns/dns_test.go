@@ -335,7 +335,7 @@ func TestDNSTruncatedUDPUsesBoundedPrivateTCPFallback(t *testing.T) {
 	}
 }
 
-func TestDNSQueryReusesClearedInlineRecordStorage(t *testing.T) {
+func TestDNSQueryReusesClearedPacketAndInlineRecordStorage(t *testing.T) {
 	config := dnsTestConfig(t, 60)
 	config.DNS.MaxQueries = 2
 	config.DNS.MaxRecords = inlineDNSRecordCapacity
@@ -346,25 +346,29 @@ func TestDNSQueryReusesClearedInlineRecordStorage(t *testing.T) {
 		t.Fatal(err)
 	}
 	first := value.(*dnsQuery)
-	storage := first.recordStorage
+	packetStorage := first.packetStorage
+	recordStorage := first.recordStorage
 	first.records = first.recordStorage[:1]
 	first.records[0] = namespace.DNSRecord{Name: request.Name, Type: namespace.DNSRecordA, TTLSeconds: 60, Address: netip.MustParseAddr("192.0.2.60")}
 	if err := first.Close(); err != nil {
 		t.Fatal(err)
 	}
-	if first.recordStorage != nil || ns.adapter.freeRecordInline == nil {
-		t.Fatalf("closed inline storage = query:%p free:%p", first.recordStorage, ns.adapter.freeRecordInline)
+	if first.packetStorage != nil || first.recordStorage != nil || ns.adapter.freePacket == nil || ns.adapter.freeRecordInline == nil {
+		t.Fatalf("closed query storage = packet:%p records:%p free-packet:%p free-records:%p", first.packetStorage, first.recordStorage, ns.adapter.freePacket, ns.adapter.freeRecordInline)
 	}
-	if ns.adapter.freeRecordInline != storage || ns.adapter.freeRecordInline[0] != (namespace.DNSRecord{}) {
-		t.Fatalf("cleared inline storage = stored:%p want:%p record:%+v", ns.adapter.freeRecordInline, storage, ns.adapter.freeRecordInline[0])
+	if ns.adapter.freePacket != packetStorage || ns.adapter.freePacket[0] != 0 {
+		t.Fatalf("cleared packet storage = stored:%p want:%p first:%d", ns.adapter.freePacket, packetStorage, ns.adapter.freePacket[0])
+	}
+	if ns.adapter.freeRecordInline != recordStorage || ns.adapter.freeRecordInline[0] != (namespace.DNSRecord{}) {
+		t.Fatalf("cleared inline storage = stored:%p want:%p record:%+v", ns.adapter.freeRecordInline, recordStorage, ns.adapter.freeRecordInline[0])
 	}
 	value, _, err = ns.TryResolve(request)
 	if err != nil {
 		t.Fatal(err)
 	}
 	second := value.(*dnsQuery)
-	if second.recordStorage != storage || ns.adapter.freeRecordInline != nil {
-		t.Fatalf("reused inline storage = got:%p want:%p free:%p", second.recordStorage, storage, ns.adapter.freeRecordInline)
+	if second.packetStorage != packetStorage || second.recordStorage != recordStorage || ns.adapter.freePacket != nil || ns.adapter.freeRecordInline != nil {
+		t.Fatalf("reused query storage = packet:%p want:%p records:%p want:%p free-packet:%p free-records:%p", second.packetStorage, packetStorage, second.recordStorage, recordStorage, ns.adapter.freePacket, ns.adapter.freeRecordInline)
 	}
 	if err := second.Close(); err != nil {
 		t.Fatal(err)
@@ -372,8 +376,8 @@ func TestDNSQueryReusesClearedInlineRecordStorage(t *testing.T) {
 	ns.core.Lock()
 	ns.adapter.CloseLocked()
 	ns.core.Unlock()
-	if ns.adapter.freeRecordInline != nil {
-		t.Fatalf("namespace close retained inline record storage %p", ns.adapter.freeRecordInline)
+	if ns.adapter.freePacket != nil || ns.adapter.freeRecordInline != nil {
+		t.Fatalf("namespace close retained query storage packet=%p records=%p", ns.adapter.freePacket, ns.adapter.freeRecordInline)
 	}
 }
 
