@@ -28,8 +28,8 @@ type Transport interface {
 	TryShutdownWrite() (nscore.Progress, error)
 }
 
-// Stream owns one crypto/tls client, fixed queues, exactly three bounded worker
-// goroutines, and the private transport.
+// Stream owns one crypto/tls client or server connection, fixed queues, exactly
+// three bounded worker goroutines, and the private transport.
 type Stream struct {
 	transport Transport
 	local     nscore.Endpoint
