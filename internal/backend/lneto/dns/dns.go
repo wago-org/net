@@ -27,6 +27,7 @@ const (
 	firstEphemeralDNSPort            uint16 = 53000
 	dnsQueryPacketCapacity                  = lnetodns.SizeHeader + 2*(253+2+4) + 11
 	inlineDNSRecordCapacity                 = 8
+	maximumCachedDNSRecordOverflow          = 256
 	dnsTCPReceiveBytes                      = 4 << 10
 	dnsTCPTransmitBytes                     = 1 << 10
 	dnsTCPTransmitPackets                   = 8
@@ -74,7 +75,8 @@ type Adapter struct {
 	quotas                 *quota.Account
 	tcp                    *tcpbackend.Adapter
 	queries                []*dnsQuery
-	freeRecordOverflow     [][]dnsns.Record
+	freeRecordInline       *[inlineDNSRecordCapacity]dnsns.Record
+	freeRecordOverflow     []dnsns.Record
 	byPort                 map[uint16]*dnsQuery
 	candidates             []dnsns.Record
 	names                  []string
@@ -109,9 +111,6 @@ func New(common *lnetocore.Namespace, config Config) (*Adapter, error) {
 	parserRecords := config.MaxResponseBytes / 11
 	n.candidates = make([]dnsns.Record, parserRecords)
 	n.names = make([]string, 2*parserRecords)
-	if int(config.MaxRecords) > inlineDNSRecordCapacity {
-		n.freeRecordOverflow = make([][]dnsns.Record, 0, config.MaxQueries)
-	}
 	common.Unlock()
 	if tcpFallbackEnabled(config) {
 		privateTCP, err := tcpbackend.New(common, dnsTCPConfig(config))
@@ -175,7 +174,7 @@ type dnsQuery struct {
 	tcpResponseBytes   int
 	tcpServiceAttempts uint16
 	records            []dnsns.Record
-	recordStorage      [inlineDNSRecordCapacity]dnsns.Record
+	recordStorage      *[inlineDNSRecordCapacity]dnsns.Record
 	recordOverflow     []dnsns.Record
 	cursor             int
 	attempts           uint16
@@ -188,15 +187,34 @@ type dnsQuery struct {
 	work      quota.Charge
 }
 
+func (n *Adapter) acquireRecordInlineLocked() *[inlineDNSRecordCapacity]dnsns.Record {
+	if n == nil || n.freeRecordInline == nil {
+		return new([inlineDNSRecordCapacity]dnsns.Record)
+	}
+	records := n.freeRecordInline
+	n.freeRecordInline = nil
+	return records
+}
+
+func (n *Adapter) recycleRecordInlineLocked(records *[inlineDNSRecordCapacity]dnsns.Record) {
+	if n == nil || records == nil {
+		return
+	}
+	clear(records[:])
+	if n.freeRecordInline == nil {
+		n.freeRecordInline = records
+	}
+}
+
 func (n *Adapter) acquireRecordOverflowLocked() []dnsns.Record {
 	if n == nil {
 		return nil
 	}
-	if len(n.freeRecordOverflow) == 0 {
+	if n.freeRecordOverflow == nil {
 		return make([]dnsns.Record, 0, n.config.MaxRecords)
 	}
-	records := n.freeRecordOverflow[len(n.freeRecordOverflow)-1]
-	n.freeRecordOverflow = n.freeRecordOverflow[:len(n.freeRecordOverflow)-1]
+	records := n.freeRecordOverflow
+	n.freeRecordOverflow = nil
 	return records
 }
 
@@ -205,7 +223,9 @@ func (n *Adapter) recycleRecordOverflowLocked(records []dnsns.Record) {
 		return
 	}
 	clear(records)
-	n.freeRecordOverflow = append(n.freeRecordOverflow, records[:0:cap(records)])
+	if n.freeRecordOverflow == nil && cap(records) <= maximumCachedDNSRecordOverflow {
+		n.freeRecordOverflow = records[:0:cap(records)]
+	}
 }
 
 func (n *Adapter) TryResolve(request dnsns.Request) (nscore.Resource, nscore.Progress, error) {
@@ -230,7 +250,8 @@ func (n *Adapter) TryResolve(request dnsns.Request) (nscore.Resource, nscore.Pro
 		return nil, 0, nscore.Fail(nscore.FailureResourceLimit, lneto.ErrExhausted)
 	}
 	query := &dnsQuery{owner: n, request: request, txid: n.nextTxID}
-	if int(n.config.MaxRecords) <= len(query.recordStorage) {
+	if int(n.config.MaxRecords) <= inlineDNSRecordCapacity {
+		query.recordStorage = n.acquireRecordInlineLocked()
 		query.records = query.recordStorage[:0:n.config.MaxRecords]
 	} else {
 		query.recordOverflow = n.acquireRecordOverflowLocked()
@@ -240,6 +261,7 @@ func (n *Adapter) TryResolve(request dnsns.Request) (nscore.Resource, nscore.Pro
 		query.records = query.recordOverflow[:0:n.config.MaxRecords]
 	}
 	if !n.allocatePortLocked(&query.portLease) {
+		n.recycleRecordInlineLocked(query.recordStorage)
 		n.recycleRecordOverflowLocked(query.recordOverflow)
 		return nil, 0, nscore.Fail(nscore.FailureResourceLimit, lneto.ErrExhausted)
 	}
@@ -247,6 +269,7 @@ func (n *Adapter) TryResolve(request dnsns.Request) (nscore.Resource, nscore.Pro
 	packet, err := buildDNSQueryPacketInto(query.packetStorage[:], request, n.nextTxID, n.config.MaxResponseBytes)
 	if err != nil {
 		query.portLease.ReleaseLocked()
+		n.recycleRecordInlineLocked(query.recordStorage)
 		n.recycleRecordOverflowLocked(query.recordOverflow)
 		return nil, 0, lnetocore.MapError(err)
 	}
@@ -254,6 +277,7 @@ func (n *Adapter) TryResolve(request dnsns.Request) (nscore.Resource, nscore.Pro
 	query.state = dnsQueryPending
 	if err := n.quotas.AcquireResourceAndQueuedBytes(&query.retained, quota.ResourceDNS, 1, dnsRetainedBytes(n.config)); err != nil {
 		query.portLease.ReleaseLocked()
+		n.recycleRecordInlineLocked(query.recordStorage)
 		n.recycleRecordOverflowLocked(query.recordOverflow)
 		return nil, 0, lnetocore.MapError(err)
 	}
@@ -265,6 +289,7 @@ func (n *Adapter) TryResolve(request dnsns.Request) (nscore.Resource, nscore.Pro
 		query.retained.Release()
 		query.retained.ResetReleased()
 		query.portLease.ReleaseLocked()
+		n.recycleRecordInlineLocked(query.recordStorage)
 		n.recycleRecordOverflowLocked(query.recordOverflow)
 		return nil, 0, lnetocore.MapError(err)
 	}
@@ -368,15 +393,16 @@ func (q *dnsQuery) closeLocked() error {
 	for i := range q.records {
 		q.records[i] = dnsns.Record{}
 	}
-	clear(q.recordStorage[:])
 	q.records = nil
 	q.cursor = 0
 	q.request = dnsns.Request{}
 	q.failure = nil
 	q.releaseQuotaLocked()
 	if q.owner != nil {
+		q.owner.recycleRecordInlineLocked(q.recordStorage)
 		q.owner.recycleRecordOverflowLocked(q.recordOverflow)
 	}
+	q.recordStorage = nil
 	q.recordOverflow = nil
 	return nil
 }
@@ -463,10 +489,12 @@ func (n *Adapter) CloseLocked() {
 	clear(n.byPort)
 	clear(n.candidates)
 	clear(n.names)
-	for i := range n.freeRecordOverflow {
-		clear(n.freeRecordOverflow[i])
+	if n.freeRecordInline != nil {
+		clear(n.freeRecordInline[:])
 	}
+	clear(n.freeRecordOverflow)
 	n.byPort = nil
+	n.freeRecordInline = nil
 	n.freeRecordOverflow = nil
 	n.queries = nil
 	n.candidates = nil

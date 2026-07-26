@@ -286,7 +286,11 @@ when a correlated truncation starts fallback and is zeroed and dropped at the
 terminal transition rather than being retained until guest close. Namespace
 parser scratch is eagerly bounded only by the UDP response limit; a larger TCP
 answer uses temporary candidate/name scratch capped by both the actual frame and
-its declared answer count. Successful completion, timeout, cancellation, parser
+its declared answer count. Query objects lease one separately pooled eight-record
+inline slot, reducing per-query garbage without making stale handles alias a new
+query. Only one cleared inline slot and at most one overflow slot of 256 records
+may remain cached; larger overflow storage is dropped at close. Successful
+completion, timeout, cancellation, parser
 failure, and other terminal failures retire the active transport before the query
 publishes its terminal result, so late packets cannot mutate committed records.
 Responses must echo the exact requested names/classes/types. Only a unique CNAME
