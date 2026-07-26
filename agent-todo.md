@@ -1638,9 +1638,10 @@ No repository-owned workstream or completion criterion from this hardening reque
 - Current local evidence: `go test ./...`, shuffled tests, full race/shuffle,
   vet, source boundaries, checkptr, accepted-diagnostic linux/386, all 123
   TinyGo-supported packages, all 12 custom CLI bundles, and all 17 TLS signoff
-  profiles passed. TLS signoff now resolves 160 named tests after bounded
-  resumption, channel-binding, client-certificate, frozen-clock, and
-  software-signer coverage. Fuzz smoke passes 47
+  profiles passed. TLS signoff now resolves 164 named tests after bounded
+  resumption, channel-binding, client-certificate, frozen-clock,
+  software-signer, static-SNI, and certificate-rotation coverage. Fuzz smoke
+  passes 47
   targets in 33 packages, including seven TLS-owned targets. Benchmark smoke
   passes 173 top-level targets; the five-by-200 ms capture expands to 196 result
   names and includes separate client/server TLS 1.3 handshakes. Four arm64 test
@@ -1708,7 +1709,7 @@ No repository-owned workstream or completion criterion from this hardening reque
   stream module.
 - Current validation passes `go test ./...`, focused TLS race tests, `go vet
   ./...`, source-boundary checks, shell syntax, diff checks, and all 17 TLS
-  signoff package runs resolving 160 named tests.
+  signoff package runs resolving 164 named tests.
 
 ## Bounded TLS host-call hardening — July 26, 2026
 
@@ -1727,5 +1728,11 @@ No repository-owned workstream or completion criterion from this hardening reque
   callback could block inside `crypto/tls` while stream close waited for its
   bounded worker set to exit. External signer support remains intentionally
   unsupported until it can use a killable, finite host operation boundary.
+- Static SNI selection is proven against multiple immutable certificates.
+  Certificate rotation is proven through a drain-close-relisten sequence: old
+  streams complete first, then a listener using the new profile presents a
+  different peer SPKI on the same endpoint. Closing the pinned lneto listener
+  before accepted streams drain remains an explicit abort boundary rather than
+  a zero-downtime handoff claim.
 - Standard Go passes across the complete repository, and all 17 TLS signoff
-  package runs now resolve and pass 160 named test targets.
+  package runs now resolve and pass 164 named test targets.

@@ -203,6 +203,64 @@ func TestServerHandshakeALPNAndPlaintext(t *testing.T) {
 	t.Fatal("client plaintext did not reach bounded TLS server")
 }
 
+func TestServerStaticSNISelectsMatchingImmutableCertificate(t *testing.T) {
+	alpha, _ := testCertificate(t, "alpha.example.com")
+	beta, _ := testCertificate(t, "beta.example.com")
+	roots := x509.NewCertPool()
+	for _, certificate := range []cryptotls.Certificate{alpha, beta} {
+		parsed, err := x509.ParseCertificate(certificate.Certificate[0])
+		if err != nil {
+			t.Fatal(err)
+		}
+		roots.AddCert(parsed)
+	}
+	clientBridge := newBridgeConn(64<<10, 64<<10, 1<<20)
+	client := cryptotls.Client(clientBridge, &cryptotls.Config{
+		RootCAs: roots, ServerName: "beta.example.com", Time: func() time.Time { return time.Unix(1_800_000_000, 0) },
+		MinVersion: cryptotls.VersionTLS13, MaxVersion: cryptotls.VersionTLS13,
+	})
+	clientDone := make(chan error, 1)
+	go func() {
+		err := client.Handshake()
+		clientBridge.finishHandshake()
+		clientDone <- err
+	}()
+	server, err := NewServer(&memoryTransport{peer: clientBridge}, ServerProfile{
+		ID: 1,
+		Config: &cryptotls.Config{
+			Certificates: []cryptotls.Certificate{alpha, beta},
+			MinVersion:   cryptotls.VersionTLS13,
+			MaxVersion:   cryptotls.VersionTLS13,
+		},
+		MaxCertificateChainBytes: 64 << 10,
+		MaxPeerCertificates:      4,
+	}, testLimits())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer server.Close()
+	for attempt := 0; attempt < 1000000; attempt++ {
+		progress, err := server.TryFinishConnect()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if progress == nscore.ProgressDone {
+			break
+		}
+		runtime.Gosched()
+		if attempt == 999999 {
+			t.Fatal("SNI handshake did not complete")
+		}
+	}
+	if err := <-clientDone; err != nil {
+		t.Fatal(err)
+	}
+	state := client.ConnectionState()
+	if len(state.PeerCertificates) == 0 || !bytes.Equal(state.PeerCertificates[0].Raw, beta.Certificate[0]) {
+		t.Fatalf("SNI selected peer certificates = %d", len(state.PeerCertificates))
+	}
+}
+
 func TestTransportEOFConsumesExactlyOneServiceOperation(t *testing.T) {
 	peer := newBridgeConn(32, 32, 64)
 	transport := &memoryTransport{peer: peer}

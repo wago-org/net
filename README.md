@@ -136,7 +136,10 @@ RSA, NIST ECDSA, or Ed25519 private keys, and credentials never enter guest
 memory. Arbitrary `crypto.Signer`, HSM, clock, and dynamic certificate/config
 callbacks are rejected so host code cannot indefinitely block TLS worker
 teardown. Static SNI selection is limited to host-supplied immutable
-certificates. `tls.ValidationTime` supplies an optional frozen validation instant
+certificates. Rotation drains accepted streams before replacing the listener
+with a new immutable profile; closing the pinned lneto listener is an abort
+boundary for streams that have not drained, so zero-downtime same-port handoff is
+not claimed. `tls.ValidationTime` supplies an optional frozen validation instant
 without retaining a caller callback; otherwise Go's system clock is used.
 
 TLS intentionally has no `tls/register` zero-configuration extension and no

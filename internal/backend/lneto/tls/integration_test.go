@@ -73,6 +73,46 @@ func TestLiveLnetoTLSClientServerHandshakeDataShutdownAndReuse(t *testing.T) {
 	}
 }
 
+func TestLiveLnetoTLSListenerDrainAndReplacementRotatesCertificate(t *testing.T) {
+	pair := newLiveTLSPair(t, false)
+	firstValue, progress, err := pair.server.TryListenTLS(pair.endpoint, 2)
+	if err != nil || progress != nscore.ProgressDone {
+		t.Fatalf("first listen = %T, %v, %v", firstValue, progress, err)
+	}
+	firstListener := firstValue.(*listener)
+	firstClient, firstServer := pair.establish(t, firstListener)
+	firstInfo, ok := firstClient.ConnectionInfo()
+	if !ok || firstInfo.PeerLeafSPKI256 == ([32]byte{}) {
+		t.Fatalf("first peer identity = %+v, %v", firstInfo, ok)
+	}
+	pair.exchange(t, firstClient, firstServer, []byte("old-profile-stream-drains"))
+	pair.cleanShutdown(t, firstClient, firstServer)
+	for _, closeResource := range []func() error{firstClient.Close, firstServer.Close, firstListener.Close} {
+		if err := closeResource(); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	secondValue, progress, err := pair.server.TryListenTLS(pair.endpoint, 3)
+	if err != nil || progress != nscore.ProgressDone {
+		t.Fatalf("replacement listen = %T, %v, %v", secondValue, progress, err)
+	}
+	secondListener := secondValue.(*listener)
+	secondClient, secondServer := pair.establish(t, secondListener)
+	secondInfo, ok := secondClient.ConnectionInfo()
+	if !ok || secondInfo.PeerLeafSPKI256 == ([32]byte{}) || secondInfo.PeerLeafSPKI256 == firstInfo.PeerLeafSPKI256 {
+		t.Fatalf("replacement peer identity = %+v, %v; first=%x", secondInfo, ok, firstInfo.PeerLeafSPKI256)
+	}
+
+	pair.exchange(t, secondClient, secondServer, []byte("new-profile-stream-uses-rotated-certificate"))
+	for _, closeResource := range []func() error{secondClient.Close, secondServer.Close, secondListener.Close} {
+		if err := closeResource(); err != nil {
+			t.Fatal(err)
+		}
+	}
+	pair.assertReleased(t)
+}
+
 func TestLiveLnetoTLSListenerCloseAcceptRaceReleasesOwnership(t *testing.T) {
 	pair := newLiveTLSPair(t, false)
 	for iteration := 0; iteration < 32; iteration++ {
@@ -197,7 +237,7 @@ type liveTLSPair struct {
 
 func newLiveTLSPair(t testing.TB, mutual bool) *liveTLSPair {
 	t.Helper()
-	certificate, clientCertificate, roots, now := liveTLSCertificates(t)
+	certificate, rotatedCertificate, clientCertificate, roots, now := liveTLSCertificates(t)
 	clientMAC := [6]byte{0x02, 0, 0, 0, 0, 41}
 	serverMAC := [6]byte{0x02, 0, 0, 0, 0, 42}
 	clientAddress := netip.MustParseAddr("192.0.2.41")
@@ -278,9 +318,14 @@ func newLiveTLSPair(t testing.TB, mutual bool) *liveTLSPair {
 		MaxServerNameBytes: 253, MaxServiceAttemptsPerHandshake: 100000,
 		TCP:    tcpbackend.Config{MaxListeners: 1, MaxOutboundStreams: 2, AcceptBacklog: 2, ReceiveBytes: 8 << 10, TransmitBytes: 8 << 10, TransmitPackets: 32},
 		Engine: engine,
-		ServerProfiles: []gotls.ServerProfile{{
-			ID: 2, Config: serverTLSConfig, RequiredALPN: "h2", MaxCertificateChainBytes: 64 << 10, MaxPeerCertificates: 4,
-		}},
+		ServerProfiles: []gotls.ServerProfile{
+			{ID: 2, Config: serverTLSConfig, RequiredALPN: "h2", MaxCertificateChainBytes: 64 << 10, MaxPeerCertificates: 4},
+			{ID: 3, Config: &cryptotls.Config{
+				Certificates: []cryptotls.Certificate{rotatedCertificate}, Time: func() time.Time { return now },
+				MinVersion: cryptotls.VersionTLS13, MaxVersion: cryptotls.VersionTLS13,
+				NextProtos: []string{"h2"}, SessionTicketsDisabled: true,
+			}, RequiredALPN: "h2", MaxCertificateChainBytes: 64 << 10, MaxPeerCertificates: 4},
+		},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -567,7 +612,7 @@ func readinessOf(value *stream) nscore.Readiness {
 	return value.Readiness()
 }
 
-func liveTLSCertificates(t testing.TB) (server, client cryptotls.Certificate, roots *x509.CertPool, now time.Time) {
+func liveTLSCertificates(t testing.TB) (server, rotatedServer, client cryptotls.Certificate, roots *x509.CertPool, now time.Time) {
 	t.Helper()
 	now = time.Unix(1_800_000_000, 0)
 	caPublic, caPrivate, err := ed25519.GenerateKey(rand.Reader)
@@ -608,8 +653,9 @@ func liveTLSCertificates(t testing.TB) (server, client cryptotls.Certificate, ro
 		return cryptotls.Certificate{Certificate: [][]byte{der, caDER}, PrivateKey: privateKey, Leaf: leaf}
 	}
 	server = issue(2, "server.example.com", []string{"server.example.com"}, x509.ExtKeyUsageServerAuth)
+	rotatedServer = issue(4, "server.example.com", []string{"server.example.com"}, x509.ExtKeyUsageServerAuth)
 	client = issue(3, "client", nil, x509.ExtKeyUsageClientAuth)
 	roots = x509.NewCertPool()
 	roots.AddCert(ca)
-	return server, client, roots, now
+	return server, rotatedServer, client, roots, now
 }

@@ -186,10 +186,15 @@ exactly once.
 There is no HTTP/HTTPS request API, DTLS, QUIC TLS, STARTTLS upgrade,
 guest-handle wrapping, arbitrary guest TLS configuration, live mutation of an
 already registered profile, external/HSM signer callback, caller clock callback,
-or 0-RTT. Certificate rotation uses immutable profiles/static SNI certificates
-and listener replacement; session-ticket key rotation uses an ordered bounded
-key set supplied when constructing a new immutable server profile. Server
-listeners and bounded inbound handshakes are available only through explicit
-granular TLS registration and authority; they do not place TLS in aggregate
-`register`. Certificate validation uses the immutable `ValidationTime` option
-when supplied, otherwise Go's standard system clock.
+or 0-RTT. Static SNI selection chooses only among certificates already cloned
+into one immutable profile. Certificate rotation uses a bounded drain-and-replace
+sequence: stop creating work on the old listener, allow its accepted streams to
+finish, close it, and open the same endpoint with a new immutable profile. The
+pinned lneto listener owns accepted-connection dispatch, so closing a listener is
+an abort boundary for accepted streams that have not drained; zero-downtime
+same-port listener handoff is not claimed. Session-ticket key rotation uses an
+ordered bounded key set supplied when constructing a new immutable server
+profile. Server listeners and bounded inbound handshakes are available only
+through explicit granular TLS registration and authority; they do not place TLS
+in aggregate `register`. Certificate validation uses the immutable
+`ValidationTime` option when supplied, otherwise Go's standard system clock.
