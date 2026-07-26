@@ -12,14 +12,17 @@ TCP ownership exactly once.
 Hosts construct immutable profiles with `NewClientProfile`, exact profile IDs,
 `AllowServerNames`, optional `RequireALPN`, and an ordinary `*crypto/tls.Config`.
 The configuration, roots, certificate DER, ALPN list, and name authority are
-cloned. Later caller mutation cannot change registration. Client private-key
-objects stay in host memory and no certificate chain or private key appears in
-the guest ABI.
+cloned. Later caller mutation cannot change registration. Client certificate
+chains and leaf/key correspondence are parsed eagerly. Private keys stay in host
+memory and no certificate chain or private key appears in the guest ABI.
 
 The first release rejects `InsecureSkipVerify`, `KeyLogWriter`, renegotiation,
-verification callbacks, certificate-selection callbacks, caller-supplied client
-session caches, and Encrypted ClientHello callbacks/configuration. Hosts may
-explicitly add `EnableClientSessionResumption(maxEntries, maxBytes)`. That option
+verification callbacks, certificate-selection callbacks, caller-supplied clock
+callbacks, caller-supplied client session caches, and Encrypted ClientHello
+callbacks/configuration. `ValidationTime` may install one immutable UTC-normalized
+validation instant without retaining caller code; otherwise Go's standard system
+clock is used. Hosts may explicitly add
+`EnableClientSessionResumption(maxEntries, maxBytes)`. That option
 creates a separate cache for every Wago instance, retains only serialized
 standard-library session state under exact entry and byte bounds, reserves its
 maximum against the instance queued-byte quota before allocation, and clears
@@ -44,14 +47,16 @@ mentions those endpoint classes.
 
 Hosts construct server profiles with `NewServerProfile` and static certificate
 chains. Every DER certificate is parsed during profile construction, each chain
-link is signature-checked, and each leaf public key must match its
-`crypto.Signer`. Certificate DER, OCSP staples, SCTs, ALPN, and CA pools are
-cloned. The signer itself remains a host-owned interface value and must remain
-available, immutable, and concurrency-safe for the profile lifetime; it never
-enters guest memory. Dynamic certificate/config selection and verification
-callbacks are rejected. Client SNI may select only among the immutable static
-certificates supplied by the host; it cannot select a new configuration or
-credential source. Server session tickets remain disabled by default.
+link is signature-checked, and each leaf public key must match its private key.
+Certificate DER, OCSP staples, SCTs, ALPN, and CA pools are cloned. Private keys
+remain host-owned but are restricted to standard in-memory RSA, NIST ECDSA, and
+Ed25519 implementations. Arbitrary `crypto.Signer` wrappers and HSM callbacks are
+rejected because `crypto.Signer.Sign` has no cancellation contract and could
+otherwise prevent deterministic worker teardown. Dynamic certificate/config
+selection and verification callbacks are also rejected. Client SNI may select
+only among the immutable static certificates supplied by the host; it cannot
+select a new configuration or credential source. Server session tickets remain
+disabled by default.
 `EnableServerSessionTickets` accepts one to four explicit nonzero, unique
 32-byte keys. The first key encrypts new stateless tickets and every supplied
 key may decrypt, supporting bounded deployment rotation from `[new, old]` to
@@ -180,10 +185,11 @@ exactly once.
 
 There is no HTTP/HTTPS request API, DTLS, QUIC TLS, STARTTLS upgrade,
 guest-handle wrapping, arbitrary guest TLS configuration, live mutation of an
-already registered profile, or 0-RTT. Certificate rotation uses immutable
-profiles/static SNI certificates and listener replacement; session-ticket key
-rotation uses an ordered bounded key set supplied when constructing a new
-immutable server profile. Server listeners and bounded inbound handshakes are
-available only through explicit granular TLS registration and authority; they
-do not place TLS in aggregate `register`. The certificate-validation clock is the cloned host
-`tls.Config.Time` function when provided, otherwise Go's standard clock.
+already registered profile, external/HSM signer callback, caller clock callback,
+or 0-RTT. Certificate rotation uses immutable profiles/static SNI certificates
+and listener replacement; session-ticket key rotation uses an ordered bounded
+key set supplied when constructing a new immutable server profile. Server
+listeners and bounded inbound handshakes are available only through explicit
+granular TLS registration and authority; they do not place TLS in aggregate
+`register`. Certificate validation uses the immutable `ValidationTime` option
+when supplied, otherwise Go's standard system clock.

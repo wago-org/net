@@ -1,8 +1,12 @@
 package tls
 
 import (
+	"crypto"
+	"crypto/ecdsa"
 	"crypto/ed25519"
+	"crypto/elliptic"
 	"crypto/rand"
+	"crypto/rsa"
 	cryptotls "crypto/tls"
 	"crypto/x509"
 	"math/big"
@@ -14,10 +18,8 @@ import (
 )
 
 func TestClientProfileDefaultsTLS13AndClones(t *testing.T) {
-	config := &cryptotls.Config{
-		NextProtos:   []string{"h2"},
-		Certificates: []cryptotls.Certificate{{SupportedSignatureAlgorithms: []cryptotls.SignatureScheme{cryptotls.Ed25519}}},
-	}
+	config := testServerConfig(t)
+	config.Certificates[0].SupportedSignatureAlgorithms = []cryptotls.SignatureScheme{cryptotls.Ed25519}
 	profile, err := NewClientProfile(1, config, AllowServerNames("API.Example.com."), RequireALPN("h2"))
 	if err != nil {
 		t.Fatal(err)
@@ -43,6 +45,7 @@ func TestClientProfileRejectsUnsafeConfiguration(t *testing.T) {
 		{KeyLogWriter: discardWriter{}},
 		{Renegotiation: cryptotls.RenegotiateOnceAsClient},
 		{VerifyConnection: func(cryptotls.ConnectionState) error { return nil }},
+		{Time: func() time.Time { return time.Now() }},
 		{ClientSessionCache: cryptotls.NewLRUClientSessionCache(1)},
 		{WrapSession: func(cryptotls.ConnectionState, *cryptotls.SessionState) ([]byte, error) { return nil, nil }},
 		{CipherSuites: []uint16{cryptotls.TLS_RSA_WITH_AES_128_CBC_SHA}},
@@ -51,6 +54,42 @@ func TestClientProfileRejectsUnsafeConfiguration(t *testing.T) {
 		if _, err := NewClientProfile(1, config, AllowServerNames("example.com")); err != ErrUnsafeTLSConfig {
 			t.Fatalf("config %+v: %v", config, err)
 		}
+	}
+}
+
+func TestProfilesUseOnlyPackageOwnedFrozenValidationTime(t *testing.T) {
+	configured := time.Date(2030, 5, 6, 7, 8, 9, 10, time.FixedZone("caller", 3600))
+	client, err := NewClientProfile(1, &cryptotls.Config{}, AllowServerNames("example.com"), ValidationTime(configured))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if client.config.Time == nil {
+		t.Fatal("client validation time callback missing")
+	}
+	if got := client.config.Time(); !got.Equal(configured) || got.Location() != time.UTC {
+		t.Fatalf("client validation time = %v", got)
+	}
+	server, err := NewServerProfile(1, testServerConfig(t), ValidationTime(configured))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if server.config.Time == nil {
+		t.Fatal("server validation time callback missing")
+	}
+	if got := server.config.Time(); !got.Equal(configured) || got.Location() != time.UTC {
+		t.Fatalf("server validation time = %v", got)
+	}
+	if _, err := NewClientProfile(1, &cryptotls.Config{}, AllowServerNames("example.com"), ValidationTime(time.Time{})); err != ErrInvalidProfile {
+		t.Fatalf("zero client validation time = %v", err)
+	}
+	if _, err := NewServerProfile(1, testServerConfig(t), ValidationTime(time.Time{})); err != ErrInvalidServerProfile {
+		t.Fatalf("zero server validation time = %v", err)
+	}
+	if _, err := NewClientProfile(1, &cryptotls.Config{}, AllowServerNames("example.com"), ValidationTime(configured), ValidationTime(configured)); err != ErrInvalidProfile {
+		t.Fatalf("duplicate client validation time = %v", err)
+	}
+	if _, err := NewServerProfile(1, testServerConfig(t), ValidationTime(configured), ValidationTime(configured)); err != ErrInvalidServerProfile {
+		t.Fatalf("duplicate server validation time = %v", err)
 	}
 }
 
@@ -182,6 +221,60 @@ func TestServerProfileStorageRequiresExplicitListenerAuthority(t *testing.T) {
 	}
 }
 
+func TestProfilesAcceptOnlyStandardSoftwareSignerFamilies(t *testing.T) {
+	_, ed25519Key, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ecdsaKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rsaKey, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for name, signer := range map[string]crypto.Signer{
+		"ed25519": ed25519Key,
+		"ecdsa":   ecdsaKey,
+		"rsa":     rsaKey,
+	} {
+		t.Run(name, func(t *testing.T) {
+			config := testConfigForSigner(t, signer)
+			if _, err := NewClientProfile(1, config, AllowServerNames("example.com")); err != nil {
+				t.Fatalf("client profile = %v", err)
+			}
+			if _, err := NewServerProfile(1, config); err != nil {
+				t.Fatalf("server profile = %v", err)
+			}
+		})
+	}
+}
+
+func TestClientProfileRejectsMalformedChainsMismatchedAndExternalSigners(t *testing.T) {
+	malformed := testServerConfig(t)
+	malformed.Certificates[0].Certificate[0] = []byte{1, 2, 3}
+	if _, err := NewClientProfile(1, malformed, AllowServerNames("example.com")); err != ErrInvalidProfile {
+		t.Fatalf("malformed client certificate = %v", err)
+	}
+
+	mismatched := testServerConfig(t)
+	_, otherSigner, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	mismatched.Certificates[0].PrivateKey = otherSigner
+	if _, err := NewClientProfile(1, mismatched, AllowServerNames("example.com")); err != ErrInvalidProfile {
+		t.Fatalf("mismatched client signer = %v", err)
+	}
+
+	wrapped := testServerConfig(t)
+	wrapped.Certificates[0].PrivateKey = externalSigner{Signer: wrapped.Certificates[0].PrivateKey.(crypto.Signer)}
+	if _, err := NewClientProfile(1, wrapped, AllowServerNames("example.com")); err != ErrUnsafeTLSConfig {
+		t.Fatalf("external client signer = %v", err)
+	}
+}
+
 func TestServerProfileRejectsMalformedChainAndMismatchedSigner(t *testing.T) {
 	malformed := testServerConfig(t)
 	malformed.Certificates[0].Certificate[0] = []byte{1, 2, 3}
@@ -205,6 +298,12 @@ func TestServerProfileRejectsMalformedChainAndMismatchedSigner(t *testing.T) {
 	if _, err := NewServerProfile(1, brokenChain); err != ErrInvalidServerProfile {
 		t.Fatalf("broken chain = %v", err)
 	}
+
+	wrapped := testServerConfig(t)
+	wrapped.Certificates[0].PrivateKey = externalSigner{Signer: wrapped.Certificates[0].PrivateKey.(crypto.Signer)}
+	if _, err := NewServerProfile(1, wrapped); err != ErrUnsafeTLSConfig {
+		t.Fatalf("external server signer = %v", err)
+	}
 }
 
 func TestServerProfileRejectsUnsafeConfigurationAndRequiresTLS12OptIn(t *testing.T) {
@@ -212,6 +311,11 @@ func TestServerProfileRejectsUnsafeConfigurationAndRequiresTLS12OptIn(t *testing
 	unsafe.GetCertificate = func(*cryptotls.ClientHelloInfo) (*cryptotls.Certificate, error) { return nil, nil }
 	if _, err := NewServerProfile(1, unsafe); err != ErrUnsafeTLSConfig {
 		t.Fatalf("dynamic certificate callback = %v", err)
+	}
+	unsafeClock := testServerConfig(t)
+	unsafeClock.Time = func() time.Time { return time.Now() }
+	if _, err := NewServerProfile(1, unsafeClock); err != ErrUnsafeTLSConfig {
+		t.Fatalf("dynamic clock callback = %v", err)
 	}
 	invalidClientAuth := testServerConfig(t)
 	invalidClientAuth.ClientAuth = cryptotls.RequireAndVerifyClientCert
@@ -228,26 +332,33 @@ func TestServerProfileRejectsUnsafeConfigurationAndRequiresTLS12OptIn(t *testing
 	}
 }
 
+type externalSigner struct {
+	crypto.Signer
+}
+
 func testServerConfig(t testing.TB) *cryptotls.Config {
 	t.Helper()
-	publicKey, privateKey, err := ed25519.GenerateKey(rand.Reader)
+	_, privateKey, err := ed25519.GenerateKey(rand.Reader)
 	if err != nil {
 		t.Fatal(err)
 	}
+	return testConfigForSigner(t, privateKey)
+}
+
+func testConfigForSigner(t testing.TB, signer crypto.Signer) *cryptotls.Config {
+	t.Helper()
 	now := time.Unix(1_800_000_000, 0)
-	der, err := x509.CreateCertificate(rand.Reader, &x509.Certificate{
+	template := &x509.Certificate{
 		SerialNumber: big.NewInt(1), DNSNames: []string{"server.example.com"},
 		NotBefore: now.Add(-time.Hour), NotAfter: now.Add(time.Hour),
-		KeyUsage: x509.KeyUsageDigitalSignature, ExtKeyUsage: []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
-	}, &x509.Certificate{
-		SerialNumber: big.NewInt(1), DNSNames: []string{"server.example.com"},
-		NotBefore: now.Add(-time.Hour), NotAfter: now.Add(time.Hour),
-		KeyUsage: x509.KeyUsageDigitalSignature, ExtKeyUsage: []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
-	}, publicKey, privateKey)
+		KeyUsage:    x509.KeyUsageDigitalSignature,
+		ExtKeyUsage: []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth, x509.ExtKeyUsageClientAuth},
+	}
+	der, err := x509.CreateCertificate(rand.Reader, template, template, signer.Public(), signer)
 	if err != nil {
 		t.Fatal(err)
 	}
-	return &cryptotls.Config{Certificates: []cryptotls.Certificate{{Certificate: [][]byte{der}, PrivateKey: privateKey}}, NextProtos: []string{"h2"}}
+	return &cryptotls.Config{Certificates: []cryptotls.Certificate{{Certificate: [][]byte{der}, PrivateKey: signer}}, NextProtos: []string{"h2"}}
 }
 
 func TestAllowLoopbackRegistrationAuthorityIsTLSScoped(t *testing.T) {

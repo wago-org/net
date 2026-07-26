@@ -130,11 +130,14 @@ if err := wagonettls.Register(network,
 }
 ```
 
-Storing a server profile alone grants no listen authority. Certificate chains
-are parsed eagerly, leaf keys must match host-owned `crypto.Signer` values, and
-server credentials never enter guest memory. Static SNI selection is limited to
-host-supplied immutable certificates; dynamic certificate/config callbacks are
-rejected.
+Storing a server profile alone grants no listen authority. Client and server
+certificate chains are parsed eagerly, leaf keys must match standard in-memory
+RSA, NIST ECDSA, or Ed25519 private keys, and credentials never enter guest
+memory. Arbitrary `crypto.Signer`, HSM, clock, and dynamic certificate/config
+callbacks are rejected so host code cannot indefinitely block TLS worker
+teardown. Static SNI selection is limited to host-supplied immutable
+certificates. `tls.ValidationTime` supplies an optional frozen validation instant
+without retaining a caller callback; otherwise Go's system clock is used.
 
 TLS intentionally has no `tls/register` zero-configuration extension and no
 `net-tls` custom-CLI key. Trust roots, verification identities, ALPN, client or
@@ -162,10 +165,11 @@ per-instance client resumption cache with `EnableClientSessionResumption` and
 ordered stateless server ticket keys with `EnableServerSessionTickets`; cache
 entries and serialized bytes are bounded, quota-reserved, cleared at teardown,
 and never enable 0-RTT. Common Name fallback, key logging, renegotiation,
-arbitrary verification/certificate callbacks, guest-supplied session caches,
-0-RTT, STARTTLS, and wrapping guest TCP handles are absent. TLS 1.3 is the
-default and TLS 1.2 requires `EnableTLS12()`. Client private keys remain
-host-side. Clean `close_notify` maps to EOF; raw TCP EOF maps to TLS protocol
+arbitrary verification/certificate/clock/signer callbacks, guest-supplied
+session caches, 0-RTT, STARTTLS, and wrapping guest TCP handles are absent. TLS
+1.3 is the default and TLS 1.2 requires `EnableTLS12()`. Client private keys
+remain host-side and use the same bounded software-key restriction. Clean
+`close_notify` maps to EOF; raw TCP EOF maps to TLS protocol
 failure. The additive `connection_info_v2` reports client/server role and peer
 authentication while preserving `connection_info_v1` byte-for-byte; the fixed
 `channel_binding` import returns the 32-byte RFC 9266 `tls-exporter` binding only
