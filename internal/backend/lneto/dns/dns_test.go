@@ -6,6 +6,7 @@ import (
 	"errors"
 	"net/netip"
 	"reflect"
+	"runtime"
 	"strings"
 	"sync"
 	"testing"
@@ -16,7 +17,9 @@ import (
 	"github.com/soypat/lneto/ipv4"
 	lnetoudp "github.com/soypat/lneto/udp"
 	lnetocore "github.com/wago-org/net/internal/backend/lneto/core"
+	tcpbackend "github.com/wago-org/net/internal/backend/lneto/tcp"
 	"github.com/wago-org/net/internal/namespace"
+	tcpns "github.com/wago-org/net/internal/namespace/tcp"
 	"github.com/wago-org/net/internal/packetlink"
 	"github.com/wago-org/net/internal/policy"
 	"github.com/wago-org/net/internal/quota"
@@ -31,6 +34,33 @@ func TestConfigRejectsNonWireResolvers(t *testing.T) {
 	base := Config{Server: netip.MustParseAddr("192.0.2.53"), MaxQueries: 1, MaxRecords: 1, MaxResponseBytes: 512, MaxAttempts: 1, RetryServiceAttempts: 1}
 	if !ValidConfig(base, 1500, compiled, account, true) {
 		t.Fatal("valid unicast resolver rejected")
+	}
+	fallback := base
+	fallback.MaxTCPResponseBytes = 16 << 10
+	fallback.MaxTCPServiceAttempts = 128
+	if !ValidConfig(fallback, 1500, compiled, account, true) {
+		t.Fatal("valid bounded TCP fallback rejected")
+	}
+	for name, mutate := range map[string]func(*Config){
+		"bytes without attempts": func(config *Config) { config.MaxTCPResponseBytes = 512 },
+		"attempts without bytes": func(config *Config) { config.MaxTCPServiceAttempts = 1 },
+		"response too short": func(config *Config) {
+			config.MaxTCPResponseBytes, config.MaxTCPServiceAttempts = 11, 1
+		},
+		"too many attempts": func(config *Config) {
+			config.MaxTCPResponseBytes, config.MaxTCPServiceAttempts = 512, MaximumTCPServiceAttempts+1
+		},
+		"aggregate response retention": func(config *Config) {
+			config.MaxQueries, config.MaxTCPResponseBytes, config.MaxTCPServiceAttempts = 1025, MaximumTCPResponseBytes, 1
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			invalid := base
+			mutate(&invalid)
+			if ValidConfig(invalid, 1500, compiled, account, true) {
+				t.Fatalf("invalid TCP fallback accepted: %+v", invalid)
+			}
+		})
 	}
 	for name, server := range map[string]netip.Addr{
 		"loopback":          netip.MustParseAddr("127.0.0.1"),
@@ -133,6 +163,352 @@ func TestBuildDNSQueryPacketDirectEncoding(t *testing.T) {
 			t.Fatalf("nonzero EDNS tail: %x", packet[offset:])
 		}
 	}
+}
+
+func TestDNSTruncatedUDPUsesBoundedPrivateTCPFallback(t *testing.T) {
+	clientAddress := netip.MustParseAddr("192.0.2.61")
+	serverAddress := netip.MustParseAddr("192.0.2.53")
+	clientMAC := [6]byte{0x02, 0, 0, 0, 0, 61}
+	serverMAC := [6]byte{0x02, 0, 0, 0, 0, 53}
+	clientPolicy, err := policy.Compile(policy.Config{Rules: []policy.Rule{{
+		Action: policy.ActionAllow, Transports: []policy.Transport{policy.TransportDNS},
+		Directions: []policy.Direction{policy.DirectionOutbound}, DNSSuffixes: []string{"example.com"},
+	}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	serverPolicy, err := policy.Compile(policy.Config{
+		Rules: []policy.Rule{{
+			Action: policy.ActionAllow, Transports: []policy.Transport{policy.TransportTCP},
+			Directions: []policy.Direction{policy.DirectionInbound}, Prefixes: []netip.Prefix{netip.PrefixFrom(serverAddress, 32)},
+			Ports: []policy.PortRange{{First: lnetodns.ServerPort, Last: lnetodns.ServerPort}},
+		}},
+		PrivilegedBindTransports: []policy.Transport{policy.TransportTCP},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	limits := quota.Limits{Resources: 16, TCPResources: 8, DNSResources: 4, QueuedBytes: 1 << 20, DNSWork: 8}
+	clientAccount := quota.NewAccount(limits)
+	serverAccount := quota.NewAccount(limits)
+	mtu := uint16(ethernet.MaxMTU)
+	newCore := func(hostname string, seed int64, address netip.Addr, hardware, gateway [6]byte, compiled *policy.Policy, account *quota.Account) *lnetocore.Namespace {
+		core, err := lnetocore.New(lnetocore.Config{
+			Hostname: hostname, RandSeed: seed, HardwareAddress: hardware, GatewayHardwareAddress: gateway,
+			IPv4Address: address, MTU: mtu, MaxActiveTCPPorts: 4, Policy: compiled, Quotas: account,
+			Link: packetlink.Config{MaxFrameBytes: int(mtu) + 14, IngressFrames: 32, EgressFrames: 32},
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return core
+	}
+	clientCore := newCore("dns-tcp-client", 61, clientAddress, clientMAC, serverMAC, clientPolicy, clientAccount)
+	serverCore := newCore("dns-tcp-server", 53, serverAddress, serverMAC, clientMAC, serverPolicy, serverAccount)
+	t.Cleanup(func() {
+		_ = clientCore.Close()
+		_ = serverCore.Close()
+	})
+	dnsConfig := Config{
+		Server: serverAddress, MaxQueries: 2, MaxRecords: 4, MaxResponseBytes: 512,
+		MaxAttempts: 1, RetryServiceAttempts: 2, MaxTCPResponseBytes: 2048, MaxTCPServiceAttempts: 512,
+	}
+	clientDNS, err := New(clientCore, dnsConfig)
+	if err != nil {
+		t.Fatal(err)
+	}
+	serverTCP, err := tcpbackend.New(serverCore, tcpbackend.Config{
+		MaxListeners: 1, AcceptBacklog: 1, ReceiveBytes: 4 << 10, TransmitBytes: 4 << 10, TransmitPackets: 8,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	listenerValue, progress, err := serverTCP.TryListen(namespace.Endpoint{Address: serverAddress, Port: lnetodns.ServerPort})
+	if err != nil || progress != namespace.ProgressDone {
+		t.Fatalf("TCP DNS listen = %T, %v, %v", listenerValue, progress, err)
+	}
+	listener := listenerValue.(tcpns.Listener)
+	request := namespace.DNSRequest{Name: "example.com", Types: namespace.DNSRecordsA | namespace.DNSRecordsAAAA}
+	queryValue, progress, err := clientDNS.TryResolve(request)
+	if err != nil || progress != namespace.ProgressInProgress {
+		t.Fatalf("DNS query = %T, %v, %v", queryValue, progress, err)
+	}
+	query := queryValue.(*dnsQuery)
+	clientNS := &testNamespace{core: clientCore, adapter: clientDNS, requiredFrameBytes: int(mtu) + 14}
+	udpQuery := serviceDNSPacket(t, clientNS)
+	txid, localPort := dnsPacketIdentity(t, udpQuery)
+	questionName := lnetodns.MustNewName(request.Name)
+	truncatedMessage := lnetodns.Message{Questions: []lnetodns.Question{
+		{Name: questionName, Type: lnetodns.TypeA, Class: lnetodns.ClassINET},
+		{Name: questionName, Type: lnetodns.TypeAAAA, Class: lnetodns.ClassINET},
+	}}
+	responseConfig := namespaceTestConfig{
+		HardwareAddress: clientMAC, GatewayHardwareAddress: serverMAC, IPv4Address: clientAddress, DNS: dnsConfig,
+	}
+	truncated := buildDNSFrame(t, responseConfig, txid, localPort, truncatedMessage, lnetodns.HeaderFlags(1<<15|1<<9|1<<8|1<<7))
+	serviceDNSIngressFrame(t, clientNS, truncated)
+	if query.state != dnsQueryTCPConnecting || query.localPort != 0 || query.tcpStream == nil {
+		t.Fatalf("fallback transition = state:%v port:%d stream:%T", query.state, query.localPort, query.tcpStream)
+	}
+
+	var serverStream tcpns.Stream
+	var requestWire, responseWire []byte
+	responseOffset := 0
+	for attempt := 0; attempt < 20000 && query.state != dnsQueryDone; attempt++ {
+		relayDNSCore(t, clientCore, serverCore)
+		relayDNSCore(t, serverCore, clientCore)
+		if serverStream == nil && listener.Readiness()&namespace.ReadyAccept != 0 {
+			accepted, acceptProgress, acceptErr := listener.TryAccept()
+			if acceptErr != nil || acceptProgress != namespace.ProgressDone {
+				t.Fatalf("TCP DNS accept = %T, %v, %v", accepted, acceptProgress, acceptErr)
+			}
+			serverStream = accepted.(tcpns.Stream)
+		}
+		if serverStream != nil {
+			buffer := make([]byte, 257)
+			result, readErr := serverStream.TryRead(buffer)
+			if readErr != nil {
+				t.Fatal(readErr)
+			}
+			requestWire = append(requestWire, buffer[:result.Bytes]...)
+			if responseWire == nil && len(requestWire) >= 2 {
+				requestBytes := int(binary.BigEndian.Uint16(requestWire[:2]))
+				if len(requestWire) >= 2+requestBytes {
+					if got := binary.BigEndian.Uint16(requestWire[2:4]); got != txid {
+						t.Fatalf("TCP query txid = %d, want %d", got, txid)
+					}
+					udpResponse := buildDNSResponseFrame(t, responseConfig, txid, localPort, request.Name)
+					ethernetFrame, _ := ethernet.NewFrame(udpResponse)
+					ipFrame, _ := ipv4.NewFrame(ethernetFrame.Payload())
+					udpFrame, _ := lnetoudp.NewFrame(ipFrame.Payload())
+					payload := append([]byte(nil), udpFrame.RawData()[8:udpFrame.Length()]...)
+					responseWire = make([]byte, 2+len(payload))
+					binary.BigEndian.PutUint16(responseWire[:2], uint16(len(payload)))
+					copy(responseWire[2:], payload)
+				}
+			}
+			if responseOffset < len(responseWire) {
+				result, writeErr := serverStream.TryWrite(responseWire[responseOffset:])
+				if writeErr != nil {
+					t.Fatal(writeErr)
+				}
+				responseOffset += result.Bytes
+			}
+		}
+		runtime.Gosched()
+	}
+	if query.state != dnsQueryDone || query.tcpStream != nil || query.txid != 0 {
+		t.Fatalf("TCP fallback completion = state:%v stream:%T txid:%d failure:%v", query.state, query.tcpStream, query.txid, query.failure)
+	}
+	var records []namespace.DNSRecord
+	for {
+		record, next, err := query.TryNext()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if next == namespace.DNSNextEOF {
+			break
+		}
+		if next != namespace.DNSNextReady {
+			t.Fatalf("TCP DNS next = %v", next)
+		}
+		records = append(records, record)
+	}
+	if len(records) != 3 {
+		t.Fatalf("TCP fallback records = %+v", records)
+	}
+	if err := query.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if serverStream != nil {
+		_ = serverStream.Close()
+	}
+	if err := listener.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if usage, _ := clientAccount.Snapshot(); usage != (quota.Usage{}) {
+		t.Fatalf("client fallback quota = %+v", usage)
+	}
+	if usage, _ := serverAccount.Snapshot(); usage != (quota.Usage{}) {
+		t.Fatalf("server fallback quota = %+v", usage)
+	}
+}
+
+func TestDNSTCPFallbackHonorsRawTCPDenyWithoutLeakingTransport(t *testing.T) {
+	config := dnsTestConfig(t, 62)
+	config.MaxActiveTCPPorts = 2
+	config.DNS.MaxTCPResponseBytes = 2048
+	config.DNS.MaxTCPServiceAttempts = 32
+	config.Quotas = quota.NewAccount(quota.Limits{Resources: 8, TCPResources: 4, DNSResources: 4, QueuedBytes: 1 << 20, DNSWork: 8})
+	compiled, err := policy.Compile(policy.Config{Rules: []policy.Rule{
+		{Action: policy.ActionAllow, Transports: []policy.Transport{policy.TransportDNS}, Directions: []policy.Direction{policy.DirectionOutbound}, DNSSuffixes: []string{"example.com"}},
+		{Action: policy.ActionDeny, Transports: []policy.Transport{policy.TransportTCP}, Directions: []policy.Direction{policy.DirectionOutbound}, Prefixes: []netip.Prefix{netip.PrefixFrom(config.DNS.Server, 32)}, Ports: []policy.PortRange{{First: lnetodns.ServerPort, Last: lnetodns.ServerPort}}},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	config.Policy = compiled
+	ns := newTestNamespace(t, config)
+	request := namespace.DNSRequest{Name: "example.com", Types: namespace.DNSRecordsA | namespace.DNSRecordsAAAA}
+	value, _, err := ns.TryResolve(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	query := value.(*dnsQuery)
+	outgoing := serviceDNSPacket(t, ns)
+	txid, localPort := dnsPacketIdentity(t, outgoing)
+	questionName := lnetodns.MustNewName(request.Name)
+	truncatedMessage := lnetodns.Message{Questions: []lnetodns.Question{
+		{Name: questionName, Type: lnetodns.TypeA, Class: lnetodns.ClassINET},
+		{Name: questionName, Type: lnetodns.TypeAAAA, Class: lnetodns.ClassINET},
+	}}
+	truncated := buildDNSFrame(t, config, txid, localPort, truncatedMessage, lnetodns.HeaderFlags(1<<15|1<<9|1<<8|1<<7))
+	serviceDNSIngressFrame(t, ns, truncated)
+	if query.state != dnsQueryFailed || requireFailure(t, query.failure) != namespace.FailureAccessDenied || query.localPort != 0 || query.tcpStream != nil {
+		t.Fatalf("denied fallback = state:%v failure:%v port:%d stream:%T", query.state, query.failure, query.localPort, query.tcpStream)
+	}
+	ns.core.Lock()
+	leases := ns.core.TCPPortLeaseCountLocked()
+	ns.core.Unlock()
+	if leases != 0 {
+		t.Fatalf("denied fallback retained %d TCP leases", leases)
+	}
+	if err := query.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if usage, _ := config.Quotas.Snapshot(); usage != (quota.Usage{}) {
+		t.Fatalf("denied fallback retained quota = %+v", usage)
+	}
+}
+
+func TestDNSTCPFallbackCancellationClosesPrivateStreamAndClearsRetention(t *testing.T) {
+	config := dnsTestConfig(t, 63)
+	config.MaxActiveTCPPorts = 2
+	config.DNS.MaxTCPResponseBytes = 2048
+	config.DNS.MaxTCPServiceAttempts = 32
+	config.Quotas = quota.NewAccount(quota.Limits{Resources: 8, TCPResources: 4, DNSResources: 4, QueuedBytes: 1 << 20, DNSWork: 8})
+	ns := newTestNamespace(t, config)
+	request := namespace.DNSRequest{Name: "example.com", Types: namespace.DNSRecordsA | namespace.DNSRecordsAAAA}
+	value, _, err := ns.TryResolve(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	query := value.(*dnsQuery)
+	outgoing := serviceDNSPacket(t, ns)
+	txid, localPort := dnsPacketIdentity(t, outgoing)
+	name := lnetodns.MustNewName(request.Name)
+	truncated := buildDNSFrame(t, config, txid, localPort, lnetodns.Message{Questions: []lnetodns.Question{
+		{Name: name, Type: lnetodns.TypeA, Class: lnetodns.ClassINET},
+		{Name: name, Type: lnetodns.TypeAAAA, Class: lnetodns.ClassINET},
+	}}, lnetodns.HeaderFlags(1<<15|1<<9|1<<8|1<<7))
+	serviceDNSIngressFrame(t, ns, truncated)
+	if query.state != dnsQueryTCPConnecting || query.tcpStream == nil {
+		t.Fatalf("fallback before cancel = state:%v stream:%T", query.state, query.tcpStream)
+	}
+	if err := query.Cancel(); err != nil {
+		t.Fatal(err)
+	}
+	if query.state != dnsQueryFailed || requireFailure(t, query.failure) != namespace.FailureCanceled || query.tcpStream != nil || query.txid != 0 {
+		t.Fatalf("canceled fallback = state:%v failure:%v stream:%T txid:%d", query.state, query.failure, query.tcpStream, query.txid)
+	}
+	if !bytes.Equal(query.tcpResponse, make([]byte, len(query.tcpResponse))) {
+		t.Fatal("canceled fallback retained response bytes")
+	}
+	ns.core.Lock()
+	leases := ns.core.TCPPortLeaseCountLocked()
+	ns.core.Unlock()
+	if leases != 0 {
+		t.Fatalf("canceled fallback retained %d TCP leases", leases)
+	}
+	if err := query.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if usage, _ := config.Quotas.Snapshot(); usage != (quota.Usage{}) {
+		t.Fatalf("canceled fallback retained quota = %+v", usage)
+	}
+}
+
+func TestDNSTCPFallbackBoundsLengthTimeoutAndEOFCleanup(t *testing.T) {
+	for _, test := range []struct {
+		name    string
+		prepare func(*dnsQuery, *scriptedLockedTCPStream)
+		want    namespace.Failure
+	}{
+		{
+			name: "oversized response",
+			prepare: func(query *dnsQuery, stream *scriptedLockedTCPStream) {
+				query.state = dnsQueryTCPReadingLength
+				stream.reads = [][]byte{{0x08, 0x01}}
+			},
+			want: namespace.FailureMessageTooLarge,
+		},
+		{
+			name: "service timeout",
+			prepare: func(query *dnsQuery, _ *scriptedLockedTCPStream) {
+				query.state = dnsQueryTCPConnecting
+				query.tcpServiceAttempts = query.owner.config.MaxTCPServiceAttempts
+			},
+			want: namespace.FailureTimedOut,
+		},
+		{
+			name: "premature EOF",
+			prepare: func(query *dnsQuery, stream *scriptedLockedTCPStream) {
+				query.state = dnsQueryTCPReadingLength
+				stream.eof = true
+			},
+			want: namespace.FailureTemporary,
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			stream := &scriptedLockedTCPStream{}
+			query := &dnsQuery{
+				owner:     &Adapter{config: Config{MaxTCPResponseBytes: 2048, MaxTCPServiceAttempts: 4}},
+				tcpStream: stream, tcpResponse: make([]byte, 2048), txid: 1,
+			}
+			test.prepare(query, stream)
+			if err := query.serviceTCPFallbackLocked(); err != nil {
+				t.Fatal(err)
+			}
+			if query.state != dnsQueryFailed || requireFailure(t, query.failure) != test.want || query.tcpStream != nil || stream.closeCalls != 1 {
+				t.Fatalf("bounded fallback = state:%v failure:%v stream:%T closes:%d", query.state, query.failure, query.tcpStream, stream.closeCalls)
+			}
+			if !bytes.Equal(query.tcpResponse, make([]byte, len(query.tcpResponse))) {
+				t.Fatal("failed fallback retained response bytes")
+			}
+		})
+	}
+}
+
+type scriptedLockedTCPStream struct {
+	reads      [][]byte
+	eof        bool
+	closeCalls int
+}
+
+func (stream *scriptedLockedTCPStream) TryFinishConnectLocked() (namespace.Progress, error) {
+	return namespace.ProgressInProgress, nil
+}
+
+func (stream *scriptedLockedTCPStream) TryReadLocked(dst []byte) (namespace.IOResult, error) {
+	if len(stream.reads) != 0 {
+		value := stream.reads[0]
+		stream.reads = stream.reads[1:]
+		count := copy(dst, value)
+		return namespace.IOResult{Bytes: count, State: namespace.IOReady}, nil
+	}
+	if stream.eof {
+		return namespace.IOResult{State: namespace.IOEOF}, nil
+	}
+	return namespace.IOResult{State: namespace.IOWouldBlock}, nil
+}
+
+func (stream *scriptedLockedTCPStream) TryWriteLocked([]byte) (namespace.IOResult, error) {
+	return namespace.IOResult{State: namespace.IOWouldBlock}, nil
+}
+
+func (stream *scriptedLockedTCPStream) CloseLocked() error {
+	stream.closeCalls++
+	return nil
 }
 
 func TestBuildDNSQueryPacketIntoUsesCallerStorage(t *testing.T) {
@@ -1305,6 +1681,7 @@ func TestDNSConcurrentOperationsAndNamespaceClose(t *testing.T) {
 type namespaceTestConfig struct {
 	Hostname               string
 	RandSeed               int64
+	MaxActiveTCPPorts      uint16
 	HardwareAddress        [6]byte
 	GatewayHardwareAddress [6]byte
 	IPv4Address            netip.Addr
@@ -1326,7 +1703,7 @@ func newTestNamespace(t testing.TB, config namespaceTestConfig) *testNamespace {
 	common, err := lnetocore.New(lnetocore.Config{
 		Hostname: config.Hostname, RandSeed: config.RandSeed,
 		HardwareAddress: config.HardwareAddress, GatewayHardwareAddress: config.GatewayHardwareAddress,
-		IPv4Address: config.IPv4Address, MTU: config.MTU, Link: config.Link,
+		IPv4Address: config.IPv4Address, MTU: config.MTU, MaxActiveTCPPorts: config.MaxActiveTCPPorts, Link: config.Link,
 		Policy: config.Policy, Quotas: config.Quotas,
 	})
 	if err != nil {
@@ -1395,6 +1772,40 @@ func dnsTestConfig(t testing.TB, id byte) namespaceTestConfig {
 	}
 	config.GatewayHardwareAddress = [6]byte{0x02, 0, 0, 0, 0, 53}
 	return config
+}
+
+func relayDNSCore(t testing.TB, from, to *lnetocore.Namespace) bool {
+	t.Helper()
+	from.Lock()
+	from.SetNextIngressLocked(false)
+	required := from.RequiredFrameBytesLocked()
+	from.Unlock()
+	budget := namespace.ServiceBudget{Packets: 1, Bytes: uint32(required), Operations: 1}
+	report, progress, err := from.TryService(budget)
+	if err != nil || !report.ValidResult(budget, progress) {
+		t.Fatalf("DNS TCP egress service = %+v, %v, %v", report, progress, err)
+	}
+	if report.Packets == 0 {
+		return false
+	}
+	frame := make([]byte, from.Link().MaxFrameBytes())
+	result, err := from.Link().TryDequeue(packetlink.Egress, frame)
+	if err != nil || !result.Ready || result.Truncated || result.FrameBytes == 0 {
+		t.Fatalf("DNS TCP egress dequeue = %+v, %v", result, err)
+	}
+	if err := to.Link().TryEnqueue(packetlink.Ingress, frame[:result.FrameBytes]); err != nil {
+		t.Fatal(err)
+	}
+	to.Lock()
+	to.SetNextIngressLocked(true)
+	required = to.RequiredFrameBytesLocked()
+	to.Unlock()
+	budget = namespace.ServiceBudget{Packets: 1, Bytes: uint32(required), Operations: 1}
+	report, progress, err = to.TryService(budget)
+	if err != nil || report.Packets != 1 || !report.ValidResult(budget, progress) {
+		t.Fatalf("DNS TCP ingress service = %+v, %v, %v", report, progress, err)
+	}
+	return true
 }
 
 func serviceDNSPacket(t testing.TB, ns *testNamespace) []byte {

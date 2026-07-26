@@ -182,33 +182,41 @@ func TestDefaultDNSStorageFitsSharedDefaultsAndStopsAtEightQueries(t *testing.T)
 }
 
 func TestDNSRegistrationLeavesTCPAndUDPImportsUnresolved(t *testing.T) {
-	network := wagonet.New()
-	if err := dns.Register(network); err != nil {
-		t.Fatalf("Register: %v", err)
-	}
-	runtime := wago.NewRuntime()
-	if err := loadNetwork(runtime, network); err != nil {
-		t.Fatalf("Use: %v", err)
-	}
-
-	for _, test := range []struct {
-		module     string
-		capability wago.Capability
-	}{
-		{module: wagonet.TCPModule, capability: wagonet.CapTCP},
-		{module: wagonet.UDPModule, capability: wagonet.CapUDP},
+	for name, options := range map[string][]dns.Option{
+		"udp only":     {dns.Resolver("192.0.2.53")},
+		"tcp fallback": {dns.Resolver("192.0.2.53"), dns.EnableTCPFallback(16<<10, 128)},
 	} {
-		module, err := runtime.Compile(namespaceImportModule(test.module))
-		if err == nil {
-			var instance *wago.Instance
-			instance, err = runtime.Instantiate(context.Background(), module, wago.WithPolicy(wago.Policy{AllowedCapabilities: []wago.Capability{test.capability}}))
-			if instance != nil {
-				_ = instance.Close()
+		t.Run(name, func(t *testing.T) {
+			network := wagonet.New(wagonet.WithConfig(wagonet.Config{StaticIPv4: selectiveStaticIPv4()}))
+			if err := dns.Register(network, options...); err != nil {
+				t.Fatalf("Register: %v", err)
 			}
-		}
-		if err == nil {
-			t.Fatalf("unregistered %s import unexpectedly resolved", test.module)
-		}
+			runtime := wago.NewRuntime()
+			defer runtime.Close()
+			if err := loadNetwork(runtime, network); err != nil {
+				t.Fatalf("LoadPlugins: %v", err)
+			}
+
+			for _, test := range []struct {
+				module     string
+				capability wago.Capability
+			}{
+				{module: wagonet.TCPModule, capability: wagonet.CapTCP},
+				{module: wagonet.UDPModule, capability: wagonet.CapUDP},
+			} {
+				module, err := runtime.Compile(namespaceImportModule(test.module))
+				if err == nil {
+					var instance *wago.Instance
+					instance, err = runtime.Instantiate(context.Background(), module, wago.WithPolicy(wago.Policy{AllowedCapabilities: []wago.Capability{test.capability}}))
+					if instance != nil {
+						_ = instance.Close()
+					}
+				}
+				if err == nil {
+					t.Fatalf("unregistered %s import unexpectedly resolved", test.module)
+				}
+			}
+		})
 	}
 }
 
