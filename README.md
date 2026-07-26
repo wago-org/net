@@ -66,9 +66,13 @@ Hosts may opt into `dns.EnableTCPFallback(maxResponseBytes,
 maxServiceAttempts)`: a valid correlated truncated UDP response then transfers
 the same query to one private length-prefixed TCP stream under exact response,
 service-attempt, port, TCP-buffer, quota, cancellation, and teardown bounds. The
-guest receives no raw TCP handle or capability, and raw-TCP deny rules still
-constrain the configured resolver. Without the option, truncation retains the
-original `TEMPORARY_FAILURE` behavior. Privileged packet access remains absent
+maximum fallback response is quota-reserved with the query, but its byte slice is
+allocated only after a correlated truncation and is cleared and released as soon
+as the query becomes terminal. Namespace-retained parser scratch stays at the UDP
+response bound; larger TCP answers use temporary scratch sized by the bounded
+answer count. The guest receives no raw TCP handle or capability, and raw-TCP
+deny rules still constrain the configured resolver. Without the option,
+truncation retains the original `TEMPORARY_FAILURE` behavior. Privileged packet access remains absent
 and unsupported.
 
 The primary composition API selects only the protocols a runtime should expose:

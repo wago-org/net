@@ -280,10 +280,15 @@ instance operation, ABI, or namespace facet is exposed. Raw-TCP denies still
 constrain the private connection without requiring a raw-TCP allow rule. Each
 query has an active transport phase (UDP source-port lease and retry state, or a
 single private TCP stream) and a guest-visible terminal phase (handle, retained
-records or failure, quota until close). Successful completion, timeout,
-cancellation, parser failure, and other terminal failures retire the active
-transport before the query publishes its terminal result, so late packets cannot
-mutate committed records.
+records or failure, quota until close). The maximum TCP response remains
+quota-reserved from query creation, but the response byte slice is allocated only
+when a correlated truncation starts fallback and is zeroed and dropped at the
+terminal transition rather than being retained until guest close. Namespace
+parser scratch is eagerly bounded only by the UDP response limit; a larger TCP
+answer uses temporary candidate/name scratch capped by both the actual frame and
+its declared answer count. Successful completion, timeout, cancellation, parser
+failure, and other terminal failures retire the active transport before the query
+publishes its terminal result, so late packets cannot mutate committed records.
 Responses must echo the exact requested names/classes/types. Only a unique CNAME
 chain reachable from the requested name and requested A/AAAA records at its
 terminal name are emitted; irrelevant and duplicate answers are ignored, while

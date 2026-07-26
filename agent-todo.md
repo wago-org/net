@@ -1770,3 +1770,10 @@ No repository-owned workstream or completion criterion from this hardening reque
   iteration, and zero residual quota. Separate tests prove raw-deny rejection,
   response/attempt/aggregate bounds, EOF cleanup, standard-Go race safety, and
   TinyGo execution of the DNS backend and public package.
+- Follow-up allocation hardening keeps the quota reservation unchanged but
+  defers the maximum TCP response slice until correlated truncation, zeroes and
+  drops it at the terminal transition instead of guest close, and sizes eager
+  parser scratch only to the UDP response limit. With a 65,535-byte TCP bound
+  and 512-byte UDP bound this removes about 554 KiB of always-retained parser
+  scratch per namespace and eliminates the prior 16 KiB allocation from every
+  non-truncated query in the documented example configuration.
