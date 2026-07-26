@@ -41,7 +41,15 @@ func TestClientHandshakeVerificationALPNAndPlaintext(t *testing.T) {
 		RequiredALPN: "h2", MaxCertificateChainBytes: 64 << 10, MaxPeerCertificates: 4,
 		AllowedNames: map[string]tlsns.IdentityType{"api.example.com": tlsns.IdentityDNS},
 	}
-	transport := &memoryTransport{peer: serverBridge, readLimit: 13, writeLimit: 11}
+	transport := &memoryTransport{
+		peer: serverBridge, readLimit: 13, writeLimit: 11,
+		finishErrorAfterReady: nscore.Fail(nscore.FailureConnectionRefused, net.ErrClosed),
+	}
+	t.Cleanup(func() {
+		if calls := transport.finishCalls.Load(); calls != 1 {
+			t.Errorf("transport finish-connect calls = %d, want 1", calls)
+		}
+	})
 	client, err := NewClient(transport, profile, "api.example.com", tlsns.IdentityDNS, testLimits())
 	if err != nil {
 		t.Fatal(err)
@@ -144,7 +152,16 @@ func TestServerHandshakeALPNAndPlaintext(t *testing.T) {
 		},
 		RequiredALPN: "h2", MaxCertificateChainBytes: 64 << 10, MaxPeerCertificates: 4,
 	}
-	server, err := NewServer(&memoryTransport{peer: clientBridge, local: local, remote: remote, readLimit: 13, writeLimit: 11}, profile, testLimits())
+	transport := &memoryTransport{
+		peer: clientBridge, local: local, remote: remote, readLimit: 13, writeLimit: 11,
+		finishErrorAfterReady: nscore.Fail(nscore.FailureConnectionRefused, net.ErrClosed),
+	}
+	t.Cleanup(func() {
+		if calls := transport.finishCalls.Load(); calls != 1 {
+			t.Errorf("transport finish-connect calls = %d, want 1", calls)
+		}
+	})
+	server, err := NewServer(transport, profile, testLimits())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -324,12 +341,14 @@ func testLimits() Limits {
 }
 
 type memoryTransport struct {
-	peer          *bridgeConn
-	closed        atomic.Bool
-	eof           atomic.Bool
-	readLimit     int
-	writeLimit    int
-	local, remote nscore.Endpoint
+	peer                  *bridgeConn
+	closed                atomic.Bool
+	eof                   atomic.Bool
+	finishCalls           atomic.Uint32
+	finishErrorAfterReady error
+	readLimit             int
+	writeLimit            int
+	local, remote         nscore.Endpoint
 }
 
 func (transport *memoryTransport) LocalEndpoint() nscore.Endpoint {
@@ -348,6 +367,9 @@ func (transport *memoryTransport) Readiness() nscore.Readiness {
 	return nscore.ReadyConnected | nscore.ReadyReadable | nscore.ReadyWritable
 }
 func (transport *memoryTransport) TryFinishConnect() (nscore.Progress, error) {
+	if transport.finishCalls.Add(1) > 1 && transport.finishErrorAfterReady != nil {
+		return 0, transport.finishErrorAfterReady
+	}
 	return nscore.ProgressDone, nil
 }
 func (transport *memoryTransport) TryRead(dst []byte) (nscore.IOResult, error) {
