@@ -75,6 +75,7 @@ type Adapter struct {
 	quotas                 *quota.Account
 	tcp                    *tcpbackend.Adapter
 	queries                []*dnsQuery
+	freeAccounting         *dnsQueryAccounting
 	freePacket             *[dnsQueryPacketCapacity]byte
 	freeRecordInline       *[inlineDNSRecordCapacity]dnsns.Record
 	freeRecordOverflow     []dnsns.Record
@@ -160,6 +161,11 @@ type lockedTCPStream interface {
 	CloseLocked() error
 }
 
+type dnsQueryAccounting struct {
+	retained quota.Charge
+	work     quota.Charge
+}
+
 type dnsQuery struct {
 	owner              *Adapter
 	request            dnsns.Request
@@ -183,9 +189,26 @@ type dnsQuery struct {
 	state              dnsQueryState
 	failure            error
 
-	portLease lnetocore.UDPPortLease
-	retained  quota.Charge
-	work      quota.Charge
+	portLease  lnetocore.UDPPortLease
+	accounting *dnsQueryAccounting
+}
+
+func (n *Adapter) acquireAccountingLocked() *dnsQueryAccounting {
+	if n == nil || n.freeAccounting == nil {
+		return new(dnsQueryAccounting)
+	}
+	accounting := n.freeAccounting
+	n.freeAccounting = nil
+	return accounting
+}
+
+func (n *Adapter) recycleAccountingLocked(accounting *dnsQueryAccounting) {
+	if n == nil || accounting == nil {
+		return
+	}
+	if n.freeAccounting == nil {
+		n.freeAccounting = accounting
+	}
 }
 
 func (n *Adapter) acquirePacketLocked() *[dnsQueryPacketCapacity]byte {
@@ -269,19 +292,21 @@ func (n *Adapter) TryResolve(request dnsns.Request) (nscore.Resource, nscore.Pro
 	if len(n.queries) == int(n.config.MaxQueries) {
 		return nil, 0, nscore.Fail(nscore.FailureResourceLimit, lneto.ErrExhausted)
 	}
-	query := &dnsQuery{owner: n, request: request, txid: n.nextTxID, packetStorage: n.acquirePacketLocked()}
+	query := &dnsQuery{owner: n, request: request, txid: n.nextTxID, accounting: n.acquireAccountingLocked(), packetStorage: n.acquirePacketLocked()}
 	if int(n.config.MaxRecords) <= inlineDNSRecordCapacity {
 		query.recordStorage = n.acquireRecordInlineLocked()
 		query.records = query.recordStorage[:0:n.config.MaxRecords]
 	} else {
 		query.recordOverflow = n.acquireRecordOverflowLocked()
 		if query.recordOverflow == nil {
+			n.recycleAccountingLocked(query.accounting)
 			n.recyclePacketLocked(query.packetStorage)
 			return nil, 0, nscore.Fail(nscore.FailureResourceLimit, lneto.ErrExhausted)
 		}
 		query.records = query.recordOverflow[:0:n.config.MaxRecords]
 	}
 	if !n.allocatePortLocked(&query.portLease) {
+		n.recycleAccountingLocked(query.accounting)
 		n.recyclePacketLocked(query.packetStorage)
 		n.recycleRecordInlineLocked(query.recordStorage)
 		n.recycleRecordOverflowLocked(query.recordOverflow)
@@ -291,6 +316,7 @@ func (n *Adapter) TryResolve(request dnsns.Request) (nscore.Resource, nscore.Pro
 	packet, err := buildDNSQueryPacketInto(query.packetStorage[:], request, n.nextTxID, n.config.MaxResponseBytes)
 	if err != nil {
 		query.portLease.ReleaseLocked()
+		n.recycleAccountingLocked(query.accounting)
 		n.recyclePacketLocked(query.packetStorage)
 		n.recycleRecordInlineLocked(query.recordStorage)
 		n.recycleRecordOverflowLocked(query.recordOverflow)
@@ -298,8 +324,9 @@ func (n *Adapter) TryResolve(request dnsns.Request) (nscore.Resource, nscore.Pro
 	}
 	query.packet = packet
 	query.state = dnsQueryPending
-	if err := n.quotas.AcquireResourceAndQueuedBytes(&query.retained, quota.ResourceDNS, 1, dnsRetainedBytes(n.config)); err != nil {
+	if err := n.quotas.AcquireResourceAndQueuedBytes(&query.accounting.retained, quota.ResourceDNS, 1, dnsRetainedBytes(n.config)); err != nil {
 		query.portLease.ReleaseLocked()
+		n.recycleAccountingLocked(query.accounting)
 		n.recyclePacketLocked(query.packetStorage)
 		n.recycleRecordInlineLocked(query.recordStorage)
 		n.recycleRecordOverflowLocked(query.recordOverflow)
@@ -309,10 +336,11 @@ func (n *Adapter) TryResolve(request dnsns.Request) (nscore.Resource, nscore.Pro
 	if request.Types == dnsns.RecordsA|dnsns.RecordsAAAA {
 		workUnits = 2
 	}
-	if err := n.quotas.AcquireDNSWork(&query.work, workUnits); err != nil {
-		query.retained.Release()
-		query.retained.ResetReleased()
+	if err := n.quotas.AcquireDNSWork(&query.accounting.work, workUnits); err != nil {
+		query.accounting.retained.Release()
+		query.accounting.retained.ResetReleased()
 		query.portLease.ReleaseLocked()
+		n.recycleAccountingLocked(query.accounting)
 		n.recyclePacketLocked(query.packetStorage)
 		n.recycleRecordInlineLocked(query.recordStorage)
 		n.recycleRecordOverflowLocked(query.recordOverflow)
@@ -423,10 +451,12 @@ func (q *dnsQuery) closeLocked() error {
 	q.failure = nil
 	q.releaseQuotaLocked()
 	if q.owner != nil {
+		q.owner.recycleAccountingLocked(q.accounting)
 		q.owner.recyclePacketLocked(q.packetStorage)
 		q.owner.recycleRecordInlineLocked(q.recordStorage)
 		q.owner.recycleRecordOverflowLocked(q.recordOverflow)
 	}
+	q.accounting = nil
 	q.packetStorage = nil
 	q.recordStorage = nil
 	q.recordOverflow = nil
@@ -493,14 +523,20 @@ func (q *dnsQuery) completeLocked(records []dnsns.Record) {
 }
 
 func (q *dnsQuery) releaseWorkLocked() {
-	q.work.Release()
-	q.work.ResetReleased()
+	if q.accounting == nil {
+		return
+	}
+	q.accounting.work.Release()
+	q.accounting.work.ResetReleased()
 }
 
 func (q *dnsQuery) releaseQuotaLocked() {
+	if q.accounting == nil {
+		return
+	}
 	q.releaseWorkLocked()
-	q.retained.Release()
-	q.retained.ResetReleased()
+	q.accounting.retained.Release()
+	q.accounting.retained.ResetReleased()
 }
 
 // CloseLocked releases every DNS query and retained allocation. The caller
@@ -523,6 +559,7 @@ func (n *Adapter) CloseLocked() {
 	}
 	clear(n.freeRecordOverflow)
 	n.byPort = nil
+	n.freeAccounting = nil
 	n.freePacket = nil
 	n.freeRecordInline = nil
 	n.freeRecordOverflow = nil

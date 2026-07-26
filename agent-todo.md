@@ -1777,10 +1777,11 @@ No repository-owned workstream or completion criterion from this hardening reque
   and 512-byte UDP bound this removes about 554 KiB of always-retained parser
   scratch per namespace and eliminates the prior 16 KiB allocation from every
   non-truncated query in the documented example configuration.
-- Packet and inline-record retention now use detached cleared slots rather than
-  embedding 1,053 bytes in every query object. Steady resolve/close allocation
-  falls from 1,792 to 768 bytes per query (57.1%) while controlled latency drops
-  from about 614 ns to 538 ns (12.4%) with the same one allocation. The adapter
-  caches only one packet slot, one inline slot, and at most one overflow slot of
-  256 records; larger overflow buffers are released instead of becoming an
-  uncharged high-water memory pool.
+- Quota accounting, packet, and inline-record retention now use detached cleared
+  slots rather than embedding 1,501 bytes in every query object. Steady
+  resolve/close allocation falls from 1,792 to 288 bytes per query (83.9%) while
+  controlled latency drops from about 614 ns to 478 ns (22.1%) with the same one
+  allocation. Charges are released/reset before reuse. The adapter caches only
+  one accounting slot, one packet slot, one inline slot, and at most one overflow
+  slot of 256 records; larger overflow buffers are released instead of becoming
+  an uncharged high-water memory pool.
