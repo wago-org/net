@@ -179,11 +179,11 @@ buffers are zeroed before reuse or release. The adapter retains at most one idle
 listener pool of no more than 256 slots and 1 MiB of storage plus one idle
 outbound buffer of no more than 1 MiB; concurrent high-water buffers and larger
 configurations are dropped after close rather than remaining as uncharged cache.
-Adapter creation seeds only a small stream-registry capacity hint and no longer
-allocates reuse-index arrays proportional to configured listener or outbound
-limits. It grows the registry as streams are actually created rather than
-preallocating for the full theoretical `MaxOutboundStreams +
-MaxListeners*AcceptBacklog` population. Closing an
+Adapter creation seeds only small listener/stream registry capacity hints and no
+longer allocates registries or reuse-index arrays proportional to configured
+listener or outbound limits. It grows the registries as resources are actually
+created rather than preallocating for the full theoretical
+`MaxOutboundStreams + MaxListeners*AcceptBacklog` population. Closing an
 accepted stream releases its resource quota immediately. lneto retains the
 closed pool entry until its listener performs maintenance; the next bounded
 egress service probe reclaims that entry and now reports one charged service
