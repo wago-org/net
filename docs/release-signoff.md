@@ -143,7 +143,7 @@ reviewed standard-Go-only TLS closure is exactly five packages:
 TinyGo 0.41.1 tests the remaining 123 packages individually and retains one log
 per package. On the expanded standard-Go client/server stream branch, the
 explicit TLS signoff still runs 17 package profiles (10 ordinary and seven race)
-and now resolves 168 named test targets, including bounded per-instance client
+and now resolves 170 named test targets, including bounded per-instance client
 resumption, explicit server ticket-key rotation, cache isolation, exact cache
 quota teardown, fixed RFC 9266 channel-binding derivation/output atomicity,
 eager client-certificate validation, package-owned frozen validation time,

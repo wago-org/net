@@ -590,15 +590,15 @@ func (stream *Stream) Close() error {
 	stream.cancel()
 	stream.bridge.abort(context.Canceled)
 	stream.wg.Wait()
+	stream.bridge.release()
 	stream.mu.Lock()
-	stream.rxPlain.clear()
-	stream.txPlain.clear()
-	clear(stream.readScratch)
-	clear(stream.writeScratch)
-	clear(stream.cipherScratch)
-	clear(stream.channelBinding[:])
+	transport := stream.transport
+	stream.releaseRetainedLocked()
 	stream.mu.Unlock()
-	return stream.transport.Close()
+	if transport == nil {
+		return nil
+	}
+	return transport.Close()
 }
 
 // CloseWorkersLocked is used only by shared-backend teardown while the private
@@ -617,9 +617,28 @@ func (stream *Stream) CloseWorkersLocked() {
 	stream.cancel()
 	stream.bridge.abort(context.Canceled)
 	stream.wg.Wait()
+	stream.bridge.release()
 	stream.mu.Lock()
-	clear(stream.channelBinding[:])
+	stream.releaseRetainedLocked()
 	stream.mu.Unlock()
+}
+
+func (stream *Stream) releaseRetainedLocked() {
+	stream.rxPlain.release()
+	stream.txPlain.release()
+	clear(stream.readScratch)
+	clear(stream.writeScratch)
+	clear(stream.cipherScratch)
+	stream.readScratch = nil
+	stream.writeScratch = nil
+	stream.cipherScratch = nil
+	clear(stream.channelBinding[:])
+	stream.info = tlsns.ConnectionInfo{}
+	stream.tls = nil
+	stream.profile = Profile{}
+	stream.serverProfile = ServerProfile{}
+	stream.transport = nil
+	stream.terminal = nil
 }
 
 func mapTLSError(err error) error {

@@ -99,10 +99,12 @@ the graceful TLS stream path: it drains accepted plaintext and emits
 `close_notify`, while peer `close_notify` becomes stable EOF. Resource `close`
 remains the bounded abort path: it cancels the handshake, closes the bridge,
 wakes every condition wait, joins all three workers, clears retained plaintext,
-and aborts the private TCP stream without waiting for peer packets or
-acknowledgements. Shared namespace teardown joins workers, clears any bounded
-client resumption cache, and releases its quota before the private TCP
-participant releases transport state.
+ciphertext, scratch, channel-binding, connection-metadata, and profile references,
+drops their backing slices immediately, and aborts the private TCP stream without
+waiting for peer packets or acknowledgements. Worker-only shared-namespace
+teardown performs the same memory release before the private TCP participant
+releases transport state, then clears any bounded client resumption cache and its
+quota.
 
 The current bounded bridge is intentionally granular-only and experimental. It
 has a named standard-Go ordinary/race release check in `scripts/tls-signoff.sh`.

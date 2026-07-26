@@ -70,6 +70,11 @@ func (ring *byteRing) clear() {
 	ring.length = 0
 }
 
+func (ring *byteRing) release() {
+	ring.clear()
+	ring.buffer = nil
+}
+
 // bridgeConn is the bounded blocking endpoint used only by crypto/tls workers.
 // Host calls interact through nonblocking feed/peek methods below.
 type bridgeConn struct {
@@ -149,6 +154,19 @@ type bridgeAddress string
 
 func (address bridgeAddress) Network() string { return "wago-tls" }
 func (address bridgeAddress) String() string  { return string(address) }
+
+func (conn *bridgeConn) release() {
+	if conn == nil {
+		return
+	}
+	conn.mu.Lock()
+	conn.inbound.release()
+	conn.outbound.release()
+	conn.err = nil
+	conn.handshakeBytes = 0
+	conn.maxHandshakeBytes = 0
+	conn.mu.Unlock()
+}
 
 func (conn *bridgeConn) abort(err error) {
 	if conn == nil {

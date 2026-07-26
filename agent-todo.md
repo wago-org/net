@@ -1638,7 +1638,7 @@ No repository-owned workstream or completion criterion from this hardening reque
 - Current local evidence: `go test ./...`, shuffled tests, full race/shuffle,
   vet, source boundaries, checkptr, accepted-diagnostic linux/386, all 123
   TinyGo-supported packages, all 12 custom CLI bundles, and all 17 TLS signoff
-  profiles passed. TLS signoff now resolves 168 named tests after bounded
+  profiles passed. TLS signoff now resolves 170 named tests after bounded
   resumption, channel-binding, client-certificate, frozen-clock,
   software-signer, static-SNI, and certificate-rotation coverage. Fuzz smoke
   passes 47
@@ -1709,7 +1709,7 @@ No repository-owned workstream or completion criterion from this hardening reque
   stream module.
 - Current validation passes `go test ./...`, focused TLS race tests, `go vet
   ./...`, source-boundary checks, shell syntax, diff checks, and all 17 TLS
-  signoff package runs resolving 168 named tests.
+  signoff package runs resolving 170 named tests.
 
 ## Bounded TLS host-call hardening — July 26, 2026
 
@@ -1735,7 +1735,7 @@ No repository-owned workstream or completion criterion from this hardening reque
   before accepted streams drain remains an explicit abort boundary rather than
   a zero-downtime handoff claim.
 - Standard Go passes across the complete repository, and all 17 TLS signoff
-  package runs now resolve and pass 168 named test targets.
+  package runs now resolve and pass 170 named test targets.
 
 ## TLS immutable-profile allocation hardening — July 26, 2026
 
@@ -1748,6 +1748,11 @@ No repository-owned workstream or completion criterion from this hardening reque
   handshake race coverage. The adapter remains the sole profile owner, live
   mutation remains unsupported, and profile/certificate rotation semantics are
   unchanged.
+- Normal and worker-only close now zero and drop plaintext/ciphertext rings,
+  scratch slices, channel binding, metadata, `crypto/tls.Conn`, transport, and
+  profile references immediately after workers join. A retained stale resource
+  object therefore no longer pins the configured TLS buffers or certificate/CA
+  graph until a later garbage collection of the wrapper itself.
 - Controlled TLS 1.3 benchmarks reduce client handshakes from about 391,650 to
   390,050 bytes and from 964 to 952 allocations, and server handshakes from
   about 391,220 to 389,650 bytes and from 954 to 948 allocations. Constructing
