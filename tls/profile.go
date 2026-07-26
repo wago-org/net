@@ -3,12 +3,18 @@ package tls
 import (
 	"bytes"
 	"crypto"
+	"crypto/ecdsa"
+	"crypto/ed25519"
+	"crypto/elliptic"
+	"crypto/rsa"
 	cryptotls "crypto/tls"
 	"crypto/x509"
 	"errors"
 	"net/netip"
+	"reflect"
 	"slices"
 	"strings"
+	"time"
 	"unicode/utf8"
 
 	"github.com/wago-org/net/internal/dnsname"
@@ -64,6 +70,8 @@ type profileBuilder struct {
 	allowedNames            map[string]identityKind
 	requiredALPN            string
 	allowTLS12              bool
+	validationTime          time.Time
+	validationTimeSet       bool
 	maxClientSessionEntries uint16
 	maxClientSessionBytes   int
 }
@@ -82,7 +90,45 @@ func (option serverProfileOptionFunc) applyServerProfile(builder *serverProfileB
 type serverProfileBuilder struct {
 	requiredALPN      string
 	allowTLS12        bool
+	validationTime    time.Time
+	validationTimeSet bool
 	sessionTicketKeys [][32]byte
+}
+
+// ProfileOption is a host-only option that applies to both client and server
+// profiles. Implementations are package-owned so arbitrary guest-reachable
+// callbacks cannot enter TLS processing through this surface.
+type ProfileOption interface {
+	ClientProfileOption
+	ServerProfileOption
+}
+
+type validationTimeOption struct {
+	value time.Time
+}
+
+func (option validationTimeOption) applyClientProfile(builder *profileBuilder) error {
+	if builder.validationTimeSet || option.value.IsZero() {
+		return ErrInvalidProfile
+	}
+	builder.validationTime = option.value.UTC()
+	builder.validationTimeSet = true
+	return nil
+}
+
+func (option validationTimeOption) applyServerProfile(builder *serverProfileBuilder) error {
+	if builder.validationTimeSet || option.value.IsZero() {
+		return ErrInvalidServerProfile
+	}
+	builder.validationTime = option.value.UTC()
+	builder.validationTimeSet = true
+	return nil
+}
+
+// ValidationTime installs one immutable validation instant without retaining a
+// caller callback. When omitted, crypto/tls uses Go's standard system clock.
+func ValidationTime(value time.Time) ProfileOption {
+	return validationTimeOption{value: value}
 }
 
 // AllowServerNames authorizes exact normalized DNS names or canonical IP
@@ -192,8 +238,10 @@ func EnableServerSessionTickets(keys ...[32]byte) ServerProfileOption {
 }
 
 // NewClientProfile validates and deeply clones a caller-owned crypto/tls
-// configuration. Later mutation of the supplied config, trust pool, certificate
-// slices, or ALPN slice cannot change the profile.
+// configuration. Client certificate chains and leaf/private-key correspondence
+// are checked eagerly, and private keys are restricted to standard in-memory
+// software implementations. Later mutation of the supplied config, trust pool,
+// certificate slices, or ALPN slice cannot change the profile.
 func NewClientProfile(id uint32, config *cryptotls.Config, options ...ClientProfileOption) (*ClientProfile, error) {
 	if id == 0 || config == nil {
 		return nil, ErrInvalidProfile
@@ -214,6 +262,10 @@ func NewClientProfile(id uint32, config *cryptotls.Config, options ...ClientProf
 	if err != nil {
 		return nil, err
 	}
+	if builder.validationTimeSet {
+		validationTime := builder.validationTime
+		cloned.Time = func() time.Time { return validationTime }
+	}
 	if builder.requiredALPN != "" {
 		if len(cloned.NextProtos) == 0 {
 			cloned.NextProtos = []string{builder.requiredALPN}
@@ -228,12 +280,12 @@ func NewClientProfile(id uint32, config *cryptotls.Config, options ...ClientProf
 }
 
 // NewServerProfile validates and clones a caller-owned crypto/tls server
-// configuration. Static certificate DER and metadata are deeply cloned. Each
-// crypto.Signer remains a host-owned interface value because private keys are
-// intentionally never copied or exposed; the caller must keep that signer
-// available, concurrency-safe, and immutable for the profile lifetime.
-// Dynamic certificate, verification, session, entropy, and key-log callbacks
-// are rejected so guest traffic cannot mutate host policy.
+// configuration. Static certificate DER and metadata are deeply cloned.
+// Private keys remain host-owned and are restricted to standard in-memory RSA,
+// ECDSA, and Ed25519 implementations whose signing calls cannot delegate to an
+// arbitrary external callback. Dynamic certificate, verification, clock,
+// session, entropy, and key-log callbacks are rejected so guest traffic cannot
+// mutate host policy or indefinitely block deterministic worker teardown.
 func NewServerProfile(id uint32, config *cryptotls.Config, options ...ServerProfileOption) (*ServerProfile, error) {
 	if id == 0 || config == nil {
 		return nil, ErrInvalidServerProfile
@@ -250,6 +302,10 @@ func NewServerProfile(id uint32, config *cryptotls.Config, options ...ServerProf
 	cloned, err := cloneSafeServerConfig(config, builder.allowTLS12)
 	if err != nil {
 		return nil, err
+	}
+	if builder.validationTimeSet {
+		validationTime := builder.validationTime
+		cloned.Time = func() time.Time { return validationTime }
 	}
 	if builder.requiredALPN != "" {
 		if len(cloned.NextProtos) == 0 {
@@ -296,7 +352,7 @@ func cloneSafeConfig(input *cryptotls.Config, allowTLS12 bool) (*cryptotls.Confi
 	if input.InsecureSkipVerify || input.KeyLogWriter != nil || input.Renegotiation != cryptotls.RenegotiateNever ||
 		input.VerifyPeerCertificate != nil || input.VerifyConnection != nil || input.GetClientCertificate != nil ||
 		input.GetCertificate != nil || input.GetConfigForClient != nil || input.ClientSessionCache != nil ||
-		input.UnwrapSession != nil || input.WrapSession != nil || input.Rand != nil || input.NameToCertificate != nil ||
+		input.UnwrapSession != nil || input.WrapSession != nil || input.Rand != nil || input.Time != nil || input.NameToCertificate != nil ||
 		input.ClientAuth != cryptotls.NoClientCert || input.ClientCAs != nil || input.SessionTicketKey != ([32]byte{}) ||
 		len(input.CipherSuites) != 0 || len(input.CurvePreferences) != 0 ||
 		len(input.EncryptedClientHelloConfigList) != 0 || input.EncryptedClientHelloRejectionVerify != nil ||
@@ -317,6 +373,11 @@ func cloneSafeConfig(input *cryptotls.Config, allowTLS12 bool) (*cryptotls.Confi
 	}
 	if input.RootCAs != nil {
 		cloned.RootCAs = input.RootCAs.Clone()
+	}
+	for _, certificate := range input.Certificates {
+		if err := validateStaticCertificate(certificate, ErrInvalidProfile); err != nil {
+			return nil, err
+		}
 	}
 	cloned.Certificates = cloneCertificates(input.Certificates)
 	minVersion := cloned.MinVersion
@@ -349,7 +410,7 @@ func cloneSafeServerConfig(input *cryptotls.Config, allowTLS12 bool) (*cryptotls
 	if input.InsecureSkipVerify || input.KeyLogWriter != nil || input.Renegotiation != cryptotls.RenegotiateNever ||
 		input.VerifyPeerCertificate != nil || input.VerifyConnection != nil || input.GetClientCertificate != nil ||
 		input.GetCertificate != nil || input.GetConfigForClient != nil || input.ClientSessionCache != nil ||
-		input.UnwrapSession != nil || input.WrapSession != nil || input.Rand != nil || input.NameToCertificate != nil ||
+		input.UnwrapSession != nil || input.WrapSession != nil || input.Rand != nil || input.Time != nil || input.NameToCertificate != nil ||
 		input.RootCAs != nil || input.ServerName != "" || input.SessionTicketKey != ([32]byte{}) ||
 		len(input.CipherSuites) != 0 || len(input.CurvePreferences) != 0 ||
 		len(input.EncryptedClientHelloConfigList) != 0 || input.EncryptedClientHelloRejectionVerify != nil ||
@@ -363,7 +424,7 @@ func cloneSafeServerConfig(input *cryptotls.Config, allowTLS12 bool) (*cryptotls
 		return nil, ErrInvalidServerProfile
 	}
 	for _, certificate := range input.Certificates {
-		if err := validateStaticServerCertificate(certificate); err != nil {
+		if err := validateStaticCertificate(certificate, ErrInvalidServerProfile); err != nil {
 			return nil, err
 		}
 	}
@@ -404,36 +465,85 @@ func cloneSafeServerConfig(input *cryptotls.Config, allowTLS12 bool) (*cryptotls
 	return cloned, nil
 }
 
-func validateStaticServerCertificate(certificate cryptotls.Certificate) error {
-	signer, signerOK := certificate.PrivateKey.(crypto.Signer)
-	if len(certificate.Certificate) == 0 || !signerOK || signer.Public() == nil {
-		return ErrInvalidServerProfile
+func validateStaticCertificate(certificate cryptotls.Certificate, invalidError error) error {
+	if len(certificate.Certificate) == 0 {
+		return invalidError
+	}
+	signer, err := validateSoftwareSigner(certificate.PrivateKey, invalidError)
+	if err != nil {
+		return err
 	}
 	parsed := make([]*x509.Certificate, len(certificate.Certificate))
 	for index, der := range certificate.Certificate {
 		if len(der) == 0 {
-			return ErrInvalidServerProfile
+			return invalidError
 		}
 		value, err := x509.ParseCertificate(der)
 		if err != nil {
-			return ErrInvalidServerProfile
+			return invalidError
 		}
 		parsed[index] = value
 	}
 	for index := 0; index+1 < len(parsed); index++ {
 		if err := parsed[index].CheckSignatureFrom(parsed[index+1]); err != nil {
-			return ErrInvalidServerProfile
+			return invalidError
 		}
 	}
 	leafPublic, err := x509.MarshalPKIXPublicKey(parsed[0].PublicKey)
 	if err != nil {
-		return ErrInvalidServerProfile
+		return invalidError
 	}
 	signerPublic, err := x509.MarshalPKIXPublicKey(signer.Public())
 	if err != nil || !bytes.Equal(leafPublic, signerPublic) {
-		return ErrInvalidServerProfile
+		return invalidError
 	}
 	return nil
+}
+
+func validateSoftwareSigner(privateKey any, invalidError error) (crypto.Signer, error) {
+	switch key := privateKey.(type) {
+	case *rsa.PrivateKey:
+		if key == nil || key.Validate() != nil {
+			return nil, invalidError
+		}
+		return key, nil
+	case *ecdsa.PrivateKey:
+		if key == nil || !standardECDSACurve(key.Curve) {
+			return nil, ErrUnsafeTLSConfig
+		}
+		if key.D == nil || key.X == nil || key.Y == nil || key.D.Sign() <= 0 ||
+			key.D.Cmp(key.Curve.Params().N) >= 0 || !key.Curve.IsOnCurve(key.X, key.Y) {
+			return nil, invalidError
+		}
+		scalar := key.D.FillBytes(make([]byte, (key.Curve.Params().N.BitLen()+7)/8))
+		x, y := key.Curve.ScalarBaseMult(scalar)
+		if x == nil || y == nil || x.Cmp(key.X) != 0 || y.Cmp(key.Y) != 0 {
+			return nil, invalidError
+		}
+		return key, nil
+	case ed25519.PrivateKey:
+		if len(key) != ed25519.PrivateKeySize {
+			return nil, invalidError
+		}
+		return key, nil
+	case *ed25519.PrivateKey:
+		if key == nil || len(*key) != ed25519.PrivateKeySize {
+			return nil, invalidError
+		}
+		return *key, nil
+	default:
+		if _, ok := privateKey.(crypto.Signer); ok {
+			return nil, ErrUnsafeTLSConfig
+		}
+		return nil, invalidError
+	}
+}
+
+func standardECDSACurve(curve elliptic.Curve) bool {
+	if curve == nil || !reflect.TypeOf(curve).Comparable() {
+		return false
+	}
+	return curve == elliptic.P256() || curve == elliptic.P384() || curve == elliptic.P521()
 }
 
 func cloneCertificates(input []cryptotls.Certificate) []cryptotls.Certificate {
