@@ -51,19 +51,20 @@ type Stream struct {
 	writeScratch  []byte
 	cipherScratch []byte
 
-	verified        bool
-	serviceAttempts uint32
-	cleanEOF        bool
-	shutdown        bool
-	shutdownDone    bool
-	closed          bool
-	terminal        error
-	info            tlsns.ConnectionInfo
-	channelBinding  [tlsns.ChannelBindingBytes]byte
-	role            tlsns.Role
-	profile         Profile
-	serverProfile   ServerProfile
-	identity        tlsns.IdentityType
+	verified           bool
+	transportConnected bool
+	serviceAttempts    uint32
+	cleanEOF           bool
+	shutdown           bool
+	shutdownDone       bool
+	closed             bool
+	terminal           error
+	info               tlsns.ConnectionInfo
+	channelBinding     [tlsns.ChannelBindingBytes]byte
+	role               tlsns.Role
+	profile            Profile
+	serverProfile      ServerProfile
+	identity           tlsns.IdentityType
 }
 
 func NewClient(transport Transport, profile Profile, serverName string, identity tlsns.IdentityType, limits Limits) (*Stream, error) {
@@ -332,18 +333,28 @@ func (stream *Stream) TryService(budget nscore.ServiceBudget) (nscore.ServiceRep
 		stream.bridge.abort(terminal)
 		return nscore.ServiceReport{}, 0, terminal
 	}
-	progress, err := stream.transport.TryFinishConnect()
-	if err != nil {
-		stream.fail(err)
-		return nscore.ServiceReport{}, 0, err
-	}
-	if !progress.Valid() {
-		err := nscore.Fail(nscore.FailureIO, ErrInvalidConfig)
-		stream.fail(err)
-		return nscore.ServiceReport{}, 0, err
-	}
-	if progress != nscore.ProgressDone {
-		return nscore.ServiceReport{}, nscore.ProgressWouldBlock, nil
+	stream.mu.Lock()
+	transportConnected := stream.transportConnected
+	stream.mu.Unlock()
+	if !transportConnected {
+		progress, err := stream.transport.TryFinishConnect()
+		if err != nil {
+			stream.fail(err)
+			return nscore.ServiceReport{}, 0, err
+		}
+		if !progress.Valid() {
+			err := nscore.Fail(nscore.FailureIO, ErrInvalidConfig)
+			stream.fail(err)
+			return nscore.ServiceReport{}, 0, err
+		}
+		if progress != nscore.ProgressDone {
+			return nscore.ServiceReport{}, nscore.ProgressWouldBlock, nil
+		}
+		stream.mu.Lock()
+		if !stream.closed && stream.terminal == nil {
+			stream.transportConnected = true
+		}
+		stream.mu.Unlock()
 	}
 
 	var report nscore.ServiceReport
