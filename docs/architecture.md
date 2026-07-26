@@ -174,10 +174,16 @@ It uses only immediate `tcp.Handler` buffer/state primitives and never calls
 pools and
 outbound streams have bounded receive/transmit storage, partial I/O, connect and
 accept progress, half-close, level readiness, endpoint policy, quota ownership,
-port reuse, and deterministic abort cleanup. Adapter creation seeds only a
-small stream-registry capacity hint and grows that registry as streams are
-actually created rather than preallocating for the full theoretical
-`MaxOutboundStreams + MaxListeners*AcceptBacklog` population. Closing an
+port reuse, and deterministic abort cleanup. Closed listener and outbound
+buffers are zeroed before reuse or release. The adapter retains at most one idle
+listener pool of no more than 256 slots and 1 MiB of storage plus one idle
+outbound buffer of no more than 1 MiB; concurrent high-water buffers and larger
+configurations are dropped after close rather than remaining as uncharged cache.
+Adapter creation seeds only a small stream-registry capacity hint and no longer
+allocates reuse-index arrays proportional to configured listener or outbound
+limits. It grows the registry as streams are actually created rather than
+preallocating for the full theoretical `MaxOutboundStreams +
+MaxListeners*AcceptBacklog` population. Closing an
 accepted stream releases its resource quota immediately. lneto retains the
 closed pool entry until its listener performs maintenance; the next bounded
 egress service probe reclaims that entry and now reports one charged service

@@ -227,7 +227,7 @@ func TestQuotaDeniedConnectDoesNotAllocateOrRetainOutboundStorage(t *testing.T) 
 	common.Lock()
 	leaseCount := common.TCPPortLeaseCountLocked()
 	common.Unlock()
-	if len(adapter.freeOutboundStorage) != 0 || len(adapter.streams) != 0 || leaseCount != 0 || adapter.outboundStreams != 0 {
+	if adapter.freeOutboundStorage != nil || len(adapter.streams) != 0 || leaseCount != 0 || adapter.outboundStreams != 0 {
 		t.Fatalf("quota denied connect retained state: storage=%d streams=%d leases=%d outbound=%d", len(adapter.freeOutboundStorage), len(adapter.streams), leaseCount, adapter.outboundStreams)
 	}
 	if usage, closed := adapter.quotas.Snapshot(); closed || usage != (quota.Usage{QueuedBytes: 16 << 10}) {
@@ -305,10 +305,10 @@ func TestOutboundStorageReuseClearsDataAndIsolatesStaleStream(t *testing.T) {
 	if stale.storage != nil || stale.conn != nil || stale.allocation != nil || !stale.closed {
 		t.Fatalf("closed stale stream retained state: storage=%v conn=%p allocation=%p closed=%v", stale.storage, stale.conn, stale.allocation, stale.closed)
 	}
-	if len(adapter.freeOutboundStorage) != 1 || &adapter.freeOutboundStorage[0][0] != storageAddress {
-		t.Fatalf("outbound storage was not retained for bounded reuse: pools=%d", len(adapter.freeOutboundStorage))
+	if len(adapter.freeOutboundStorage) != len(storage) || &adapter.freeOutboundStorage[0] != storageAddress {
+		t.Fatalf("outbound storage was not retained for bounded reuse: bytes=%d", len(adapter.freeOutboundStorage))
 	}
-	for i, value := range adapter.freeOutboundStorage[0] {
+	for i, value := range adapter.freeOutboundStorage {
 		if value != 0 {
 			t.Fatalf("recycled storage byte %d = %d", i, value)
 		}
@@ -345,6 +345,159 @@ func TestOutboundStorageReuseClearsDataAndIsolatesStaleStream(t *testing.T) {
 	if usage, _ := adapter.quotas.Snapshot(); usage != (quota.Usage{}) {
 		t.Fatalf("final quota = %+v", usage)
 	}
+}
+
+func TestOutboundStorageReuseRetainsAtMostOneIdleBuffer(t *testing.T) {
+	core, adapter := newTestAdapter(t, 7, 0, 3)
+	remote := nscore.Endpoint{Address: netip.MustParseAddr("192.0.2.8"), Port: 4208}
+	streams := make([]*tcpStream, 0, 3)
+	storages := make([][]byte, 0, 3)
+	for i := 0; i < 3; i++ {
+		value, progress, err := adapter.TryConnect(remote)
+		if err != nil || progress != nscore.ProgressInProgress {
+			t.Fatalf("connect %d = %T, %v, %v", i, value, progress, err)
+		}
+		stream := value.(*tcpStream)
+		for j := range stream.storage {
+			stream.storage[j] = byte(i + 1)
+		}
+		streams = append(streams, stream)
+		storages = append(storages, stream.storage)
+	}
+	wantCached := &storages[0][0]
+	for i, stream := range streams {
+		if err := stream.Close(); err != nil {
+			t.Fatalf("close %d: %v", i, err)
+		}
+	}
+	if len(adapter.freeOutboundStorage) != 512 || &adapter.freeOutboundStorage[0] != wantCached {
+		t.Fatalf("idle outbound cache = bytes:%d address:%p want:%p", len(adapter.freeOutboundStorage), firstByte(adapter.freeOutboundStorage), wantCached)
+	}
+	for i, storage := range storages {
+		for j, value := range storage {
+			if value != 0 {
+				t.Fatalf("released storage %d byte %d = %d", i, j, value)
+			}
+		}
+	}
+	if len(adapter.streams) != 0 || adapter.outboundStreams != 0 {
+		t.Fatalf("closed outbound state = streams:%d outbound:%d", len(adapter.streams), adapter.outboundStreams)
+	}
+	if usage, _ := adapter.quotas.Snapshot(); usage != (quota.Usage{}) {
+		t.Fatalf("closed outbound quota = %+v", usage)
+	}
+	if err := core.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if adapter.freeOutboundStorage != nil {
+		t.Fatalf("namespace close retained %d outbound bytes", len(adapter.freeOutboundStorage))
+	}
+}
+
+func TestListenerPoolReuseRetainsAtMostOneClearedIdlePool(t *testing.T) {
+	core, adapter := newTestAdapterWithBacklog(t, 9, 3, 0, 2)
+	listeners := make([]*tcpListener, 0, 3)
+	storages := make([][]byte, 0, 3)
+	for i := 0; i < 3; i++ {
+		local := nscore.Endpoint{Address: netip.MustParseAddr("192.0.2.9"), Port: uint16(4210 + i)}
+		value, progress, err := adapter.TryListen(local)
+		if err != nil || progress != nscore.ProgressDone {
+			t.Fatalf("listen %d = %T, %v, %v", i, value, progress, err)
+		}
+		listener := value.(*tcpListener)
+		for j := range listener.pool.storage {
+			listener.pool.storage[j] = byte(i + 1)
+		}
+		listeners = append(listeners, listener)
+		storages = append(storages, listener.pool.storage)
+	}
+	wantCached := &storages[0][0]
+	for i, listener := range listeners {
+		if err := listener.Close(); err != nil {
+			t.Fatalf("close %d: %v", i, err)
+		}
+		if listener.pool.slots != nil || listener.pool.storage != nil {
+			t.Fatalf("closed listener %d retained pool", i)
+		}
+	}
+	if len(adapter.freeListenerPool.slots) != 2 || len(adapter.freeListenerPool.storage) != 1024 || &adapter.freeListenerPool.storage[0] != wantCached {
+		t.Fatalf("idle listener cache = slots:%d bytes:%d address:%p want:%p", len(adapter.freeListenerPool.slots), len(adapter.freeListenerPool.storage), firstByte(adapter.freeListenerPool.storage), wantCached)
+	}
+	for i, storage := range storages {
+		for j, value := range storage {
+			if value != 0 {
+				t.Fatalf("released listener storage %d byte %d = %d", i, j, value)
+			}
+		}
+	}
+	if len(adapter.listeners) != 0 {
+		t.Fatalf("closed listener state = listeners:%d", len(adapter.listeners))
+	}
+	if usage, _ := adapter.quotas.Snapshot(); usage != (quota.Usage{}) {
+		t.Fatalf("closed listener quota = %+v", usage)
+	}
+	if err := core.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if adapter.freeListenerPool.slots != nil || adapter.freeListenerPool.storage != nil {
+		t.Fatal("namespace close retained listener pool")
+	}
+}
+
+func TestIdleReuseDropsOversizedTCPStorageAndListenerMetadata(t *testing.T) {
+	adapter := &Adapter{}
+	outboundStorage := make([]byte, maxIdleTCPReuseStorageBytes+1)
+	for i := range outboundStorage {
+		outboundStorage[i] = 0xff
+	}
+	stream := &tcpStream{owner: adapter, storage: outboundStorage}
+	adapter.recycleOutboundStreamLocked(stream)
+	if adapter.freeOutboundStorage != nil || stream.storage != nil {
+		t.Fatalf("oversized outbound storage retained: cache=%d stream=%d", len(adapter.freeOutboundStorage), len(stream.storage))
+	}
+	for i, value := range outboundStorage {
+		if value != 0 {
+			t.Fatalf("oversized outbound byte %d = %d", i, value)
+		}
+	}
+
+	oversizedConfig := Config{AcceptBacklog: 1, ReceiveBytes: maxIdleTCPReuseStorageBytes, TransmitBytes: 256, TransmitPackets: 4}
+	oversizedPool, err := newTCPPool(adapter, 1, oversizedConfig)
+	if err != nil {
+		t.Fatal(err)
+	}
+	oversizedListenerStorage := oversizedPool.storage
+	for i := range oversizedListenerStorage {
+		oversizedListenerStorage[i] = 0xff
+	}
+	oversizedListener := &tcpListener{pool: oversizedPool}
+	adapter.recycleListenerLocked(oversizedListener)
+	if adapter.freeListenerPool.slots != nil || adapter.freeListenerPool.storage != nil || oversizedListener.pool.slots != nil || oversizedListener.pool.storage != nil {
+		t.Fatal("oversized listener pool retained")
+	}
+	for i, value := range oversizedListenerStorage {
+		if value != 0 {
+			t.Fatalf("oversized listener byte %d = %d", i, value)
+		}
+	}
+
+	metadataConfig := Config{AcceptBacklog: maxIdleTCPListenerSlots + 1, ReceiveBytes: 256, TransmitBytes: 256, TransmitPackets: 4}
+	metadataPool, err := newTCPPool(adapter, maxIdleTCPListenerSlots+1, metadataConfig)
+	if err != nil {
+		t.Fatal(err)
+	}
+	metadataListener := &tcpListener{pool: metadataPool}
+	adapter.recycleListenerLocked(metadataListener)
+	if adapter.freeListenerPool.slots != nil || adapter.freeListenerPool.storage != nil || metadataListener.pool.slots != nil || metadataListener.pool.storage != nil {
+		t.Fatal("oversized listener metadata retained")
+	}
+}
+
+func firstByte(storage []byte) *byte {
+	if len(storage) == 0 {
+		return nil
+	}
+	return &storage[0]
 }
 
 func TestAcceptedCloseRetainsSlotUntilChargedMaintenance(t *testing.T) {
@@ -1688,11 +1841,11 @@ func TestListenerBacklogCloseDetachesAllSlotsBeforePoolReuse(t *testing.T) {
 	if usage, _ := server.quotas.Snapshot(); usage != (quota.Usage{}) {
 		t.Fatalf("listener close quota = %+v", usage)
 	}
-	if len(server.freeListenerPools) != 1 {
-		t.Fatalf("free listener pools = %d", len(server.freeListenerPools))
+	if server.freeListenerPool.slots == nil {
+		t.Fatal("listener pool was not retained for bounded reuse")
 	}
-	for i := range server.freeListenerPools[0].slots {
-		slot := &server.freeListenerPools[0].slots[i]
+	for i := range server.freeListenerPool.slots {
+		slot := &server.freeListenerPool.slots[i]
 		if slot.inUse || slot.stream != nil || slot.quotaOwned || slot.resource.ResetReleased() {
 			t.Fatalf("released slot %d = in_use=%v stream=%p quota_owned=%v", i, slot.inUse, slot.stream, slot.quotaOwned)
 		}
@@ -1706,8 +1859,8 @@ func TestListenerBacklogCloseDetachesAllSlotsBeforePoolReuse(t *testing.T) {
 		t.Fatalf("replacement listen = %T, %v, %v", replacementValue, progress, err)
 	}
 	replacement := replacementValue.(*tcpListener)
-	if replacement == listener || len(server.freeListenerPools) != 0 {
-		t.Fatalf("replacement wrapper/pool reuse = same_wrapper=%v free_pools=%d", replacement == listener, len(server.freeListenerPools))
+	if replacement == listener || server.freeListenerPool.slots != nil {
+		t.Fatalf("replacement wrapper/pool reuse = same_wrapper=%v free_pool=%v", replacement == listener, server.freeListenerPool.slots != nil)
 	}
 	connect(clientCore1, client1, clientMAC1)
 	thirdServerValue, progress, err := replacement.TryAccept()
