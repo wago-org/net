@@ -206,8 +206,11 @@ under the namespace lock; `tcp.Conn.Read`, `Write`, and `Flush` remain absent.
 Connect/accept, partial I/O, EOF/reset semantics, half-close, policy, exact
 resource/retained-storage quota, bounded readiness, port reuse, and abort cleanup
 are covered. Closed listener/outbound bytes are zeroed, and idle reuse retains
-at most one listener pool capped at 256 slots and 1 MiB plus one outbound buffer
-capped at 1 MiB; excess high-water storage is dropped after quota release.
+at most one listener pool capped at 256 slots and 1 MiB plus one outbound
+buffer/released-accounting slot capped at 1 MiB; excess high-water storage is
+dropped after quota release. The accounting reuse lowers steady connect/close
+allocation from 1,128 to 936 B/op (17.0%) while `tcp.Conn` remains deliberately
+generation-distinct because lneto may retain its pointer after abort.
 Adapter creation now uses small listener/stream registry hints and no longer
 allocates registries or reuse-index arrays proportional to maximum listener or
 outbound counts. Accepted-stream close releases resource quota immediately; lneto's
