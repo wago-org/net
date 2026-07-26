@@ -644,7 +644,14 @@ func (n *Adapter) TryConnectAuthorized(remote nscore.Endpoint, authorize Connect
 	}
 	n.core.Lock()
 	defer n.core.Unlock()
-	if n.core.ClosedLocked() || n.stack == nil {
+	return n.TryConnectAuthorizedLocked(remote, authorize)
+}
+
+// TryConnectAuthorizedLocked is the shared-core-lock variant used by bounded
+// protocol participants that privately layer over TCP. The caller must hold
+// n's exact core lock for the entire call.
+func (n *Adapter) TryConnectAuthorizedLocked(remote nscore.Endpoint, authorize ConnectAuthorizer) (nscore.Resource, nscore.Progress, error) {
+	if n == nil || n.core == nil || n.core.ClosedLocked() || n.stack == nil {
 		return nil, 0, nscore.Fail(nscore.FailureClosed, net.ErrClosed)
 	}
 	if !remote.Valid() || remote.Address.IsUnspecified() || remote.Port == 0 || (!remote.Address.Is4() && !remote.Address.Is6()) {
@@ -900,7 +907,13 @@ func (s *tcpStream) TryFinishConnect() (nscore.Progress, error) {
 	}
 	s.owner.core.Lock()
 	defer s.owner.core.Unlock()
-	if s.closed || s.owner.core.ClosedLocked() {
+	return s.TryFinishConnectLocked()
+}
+
+// TryFinishConnectLocked is the shared-core-lock variant for private protocol
+// participants. The caller must hold the exact owner core lock.
+func (s *tcpStream) TryFinishConnectLocked() (nscore.Progress, error) {
+	if s == nil || s.owner == nil || s.closed || s.owner.core.ClosedLocked() {
 		return 0, nscore.Fail(nscore.FailureClosed, net.ErrClosed)
 	}
 	if s.terminal || s.conn == nil {
@@ -929,7 +942,13 @@ func (s *tcpStream) TryRead(dst []byte) (nscore.IOResult, error) {
 	}
 	s.owner.core.Lock()
 	defer s.owner.core.Unlock()
-	if s.closed || s.owner.core.ClosedLocked() {
+	return s.TryReadLocked(dst)
+}
+
+// TryReadLocked is the shared-core-lock variant for private protocol
+// participants. The caller must hold the exact owner core lock.
+func (s *tcpStream) TryReadLocked(dst []byte) (nscore.IOResult, error) {
+	if s == nil || s.owner == nil || s.closed || s.owner.core.ClosedLocked() {
 		return nscore.IOResult{}, nscore.Fail(nscore.FailureClosed, net.ErrClosed)
 	}
 	if len(dst) == 0 {
@@ -963,7 +982,13 @@ func (s *tcpStream) TryWrite(src []byte) (nscore.IOResult, error) {
 	}
 	s.owner.core.Lock()
 	defer s.owner.core.Unlock()
-	if s.closed || s.owner.core.ClosedLocked() {
+	return s.TryWriteLocked(src)
+}
+
+// TryWriteLocked is the shared-core-lock variant for private protocol
+// participants. The caller must hold the exact owner core lock.
+func (s *tcpStream) TryWriteLocked(src []byte) (nscore.IOResult, error) {
+	if s == nil || s.owner == nil || s.closed || s.owner.core.ClosedLocked() {
 		return nscore.IOResult{}, nscore.Fail(nscore.FailureClosed, net.ErrClosed)
 	}
 	if s.terminal || s.conn == nil {
@@ -1025,6 +1050,14 @@ func (s *tcpStream) Close() error {
 	}
 	s.owner.core.Lock()
 	defer s.owner.core.Unlock()
+	return s.closeLocked()
+}
+
+// CloseLocked closes a private stream while its exact shared core lock is held.
+func (s *tcpStream) CloseLocked() error {
+	if s == nil || s.owner == nil {
+		return nil
+	}
 	return s.closeLocked()
 }
 

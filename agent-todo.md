@@ -131,9 +131,12 @@ with the selective submodule API.
 Acceptance checks must inspect both runtime registration and the Go dependency
 graph. TCP-only, UDP-only, DNS-only, and every supported combination must assert
 exact imports and capabilities. A TCP-only fixture must have no dependency on the
-UDP/DNS public packages or lneto adapters; equivalent checks apply to the other
-protocols. The root package must have no protocol-package dependency, and only
-the explicit aggregate registration package may include all protocols.
+UDP/DNS public packages or lneto adapters, and equivalent isolation applies to
+UDP. DNS-only retains one reviewed internal exception for the private lneto TCP
+adapter used by optional truncation fallback, while every public, binding,
+instance, ABI, namespace-facet, capability, and guest-import TCP surface remains
+absent. The root package must have no protocol-package dependency, and only the
+explicit aggregate registration package may include all public protocols.
 
 ## Current architecture
 
@@ -215,8 +218,10 @@ ownership, and synchronous close. Responses must echo the exact requested
 questions. Only a unique reachable CNAME chain and requested terminal A/AAAA
 records are emitted; irrelevant/unrequested/duplicate answers are ignored,
 conflicting chains and loops fail closed, and compressed wire parsing is directly
-fuzzed. Truncated responses fail truthfully as temporary because TCP fallback is
-not implemented.
+fuzzed. Truncated responses fail truthfully as temporary unless the host enables
+bounded private TCP fallback, in which case the same query handle uses one
+length-prefixed stream to the configured resolver under exact byte, attempt,
+port, policy, quota, cancellation, and teardown bounds.
 
 `internal/readiness` provides a finite coordinator per instance resource table.
 Registrations preserve exact handle kind, polls are level-triggered and bounded
@@ -836,8 +841,9 @@ Arm64 execution is explicitly outside the current user-selected release profile.
 - DNS is finite, nonblocking, capability-gated, and fully registered. Responses
   are source, destination-port, transaction-ID, checksum, fragmentation, size,
   echoed-question, chain, record, and quota bounded. UDP truncation maps to
-  temporary failure because DNS-over-TCP fallback is intentionally not
-  implemented in ABI v1.
+  temporary failure by default. Hosts may opt into bounded private TCP fallback
+  without changing ABI v1 or exposing raw TCP authority/imports; raw-TCP deny
+  rules still constrain the exact configured resolver.
 - lneto's high-level TCP/UDP `Read`, `Write`, `ReadFrom`, and `WriteTo` use backoff
   loops and may block. The concrete namespace imports none of them. UDP uses
   adapter-owned bounded queues and lneto frame codecs. TCP is safely serialized
@@ -1105,8 +1111,8 @@ Remaining risks are publishing the exact production Wago merge without rewriting
 its two parent histories; publishing the exact current-main Wago/networking review
 subjects before adoption; the absence of a separately reviewable pool plugin;
 lneto lacking a public immediate accepted-entry detach API so safe TCP slot reuse
-remains one explicitly charged service probe after close; the intentionally
-unsupported DNS-over-TCP fallback; and hosted release automation after immutable
+remains one explicitly charged service probe after close; and hosted release
+automation after immutable
 Wago publication. The release gate
 documents, machine-records, and narrowly checks the unchanged WASI native
 preview-1 exception rather than hiding it. The review bundle carries complete
@@ -1736,3 +1742,31 @@ No repository-owned workstream or completion criterion from this hardening reque
   a zero-downtime handoff claim.
 - Standard Go passes across the complete repository, and all 17 TLS signoff
   package runs now resolve and pass 164 named test targets.
+
+## Bounded DNS-over-TCP fallback — July 26, 2026
+
+- Added opt-in `dns.EnableTCPFallback(maxResponseBytes, maxServiceAttempts)`
+  without changing the six-function DNS ABI. The default remains UDP-only and
+  still reports a truncated response as temporary failure.
+- A valid source/port/checksum/transaction/question-correlated UDP truncation
+  response now retires its UDP lease and can start exactly one private TCP
+  stream to the configured resolver. The state machine bounds connect checks,
+  partial length/query writes, two-byte response framing, partial response
+  reads, retained response bytes, and total service attempts.
+- DNS authority continues to select the configured resolver and query name.
+  Raw-TCP allow authority is not required or exposed, but every matching
+  raw-TCP deny still constrains the private stream. DNS-only registration keeps
+  `net.tcp`, `wago_net_tcp`, the public TCP facade, binding, instance operations,
+  ABI, and namespace facet absent; only the internal lneto TCP adapter is a
+  reviewed private dependency.
+- Private TCP buffers/resources/ports use the existing exact quota and shared
+  port domains. Cancellation, timeout, malformed/oversized length, premature
+  EOF, parser failure, query close, and namespace teardown close the private
+  stream, clear retained response bytes, and release ownership deterministically.
+  Aggregate compatibility capacity now includes both public TCP ports and the
+  maximum simultaneous DNS fallback streams with checked `uint16` arithmetic.
+- Live two-core integration proves UDP truncation followed by a real lneto TCP
+  handshake, length-prefixed query/response exchange, unchanged A/AAAA/CNAME
+  iteration, and zero residual quota. Separate tests prove raw-deny rejection,
+  response/attempt/aggregate bounds, EOF cleanup, standard-Go race safety, and
+  TinyGo execution of the DNS backend and public package.

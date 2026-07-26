@@ -95,8 +95,11 @@ policy or quota construction, while advanced callers retain exact control.
    plus the shared `wago_net.abi_version` core import. Unregistered protocols are
    absent from Wago inspection and fail ordinary Wasm import resolution.
 4. A TCP-only dependency graph contains no plugin UDP/DNS public, binding,
-   instance-operation, or lneto-adapter package. Equivalent isolation holds for
-   UDP-only and DNS-only clients.
+   instance-operation, or lneto-adapter package, and equivalent isolation holds
+   for UDP-only clients. DNS-only clients exclude every public TCP facade,
+   register package, binding, instance operation, ABI, namespace facet,
+   capability, and guest import; they may include the private lneto TCP adapter
+   used by opt-in DNS truncation fallback.
 5. Shared lifecycle hooks, exact caller identity, resource-table identity,
    policy composition, quotas, readiness, namespace ownership, reset safety, and
    deterministic cleanup are installed exactly once per composed network.
@@ -309,7 +312,10 @@ advanced compatibility section for raw configuration.
 Small root, TCP-only, UDP-only, DNS-only, pair, and aggregate fixtures now gate
 exact runtime capability/import sets under standard Go and TinyGo. Their
 standard-Go `go list -deps` gate rejects every omitted public protocol and
-binding package plus accidental aggregate-package dependencies. The fixtures
+binding package plus accidental aggregate-package dependencies. DNS-only graphs
+have one explicit internal exception for the private lneto TCP adapter used by
+bounded fallback; every public and guest-facing TCP layer remains rejected. The
+fixtures
 require `internal/instance/core`, `internal/abi/core`,
 `internal/namespace/core`, and `internal/backend/lneto/core` in every graph.
 They require only selected `internal/instance/{tcp,udp,dns}` operations,

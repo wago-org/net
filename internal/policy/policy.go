@@ -237,6 +237,18 @@ func (p *Policy) CheckAddress(operation Operation, address netip.Addr) bool {
 	return p.decide(query{transport: transport, direction: direction, address: address})
 }
 
+// AllowsPrivateTCPTransport reports whether a protocol-owned private TCP
+// connection remains permitted by raw-TCP deny rules. It deliberately does not
+// require a raw-TCP allow rule: the selecting protocol must establish its own
+// authority and endpoint-class gates before calling this method.
+func (p *Policy) AllowsPrivateTCPTransport(direction Direction, address netip.Addr, port uint16) bool {
+	if p == nil || (direction != DirectionOutbound && direction != DirectionInbound) ||
+		!address.IsValid() || address.Is4In6() || address.IsUnspecified() || port == 0 {
+		return false
+	}
+	return !p.denied(query{transport: TransportTCP, direction: direction, address: address, port: port, hasPort: true})
+}
+
 func (p *Policy) CheckPortAllocation(operation Operation, address netip.Addr, actualPort uint16) bool {
 	if actualPort == 0 || !p.CheckEndpoint(operation, address, 0) {
 		return false

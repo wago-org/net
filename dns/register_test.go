@@ -199,33 +199,51 @@ func TestDefaultDNSStorageFitsSharedDefaultsAndStopsAtEightQueries(t *testing.T)
 }
 
 func TestDNSRegistrationLeavesTCPAndUDPImportsUnresolved(t *testing.T) {
-	network := wagonet.New()
-	if err := dns.Register(network); err != nil {
-		t.Fatalf("Register: %v", err)
-	}
-	runtime := wago.NewRuntime()
-	if err := runtime.Use(network); err != nil {
-		t.Fatalf("Use: %v", err)
-	}
-
-	for _, test := range []struct {
-		module     string
-		capability wago.Capability
-	}{
-		{module: wagonet.TCPModule, capability: wagonet.CapTCP},
-		{module: wagonet.UDPModule, capability: wagonet.CapUDP},
+	for name, options := range map[string][]dns.Option{
+		"udp only":     {dns.Resolver("192.0.2.53")},
+		"tcp fallback": {dns.Resolver("192.0.2.53"), dns.EnableTCPFallback(16<<10, 128)},
 	} {
-		module, err := runtime.Compile(namespaceImportModule(test.module))
-		if err == nil {
-			var instance *wago.Instance
-			instance, err = runtime.Instantiate(context.Background(), module, wago.WithPolicy(wago.Policy{AllowedCapabilities: []wago.Capability{test.capability}}))
-			if instance != nil {
-				_ = instance.Close()
+		t.Run(name, func(t *testing.T) {
+			network := wagonet.New(wagonet.WithConfig(wagonet.Config{StaticIPv4: selectiveStaticIPv4()}))
+			if err := dns.Register(network, options...); err != nil {
+				t.Fatalf("Register: %v", err)
 			}
-		}
-		if err == nil {
-			t.Fatalf("unregistered %s import unexpectedly resolved", test.module)
-		}
+			runtime := wago.NewRuntime()
+			if err := runtime.Use(network); err != nil {
+				t.Fatalf("Use: %v", err)
+			}
+			empty, err := runtime.Compile([]byte{0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00})
+			if err != nil {
+				t.Fatal(err)
+			}
+			instance, err := runtime.Instantiate(context.Background(), empty)
+			if err != nil {
+				t.Fatalf("instantiate DNS-only runtime: %v", err)
+			}
+			if err := instance.Close(); err != nil {
+				t.Fatal(err)
+			}
+
+			for _, test := range []struct {
+				module     string
+				capability wago.Capability
+			}{
+				{module: wagonet.TCPModule, capability: wagonet.CapTCP},
+				{module: wagonet.UDPModule, capability: wagonet.CapUDP},
+			} {
+				module, err := runtime.Compile(namespaceImportModule(test.module))
+				if err == nil {
+					var instance *wago.Instance
+					instance, err = runtime.Instantiate(context.Background(), module, wago.WithPolicy(wago.Policy{AllowedCapabilities: []wago.Capability{test.capability}}))
+					if instance != nil {
+						_ = instance.Close()
+					}
+				}
+				if err == nil {
+					t.Fatalf("unregistered %s import unexpectedly resolved", test.module)
+				}
+			}
+		})
 	}
 }
 

@@ -3,6 +3,7 @@ package dns
 import (
 	"encoding/binary"
 	"errors"
+	"io"
 	"net"
 	"net/netip"
 
@@ -12,24 +13,33 @@ import (
 	"github.com/soypat/lneto/ipv4"
 	lnetoudp "github.com/soypat/lneto/udp"
 	lnetocore "github.com/wago-org/net/internal/backend/lneto/core"
+	tcpbackend "github.com/wago-org/net/internal/backend/lneto/tcp"
 	nscore "github.com/wago-org/net/internal/namespace/core"
 	dnsns "github.com/wago-org/net/internal/namespace/dns"
 	"github.com/wago-org/net/internal/policy"
 	"github.com/wago-org/net/internal/quota"
+	"github.com/wago-org/net/internal/resource"
 )
 
 var _ dnsns.Query = (*dnsQuery)(nil)
 
 const (
-	firstEphemeralDNSPort   uint16 = 53000
-	dnsQueryPacketCapacity         = lnetodns.SizeHeader + 2*(253+2+4) + 11
-	inlineDNSRecordCapacity        = 8
+	firstEphemeralDNSPort            uint16 = 53000
+	dnsQueryPacketCapacity                  = lnetodns.SizeHeader + 2*(253+2+4) + 11
+	inlineDNSRecordCapacity                 = 8
+	dnsTCPReceiveBytes                      = 4 << 10
+	dnsTCPTransmitBytes                     = 1 << 10
+	dnsTCPTransmitPackets                   = 8
+	MaximumTCPResponseBytes                 = int(^uint16(0))
+	MaximumTCPServiceAttempts               = 4096
+	MaximumAggregateTCPResponseBytes        = 64 << 20
 )
 
 var (
-	errPolicyDenied  = errors.New("net: endpoint policy denied operation")
-	errCanceled      = errors.New("DNS query canceled")
-	errResponseLimit = errors.New("DNS response service-attempt limit reached")
+	errPolicyDenied     = errors.New("net: endpoint policy denied operation")
+	errCanceled         = errors.New("DNS query canceled")
+	errResponseLimit    = errors.New("DNS response service-attempt limit reached")
+	errTCPFallbackLimit = errors.New("DNS TCP fallback service-attempt limit reached")
 )
 
 const (
@@ -37,21 +47,24 @@ const (
 	closeOrder   = 10
 )
 
-// Config fixes resolver authority, response retention, concurrency, and
-// deterministic retransmission work. Zero MaxQueries disables DNS truthfully.
-// MaxQueries continues to limit live guest query handles until they are closed,
-// even after a terminal query has already retired its transport state.
+// Config fixes resolver authority, UDP/TCP response retention, concurrency,
+// and deterministic retransmission work. TCP fallback is disabled unless both
+// TCP fields are nonzero. Zero MaxQueries disables DNS truthfully. MaxQueries
+// continues to limit live guest query handles until they are closed, even after
+// a terminal query has already retired its transport state.
 type Config struct {
-	Server               netip.Addr
-	MaxQueries           uint16
-	MaxRecords           uint16
-	MaxResponseBytes     int
-	MaxAttempts          uint16
-	RetryServiceAttempts uint16
+	Server                netip.Addr
+	MaxQueries            uint16
+	MaxRecords            uint16
+	MaxResponseBytes      int
+	MaxAttempts           uint16
+	RetryServiceAttempts  uint16
+	MaxTCPResponseBytes   int
+	MaxTCPServiceAttempts uint16
 }
 
-// Adapter owns DNS query state, wire codecs, retries, response retention, and
-// UDP service participation over one shared lneto core.
+// Adapter owns DNS query state, wire codecs, retries, response retention, UDP
+// service participation, and optional private TCP fallback over one shared core.
 type Adapter struct {
 	core                   *lnetocore.Namespace
 	config                 Config
@@ -59,6 +72,7 @@ type Adapter struct {
 	gatewayHardwareAddress [6]byte
 	policy                 *policy.Policy
 	quotas                 *quota.Account
+	tcp                    *tcpbackend.Adapter
 	queries                []*dnsQuery
 	freeRecordOverflow     [][]dnsns.Record
 	byPort                 map[uint16]*dnsQuery
@@ -92,12 +106,20 @@ func New(common *lnetocore.Namespace, config Config) (*Adapter, error) {
 	}
 	n.queries = make([]*dnsQuery, 0, config.MaxQueries)
 	n.byPort = make(map[uint16]*dnsQuery, config.MaxQueries)
-	n.candidates = make([]dnsns.Record, config.MaxResponseBytes/11)
-	n.names = make([]string, 2*(config.MaxResponseBytes/11))
+	parserBytes := max(config.MaxResponseBytes, config.MaxTCPResponseBytes)
+	n.candidates = make([]dnsns.Record, parserBytes/11)
+	n.names = make([]string, 2*(parserBytes/11))
 	if int(config.MaxRecords) > inlineDNSRecordCapacity {
 		n.freeRecordOverflow = make([][]dnsns.Record, 0, config.MaxQueries)
 	}
 	common.Unlock()
+	if tcpFallbackEnabled(config) {
+		privateTCP, err := tcpbackend.New(common, dnsTCPConfig(config))
+		if err != nil {
+			return nil, err
+		}
+		n.tcp = privateTCP
+	}
 	if err := common.Install(lnetocore.Participant{
 		IngressOrder: serviceOrder,
 		Ingress:      n.ingressLocked,
@@ -107,6 +129,11 @@ func New(common *lnetocore.Namespace, config Config) (*Adapter, error) {
 		CloseOrder:   closeOrder,
 		Close:        n.CloseLocked,
 	}); err != nil {
+		if n.tcp != nil {
+			common.Lock()
+			n.tcp.CloseLocked()
+			common.Unlock()
+		}
 		return nil, err
 	}
 	return n, nil
@@ -117,26 +144,44 @@ type dnsQueryState uint8
 const (
 	dnsQueryPending dnsQueryState = iota + 1
 	dnsQueryWaiting
+	dnsQueryTCPConnecting
+	dnsQueryTCPWriting
+	dnsQueryTCPReadingLength
+	dnsQueryTCPReadingResponse
 	dnsQueryDone
 	dnsQueryFailed
 	dnsQueryClosed
 )
 
+type lockedTCPStream interface {
+	TryFinishConnectLocked() (nscore.Progress, error)
+	TryReadLocked([]byte) (nscore.IOResult, error)
+	TryWriteLocked([]byte) (nscore.IOResult, error)
+	CloseLocked() error
+}
+
 type dnsQuery struct {
-	owner          *Adapter
-	request        dnsns.Request
-	localPort      uint16
-	txid           uint16
-	packet         []byte
-	packetStorage  [dnsQueryPacketCapacity]byte
-	records        []dnsns.Record
-	recordStorage  [inlineDNSRecordCapacity]dnsns.Record
-	recordOverflow []dnsns.Record
-	cursor         int
-	attempts       uint16
-	retry          uint16
-	state          dnsQueryState
-	failure        error
+	owner              *Adapter
+	request            dnsns.Request
+	localPort          uint16
+	txid               uint16
+	packet             []byte
+	packetStorage      [dnsQueryPacketCapacity]byte
+	tcpStream          lockedTCPStream
+	tcpPrefix          [2]byte
+	tcpPrefixBytes     int
+	tcpPacketBytes     int
+	tcpResponse        []byte
+	tcpResponseBytes   int
+	tcpServiceAttempts uint16
+	records            []dnsns.Record
+	recordStorage      [inlineDNSRecordCapacity]dnsns.Record
+	recordOverflow     []dnsns.Record
+	cursor             int
+	attempts           uint16
+	retry              uint16
+	state              dnsQueryState
+	failure            error
 
 	portLease lnetocore.UDPPortLease
 	retained  quota.Charge
@@ -212,6 +257,9 @@ func (n *Adapter) TryResolve(request dnsns.Request) (nscore.Resource, nscore.Pro
 		n.recycleRecordOverflowLocked(query.recordOverflow)
 		return nil, 0, lnetocore.MapError(err)
 	}
+	if tcpFallbackEnabled(n.config) {
+		query.tcpResponse = make([]byte, n.config.MaxTCPResponseBytes)
+	}
 	workUnits := uint64(1)
 	if request.Types == dnsns.RecordsA|dnsns.RecordsAAAA {
 		workUnits = 2
@@ -219,6 +267,8 @@ func (n *Adapter) TryResolve(request dnsns.Request) (nscore.Resource, nscore.Pro
 	if err := n.quotas.AcquireDNSWork(&query.work, workUnits); err != nil {
 		query.retained.Release()
 		query.retained.ResetReleased()
+		clear(query.tcpResponse)
+		query.tcpResponse = nil
 		query.portLease.ReleaseLocked()
 		n.recycleRecordOverflowLocked(query.recordOverflow)
 		return nil, 0, lnetocore.MapError(err)
@@ -313,6 +363,13 @@ func (q *dnsQuery) closeLocked() error {
 	clear(q.packet)
 	clear(q.packetStorage[:])
 	q.packet = nil
+	clear(q.tcpPrefix[:])
+	clear(q.tcpResponse)
+	q.tcpResponse = nil
+	q.tcpPrefixBytes = 0
+	q.tcpPacketBytes = 0
+	q.tcpResponseBytes = 0
+	q.tcpServiceAttempts = 0
 	for i := range q.records {
 		q.records[i] = dnsns.Record{}
 	}
@@ -329,7 +386,7 @@ func (q *dnsQuery) closeLocked() error {
 	return nil
 }
 
-func (q *dnsQuery) retireTransportLocked() {
+func (q *dnsQuery) retireUDPTransportLocked() {
 	if q == nil {
 		return
 	}
@@ -339,6 +396,30 @@ func (q *dnsQuery) retireTransportLocked() {
 	q.portLease.ReleaseLocked()
 	q.localPort = 0
 	q.retry = 0
+}
+
+func (q *dnsQuery) retireTCPTransportLocked() {
+	if q == nil {
+		return
+	}
+	if q.tcpStream != nil {
+		_ = q.tcpStream.CloseLocked()
+		q.tcpStream = nil
+	}
+	q.tcpPrefixBytes = 0
+	q.tcpPacketBytes = 0
+	q.tcpResponseBytes = 0
+	q.tcpServiceAttempts = 0
+	clear(q.tcpPrefix[:])
+	clear(q.tcpResponse)
+}
+
+func (q *dnsQuery) retireTransportLocked() {
+	if q == nil {
+		return
+	}
+	q.retireUDPTransportLocked()
+	q.retireTCPTransportLocked()
 	q.txid = 0
 }
 
@@ -399,11 +480,22 @@ func (n *Adapter) CloseLocked() {
 
 func (n *Adapter) hasWorkLocked() bool {
 	for _, query := range n.queries {
-		if query != nil && (query.state == dnsQueryPending || query.state == dnsQueryWaiting) {
+		if query != nil && query.hasServiceWorkLocked() {
 			return true
 		}
 	}
 	return false
+}
+
+func (q *dnsQuery) hasServiceWorkLocked() bool {
+	if q == nil {
+		return false
+	}
+	return q.state == dnsQueryPending || q.state == dnsQueryWaiting || q.tcpFallbackStateLocked()
+}
+
+func (q *dnsQuery) tcpFallbackStateLocked() bool {
+	return q != nil && q.state >= dnsQueryTCPConnecting && q.state <= dnsQueryTCPReadingResponse
 }
 
 // egressLocked performs one bounded query operation. worked may be true
@@ -418,8 +510,15 @@ func (n *Adapter) egressLocked(dst []byte) (written int, worked bool, err error)
 			index -= len(n.queries)
 		}
 		query := n.queries[index]
-		if query == nil || (query.state != dnsQueryPending && query.state != dnsQueryWaiting) {
+		if query == nil || !query.hasServiceWorkLocked() {
 			continue
+		}
+		if query.tcpFallbackStateLocked() {
+			n.cursor = index + 1
+			if n.cursor == len(n.queries) {
+				n.cursor = 0
+			}
+			return 0, true, query.serviceTCPFallbackLocked()
 		}
 		if query.state == dnsQueryWaiting {
 			n.cursor = index + 1
@@ -477,6 +576,153 @@ func (n *Adapter) egressLocked(dst []byte) (written int, worked bool, err error)
 		return frameBytes, true, nil
 	}
 	return 0, false, nil
+}
+
+func (q *dnsQuery) beginTCPFallbackLocked() {
+	if q == nil || q.owner == nil || q.owner.tcp == nil || !tcpFallbackEnabled(q.owner.config) || q.tcpFallbackStateLocked() {
+		if q != nil {
+			q.failLocked(nscore.FailureTemporary, lneto.ErrTruncatedFrame)
+		}
+		return
+	}
+	q.retireUDPTransportLocked()
+	remote := nscore.Endpoint{Address: q.owner.config.Server, Port: lnetodns.ServerPort}
+	private, progress, err := q.owner.tcp.TryConnectAuthorizedLocked(remote, func(compiled *policy.Policy, endpoint nscore.Endpoint) error {
+		if endpoint != remote || !compiled.AllowsPrivateTCPTransport(policy.DirectionOutbound, endpoint.Address, endpoint.Port) {
+			return nscore.Fail(nscore.FailureAccessDenied, errPolicyDenied)
+		}
+		return nil
+	})
+	if err != nil {
+		q.failLocked(dnsTCPFailure(err), err)
+		return
+	}
+	stream, ok := private.(lockedTCPStream)
+	if !ok || resource.IsNil(private) || (progress != nscore.ProgressDone && progress != nscore.ProgressInProgress) {
+		if closer, closeOK := private.(interface{ CloseLocked() error }); closeOK && !resource.IsNil(private) {
+			_ = closer.CloseLocked()
+		}
+		q.failLocked(nscore.FailureIO, lneto.ErrBadState)
+		return
+	}
+	q.tcpStream = stream
+	binary.BigEndian.PutUint16(q.tcpPrefix[:], uint16(len(q.packet)))
+	q.tcpPrefixBytes = 0
+	q.tcpPacketBytes = 0
+	q.tcpResponseBytes = 0
+	q.tcpServiceAttempts = 0
+	q.state = dnsQueryTCPConnecting
+}
+
+func (q *dnsQuery) serviceTCPFallbackLocked() error {
+	if q == nil || q.owner == nil || q.tcpStream == nil || !q.tcpFallbackStateLocked() {
+		if q != nil {
+			q.failLocked(nscore.FailureIO, lneto.ErrBadState)
+		}
+		return nil
+	}
+	if q.tcpServiceAttempts >= q.owner.config.MaxTCPServiceAttempts {
+		q.failLocked(nscore.FailureTimedOut, errTCPFallbackLimit)
+		return nil
+	}
+	q.tcpServiceAttempts++
+	switch q.state {
+	case dnsQueryTCPConnecting:
+		progress, err := q.tcpStream.TryFinishConnectLocked()
+		if err != nil {
+			q.failLocked(dnsTCPFailure(err), err)
+			return nil
+		}
+		if progress == nscore.ProgressDone {
+			q.state = dnsQueryTCPWriting
+		}
+		return nil
+	case dnsQueryTCPWriting:
+		var pending []byte
+		if q.tcpPrefixBytes < len(q.tcpPrefix) {
+			pending = q.tcpPrefix[q.tcpPrefixBytes:]
+		} else {
+			pending = q.packet[q.tcpPacketBytes:]
+		}
+		result, err := q.tcpStream.TryWriteLocked(pending)
+		if err != nil {
+			q.failLocked(dnsTCPFailure(err), err)
+			return nil
+		}
+		if q.tcpPrefixBytes < len(q.tcpPrefix) {
+			q.tcpPrefixBytes += result.Bytes
+		} else {
+			q.tcpPacketBytes += result.Bytes
+		}
+		if q.tcpPrefixBytes == len(q.tcpPrefix) && q.tcpPacketBytes == len(q.packet) {
+			clear(q.tcpPrefix[:])
+			q.tcpPrefixBytes = 0
+			q.state = dnsQueryTCPReadingLength
+		}
+		return nil
+	case dnsQueryTCPReadingLength:
+		result, err := q.tcpStream.TryReadLocked(q.tcpPrefix[q.tcpPrefixBytes:])
+		if err != nil {
+			q.failLocked(dnsTCPFailure(err), err)
+			return nil
+		}
+		if result.State == nscore.IOEOF {
+			q.failLocked(nscore.FailureTemporary, io.ErrUnexpectedEOF)
+			return nil
+		}
+		q.tcpPrefixBytes += result.Bytes
+		if q.tcpPrefixBytes == len(q.tcpPrefix) {
+			responseBytes := int(binary.BigEndian.Uint16(q.tcpPrefix[:]))
+			if responseBytes == 0 {
+				q.failLocked(nscore.FailureIO, lneto.ErrInvalidLengthField)
+			} else if responseBytes > len(q.tcpResponse) {
+				q.failLocked(nscore.FailureMessageTooLarge, lneto.ErrShortBuffer)
+			} else {
+				q.state = dnsQueryTCPReadingResponse
+			}
+		}
+		return nil
+	case dnsQueryTCPReadingResponse:
+		expected := int(binary.BigEndian.Uint16(q.tcpPrefix[:]))
+		result, err := q.tcpStream.TryReadLocked(q.tcpResponse[q.tcpResponseBytes:expected])
+		if err != nil {
+			q.failLocked(dnsTCPFailure(err), err)
+			return nil
+		}
+		if result.State == nscore.IOEOF {
+			q.failLocked(nscore.FailureTemporary, io.ErrUnexpectedEOF)
+			return nil
+		}
+		q.tcpResponseBytes += result.Bytes
+		if q.tcpResponseBytes != expected {
+			return nil
+		}
+		records, response, failure, err := parseDNSResponseInto(q.records[:0], q.owner.candidates, q.owner.names, q.tcpResponse[:expected], q.txid, q.request, int(q.owner.config.MaxRecords))
+		if !response {
+			q.failLocked(nscore.FailureIO, lneto.ErrMismatch)
+		} else if err != nil {
+			q.failLocked(failure, err)
+		} else {
+			q.completeLocked(records)
+		}
+		return nil
+	default:
+		q.failLocked(nscore.FailureIO, lneto.ErrBadState)
+		return nil
+	}
+}
+
+func dnsTCPFailure(err error) nscore.Failure {
+	failure, ok := nscore.FailureOf(err)
+	if !ok {
+		return nscore.FailureTemporary
+	}
+	switch failure {
+	case nscore.FailureAccessDenied, nscore.FailureResourceLimit, nscore.FailureTimedOut, nscore.FailureCanceled:
+		return failure
+	default:
+		return nscore.FailureTemporary
+	}
 }
 
 func (n *Adapter) ingressLocked(frame []byte) (bool, error) {
@@ -544,6 +790,10 @@ func (n *Adapter) ingressLocked(frame []byte) (bool, error) {
 		return true, nil
 	}
 	if err != nil {
+		if errors.Is(err, lneto.ErrTruncatedFrame) && tcpFallbackEnabled(n.config) {
+			query.beginTCPFallbackLocked()
+			return true, nil
+		}
 		query.failLocked(failure, err)
 		return true, nil
 	}
@@ -1010,7 +1260,23 @@ func decodeDNSNameInto(decoded, message []byte, offset int) (int, int, error) {
 }
 
 func dnsRetainedBytes(config Config) uint64 {
-	return uint64(config.MaxResponseBytes) + uint64(config.MaxRecords)*(2*254+16) + 2*254
+	return uint64(config.MaxResponseBytes) + uint64(config.MaxTCPResponseBytes) + uint64(config.MaxRecords)*(2*254+16) + 2*254
+}
+
+func tcpFallbackEnabled(config Config) bool {
+	return config.MaxTCPResponseBytes != 0 && config.MaxTCPServiceAttempts != 0
+}
+
+func dnsTCPConfig(config Config) tcpbackend.Config {
+	if !tcpFallbackEnabled(config) {
+		return tcpbackend.Config{}
+	}
+	return tcpbackend.Config{
+		MaxOutboundStreams: config.MaxQueries,
+		ReceiveBytes:       dnsTCPReceiveBytes,
+		TransmitBytes:      dnsTCPTransmitBytes,
+		TransmitPackets:    dnsTCPTransmitPackets,
+	}
 }
 
 // ValidConfig validates DNS-local resolver, storage, retry, and authority bounds.
@@ -1021,8 +1287,12 @@ func ValidConfig(config Config, mtu int, compiled *policy.Policy, account *quota
 	if requireAuthority && (compiled == nil || account == nil) {
 		return false
 	}
+	tcpDisabled := config.MaxTCPResponseBytes == 0 && config.MaxTCPServiceAttempts == 0
+	tcpEnabled := config.MaxTCPResponseBytes >= lnetodns.SizeHeader && config.MaxTCPResponseBytes <= MaximumTCPResponseBytes &&
+		config.MaxTCPServiceAttempts > 0 && config.MaxTCPServiceAttempts <= MaximumTCPServiceAttempts &&
+		uint64(config.MaxQueries)*uint64(config.MaxTCPResponseBytes) <= MaximumAggregateTCPResponseBytes
 	return validResolver(config.Server) && config.MaxRecords > 0 && config.MaxResponseBytes >= lnetodns.MaxSizeUDP && config.MaxResponseBytes <= mtu-28 &&
-		config.MaxResponseBytes <= int(^uint16(0)) && config.MaxAttempts > 0 && config.RetryServiceAttempts > 0
+		config.MaxResponseBytes <= int(^uint16(0)) && config.MaxAttempts > 0 && config.RetryServiceAttempts > 0 && (tcpDisabled || tcpEnabled)
 }
 
 func validResolver(address netip.Addr) bool {

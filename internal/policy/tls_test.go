@@ -47,6 +47,38 @@ func TestTLSServerAuthorityIsDistinctAndHonorsRawTCPDeny(t *testing.T) {
 	}
 }
 
+func TestPrivateTCPTransportRequiresProtocolAuthorityAndHonorsRawDeny(t *testing.T) {
+	denied := netip.MustParseAddr("192.0.2.9")
+	compiled, err := Compile(Config{Rules: []Rule{{
+		Action: ActionDeny, Transports: []Transport{TransportTCP}, Directions: []Direction{DirectionOutbound},
+		Prefixes: []netip.Prefix{netip.PrefixFrom(denied, 32)}, Ports: []PortRange{{First: 53, Last: 53}},
+	}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !compiled.AllowsPrivateTCPTransport(DirectionOutbound, netip.MustParseAddr("192.0.2.8"), 53) {
+		t.Fatal("unmatched private transport was treated as requiring raw-TCP allow authority")
+	}
+	if compiled.AllowsPrivateTCPTransport(DirectionOutbound, denied, 53) {
+		t.Fatal("raw-TCP deny did not constrain private transport")
+	}
+	for _, invalid := range []struct {
+		direction Direction
+		address   netip.Addr
+		port      uint16
+	}{
+		{Direction(99), netip.MustParseAddr("192.0.2.8"), 53},
+		{DirectionOutbound, netip.Addr{}, 53},
+		{DirectionOutbound, netip.IPv4Unspecified(), 53},
+		{DirectionOutbound, netip.MustParseAddr("::ffff:192.0.2.8"), 53},
+		{DirectionOutbound, netip.MustParseAddr("192.0.2.8"), 0},
+	} {
+		if compiled.AllowsPrivateTCPTransport(invalid.direction, invalid.address, invalid.port) {
+			t.Fatalf("invalid private transport allowed: %+v", invalid)
+		}
+	}
+}
+
 func TestTLSSpecialClassesRemainTLSScoped(t *testing.T) {
 	compiled, err := Compile(Config{
 		Rules:              []Rule{{Action: ActionAllow, Transports: []Transport{TransportTLS}, Directions: []Direction{DirectionOutbound}}},

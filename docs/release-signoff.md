@@ -28,6 +28,19 @@ as `unsupported-explicit`: no stub, guest module, or fake engine exists. TLS mus
 not be called production-ready until the complete strict gate passes for the
 final subject and arm64 TLS execution is retained from a suitable runner.
 
+## DNS private-transport signoff status
+
+DNS retains the existing six-function `wago_net_dns` ABI and `net.dns`
+capability. Opt-in `dns.EnableTCPFallback` adds no public/raw TCP capability or
+import: a correlated truncated UDP response may use one private lneto TCP stream
+to the configured resolver under exact response-byte, service-attempt, port,
+buffer, quota, cancellation, and teardown bounds. Standard-Go, race, and TinyGo
+backend tests exercise the real two-core UDP-to-TCP exchange plus deny, timeout,
+oversized-length, premature-EOF, and cancellation cleanup. Dependency inspection
+permits the lneto TCP adapter in DNS-only graphs while continuing to reject the
+public TCP facade, register package, binding, instance operations, ABI, namespace
+facet, capability, and guest imports.
+
 ## Pinned inputs
 
 The script refuses revision drift before doing work:
