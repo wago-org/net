@@ -17,6 +17,20 @@ import (
 	"github.com/wago-org/net/internal/quota"
 )
 
+func TestAggregateTCPPortCapacityIncludesPrivateDNSTCPFallback(t *testing.T) {
+	config := Config{
+		TCP: TCPConfig{MaxListeners: 2, MaxOutboundStreams: 3},
+		DNS: DNSConfig{MaxQueries: 4, MaxTCPResponseBytes: 2048, MaxTCPServiceAttempts: 32},
+	}
+	if got, ok := aggregateActiveTCPPorts(config); !ok || got != 9 {
+		t.Fatalf("aggregate active TCP ports = %d, %v", got, ok)
+	}
+	config.TCP.MaxListeners = ^uint16(0)
+	if got, ok := aggregateActiveTCPPorts(config); ok || got != 0 {
+		t.Fatalf("overflowed aggregate active TCP ports = %d, %v", got, ok)
+	}
+}
+
 func TestNamespacesExchangePacketsDeterministically(t *testing.T) {
 	aConfig := testConfig(1)
 	bConfig := testConfig(2)

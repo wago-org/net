@@ -269,29 +269,49 @@ defense conflict causes reconfiguration, and fails `INVALID_STATE` without
 mutation if another dynamic contributor owns the domain. No lneto blocking,
 deadline, sleep, retry/backoff, goroutine, or retained guest-slice API is used.
 `internal/backend/lneto/dns` owns immediate IPv4 UDP queries plus lneto DNS
-codecs, finite query/record/response bounds,
-policy and quota ownership, deterministic service-attempt retransmission and
-timeout, semantic RCode mapping, and copied A/AAAA/CNAME records. Each query has
-an active transport phase (UDP source-port lease, `byPort` dispatch entry, retry
-state) and a guest-visible terminal phase (handle, retained records or failure,
-quota until close). Successful completion, timeout, cancellation, parser
-failure, and other terminal failures retire the transport phase before the query
+codecs, finite query/record/response bounds, policy and quota ownership,
+deterministic service-attempt retransmission and timeout, semantic RCode mapping,
+and copied A/AAAA/CNAME records. Hosts may opt into bounded TCP fallback. A valid
+correlated UDP truncation response then retires the UDP source-port lease and
+uses one private `internal/backend/lneto/tcp` stream to the same configured
+resolver. The adapter writes and reads DNS's two-byte length framing under exact
+response-byte and service-attempt limits; no raw TCP handle, capability, binding,
+instance operation, ABI, or namespace facet is exposed. Raw-TCP denies still
+constrain the private connection without requiring a raw-TCP allow rule. Each
+query has an active transport phase (UDP source-port lease and retry state, or a
+single private TCP stream) and a guest-visible terminal phase (handle, retained
+records or failure, quota until close). The maximum TCP response remains
+quota-reserved from query creation, but the response byte slice is allocated only
+when a correlated truncation starts fallback and is zeroed and dropped at the
+terminal transition rather than being retained until guest close. Namespace
+parser scratch is eagerly bounded only by the UDP response limit; a larger TCP
+answer uses temporary candidate/name scratch capped by both the actual frame and
+its declared answer count. Query objects lease separately pooled quota-accounting,
+packet, and eight-record inline slots, reducing per-query garbage without making
+stale handles alias a new query. Charges are released and reset before reuse.
+Only one accounting slot, one cleared packet slot, one inline record slot, and at
+most one overflow slot of 256 records may remain cached; larger overflow storage
+is dropped at close. Successful
+completion, timeout, cancellation, parser
+failure, and other terminal failures retire the active transport before the query
 publishes its terminal result, so late packets cannot mutate committed records.
 Responses must echo the exact requested names/classes/types. Only a unique CNAME
 chain reachable from the requested name and requested A/AAAA records at its
 terminal name are emitted; irrelevant and duplicate answers are ignored, while
 conflicts and loops fail closed. Compressed names and resource framing have
- direct fuzz coverage. Truncated UDP responses map to temporary failure because
-DNS-over-TCP fallback is not implemented. `MaxQueries` still limits live guest
-query handles until close even after terminal transport retirement. UDP sockets
+direct fuzz coverage. Truncated UDP responses map to temporary failure when TCP
+fallback is disabled; when enabled they can complete only through the bounded
+private TCP state machine. `MaxQueries` still limits live guest query handles
+until close even after terminal transport retirement. UDP sockets
 and DNS queries reserve local ports through one protocol-neutral core lease
 domain, preserving exact collision, release, deterministic allocation, and close
 behavior without moving datagrams or DNS records into core. Root namespace
 construction imports only the shared lneto core. Root, single-protocol, pair,
 and all-protocol dependency fixtures require exactly the selected
-adapters/facets and reject every omitted one plus the aggregate assembler,
-completing the Stage 4 compile-isolation boundary; runtime composition separately
-covers all 4096 selective registrations.
+adapters/facets and reject every omitted one plus the aggregate assembler. The
+reviewed exception is DNS's private lneto TCP adapter: DNS-only graphs include
+that adapter but reject every public TCP layer and guest-facing TCP import.
+Runtime composition separately covers all 4096 selective registrations.
 Granular `tcp/register`, `udp/register`, `dns/register`, `icmpv4/register`,
 `ntp/register`, `mdns/register`, `dhcpv4/register`, `linklocal4/register`,
 `ipv6/register`, `icmpv6/register`, and `dhcpv6/register` packages own only their

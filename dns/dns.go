@@ -22,9 +22,10 @@ var (
 )
 
 // Config fixes DNS resolver authority, concurrent queries, retained records,
-// response bytes, and deterministic retry bounds. MaxQueries limits live guest
-// query handles until close even after a terminal query has retired its
-// transport state. Zero disables queries.
+// UDP/TCP response bytes, and deterministic retry bounds. MaxQueries limits live
+// guest query handles until close even after a terminal query has retired its
+// transport state. TCP fallback is disabled unless both TCP fields are nonzero.
+// Zero MaxQueries disables queries.
 type Config = dnsbackend.Config
 
 // DefaultConfig returns finite A/AAAA client storage for one explicit resolver.
@@ -45,12 +46,15 @@ type optionFunc func(*registration) error
 func (option optionFunc) applyDNS(config *registration) error { return option(config) }
 
 type registration struct {
-	config             Config
-	configSet          bool
-	resolver           netip.Addr
-	resolverSet        bool
-	defaultAuthority   bool
-	authorityAdditions policy.Config
+	config                Config
+	configSet             bool
+	resolver              netip.Addr
+	resolverSet           bool
+	tcpFallbackSet        bool
+	maxTCPResponseBytes   int
+	maxTCPServiceAttempts uint16
+	defaultAuthority      bool
+	authorityAdditions    policy.Config
 }
 
 // WithConfig supplies the advanced exact DNS resolver and storage configuration.
@@ -73,6 +77,23 @@ func Resolver(server string) Option {
 		}
 		target.resolver = address
 		target.resolverSet = true
+		return nil
+	})
+}
+
+// EnableTCPFallback permits one private, non-guest-visible TCP connection to
+// the configured resolver after a valid correlated UDP response sets the DNS
+// truncation bit. Response retention and maintenance attempts remain exact and
+// finite; raw-TCP allow authority is not granted and raw-TCP denies still apply.
+func EnableTCPFallback(maxResponseBytes int, maxServiceAttempts uint16) Option {
+	return optionFunc(func(target *registration) error {
+		if target.tcpFallbackSet || maxResponseBytes < 12 || maxResponseBytes > dnsbackend.MaximumTCPResponseBytes ||
+			maxServiceAttempts == 0 || maxServiceAttempts > dnsbackend.MaximumTCPServiceAttempts {
+			return ErrInvalidOption
+		}
+		target.tcpFallbackSet = true
+		target.maxTCPResponseBytes = maxResponseBytes
+		target.maxTCPServiceAttempts = maxServiceAttempts
 		return nil
 	})
 }
@@ -127,13 +148,17 @@ func (r registration) authority() policy.Config {
 
 func (r registration) finalConfig() Config {
 	config := r.config
-	if !r.resolverSet {
-		return config
+	if r.resolverSet {
+		if !r.configSet {
+			config = DefaultConfig(r.resolver)
+		} else {
+			config.Server = r.resolver
+		}
 	}
-	if !r.configSet {
-		return DefaultConfig(r.resolver)
+	if r.tcpFallbackSet {
+		config.MaxTCPResponseBytes = r.maxTCPResponseBytes
+		config.MaxTCPServiceAttempts = r.maxTCPServiceAttempts
 	}
-	config.Server = r.resolver
 	return config
 }
 
@@ -151,7 +176,23 @@ func Register(network *wagonet.Network, options ...Option) error {
 		}
 	}
 	resolvedConfig := config.finalConfig()
-	backend := plugin.NewBackend(plugin.BackendLnetoV1, nil,
+	if config.tcpFallbackSet && !config.resolverSet && (!config.configSet || !resolvedConfig.Server.IsValid()) {
+		return ErrInvalidResolver
+	}
+	backend := plugin.NewBackend(plugin.BackendLnetoV1, func(base any) error {
+		common, ok := base.(*lnetocore.Config)
+		if !ok {
+			return plugin.ErrInvalidBackend
+		}
+		if resolvedConfig.MaxTCPResponseBytes != 0 {
+			ports := uint32(common.MaxActiveTCPPorts) + uint32(resolvedConfig.MaxQueries)
+			if ports > uint32(^uint16(0)) {
+				return plugin.ErrInvalidBackend
+			}
+			common.MaxActiveTCPPorts = uint16(ports)
+		}
+		return nil
+	},
 		func(base any) (nscore.Service, error) {
 			common, ok := base.(*lnetocore.Namespace)
 			if !ok {

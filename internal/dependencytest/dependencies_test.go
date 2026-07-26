@@ -81,12 +81,15 @@ func TestFixtureDependencyBoundaries(t *testing.T) {
 					}
 					continue
 				}
-				if protocol == "tcp" && test.selected["tls"] {
+				if protocol == "tcp" && (test.selected["tls"] || test.selected["dns"]) {
 					if dependencies[dependency.public] || dependencies[dependency.binding] || dependencies[dependency.operation] || dependencies[dependency.abi] {
-						t.Fatalf("TLS-only reached raw TCP facade: public=%v binding=%v operation=%v ABI=%v", dependencies[dependency.public], dependencies[dependency.binding], dependencies[dependency.operation], dependencies[dependency.abi])
+						t.Fatalf("private TCP transport reached raw facade: public=%v binding=%v operation=%v ABI=%v", dependencies[dependency.public], dependencies[dependency.binding], dependencies[dependency.operation], dependencies[dependency.abi])
 					}
-					if !dependencies[dependency.namespace] || !dependencies[dependency.adapter] {
-						t.Fatal("TLS private transport seam is incomplete")
+					if !dependencies[dependency.adapter] {
+						t.Fatal("selected private TCP transport omitted the lneto TCP adapter")
+					}
+					if test.selected["tls"] && !dependencies[dependency.namespace] {
+						t.Fatal("TLS private transport seam omitted the TCP namespace facet")
 					}
 					continue
 				}
@@ -147,12 +150,15 @@ func TestSelfRegisterPackageDependencyBoundaries(t *testing.T) {
 					}
 					continue
 				}
-				if protocol == "tcp" && test.selected["tls"] {
+				if protocol == "tcp" && (test.selected["tls"] || test.selected["dns"]) {
 					if dependencies[dependency.public] || dependencies[dependency.register] || dependencies[dependency.binding] || dependencies[dependency.operation] || dependencies[dependency.abi] {
-						t.Fatal("TLS self-register graph reached raw TCP facade")
+						t.Fatal("private TCP self-register graph reached raw TCP facade")
 					}
-					if !dependencies[dependency.namespace] || !dependencies[dependency.adapter] {
-						t.Fatal("TLS self-register graph omitted private TCP transport")
+					if !dependencies[dependency.adapter] {
+						t.Fatal("private TCP self-register graph omitted the lneto TCP adapter")
+					}
+					if test.selected["tls"] && !dependencies[dependency.namespace] {
+						t.Fatal("TLS self-register graph omitted the TCP namespace facet")
 					}
 					continue
 				}

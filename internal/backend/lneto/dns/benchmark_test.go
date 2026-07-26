@@ -8,6 +8,7 @@ import (
 	lnetodns "github.com/soypat/lneto/dns"
 	nscore "github.com/wago-org/net/internal/namespace/core"
 	dnsns "github.com/wago-org/net/internal/namespace/dns"
+	"github.com/wago-org/net/internal/quota"
 )
 
 var (
@@ -206,6 +207,27 @@ func BenchmarkAdapterTryResolveClose(b *testing.B) {
 	ns := newTestNamespace(b, config)
 	request := dnsns.Request{Name: "service.api.example.com", Types: dnsns.RecordsA | dnsns.RecordsAAAA}
 	// The test policy grants example.com and therefore this subdomain.
+	b.ReportAllocs()
+	for b.Loop() {
+		value, progress, err := ns.adapter.TryResolve(request)
+		if err != nil || progress != nscore.ProgressInProgress {
+			b.Fatalf("resolve = %T, %v, %v", value, progress, err)
+		}
+		if err := value.Close(); err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
+func BenchmarkAdapterTryResolveCloseTCPFallback(b *testing.B) {
+	config := dnsTestConfig(b, 88)
+	config.MaxActiveTCPPorts = 1
+	config.DNS.MaxQueries = 1
+	config.DNS.MaxTCPResponseBytes = 16 << 10
+	config.DNS.MaxTCPServiceAttempts = 128
+	config.Quotas = quota.NewAccount(quota.Limits{Resources: 4, TCPResources: 2, DNSResources: 2, QueuedBytes: 1 << 20, DNSWork: 4})
+	ns := newTestNamespace(b, config)
+	request := dnsns.Request{Name: "service.api.example.com", Types: dnsns.RecordsA | dnsns.RecordsAAAA}
 	b.ReportAllocs()
 	for b.Loop() {
 		value, progress, err := ns.adapter.TryResolve(request)

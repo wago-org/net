@@ -66,6 +66,45 @@ func TestAllowAllStillHonorsRawDenyRules(t *testing.T) {
 	}
 }
 
+func TestTCPFallbackOptionIsFiniteAndOrderIndependent(t *testing.T) {
+	resolver := netip.MustParseAddr("192.0.2.53")
+	for _, options := range [][]Option{
+		{Resolver(resolver.String()), EnableTCPFallback(16<<10, 128)},
+		{EnableTCPFallback(16<<10, 128), Resolver(resolver.String())},
+		{WithConfig(Config{Server: resolver, MaxQueries: 2, MaxRecords: 4, MaxResponseBytes: 512, MaxAttempts: 1, RetryServiceAttempts: 1}), EnableTCPFallback(16<<10, 128)},
+	} {
+		config := registration{defaultAuthority: true}
+		for _, option := range options {
+			if err := option.applyDNS(&config); err != nil {
+				t.Fatal(err)
+			}
+		}
+		resolved := config.finalConfig()
+		if resolved.MaxTCPResponseBytes != 16<<10 || resolved.MaxTCPServiceAttempts != 128 {
+			t.Fatalf("TCP fallback config = %+v", resolved)
+		}
+	}
+	for name, option := range map[string]Option{
+		"short response": EnableTCPFallback(11, 1),
+		"large response": EnableTCPFallback(65536, 1),
+		"zero attempts":  EnableTCPFallback(512, 0),
+		"many attempts":  EnableTCPFallback(512, 4097),
+	} {
+		t.Run(name, func(t *testing.T) {
+			if err := option.applyDNS(&registration{}); !errors.Is(err, ErrInvalidOption) {
+				t.Fatalf("invalid fallback = %v", err)
+			}
+		})
+	}
+	config := registration{}
+	if err := EnableTCPFallback(512, 1).applyDNS(&config); err != nil {
+		t.Fatal(err)
+	}
+	if err := EnableTCPFallback(512, 1).applyDNS(&config); !errors.Is(err, ErrInvalidOption) {
+		t.Fatalf("duplicate fallback = %v", err)
+	}
+}
+
 func TestResolverAndConfigComposeIndependentOfOptionOrder(t *testing.T) {
 	resolver := netip.MustParseAddr("192.0.2.53")
 	custom := Config{MaxQueries: 3, MaxRecords: 4, MaxResponseBytes: 640, MaxAttempts: 5, RetryServiceAttempts: 6}

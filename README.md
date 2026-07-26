@@ -61,10 +61,19 @@ per-instance service-work accounting. The bounded lneto-backed DNS engine uses
 generation-safe per-instance query handles with readiness, cancellation, timeout,
 quota, and lifecycle cleanup. It correlates exact echoed questions, emits only a
 unique reachable CNAME chain plus requested terminal A/AAAA records, rejects
-conflicting chains and loops, and directly fuzzes compressed wire parsing. DNS is
-UDP-only: truncated responses return `TEMPORARY_FAILURE` because DNS-over-TCP
-fallback is not implemented. Privileged packet access remains absent and
-unsupported.
+conflicting chains and loops, and directly fuzzes compressed wire parsing.
+Hosts may opt into `dns.EnableTCPFallback(maxResponseBytes,
+maxServiceAttempts)`: a valid correlated truncated UDP response then transfers
+the same query to one private length-prefixed TCP stream under exact response,
+service-attempt, port, TCP-buffer, quota, cancellation, and teardown bounds. The
+maximum fallback response is quota-reserved with the query, but its byte slice is
+allocated only after a correlated truncation and is cleared and released as soon
+as the query becomes terminal. Namespace-retained parser scratch stays at the UDP
+response bound; larger TCP answers use temporary scratch sized by the bounded
+answer count. The guest receives no raw TCP handle or capability, and raw-TCP
+deny rules still constrain the configured resolver. Without the option,
+truncation retains the original `TEMPORARY_FAILURE` behavior. Privileged packet access remains absent
+and unsupported.
 
 The primary composition API selects only the protocols a runtime should expose:
 
@@ -90,7 +99,10 @@ if err := udp.Register(network); err != nil {
 if err := tcp.Register(network); err != nil {
     return err
 }
-if err := dns.Register(network, dns.Resolver("192.0.2.53")); err != nil {
+if err := dns.Register(network,
+    dns.Resolver("192.0.2.53"),
+    dns.EnableTCPFallback(16<<10, 256),
+); err != nil {
     return err
 }
 return wago.NewRuntime().Use(network)
@@ -299,9 +311,12 @@ creates one shared lneto core per exact instance, installs selected adapters
 transactionally before publishing the namespace, and exposes them through an
 immutable protocol-neutral service composition. Failed assembly closes the core
 and every installed participant before any instance state is published. The root
-imports no aggregate or protocol adapter package, and TCP-only, UDP-only, and
-DNS-only fixtures compile only their selected public, binding, operation,
-namespace-facet, ABI, and adapter packages. Protocol authority contributions are
+imports no aggregate or protocol adapter package. TCP-only and UDP-only fixtures
+compile only their selected implementation graphs. DNS-only additionally
+contains the private lneto TCP adapter needed for optional truncation fallback,
+but still excludes the public TCP facade, self-registration package, binding,
+instance operations, ABI, namespace facet, capability, and guest imports.
+Protocol authority contributions are
 deep-copied and composed once before manager construction; one immutable policy
 and quota domain remain shared per exact instance, with deny-wins behavior.
 

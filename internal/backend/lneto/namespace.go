@@ -103,6 +103,7 @@ func New(config Config) (*Namespace, error) {
 }
 
 func coreConfig(config Config) lnetocore.Config {
+	activeTCPPorts, _ := aggregateActiveTCPPorts(config)
 	return lnetocore.Config{
 		Hostname:               config.Hostname,
 		RandSeed:               config.RandSeed,
@@ -111,7 +112,7 @@ func coreConfig(config Config) lnetocore.Config {
 		IPv4Address:            config.IPv4Address,
 		MTU:                    config.MTU,
 		Link:                   config.Link,
-		MaxActiveTCPPorts:      config.TCP.MaxListeners + config.TCP.MaxOutboundStreams,
+		MaxActiveTCPPorts:      activeTCPPorts,
 		Policy:                 config.Policy,
 		Quotas:                 config.Quotas,
 	}
@@ -178,12 +179,26 @@ func (n *Namespace) TryService(budget nscore.ServiceBudget) (nscore.ServiceRepor
 }
 
 func validConfig(config Config, requireAuthority bool) bool {
+	if _, ok := aggregateActiveTCPPorts(config); !ok {
+		return false
+	}
 	if tcpbackend.ValidConfig(config.TCP, config.Policy, config.Quotas, requireAuthority) == false ||
 		udpbackend.ValidConfig(config.UDP, int(config.MTU), config.Policy, config.Quotas, requireAuthority) == false ||
 		dnsbackend.ValidConfig(config.DNS, int(config.MTU), config.Policy, config.Quotas, requireAuthority) == false {
 		return false
 	}
 	return lnetocore.ValidateConfig(coreConfig(config)) == nil
+}
+
+func aggregateActiveTCPPorts(config Config) (uint16, bool) {
+	ports := uint32(config.TCP.MaxListeners) + uint32(config.TCP.MaxOutboundStreams)
+	if config.DNS.MaxTCPResponseBytes != 0 && config.DNS.MaxTCPServiceAttempts != 0 {
+		ports += uint32(config.DNS.MaxQueries)
+	}
+	if ports > uint32(^uint16(0)) {
+		return 0, false
+	}
+	return uint16(ports), true
 }
 
 func mapError(err error) error { return lnetocore.MapError(err) }
