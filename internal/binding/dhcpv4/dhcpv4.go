@@ -19,7 +19,7 @@ const (
 )
 
 func Descriptor(backend ...plugin.Backend) plugin.Module {
-	return plugin.NewModule(plugin.ModuleDHCPv4, func(registry *wago.Registry, host plugin.Host) {
+	return plugin.NewModule(plugin.ModuleDHCPv4, func(registry *plugin.Registrar, host plugin.Host) {
 		registry.Capability(Capability, wago.CapabilityDocs("use bounded DHCPv4 client leases and explicitly configured finite server service"))
 		plugin.RegisterBindings(registry.ImportModule(Module), Bindings(host))
 	}, backend...)

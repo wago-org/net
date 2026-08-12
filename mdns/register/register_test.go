@@ -1,21 +1,25 @@
 package register_test
 
 import (
+	"context"
 	"reflect"
 	"testing"
 
 	wagonet "github.com/wago-org/net"
-	_ "github.com/wago-org/net/mdns/register"
+	"github.com/wago-org/net/internal/plugintest"
+	netregister "github.com/wago-org/net/mdns/register"
 	wago "github.com/wago-org/wago"
 )
 
 func TestMDNSFactoryHasExactRuntimeSurface(t *testing.T) {
-	extension, ok := wago.NewExtension("net-mdns")
-	if !ok {
-		t.Fatal("net-mdns plugin was not registered")
+	providers := netregister.Providers()
+	if len(providers) != 1 {
+		t.Fatalf("Providers = %d, want 1", len(providers))
 	}
+	provider := providers[0]
 	runtime := wago.NewRuntime()
-	if err := runtime.Use(extension); err != nil {
+	defer runtime.Close()
+	if err := runtime.LoadPlugins(context.Background(), plugintest.Set(provider)); err != nil {
 		t.Fatal(err)
 	}
 	if got, want := runtime.Capabilities(), []wago.Capability{wagonet.CapInfo, wagonet.CapMDNS}; !reflect.DeepEqual(got, want) {

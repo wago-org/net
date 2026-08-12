@@ -1,5 +1,4 @@
-// Package register self-registers the selective IPv6 namespace extension.
-// Deployment identity remains disabled until explicit composition supplies it.
+// Package register exposes the explicit IPv6 networking catalog entry.
 package register
 
 import (
@@ -8,12 +7,15 @@ import (
 	wago "github.com/wago-org/wago"
 )
 
-func init() {
-	wago.RegisterExtension("net-ipv6", func() wago.Extension {
-		network := wagonet.New()
-		if err := ipv6.Register(network); err != nil {
-			panic("wagonet/ipv6/register: " + err.Error())
-		}
-		return network
+func Provider() wago.PluginProvider {
+	return wagonet.Provider(wagonet.ProviderSpec{
+		ID: "github.com/wago-org/net/ipv6", Name: "Wago IPv6", Description: "Bounded checked IPv6 networking.",
+		Modules: []string{wagonet.Module, wagonet.IPv6Module},
+		Factory: func() (*wagonet.Network, error) {
+			network := wagonet.New()
+			return network, ipv6.Register(network)
+		},
 	})
 }
+
+func Providers() []wago.PluginProvider { return []wago.PluginProvider{Provider()} }

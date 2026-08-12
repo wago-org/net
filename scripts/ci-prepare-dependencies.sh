@@ -2,7 +2,7 @@
 set -euo pipefail
 
 root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
-readonly wago_revision=${CI_WAGO_REVISION:-97e6f91e6c822491577faa86f3c30aa5a8fff1e8}
+readonly wago_revision=${CI_WAGO_REVISION:-1c58c9862d25a0a564786284a1967831f1ae9d61}
 readonly lneto_revision=${CI_LNETO_REVISION:-ab1a0c735a8b534a1d6322a3e245bc11a09431e7}
 readonly wago_repository=${CI_WAGO_REPOSITORY:-https://github.com/wago-org/wago.git}
 readonly lneto_repository=${CI_LNETO_REPOSITORY:-https://github.com/soypat/lneto.git}

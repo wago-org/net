@@ -6,7 +6,6 @@ import (
 
 	nscore "github.com/wago-org/net/internal/namespace/core"
 	"github.com/wago-org/net/internal/plugin"
-	wago "github.com/wago-org/wago"
 )
 
 func TestDescriptorInstallsCompleteBindingsAndPreservesBackend(t *testing.T) {
@@ -23,7 +22,6 @@ func TestDescriptorInstallsCompleteBindingsAndPreservesBackend(t *testing.T) {
 		},
 	)
 	descriptor := Descriptor(backend)
-	descriptor.Install(new(wago.Registry), plugin.Host{})
 	if err := descriptor.ConfigureBackend(plugin.BackendLnetoV1, base); err != nil || !configured {
 		t.Fatalf("ConfigureBackend = %v configured=%v", err, configured)
 	}

@@ -12,7 +12,7 @@ import (
 )
 
 func TestSetRejectsInvalidDuplicateAndFrozenModules(t *testing.T) {
-	install := func(*wago.Registry, Host) {}
+	install := func(*Registrar, Host) {}
 	var set Set
 	if err := set.Add(NewModule("", install)); !errors.Is(err, ErrInvalidModule) {
 		t.Fatalf("empty key = %v", err)
@@ -52,7 +52,7 @@ func TestBackendContributionConfigurationAndInstallation(t *testing.T) {
 			return nscore.Service{Key: "tcp", Value: serviceValue}, nil
 		},
 	)
-	module := NewModule(ModuleTCP, func(*wago.Registry, Host) {}, backend)
+	module := NewModule(ModuleTCP, func(*Registrar, Host) {}, backend)
 	var config backendConfig
 	if err := module.ConfigureBackend(BackendLnetoV1, &config); err != nil || config.count != 1 {
 		t.Fatalf("ConfigureBackend = %v, config=%+v", err, config)
@@ -68,7 +68,7 @@ func TestBackendContributionConfigurationAndInstallation(t *testing.T) {
 		t.Fatalf("incompatible install = %v", err)
 	}
 
-	stateless := NewModule(ModuleDNS, func(*wago.Registry, Host) {})
+	stateless := NewModule(ModuleDNS, func(*Registrar, Host) {})
 	if err := stateless.ConfigureBackend(BackendLnetoV1, &config); err != nil {
 		t.Fatalf("stateless configure = %v", err)
 	}
@@ -82,7 +82,7 @@ func TestAuthorityContributionCopiesAndComposes(t *testing.T) {
 		Action: policy.ActionAllow, Transports: []policy.Transport{policy.TransportTCP},
 		Directions: []policy.Direction{policy.DirectionOutbound},
 	}}, AllowLoopback: true}
-	module := NewModule(ModuleTCP, func(*wago.Registry, Host) {}).WithAuthority(NewAuthority(input))
+	module := NewModule(ModuleTCP, func(*Registrar, Host) {}).WithAuthority(NewAuthority(input))
 	input.Rules[0].Transports[0] = policy.TransportUDP
 	input.AllowLoopback = false
 
@@ -99,7 +99,7 @@ func TestAuthorityContributionCopiesAndComposes(t *testing.T) {
 }
 
 func TestSetRejectsInvalidBackendContributions(t *testing.T) {
-	install := func(*wago.Registry, Host) {}
+	install := func(*Registrar, Host) {}
 	for _, module := range []Module{
 		NewModule(ModuleTCP, install, NewBackend("", nil, func(any) (nscore.Service, error) { return nscore.Service{}, nil })),
 		NewModule(ModuleTCP, install, NewBackend(BackendLnetoV1, nil, nil)),
@@ -188,13 +188,13 @@ func TestModuleInstallForwardsExactHostFacade(t *testing.T) {
 	manager := instancecore.NewManager()
 	host := NewHost(manager)
 	called := false
-	module := NewModule(ModuleICMPv4, func(registry *wago.Registry, got Host) {
+	module := NewModule(ModuleICMPv4, func(registry *Registrar, got Host) {
 		called = true
 		if registry == nil || got.instances != manager {
 			t.Fatalf("Install host = %+v registry=%p", got, registry)
 		}
 	})
-	module.Install(new(wago.Registry), host)
+	module.install(&Registrar{}, host)
 	if !called {
 		t.Fatal("module installer was not called")
 	}
@@ -235,7 +235,7 @@ func BenchmarkHostStateUnattached(b *testing.B) {
 }
 
 func TestFreezeReturnsIndependentStableSnapshots(t *testing.T) {
-	install := func(*wago.Registry, Host) {}
+	install := func(*Registrar, Host) {}
 	var set Set
 	if err := set.Add(NewModule(ModuleTCP, install)); err != nil {
 		t.Fatalf("Add TCP: %v", err)

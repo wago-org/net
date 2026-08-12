@@ -1,4 +1,4 @@
-// Package register self-registers the selective DHCPv4-only Wago networking extension.
+// Package register exposes the explicit DHCPv4-only networking catalog entry.
 package register
 
 import (
@@ -7,12 +7,15 @@ import (
 	wago "github.com/wago-org/wago"
 )
 
-func init() {
-	wago.RegisterExtension("net-dhcpv4", func() wago.Extension {
-		network := wagonet.New()
-		if err := dhcpv4.Register(network); err != nil {
-			panic("wagonet/dhcpv4/register: " + err.Error())
-		}
-		return network
+func Provider() wago.PluginProvider {
+	return wagonet.Provider(wagonet.ProviderSpec{
+		ID: "github.com/wago-org/net/dhcpv4", Name: "Wago DHCPv4", Description: "Bounded checked DHCPv4 networking.",
+		Modules: []string{wagonet.Module, wagonet.DHCPv4Module},
+		Factory: func() (*wagonet.Network, error) {
+			network := wagonet.New()
+			return network, dhcpv4.Register(network)
+		},
 	})
 }
+
+func Providers() []wago.PluginProvider { return []wago.PluginProvider{Provider()} }

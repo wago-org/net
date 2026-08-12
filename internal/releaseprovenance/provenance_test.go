@@ -9,6 +9,8 @@ import (
 	"sort"
 	"strings"
 	"testing"
+
+	"github.com/wago-org/net/internal/inspectionpolicy"
 )
 
 func TestScanArtifactsIsSortedChecksummedAndExcludesProvenance(t *testing.T) {
@@ -80,15 +82,15 @@ func TestInspectionEvidenceRejectsStaleAggregateAndRequiresEveryBundle(t *testin
 	}
 
 	stale := `{"capabilities":["net.dns","net.info","net.tcp","net.udp"],"imports":[{"module":"wago_net"},{"module":"wago_net_dns"},{"module":"wago_net_tcp"},{"module":"wago_net_udp"}]}`
-	writeTestFile(t, filepath.Join(dir, "custom-cli", "inspection-net-go.json"), stale)
-	writeTestFile(t, filepath.Join(dir, "custom-cli", "inspection-net-tinygo.json"), stale)
+	writeTestFile(t, filepath.Join(dir, "custom-cli", "inspection-"+inspectionpolicy.AggregateKey+"-go.json"), stale)
+	writeTestFile(t, filepath.Join(dir, "custom-cli", "inspection-"+inspectionpolicy.AggregateKey+"-tinygo.json"), stale)
 	if err := readInspection(dir, new(Inspection)); err == nil {
 		t.Fatal("stale four-capability aggregate unexpectedly accepted")
 	}
 
 	dir = t.TempDir()
 	writeCanonicalInspectionEvidence(t, dir)
-	if err := os.Remove(filepath.Join(dir, "custom-cli", "inspection-net-udp-tinygo.json")); err != nil {
+	if err := os.Remove(filepath.Join(dir, "custom-cli", "inspection-"+inspectionpolicy.AggregateKey+"/udp-tinygo.json")); err != nil {
 		t.Fatal(err)
 	}
 	if err := readInspection(dir, new(Inspection)); err == nil {

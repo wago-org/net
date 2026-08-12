@@ -22,7 +22,7 @@ const (
 // Descriptor returns the opaque UDP module installed by the public udp facade
 // and the bounded aggregate compatibility path.
 func Descriptor(backend ...plugin.Backend) plugin.Module {
-	return plugin.NewModule(plugin.ModuleUDP, func(registry *wago.Registry, host plugin.Host) {
+	return plugin.NewModule(plugin.ModuleUDP, func(registry *plugin.Registrar, host plugin.Host) {
 		registry.Capability(Capability, wago.CapabilityDocs("use checked nonblocking UDP networking for the exact calling instance"))
 		plugin.RegisterBindings(registry.ImportModule(Module), Bindings(host))
 	}, backend...)

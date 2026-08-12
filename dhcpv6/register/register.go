@@ -1,4 +1,4 @@
-// Package register self-registers the selective DHCPv6-only extension.
+// Package register exposes the explicit DHCPv6 networking catalog entry.
 package register
 
 import (
@@ -7,12 +7,15 @@ import (
 	wago "github.com/wago-org/wago"
 )
 
-func init() {
-	wago.RegisterExtension("net-dhcpv6", func() wago.Extension {
-		network := wagonet.New()
-		if err := dhcpv6.Register(network); err != nil {
-			panic("wagonet/dhcpv6/register: " + err.Error())
-		}
-		return network
+func Provider() wago.PluginProvider {
+	return wagonet.Provider(wagonet.ProviderSpec{
+		ID: "github.com/wago-org/net/dhcpv6", Name: "Wago DHCPv6", Description: "Bounded checked initial DHCPv6 acquisition.",
+		Modules: []string{wagonet.Module, wagonet.DHCPv6Module},
+		Factory: func() (*wagonet.Network, error) {
+			network := wagonet.New()
+			return network, dhcpv6.Register(network)
+		},
 	})
 }
+
+func Providers() []wago.PluginProvider { return []wago.PluginProvider{Provider()} }

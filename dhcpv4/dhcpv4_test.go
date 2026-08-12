@@ -10,7 +10,6 @@ import (
 
 	wagonet "github.com/wago-org/net"
 	dhcpabi "github.com/wago-org/net/internal/abi/dhcpv4"
-	dhcpbinding "github.com/wago-org/net/internal/binding/dhcpv4"
 	"github.com/wago-org/net/internal/guest"
 	dhcpns "github.com/wago-org/net/internal/namespace/dhcpv4"
 	"github.com/wago-org/net/internal/resource"
@@ -23,7 +22,7 @@ func TestSelectiveRegistrationAndFiniteConfiguration(t *testing.T) {
 		t.Fatal(err)
 	}
 	runtime := wago.NewRuntime()
-	if err := runtime.Use(network); err != nil {
+	if err := loadNetwork(runtime, network); err != nil {
 		t.Fatal(err)
 	}
 	if got := runtime.Capabilities(); !reflect.DeepEqual(got, []wago.Capability{wagonet.CapDHCPv4, wagonet.CapInfo}) {
@@ -102,16 +101,16 @@ func TestActualBackendExactLeaseLifecycleAndDenyWins(t *testing.T) {
 		t.Fatal(err)
 	}
 	runtime := wago.NewRuntime()
-	if err := runtime.Use(network); err != nil {
+	if err := loadNetwork(runtime, network); err != nil {
 		t.Fatal(err)
 	}
-	module, _ := runtime.Compile([]byte{0x00, 0x61, 0x73, 0x6d, 0x01, 0, 0, 0})
+	module, _ := compileImportHarness(runtime)
 	instance, err := runtime.Instantiate(context.Background(), module)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer instance.Close()
-	host := hostModule{instance: instance, memory: make([]byte, 512)}
+	host := hostModule{instance: instance, memory: instance.Memory().Bytes()}
 	if got := callImport(t, runtime, host, "namespace_default", 400); got != guest.StatusOK {
 		t.Fatal(got)
 	}
@@ -129,10 +128,10 @@ func TestActualBackendExactLeaseLifecycleAndDenyWins(t *testing.T) {
 		t.Fatal(err)
 	}
 	runtime2 := wago.NewRuntime()
-	if err := runtime2.Use(allowed); err != nil {
+	if err := loadNetwork(runtime2, allowed); err != nil {
 		t.Fatal(err)
 	}
-	module2, err := runtime2.Compile([]byte{0x00, 0x61, 0x73, 0x6d, 0x01, 0, 0, 0})
+	module2, err := compileImportHarness(runtime2)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -141,7 +140,7 @@ func TestActualBackendExactLeaseLifecycleAndDenyWins(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer instance2.Close()
-	host2 := hostModule{instance: instance2, memory: make([]byte, 512)}
+	host2 := hostModule{instance: instance2, memory: instance2.Memory().Bytes()}
 	if callImport(t, runtime2, host2, "namespace_default", 400) != guest.StatusOK {
 		t.Fatal("namespace")
 	}
@@ -165,13 +164,11 @@ func TestActualBackendExactLeaseLifecycleAndDenyWins(t *testing.T) {
 	}
 }
 
-func callImport(t testing.TB, runtime *wago.Runtime, host hostModule, name string, params ...uint64) guest.Status {
+func callImport(t testing.TB, _ *wago.Runtime, host hostModule, name string, params ...uint64) guest.Status {
 	t.Helper()
-	function, ok := runtime.HostImports()[dhcpbinding.Module+"."+name].(wago.HostFunc)
-	if !ok {
-		t.Fatalf("DHCPv4 import %q missing", name)
+	results, err := host.instance.Invoke(name, params...)
+	if err != nil || len(results) != 1 {
+		t.Fatalf("DHCPv4 import %q = %v, %v", name, results, err)
 	}
-	var results [1]uint64
-	function(host, params, results[:])
 	return guest.Status(int32(results[0]))
 }

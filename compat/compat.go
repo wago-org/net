@@ -1,5 +1,5 @@
 // Package compat provides the explicit aggregate UDP, TCP, and DNS networking
-// extension for callers migrating from the former root Init constructor.
+// builder for callers migrating from the former root Init constructor.
 //
 // New selective callers should compose github.com/wago-org/net.New with the
 // individual tcp.Register, udp.Register, and dns.Register functions instead.
@@ -14,7 +14,7 @@ import (
 
 // Init constructs one shared network with UDP, TCP, and DNS all selected. The
 // supplied root Config retains the advanced aggregate configuration surface.
-func Init(config wagonet.Config) *wagonet.Extension {
+func Init(config wagonet.Config) *wagonet.Network {
 	network := wagonet.New(wagonet.WithConfig(config))
 	var udpConfig udp.Config
 	var tcpConfig tcp.Config

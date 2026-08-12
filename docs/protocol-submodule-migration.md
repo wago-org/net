@@ -123,23 +123,35 @@ import (
     "github.com/wago-org/net/tcp"
 )
 
-network := wagonet.New(
-    wagonet.StaticIPv4(/* deployment identity and link options */),
-)
-if err := tcp.Register(network); err != nil {
-    return err
-}
-return runtime.Use(network)
+provider := wagonet.Provider(wagonet.ProviderSpec{
+    ID: "example.com/acme/runtime/network",
+    Name: "Acme network",
+    Description: "TCP for the Acme guest",
+    Modules: []string{wagonet.Module, wagonet.TCPModule},
+    Factory: func() (*wagonet.Network, error) {
+        network := wagonet.New(/* deployment identity and link options */)
+        if err := tcp.Register(network); err != nil { return nil, err }
+        return network, nil
+    },
+})
 ```
 
 Composition remains explicit:
 
 ```go
-network := wagonet.New(/* shared namespace options */)
-_ = udp.Register(network)
-_ = tcp.Register(network)
-_ = dns.Register(network, dns.Resolver("192.0.2.53"))
-return runtime.Use(network)
+provider := wagonet.Provider(wagonet.ProviderSpec{
+    ID: "example.com/acme/runtime/network",
+    Name: "Acme network",
+    Description: "TCP, UDP, and DNS for the Acme guest",
+    Modules: []string{wagonet.Module, wagonet.UDPModule, wagonet.TCPModule, wagonet.DNSModule},
+    Factory: func() (*wagonet.Network, error) {
+        network := wagonet.New(/* shared namespace options */)
+        if err := udp.Register(network); err != nil { return nil, err }
+        if err := tcp.Register(network); err != nil { return nil, err }
+        if err := dns.Register(network, dns.Resolver("192.0.2.53")); err != nil { return nil, err }
+        return network, nil
+    },
+})
 ```
 
 The root package must not import child protocols. Child packages register opaque
@@ -219,11 +231,11 @@ assembler, or protocol lneto adapter package. Aggregate callers move to
 - `internal/abi/core` now contains only checked memory, address/endpoint, handle,
   and poll layouts; protocol codecs are isolated in `internal/abi/tcp`, `/udp`,
   and `/dns` and are gated from omitted fixture graphs.
-- `register/register.go` intentionally constructs the aggregate extension.
+- `register/register.go` intentionally constructs the aggregate provider.
 
 Exact runtime registration, protocol implementation compile isolation, finite
-client defaults, policy composition, granular register packages, self-register
-factory inspection, granular standard-Go/TinyGo custom CLI inspection, practical
+client defaults, policy composition, granular explicit provider catalogs,
+definition inspection, granular standard-Go/TinyGo inspection, practical
 fuzz/benchmark smoke, cross-build, and pack-only reconstruction are implemented
 and passing. The strict local heavyweight signoff passes; production activation
 remains externally blocked.
@@ -295,9 +307,9 @@ authority by default.
 
 ### Stage 6: granular packaging and compatibility
 
-Implemented. `tcp/register`, `udp/register`, and `dns/register` self-register
-only their protocol. Root `register` explicitly composes all three protocols in
-one shared extension. Dependency fixtures reject omitted protocol units from
+Implemented. `tcp/register`, `udp/register`, and `dns/register` export explicit
+side-effect-free providers for only their protocol. Root `register` explicitly
+composes all selected protocols in one shared provider. Dependency fixtures reject omitted protocol units from
 each granular graph, while the runtime matrix reports exact imports and
 capabilities for every direct selective combination.
 
@@ -319,7 +331,7 @@ is rejected, as are the former aggregate namespace package and aggregate lneto
 assembler.
 
 The standard, race, vet, fuzz, benchmark, TinyGo, cross-build, lifecycle,
-source-boundary, direct/granular dependency, granular custom CLI, source-pack,
+source-boundary, direct/granular dependency, granular provider inspection, source-pack,
 pack-only reconstruction, provenance, and standalone bundle portions pass. The
 refreshed current-Wago review and selective networking review also pass direct,
 managed, external-worker, and granular inspection reconstruction. Release

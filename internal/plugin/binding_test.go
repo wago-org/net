@@ -13,7 +13,7 @@ func TestRegisterBindingsAcceptsCompleteBackendNeutralTable(t *testing.T) {
 		Params: []wago.ValType{wago.ValI32}, Results: []wago.ValType{wago.ValI32},
 		Capability: "net.test", Docs: "bounded test binding",
 	}}
-	RegisterBindings(new(wago.Registry).ImportModule("wago_net_test"), bindings)
+	RegisterBindings(new(wago.ImportModuleBuilder), bindings)
 	if called {
 		t.Fatal("registration invoked host function")
 	}

@@ -33,7 +33,7 @@ module github.com/wago-org/net-signoff
 go 1.24
 
 require (
-	github.com/wago-org/net v0.0.0
+	github.com/wago-org/net v0.1.0
 	github.com/wago-org/wago v0.1.0
 )
 

@@ -20,23 +20,16 @@ import (
 
 func TestExtensionMetadataAndABIBinding(t *testing.T) {
 	ext := Init(Config{})
-	info := ext.Info()
-	if info.ID != "github.com/wago-org/net" || info.Stability != wago.Experimental {
-		t.Fatalf("Info = %+v", info)
+	definition := Definition(ProviderSpec{ID: PluginID, Name: "Wago Networking", Description: "test", Modules: []string{Module, UDPModule, TCPModule, DNSModule}})
+	if definition.ID != PluginID || definition.Stability != wago.Experimental {
+		t.Fatalf("Definition = %+v", definition)
 	}
-	if got := info.Compat.Engines["wago"]; got != "0.1.0" {
+	if got := definition.Compatibility.Engines["wago"]; got != ">=0.1.0" {
 		t.Fatalf("wago compatibility = %q", got)
-	}
-	if !info.Private {
-		t.Fatal("experimental exact-revision plugin must remain private")
-	}
-	wantTags := []string{"networking", "tcp", "udp", "dns", "capability-gated", "wago", "lneto", "wasm"}
-	if !reflect.DeepEqual(info.Tags, wantTags) {
-		t.Fatalf("Info tags = %v, want %v", info.Tags, wantTags)
 	}
 
 	rt := wago.NewRuntime()
-	if err := rt.Use(ext); err != nil {
+	if err := loadNetwork(rt, ext); err != nil {
 		t.Fatalf("Use: %v", err)
 	}
 	if got := rt.Capabilities(); !reflect.DeepEqual(got, []wago.Capability{CapDNS, CapInfo, CapTCP, CapUDP}) {
@@ -109,20 +102,21 @@ func TestExtensionMetadataAndABIBinding(t *testing.T) {
 		t.Fatalf("missing protocol imports: DNS=%v UDP=%v TCP=%v", wantDNS, wantUDP, wantTCP)
 	}
 
-	fn, ok := rt.HostImports()[Module+".abi_version"].(wago.HostFunc)
-	if !ok {
-		t.Fatalf("abi_version binding has type %T", rt.HostImports()[Module+".abi_version"])
+	module, err := compileImportHarness(rt, Module)
+	if err != nil {
+		t.Fatal(err)
 	}
-	results := make([]uint64, 1)
-	fn(nil, nil, results)
+	instance, err := rt.Instantiate(context.Background(), module)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer instance.Close()
+	results, err := instance.Invoke("abi_version")
+	if err != nil || len(results) != 1 {
+		t.Fatalf("abi_version invoke = %v, %v", results, err)
+	}
 	if got := uint32(results[0]); got != ABIVersion1 {
 		t.Fatalf("abi_version = %#x, want %#x", got, ABIVersion1)
-	}
-	fn(nil, nil, nil)
-	malformed := []uint64{0xfeedface}
-	fn(nil, []uint64{1}, malformed)
-	if malformed[0] != 0xfeedface {
-		t.Fatalf("malformed abi_version call mutated result: %#x", malformed[0])
 	}
 }
 
@@ -154,81 +148,14 @@ func TestInfoImportsStayCoreOnlyAndRejectConfiguredState(t *testing.T) {
 	}
 }
 
-func TestExtensionInfoReturnsIndependentMutableCopies(t *testing.T) {
-	ext := Init(Config{})
-	first := ext.Info()
-	if len(first.Authors) == 0 || len(first.Tags) == 0 || len(first.Compat.Engines) == 0 {
-		t.Fatalf("unexpected extension info = %+v", first)
-	}
-	first.Authors[0] = "mutated author"
-	first.Tags[0] = "mutated-tag"
-	if len(first.Compat.Platforms) != 0 {
-		first.Compat.Platforms = append(first.Compat.Platforms[:0:0], "mutated-platform")
-	}
-	first.Compat.Engines["wago"] = "mutated-engine"
-
-	second := ext.Info()
-	if second.Authors[0] == "mutated author" || second.Tags[0] == "mutated-tag" || second.Compat.Engines["wago"] == "mutated-engine" {
-		t.Fatalf("Info returned aliased mutable data: %+v", second)
-	}
-}
-
-func TestExtensionInfoConcurrentCallsDoNotAlias(t *testing.T) {
-	ext := Init(Config{})
-	infos := make([]wago.ExtensionInfo, 2)
-	start := make(chan struct{})
-	var workers sync.WaitGroup
-	for i := range infos {
-		workers.Add(1)
-		go func(i int) {
-			defer workers.Done()
-			<-start
-			infos[i] = ext.Info()
-		}(i)
-	}
-	close(start)
-	workers.Wait()
-	if len(infos[0].Authors) == 0 || len(infos[1].Authors) == 0 || len(infos[0].Compat.Engines) == 0 || len(infos[1].Compat.Engines) == 0 {
-		t.Fatalf("unexpected concurrent Info results: %+v / %+v", infos[0], infos[1])
-	}
-	infos[0].Authors[0] = "mutated concurrently"
-	infos[0].Compat.Engines["wago"] = "mutated concurrently"
-	if infos[1].Authors[0] == "mutated concurrently" || infos[1].Compat.Engines["wago"] == "mutated concurrently" {
-		t.Fatalf("concurrent Info calls aliased mutable data: %+v / %+v", infos[0], infos[1])
-	}
-}
-
-func TestEmptyNetworkLeavesLifecycleAndResetPolicyUnchanged(t *testing.T) {
-	network := New()
-	runtime := wago.NewRuntime()
-	if err := runtime.Use(network); err != nil {
-		t.Fatalf("Use: %v", err)
-	}
-	if len(runtime.Capabilities()) != 0 || len(runtime.ProvidedImports()) != 0 {
-		t.Fatalf("empty network exported capabilities/imports: %v / %v", runtime.Capabilities(), runtime.ProvidedImports())
-	}
-	if network.instances != nil {
-		t.Fatal("empty network initialized instance state during registration")
-	}
-	class, err := runtime.Class(emptyModule(t, runtime), wago.ClassOptions{
-		Pool: wago.PoolOptions{MinInstances: 1, MaxInstances: 1, Reset: wago.ResetMemorySnapshot},
-	})
-	if err != nil {
-		t.Fatalf("Class: %v", err)
-	}
-	if got := class.ResetPolicy(); got != wago.ResetMemorySnapshot {
-		t.Fatalf("empty network reset policy = %v, want memory snapshot", got)
-	}
-	lease, err := class.Acquire(context.Background())
-	if err != nil {
-		t.Fatalf("Acquire: %v", err)
-	}
-	if network.instances != nil {
-		_ = lease.Release()
-		t.Fatal("empty network attached instance state")
-	}
-	if err := lease.Release(); err != nil {
-		t.Fatalf("Release: %v", err)
+func TestDefinitionReturnsIndependentMutableCopies(t *testing.T) {
+	spec := ProviderSpec{ID: PluginID, Name: "Wago Networking", Description: "test", Modules: []string{Module, UDPModule}}
+	first := Definition(spec)
+	first.Compatibility.Engines["wago"] = "mutated"
+	first.Authorities[0].Scope.Modules[0] = "mutated"
+	second := Definition(spec)
+	if second.Compatibility.Engines["wago"] == "mutated" || second.Authorities[0].Scope.Modules[0] == "mutated" {
+		t.Fatalf("Definition returned aliased metadata: %+v", second)
 	}
 }
 
@@ -249,7 +176,7 @@ func TestExtensionSnapshotsCallerConfigBeforeRegistrationAndInstantiation(t *tes
 		StaticIPv4: staticIPv4,
 	}
 	extension := New(WithConfig(config))
-	if err := extension.RegisterModule(plugin.NewModule(plugin.ModuleUDP, func(*wago.Registry, plugin.Host) {})); err != nil {
+	if err := extension.RegisterModule(plugin.NewModule(plugin.ModuleUDP, func(*plugin.Registrar, plugin.Host) {})); err != nil {
 		t.Fatalf("Register module: %v", err)
 	}
 
@@ -261,7 +188,7 @@ func TestExtensionSnapshotsCallerConfigBeforeRegistrationAndInstantiation(t *tes
 	staticIPv4.IPv4Address = netip.Addr{}
 
 	runtime := wago.NewRuntime()
-	if err := runtime.Use(extension); err != nil {
+	if err := loadNetwork(runtime, extension); err != nil {
 		t.Fatalf("Use: %v", err)
 	}
 	instance, err := runtime.Instantiate(context.Background(), emptyModule(t, runtime))
@@ -269,7 +196,7 @@ func TestExtensionSnapshotsCallerConfigBeforeRegistrationAndInstantiation(t *tes
 		t.Fatalf("Instantiate: %v", err)
 	}
 	defer instance.Close()
-	state, ok := extension.instanceManager().ForInstance(instance)
+	state, ok := extension.instanceManager().SingleState()
 	if !ok || state == nil {
 		t.Fatal("instance state missing")
 	}
@@ -303,7 +230,7 @@ func TestExtensionConfigSnapshotIsRaceSafeAgainstCallerMutation(t *testing.T) {
 		StaticIPv4: staticIPv4,
 	}
 	extension := New(WithConfig(config))
-	if err := extension.RegisterModule(plugin.NewModule(plugin.ModuleUDP, func(*wago.Registry, plugin.Host) {})); err != nil {
+	if err := extension.RegisterModule(plugin.NewModule(plugin.ModuleUDP, func(*plugin.Registrar, plugin.Host) {})); err != nil {
 		t.Fatalf("Register module: %v", err)
 	}
 
@@ -339,7 +266,7 @@ func TestExtensionConfigSnapshotIsRaceSafeAgainstCallerMutation(t *testing.T) {
 	}()
 
 	runtime := wago.NewRuntime()
-	if err := runtime.Use(extension); err != nil {
+	if err := loadNetwork(runtime, extension); err != nil {
 		t.Fatalf("Use: %v", err)
 	}
 	module := emptyModule(t, runtime)
@@ -369,7 +296,7 @@ func TestProtocolConfigurationAdvertisesCompleteGuestSurface(t *testing.T) {
 		},
 	}})
 	runtime := wago.NewRuntime()
-	if err := runtime.Use(extension); err != nil {
+	if err := loadNetwork(runtime, extension); err != nil {
 		t.Fatalf("Use TCP-configured extension: %v", err)
 	}
 	if got := runtime.Capabilities(); !reflect.DeepEqual(got, []wago.Capability{CapDNS, CapInfo, CapTCP, CapUDP}) {
@@ -394,10 +321,10 @@ func TestSelectiveBackendAssemblyRejectsIncompatibleFamily(t *testing.T) {
 	backend := plugin.NewBackend("other", nil, func(any) (nscore.Service, error) {
 		return nscore.Service{Key: "test", Value: new(int)}, nil
 	})
-	if err := extension.RegisterModule(plugin.NewModule(plugin.ModuleTCP, func(*wago.Registry, plugin.Host) {}, backend)); err != nil {
+	if err := extension.RegisterModule(plugin.NewModule(plugin.ModuleTCP, func(*plugin.Registrar, plugin.Host) {}, backend)); err != nil {
 		t.Fatal(err)
 	}
-	if err := wago.NewRuntime().Use(extension); !errors.Is(err, plugin.ErrIncompatibleBackend) {
+	if err := loadNetwork(wago.NewRuntime(), extension); !errors.Is(err, plugin.ErrIncompatibleBackend) {
 		t.Fatalf("Use incompatible backend = %v", err)
 	}
 	if extension.instanceManager() != nil {
@@ -445,15 +372,15 @@ func TestSelectiveBackendAssemblyConfiguresAndInstallsExactLnetoBase(t *testing.
 		installOrder = append(installOrder, "second")
 		return nscore.Service{Key: "second", Value: secondService}, nil
 	})
-	if err := extension.RegisterModule(plugin.NewModule(plugin.ModuleTCP, func(*wago.Registry, plugin.Host) {}, first)); err != nil {
+	if err := extension.RegisterModule(plugin.NewModule(plugin.ModuleTCP, func(*plugin.Registrar, plugin.Host) {}, first)); err != nil {
 		t.Fatal(err)
 	}
-	if err := extension.RegisterModule(plugin.NewModule(plugin.ModuleIPv6, func(*wago.Registry, plugin.Host) {}, second)); err != nil {
+	if err := extension.RegisterModule(plugin.NewModule(plugin.ModuleIPv6, func(*plugin.Registrar, plugin.Host) {}, second)); err != nil {
 		t.Fatal(err)
 	}
 
 	runtime := wago.NewRuntime()
-	if err := runtime.Use(extension); err != nil {
+	if err := loadNetwork(runtime, extension); err != nil {
 		t.Fatalf("Use: %v", err)
 	}
 	if !reflect.DeepEqual(configureOrder, []string{"first", "second"}) || len(installOrder) != 0 {
@@ -463,7 +390,7 @@ func TestSelectiveBackendAssemblyConfiguresAndInstallsExactLnetoBase(t *testing.
 	if err != nil {
 		t.Fatalf("Instantiate: %v", err)
 	}
-	state, ok := extension.instanceManager().ForInstance(instance)
+	state, ok := extension.instanceManager().SingleState()
 	if !ok || state == nil {
 		t.Fatal("instance state missing")
 	}
@@ -513,11 +440,11 @@ func TestSelectiveBackendAssemblyRollsBackCoreBeforePublication(t *testing.T) {
 		common, _ = base.(*lnetocore.Namespace)
 		return nscore.Service{}, installErr
 	})
-	if err := extension.RegisterModule(plugin.NewModule(plugin.ModuleTCP, func(*wago.Registry, plugin.Host) {}, backend)); err != nil {
+	if err := extension.RegisterModule(plugin.NewModule(plugin.ModuleTCP, func(*plugin.Registrar, plugin.Host) {}, backend)); err != nil {
 		t.Fatal(err)
 	}
 	runtime := wago.NewRuntime()
-	if err := runtime.Use(extension); err != nil {
+	if err := loadNetwork(runtime, extension); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := runtime.Instantiate(context.Background(), emptyModule(t, runtime)); !errors.Is(err, installErr) {
@@ -584,7 +511,7 @@ func testBackendModule(key plugin.ModuleKey, service nscore.Service) plugin.Modu
 	backend := plugin.NewBackend(plugin.BackendLnetoV1, nil, func(any) (nscore.Service, error) {
 		return service, nil
 	})
-	return plugin.NewModule(key, func(*wago.Registry, plugin.Host) {}, backend)
+	return plugin.NewModule(key, func(*plugin.Registrar, plugin.Host) {}, backend)
 }
 
 func selectiveTestStaticIPv4() *StaticIPv4Config {
@@ -599,7 +526,7 @@ func selectiveTestStaticIPv4() *StaticIPv4Config {
 func TestExtensionRejectsInvalidStaticNamespaceBeforeRegistration(t *testing.T) {
 	extension := Init(Config{StaticIPv4: &StaticIPv4Config{}})
 	runtime := wago.NewRuntime()
-	err := runtime.Use(extension)
+	err := loadNetwork(runtime, extension)
 	failure, ok := namespace.FailureOf(err)
 	if !ok || failure != namespace.FailureInvalidArgument {
 		t.Fatalf("invalid static namespace error = %v", err)

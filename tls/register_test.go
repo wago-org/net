@@ -24,7 +24,7 @@ func TestRegisterExposesOnlyTLSAndSharedCore(t *testing.T) {
 		t.Fatal(err)
 	}
 	runtime := wago.NewRuntime()
-	if err := runtime.Use(network); err != nil {
+	if err := loadNetwork(runtime, network); err != nil {
 		t.Fatal(err)
 	}
 	if got, want := runtime.Capabilities(), []wago.Capability{wagonet.CapInfo, wagonet.CapTLS}; !reflect.DeepEqual(got, want) {
@@ -52,7 +52,7 @@ func TestTCPAndTLSComposeWithoutCapabilityWidening(t *testing.T) {
 		t.Fatal(err)
 	}
 	runtime := wago.NewRuntime()
-	if err := runtime.Use(network); err != nil {
+	if err := loadNetwork(runtime, network); err != nil {
 		t.Fatal(err)
 	}
 	wantCapabilities := []wago.Capability{wagonet.CapInfo, wagonet.CapTCP, wagonet.CapTLS}
@@ -92,10 +92,10 @@ func TestPublicTLSRegistrationLoopbackOptionControlsOnlyTLSConnect(t *testing.T)
 				t.Fatal(err)
 			}
 			runtime := wago.NewRuntime()
-			if err := runtime.Use(network); err != nil {
+			if err := loadNetwork(runtime, network); err != nil {
 				t.Fatal(err)
 			}
-			module, err := runtime.Compile([]byte{0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00})
+			module, err := compileImportHarness(runtime)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -104,7 +104,7 @@ func TestPublicTLSRegistrationLoopbackOptionControlsOnlyTLSConnect(t *testing.T)
 				t.Fatal(err)
 			}
 			defer instance.Close()
-			host := tlsExactHost{instance: instance, memory: make([]byte, 256)}
+			host := tlsExactHost{instance: instance, memory: instance.Memory().Bytes()}
 			if got := callTLS(t, runtime, host, "namespace_default", 0); got != wagonet.StatusOK {
 				t.Fatalf("namespace_default = %v", got)
 			}
@@ -145,7 +145,7 @@ func TestRegisterRejectsMissingProfileDuplicateAndFrozen(t *testing.T) {
 		t.Fatalf("duplicate = %v", err)
 	}
 	runtime := wago.NewRuntime()
-	if err := runtime.Use(network); err != nil {
+	if err := loadNetwork(runtime, network); err != nil {
 		t.Fatal(err)
 	}
 	if err := wagonettls.Register(network, wagonettls.WithClientProfile(profile)); !errors.Is(err, wagonet.ErrProtocolRegistrationFrozen) {
@@ -161,14 +161,12 @@ type tlsExactHost struct {
 func (host tlsExactHost) Memory() []byte           { return host.memory }
 func (host tlsExactHost) Instance() *wago.Instance { return host.instance }
 
-func callTLS(t testing.TB, runtime *wago.Runtime, host tlsExactHost, name string, params ...uint64) wagonet.Status {
+func callTLS(t testing.TB, _ *wago.Runtime, host tlsExactHost, name string, params ...uint64) wagonet.Status {
 	t.Helper()
-	function, ok := runtime.HostImports()[wagonet.TLSModule+"."+name].(wago.HostFunc)
-	if !ok {
-		t.Fatalf("TLS import %q missing", name)
+	results, err := host.instance.Invoke(name, params...)
+	if err != nil || len(results) != 1 {
+		t.Fatalf("TLS import %q = %v, %v", name, results, err)
 	}
-	results := []uint64{0}
-	function(host, params, results)
 	return wagonet.Status(wago.AsI32(results[0]))
 }
 

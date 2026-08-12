@@ -37,7 +37,7 @@ type Config struct {
 	NamespaceFactory NamespaceFactory
 }
 
-// DefaultConfig preserves the core extension's state-only behavior: finite
+// DefaultConfig preserves the core provider's state-only behavior: finite
 // default quotas and readiness storage with no automatically created namespace.
 func DefaultConfig() Config {
 	return Config{Limits: quota.DefaultLimits(), Readiness: readiness.DefaultConfig()}
@@ -94,7 +94,7 @@ func (s *State) Policy() *policy.Policy {
 }
 
 // NamespaceHandle returns the automatically created namespace handle, or zero
-// when the extension was configured without a namespace.
+// when the network was configured without a namespace.
 func (s *State) NamespaceHandle() resource.Handle {
 	if s == nil {
 		return 0
@@ -173,18 +173,25 @@ func runTeardownStep(step func() error) (err error, panicValue any, panicked boo
 	return err, nil, false
 }
 
-// Manager is an extension-local attachment map. It must be owned by an
-// extension value; it is intentionally not a package-global registry.
+// Manager is a provider-local attachment map. It must be owned by one Network;
+// it is intentionally not a package-global registry.
 type Manager struct {
 	mu        sync.RWMutex
-	states    map[*wago.Instance]*State
-	attaching map[*wago.Instance]*attachmentAttempt
-	detaching map[*wago.Instance]*detachmentAttempt
+	states    map[instanceKey]*State
+	attaching map[instanceKey]*attachmentAttempt
+	detaching map[instanceKey]*detachmentAttempt
 
 	policy           *policy.Policy
 	limits           quota.Limits
 	readiness        readiness.Config
 	namespaceFactory NamespaceFactory
+}
+
+// instanceKey keeps the production opaque-identity path distinct from the
+// direct-pointer path used by low-level repository fixtures.
+type instanceKey struct {
+	direct   *wago.Instance
+	identity wago.InstanceIdentity
 }
 
 type attachmentAttempt struct {
@@ -196,7 +203,7 @@ type detachmentAttempt struct {
 	err  error
 }
 
-// NewManager creates an empty extension-local manager with finite defaults and
+// NewManager creates an empty provider-local manager with finite defaults and
 // no automatically created namespace.
 func NewManager() *Manager {
 	manager, err := NewManagerConfigured(DefaultConfig())
@@ -218,9 +225,9 @@ func NewManagerConfigured(config Config) (*Manager, error) {
 		return nil, fmt.Errorf("compile endpoint policy: %w", err)
 	}
 	return &Manager{
-		states:           make(map[*wago.Instance]*State),
-		attaching:        make(map[*wago.Instance]*attachmentAttempt),
-		detaching:        make(map[*wago.Instance]*detachmentAttempt),
+		states:           make(map[instanceKey]*State),
+		attaching:        make(map[instanceKey]*attachmentAttempt),
+		detaching:        make(map[instanceKey]*detachmentAttempt),
 		policy:           compiled,
 		limits:           config.Limits,
 		readiness:        config.Readiness,
@@ -238,22 +245,6 @@ func rightSizeReadiness(configured int, resources uint64) int {
 	return configured
 }
 
-// AfterInstantiate is a Wago lifecycle hook that attaches fresh state after a
-// Runtime instance has been created.
-func (m *Manager) AfterInstantiate(_ *wago.InstantiateContext, instance *wago.Instance) error {
-	return m.Attach(instance)
-}
-
-// BeforeClose is a Wago lifecycle hook that removes state before instance
-// memory and runtime resources are invalidated. Wago close hooks cannot return
-// errors, so all resources are attempted and cleanup errors are contained.
-func (m *Manager) BeforeClose(context *wago.InstanceContext) {
-	if context == nil {
-		return
-	}
-	_ = m.Detach(context.Instance)
-}
-
 // Attach creates and publishes one isolated state for instance. An optional
 // namespace is fully quota-owned, generation-safe, and poll-registered before
 // publication; every failed stage is rolled back synchronously.
@@ -261,13 +252,43 @@ func (m *Manager) Attach(instance *wago.Instance) error {
 	if m == nil || instance == nil {
 		return ErrInvalidInstance
 	}
-	attempt, err := m.beginAttachment(instance)
+	return m.attach(instanceKey{direct: instance})
+}
+
+// AttachIdentity creates and publishes state for an opaque Runtime identity.
+func (m *Manager) AttachIdentity(identity wago.InstanceIdentity) error {
+	if m == nil || identity.IsZero() {
+		return ErrInvalidInstance
+	}
+	return m.attach(instanceKey{identity: identity})
+}
+
+// SingleState returns the attached state only when the manager owns exactly
+// one instance. It supports repository diagnostics without weakening the
+// production caller-identity boundary.
+func (m *Manager) SingleState() (*State, bool) {
+	if m == nil {
+		return nil, false
+	}
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	if len(m.states) != 1 {
+		return nil, false
+	}
+	for _, state := range m.states {
+		return state, true
+	}
+	return nil, false
+}
+
+func (m *Manager) attach(key instanceKey) error {
+	attempt, err := m.beginAttachment(key)
 	if err != nil {
 		return err
 	}
 	result := attachmentResult{}
-	m.runAttachment(instance, &result)
-	m.completeAttachment(instance, attempt, result.state, result.published, result.panicValue, result.panicked)
+	m.runAttachment(key, &result)
+	m.completeAttachment(key, attempt, result.state, result.published, result.panicValue, result.panicked)
 	return result.err
 }
 
@@ -283,7 +304,7 @@ type attachmentResult struct {
 // can finish before Attach re-panics from an ordinary call frame. In particular,
 // this avoids relying on a recover-and-repanic cycle inside the same deferred
 // function, which is not portable across all supported Go toolchains.
-func (m *Manager) runAttachment(instance *wago.Instance, result *attachmentResult) {
+func (m *Manager) runAttachment(key instanceKey, result *attachmentResult) {
 	completed := false
 	defer func() {
 		if !completed {
@@ -291,11 +312,11 @@ func (m *Manager) runAttachment(instance *wago.Instance, result *attachmentResul
 			result.panicked = true
 		}
 	}()
-	result.err = m.attachState(instance, &result.state, &result.published)
+	result.err = m.attachState(key, &result.state, &result.published)
 	completed = true
 }
 
-func (m *Manager) attachState(instance *wago.Instance, state **State, published *bool) error {
+func (m *Manager) attachState(key instanceKey, state **State, published *bool) error {
 	table, err := resource.NewTable()
 	if err != nil {
 		return fmt.Errorf("create resource table: %w", err)
@@ -317,36 +338,36 @@ func (m *Manager) attachState(instance *wago.Instance, state **State, published 
 
 	m.mu.Lock()
 	if m.states == nil {
-		m.states = make(map[*wago.Instance]*State)
+		m.states = make(map[instanceKey]*State)
 	}
-	m.states[instance] = *state
+	m.states[key] = *state
 	*published = true
 	m.mu.Unlock()
 	return nil
 }
 
-func (m *Manager) beginAttachment(instance *wago.Instance) (*attachmentAttempt, error) {
+func (m *Manager) beginAttachment(key instanceKey) (*attachmentAttempt, error) {
 	for {
 		m.mu.Lock()
-		if _, exists := m.states[instance]; exists {
+		if _, exists := m.states[key]; exists {
 			m.mu.Unlock()
 			return nil, ErrAlreadyAttached
 		}
-		if _, exists := m.attaching[instance]; exists {
+		if _, exists := m.attaching[key]; exists {
 			m.mu.Unlock()
 			return nil, ErrAlreadyAttached
 		}
-		if attempt := m.detaching[instance]; attempt != nil {
+		if attempt := m.detaching[key]; attempt != nil {
 			done := attempt.done
 			m.mu.Unlock()
 			<-done
 			continue
 		}
 		if m.attaching == nil {
-			m.attaching = make(map[*wago.Instance]*attachmentAttempt)
+			m.attaching = make(map[instanceKey]*attachmentAttempt)
 		}
 		attempt := &attachmentAttempt{done: make(chan struct{})}
-		m.attaching[instance] = attempt
+		m.attaching[key] = attempt
 		m.mu.Unlock()
 		return attempt, nil
 	}
@@ -355,12 +376,12 @@ func (m *Manager) beginAttachment(instance *wago.Instance) (*attachmentAttempt, 
 // completeAttachment retires the lifecycle record before re-propagating a
 // panic. A construction panic takes precedence over a rollback-close panic;
 // when construction returned normally, the rollback panic remains visible.
-func (m *Manager) completeAttachment(instance *wago.Instance, attempt *attachmentAttempt, state *State, published bool, originalPanic any, originalPanicked bool) {
+func (m *Manager) completeAttachment(key instanceKey, attempt *attachmentAttempt, state *State, published bool, originalPanic any, originalPanicked bool) {
 	var cleanupPanic any
 	if !published && state != nil {
 		cleanupPanic = closeUnpublishedState(state)
 	}
-	m.finishAttachment(instance, attempt)
+	m.finishAttachment(key, attempt)
 	if originalPanicked {
 		panic(originalPanic)
 	}
@@ -381,10 +402,10 @@ func closeUnpublishedState(state *State) (panicValue any) {
 	return nil
 }
 
-func (m *Manager) finishAttachment(instance *wago.Instance, attempt *attachmentAttempt) {
+func (m *Manager) finishAttachment(key instanceKey, attempt *attachmentAttempt) {
 	m.mu.Lock()
-	if m.attaching[instance] == attempt {
-		delete(m.attaching, instance)
+	if m.attaching[key] == attempt {
+		delete(m.attaching, key)
 		close(attempt.done)
 	}
 	m.mu.Unlock()
@@ -588,45 +609,57 @@ func (m *Manager) Detach(instance *wago.Instance) error {
 	if m == nil || instance == nil {
 		return ErrInvalidInstance
 	}
+	return m.detach(instanceKey{direct: instance})
+}
+
+// DetachIdentity unpublishes and closes state for an opaque Runtime identity.
+func (m *Manager) DetachIdentity(identity wago.InstanceIdentity) error {
+	if m == nil || identity.IsZero() {
+		return ErrInvalidInstance
+	}
+	return m.detach(instanceKey{identity: identity})
+}
+
+func (m *Manager) detach(key instanceKey) error {
 	for {
 		m.mu.Lock()
-		if attempt := m.attaching[instance]; attempt != nil {
+		if attempt := m.attaching[key]; attempt != nil {
 			done := attempt.done
 			m.mu.Unlock()
 			<-done
 			continue
 		}
-		if attempt := m.detaching[instance]; attempt != nil {
+		if attempt := m.detaching[key]; attempt != nil {
 			done := attempt.done
 			m.mu.Unlock()
 			<-done
 			return attempt.err
 		}
-		state := m.states[instance]
+		state := m.states[key]
 		if state == nil {
 			m.mu.Unlock()
 			return nil
 		}
-		delete(m.states, instance)
+		delete(m.states, key)
 		if m.detaching == nil {
-			m.detaching = make(map[*wago.Instance]*detachmentAttempt)
+			m.detaching = make(map[instanceKey]*detachmentAttempt)
 		}
 		attempt := &detachmentAttempt{done: make(chan struct{})}
-		m.detaching[instance] = attempt
+		m.detaching[key] = attempt
 		m.mu.Unlock()
 
-		return m.closeDetachedState(instance, attempt, state)
+		return m.closeDetachedState(key, attempt, state)
 	}
 }
 
-func (m *Manager) closeDetachedState(instance *wago.Instance, attempt *detachmentAttempt, state *State) error {
+func (m *Manager) closeDetachedState(key instanceKey, attempt *detachmentAttempt, state *State) error {
 	result := detachmentResult{}
 	runDetachedClose(state, &result)
 	waiterErr := result.err
 	if result.panicked {
 		waiterErr = ErrTeardownPanicked
 	}
-	m.finishDetachment(instance, attempt, waiterErr)
+	m.finishDetachment(key, attempt, waiterErr)
 	if result.panicked {
 		panic(result.panicValue)
 	}
@@ -651,11 +684,11 @@ func runDetachedClose(state *State, result *detachmentResult) {
 	completed = true
 }
 
-func (m *Manager) finishDetachment(instance *wago.Instance, attempt *detachmentAttempt, closeErr error) {
+func (m *Manager) finishDetachment(key instanceKey, attempt *detachmentAttempt, closeErr error) {
 	m.mu.Lock()
-	if m.detaching[instance] == attempt {
+	if m.detaching[key] == attempt {
 		attempt.err = closeErr
-		delete(m.detaching, instance)
+		delete(m.detaching, key)
 		close(attempt.done)
 	}
 	m.mu.Unlock()
@@ -666,20 +699,32 @@ func (m *Manager) ForInstance(instance *wago.Instance) (*State, bool) {
 	if m == nil || instance == nil {
 		return nil, false
 	}
+	return m.lookup(instanceKey{direct: instance})
+}
+
+// ForIdentity returns state only for the exact opaque Runtime identity.
+func (m *Manager) ForIdentity(identity wago.InstanceIdentity) (*State, bool) {
+	if m == nil || identity.IsZero() {
+		return nil, false
+	}
+	return m.lookup(instanceKey{identity: identity})
+}
+
+func (m *Manager) lookup(key instanceKey) (*State, bool) {
 	m.mu.RLock()
-	state, ok := m.states[instance]
+	state, ok := m.states[key]
 	m.mu.RUnlock()
 	return state, ok
 }
 
-// FromHost resolves the exact calling instance through Wago's optional host
-// module identity surface. HostModule-only mocks and low-level imports without
-// Runtime lifecycle attachment fail closed.
+// FromHost is a test-only bridge for host-module fixtures that expose a direct
+// instance pointer. Production plugin calls resolve opaque identity through
+// Wago's granted CallerResolver instead.
 func (m *Manager) FromHost(module wago.HostModule) (*State, bool) {
 	if m == nil || resource.IsNil(module) {
 		return nil, false
 	}
-	identity, ok := module.(wago.InstanceHostModule)
+	identity, ok := module.(interface{ Instance() *wago.Instance })
 	if !ok || resource.IsNil(identity) {
 		return nil, false
 	}

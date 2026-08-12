@@ -1,0 +1,795 @@
+{
+  "$schema": "https://wago.sh/v1/providers.schema.json",
+  "providers": [
+    {
+      "importPath": "github.com/wago-org/net/register",
+      "definition": {
+        "id": "github.com/wago-org/net",
+        "name": "Wago Networking",
+        "version": "0.1.0",
+        "description": "Bounded capability-gated TCP, UDP, DNS, and network protocol plugins for Wago.",
+        "stability": "experimental",
+        "compatibility": {
+          "engines": {
+            "wago": "\u003e=0.1.0"
+          }
+        },
+        "provenance": {
+          "homepage": "https://github.com/wago-org/net#readme",
+          "repository": "https://github.com/wago-org/net",
+          "license": "Apache-2.0",
+          "authors": [
+            "Wago contributors"
+          ]
+        },
+        "authorities": [
+          {
+            "name": "host.caller.identify",
+            "mode": "required",
+            "reason": "resolve exact synchronous callers without instance authority",
+            "scope": {}
+          },
+          {
+            "name": "host.import.define",
+            "mode": "required",
+            "reason": "define the selected checked networking guest imports",
+            "scope": {
+              "modules": [
+                "wago_net",
+                "wago_net_dhcpv4",
+                "wago_net_dhcpv6",
+                "wago_net_dns",
+                "wago_net_icmpv4",
+                "wago_net_icmpv6",
+                "wago_net_ipv6",
+                "wago_net_linklocal4",
+                "wago_net_mdns",
+                "wago_net_ntp",
+                "wago_net_tcp",
+                "wago_net_udp"
+              ]
+            }
+          },
+          {
+            "name": "instance.close.observe",
+            "mode": "required",
+            "reason": "detach network state before exact instance resources close",
+            "scope": {}
+          },
+          {
+            "name": "instance.instantiate.intercept",
+            "mode": "required",
+            "reason": "transactionally attach isolated network state before guest start",
+            "scope": {}
+          }
+        ],
+        "configSchema": {
+          "additionalProperties": false,
+          "type": "object"
+        },
+        "provides": [
+          {
+            "id": "github.com/wago-org/net/service",
+            "major": 1
+          }
+        ]
+      },
+      "definitionDigest": "sha256:98786de256a4a308f9c8e283da8f4e58561a93b55ce737ad6909e35844fa382f"
+    },
+    {
+      "importPath": "github.com/wago-org/net/register",
+      "definition": {
+        "id": "github.com/wago-org/net/dhcpv4",
+        "name": "Wago DHCPv4",
+        "version": "0.1.0",
+        "description": "Bounded checked DHCPv4 networking.",
+        "stability": "experimental",
+        "compatibility": {
+          "engines": {
+            "wago": "\u003e=0.1.0"
+          }
+        },
+        "provenance": {
+          "homepage": "https://github.com/wago-org/net#readme",
+          "repository": "https://github.com/wago-org/net",
+          "license": "Apache-2.0",
+          "authors": [
+            "Wago contributors"
+          ]
+        },
+        "authorities": [
+          {
+            "name": "host.caller.identify",
+            "mode": "required",
+            "reason": "resolve exact synchronous callers without instance authority",
+            "scope": {}
+          },
+          {
+            "name": "host.import.define",
+            "mode": "required",
+            "reason": "define the selected checked networking guest imports",
+            "scope": {
+              "modules": [
+                "wago_net",
+                "wago_net_dhcpv4"
+              ]
+            }
+          },
+          {
+            "name": "instance.close.observe",
+            "mode": "required",
+            "reason": "detach network state before exact instance resources close",
+            "scope": {}
+          },
+          {
+            "name": "instance.instantiate.intercept",
+            "mode": "required",
+            "reason": "transactionally attach isolated network state before guest start",
+            "scope": {}
+          }
+        ],
+        "configSchema": {
+          "additionalProperties": false,
+          "type": "object"
+        },
+        "provides": [
+          {
+            "id": "github.com/wago-org/net/service",
+            "major": 1
+          }
+        ]
+      },
+      "definitionDigest": "sha256:3040560e5bf628cca179f9c6fdb2f9982f658196f5167bfef3c36e1ae6eedd73"
+    },
+    {
+      "importPath": "github.com/wago-org/net/register",
+      "definition": {
+        "id": "github.com/wago-org/net/dhcpv6",
+        "name": "Wago DHCPv6",
+        "version": "0.1.0",
+        "description": "Bounded checked initial DHCPv6 acquisition.",
+        "stability": "experimental",
+        "compatibility": {
+          "engines": {
+            "wago": "\u003e=0.1.0"
+          }
+        },
+        "provenance": {
+          "homepage": "https://github.com/wago-org/net#readme",
+          "repository": "https://github.com/wago-org/net",
+          "license": "Apache-2.0",
+          "authors": [
+            "Wago contributors"
+          ]
+        },
+        "authorities": [
+          {
+            "name": "host.caller.identify",
+            "mode": "required",
+            "reason": "resolve exact synchronous callers without instance authority",
+            "scope": {}
+          },
+          {
+            "name": "host.import.define",
+            "mode": "required",
+            "reason": "define the selected checked networking guest imports",
+            "scope": {
+              "modules": [
+                "wago_net",
+                "wago_net_dhcpv6"
+              ]
+            }
+          },
+          {
+            "name": "instance.close.observe",
+            "mode": "required",
+            "reason": "detach network state before exact instance resources close",
+            "scope": {}
+          },
+          {
+            "name": "instance.instantiate.intercept",
+            "mode": "required",
+            "reason": "transactionally attach isolated network state before guest start",
+            "scope": {}
+          }
+        ],
+        "configSchema": {
+          "additionalProperties": false,
+          "type": "object"
+        },
+        "provides": [
+          {
+            "id": "github.com/wago-org/net/service",
+            "major": 1
+          }
+        ]
+      },
+      "definitionDigest": "sha256:1dd54e3b8829ed7f478f8a2bd0945c6a4fa73133a5c5fb9feb060ba4462239e2"
+    },
+    {
+      "importPath": "github.com/wago-org/net/register",
+      "definition": {
+        "id": "github.com/wago-org/net/dns",
+        "name": "Wago DNS",
+        "version": "0.1.0",
+        "description": "Bounded checked DNS networking.",
+        "stability": "experimental",
+        "compatibility": {
+          "engines": {
+            "wago": "\u003e=0.1.0"
+          }
+        },
+        "provenance": {
+          "homepage": "https://github.com/wago-org/net#readme",
+          "repository": "https://github.com/wago-org/net",
+          "license": "Apache-2.0",
+          "authors": [
+            "Wago contributors"
+          ]
+        },
+        "authorities": [
+          {
+            "name": "host.caller.identify",
+            "mode": "required",
+            "reason": "resolve exact synchronous callers without instance authority",
+            "scope": {}
+          },
+          {
+            "name": "host.import.define",
+            "mode": "required",
+            "reason": "define the selected checked networking guest imports",
+            "scope": {
+              "modules": [
+                "wago_net",
+                "wago_net_dns"
+              ]
+            }
+          },
+          {
+            "name": "instance.close.observe",
+            "mode": "required",
+            "reason": "detach network state before exact instance resources close",
+            "scope": {}
+          },
+          {
+            "name": "instance.instantiate.intercept",
+            "mode": "required",
+            "reason": "transactionally attach isolated network state before guest start",
+            "scope": {}
+          }
+        ],
+        "configSchema": {
+          "additionalProperties": false,
+          "type": "object"
+        },
+        "provides": [
+          {
+            "id": "github.com/wago-org/net/service",
+            "major": 1
+          }
+        ]
+      },
+      "definitionDigest": "sha256:46daedcec55a4a23d21aa687b6f9d213bff5b6e76939cd6ab37dc471209fec2c"
+    },
+    {
+      "importPath": "github.com/wago-org/net/register",
+      "definition": {
+        "id": "github.com/wago-org/net/icmpv4",
+        "name": "Wago ICMPv4",
+        "version": "0.1.0",
+        "description": "Bounded checked ICMPv4 networking.",
+        "stability": "experimental",
+        "compatibility": {
+          "engines": {
+            "wago": "\u003e=0.1.0"
+          }
+        },
+        "provenance": {
+          "homepage": "https://github.com/wago-org/net#readme",
+          "repository": "https://github.com/wago-org/net",
+          "license": "Apache-2.0",
+          "authors": [
+            "Wago contributors"
+          ]
+        },
+        "authorities": [
+          {
+            "name": "host.caller.identify",
+            "mode": "required",
+            "reason": "resolve exact synchronous callers without instance authority",
+            "scope": {}
+          },
+          {
+            "name": "host.import.define",
+            "mode": "required",
+            "reason": "define the selected checked networking guest imports",
+            "scope": {
+              "modules": [
+                "wago_net",
+                "wago_net_icmpv4"
+              ]
+            }
+          },
+          {
+            "name": "instance.close.observe",
+            "mode": "required",
+            "reason": "detach network state before exact instance resources close",
+            "scope": {}
+          },
+          {
+            "name": "instance.instantiate.intercept",
+            "mode": "required",
+            "reason": "transactionally attach isolated network state before guest start",
+            "scope": {}
+          }
+        ],
+        "configSchema": {
+          "additionalProperties": false,
+          "type": "object"
+        },
+        "provides": [
+          {
+            "id": "github.com/wago-org/net/service",
+            "major": 1
+          }
+        ]
+      },
+      "definitionDigest": "sha256:bd20a4101b2c37f883ba3ead4bd2827b04fe26a861af155046d211d56432bae3"
+    },
+    {
+      "importPath": "github.com/wago-org/net/register",
+      "definition": {
+        "id": "github.com/wago-org/net/icmpv6",
+        "name": "Wago ICMPv6",
+        "version": "0.1.0",
+        "description": "Bounded checked ICMPv6 and neighbor discovery.",
+        "stability": "experimental",
+        "compatibility": {
+          "engines": {
+            "wago": "\u003e=0.1.0"
+          }
+        },
+        "provenance": {
+          "homepage": "https://github.com/wago-org/net#readme",
+          "repository": "https://github.com/wago-org/net",
+          "license": "Apache-2.0",
+          "authors": [
+            "Wago contributors"
+          ]
+        },
+        "authorities": [
+          {
+            "name": "host.caller.identify",
+            "mode": "required",
+            "reason": "resolve exact synchronous callers without instance authority",
+            "scope": {}
+          },
+          {
+            "name": "host.import.define",
+            "mode": "required",
+            "reason": "define the selected checked networking guest imports",
+            "scope": {
+              "modules": [
+                "wago_net",
+                "wago_net_icmpv6"
+              ]
+            }
+          },
+          {
+            "name": "instance.close.observe",
+            "mode": "required",
+            "reason": "detach network state before exact instance resources close",
+            "scope": {}
+          },
+          {
+            "name": "instance.instantiate.intercept",
+            "mode": "required",
+            "reason": "transactionally attach isolated network state before guest start",
+            "scope": {}
+          }
+        ],
+        "configSchema": {
+          "additionalProperties": false,
+          "type": "object"
+        },
+        "provides": [
+          {
+            "id": "github.com/wago-org/net/service",
+            "major": 1
+          }
+        ]
+      },
+      "definitionDigest": "sha256:05a8005ed12acbeeef96ccc5b16d13589eef259d48acef06eb2acc04292d08aa"
+    },
+    {
+      "importPath": "github.com/wago-org/net/register",
+      "definition": {
+        "id": "github.com/wago-org/net/ipv6",
+        "name": "Wago IPv6",
+        "version": "0.1.0",
+        "description": "Bounded checked IPv6 networking.",
+        "stability": "experimental",
+        "compatibility": {
+          "engines": {
+            "wago": "\u003e=0.1.0"
+          }
+        },
+        "provenance": {
+          "homepage": "https://github.com/wago-org/net#readme",
+          "repository": "https://github.com/wago-org/net",
+          "license": "Apache-2.0",
+          "authors": [
+            "Wago contributors"
+          ]
+        },
+        "authorities": [
+          {
+            "name": "host.caller.identify",
+            "mode": "required",
+            "reason": "resolve exact synchronous callers without instance authority",
+            "scope": {}
+          },
+          {
+            "name": "host.import.define",
+            "mode": "required",
+            "reason": "define the selected checked networking guest imports",
+            "scope": {
+              "modules": [
+                "wago_net",
+                "wago_net_ipv6"
+              ]
+            }
+          },
+          {
+            "name": "instance.close.observe",
+            "mode": "required",
+            "reason": "detach network state before exact instance resources close",
+            "scope": {}
+          },
+          {
+            "name": "instance.instantiate.intercept",
+            "mode": "required",
+            "reason": "transactionally attach isolated network state before guest start",
+            "scope": {}
+          }
+        ],
+        "configSchema": {
+          "additionalProperties": false,
+          "type": "object"
+        },
+        "provides": [
+          {
+            "id": "github.com/wago-org/net/service",
+            "major": 1
+          }
+        ]
+      },
+      "definitionDigest": "sha256:3a2f779b359461b0d7110a8dc7df91c940e3bbf5bd7127b64f0ad379a7ec0970"
+    },
+    {
+      "importPath": "github.com/wago-org/net/register",
+      "definition": {
+        "id": "github.com/wago-org/net/linklocal4",
+        "name": "Wago IPv4 Link-Local",
+        "version": "0.1.0",
+        "description": "Bounded checked IPv4 link-local networking.",
+        "stability": "experimental",
+        "compatibility": {
+          "engines": {
+            "wago": "\u003e=0.1.0"
+          }
+        },
+        "provenance": {
+          "homepage": "https://github.com/wago-org/net#readme",
+          "repository": "https://github.com/wago-org/net",
+          "license": "Apache-2.0",
+          "authors": [
+            "Wago contributors"
+          ]
+        },
+        "authorities": [
+          {
+            "name": "host.caller.identify",
+            "mode": "required",
+            "reason": "resolve exact synchronous callers without instance authority",
+            "scope": {}
+          },
+          {
+            "name": "host.import.define",
+            "mode": "required",
+            "reason": "define the selected checked networking guest imports",
+            "scope": {
+              "modules": [
+                "wago_net",
+                "wago_net_linklocal4"
+              ]
+            }
+          },
+          {
+            "name": "instance.close.observe",
+            "mode": "required",
+            "reason": "detach network state before exact instance resources close",
+            "scope": {}
+          },
+          {
+            "name": "instance.instantiate.intercept",
+            "mode": "required",
+            "reason": "transactionally attach isolated network state before guest start",
+            "scope": {}
+          }
+        ],
+        "configSchema": {
+          "additionalProperties": false,
+          "type": "object"
+        },
+        "provides": [
+          {
+            "id": "github.com/wago-org/net/service",
+            "major": 1
+          }
+        ]
+      },
+      "definitionDigest": "sha256:d3ea865c0f29eeb27c6791b5fd8537cdbf802308f6d64df70ce7b8d0c0d24647"
+    },
+    {
+      "importPath": "github.com/wago-org/net/register",
+      "definition": {
+        "id": "github.com/wago-org/net/mdns",
+        "name": "Wago mDNS",
+        "version": "0.1.0",
+        "description": "Bounded checked multicast DNS networking.",
+        "stability": "experimental",
+        "compatibility": {
+          "engines": {
+            "wago": "\u003e=0.1.0"
+          }
+        },
+        "provenance": {
+          "homepage": "https://github.com/wago-org/net#readme",
+          "repository": "https://github.com/wago-org/net",
+          "license": "Apache-2.0",
+          "authors": [
+            "Wago contributors"
+          ]
+        },
+        "authorities": [
+          {
+            "name": "host.caller.identify",
+            "mode": "required",
+            "reason": "resolve exact synchronous callers without instance authority",
+            "scope": {}
+          },
+          {
+            "name": "host.import.define",
+            "mode": "required",
+            "reason": "define the selected checked networking guest imports",
+            "scope": {
+              "modules": [
+                "wago_net",
+                "wago_net_mdns"
+              ]
+            }
+          },
+          {
+            "name": "instance.close.observe",
+            "mode": "required",
+            "reason": "detach network state before exact instance resources close",
+            "scope": {}
+          },
+          {
+            "name": "instance.instantiate.intercept",
+            "mode": "required",
+            "reason": "transactionally attach isolated network state before guest start",
+            "scope": {}
+          }
+        ],
+        "configSchema": {
+          "additionalProperties": false,
+          "type": "object"
+        },
+        "provides": [
+          {
+            "id": "github.com/wago-org/net/service",
+            "major": 1
+          }
+        ]
+      },
+      "definitionDigest": "sha256:fd86c6b6e6ae88b93d931caea3085f3c62757267333e0202cfefbef68c6dd457"
+    },
+    {
+      "importPath": "github.com/wago-org/net/register",
+      "definition": {
+        "id": "github.com/wago-org/net/ntp",
+        "name": "Wago NTP",
+        "version": "0.1.0",
+        "description": "Bounded checked NTP networking.",
+        "stability": "experimental",
+        "compatibility": {
+          "engines": {
+            "wago": "\u003e=0.1.0"
+          }
+        },
+        "provenance": {
+          "homepage": "https://github.com/wago-org/net#readme",
+          "repository": "https://github.com/wago-org/net",
+          "license": "Apache-2.0",
+          "authors": [
+            "Wago contributors"
+          ]
+        },
+        "authorities": [
+          {
+            "name": "host.caller.identify",
+            "mode": "required",
+            "reason": "resolve exact synchronous callers without instance authority",
+            "scope": {}
+          },
+          {
+            "name": "host.import.define",
+            "mode": "required",
+            "reason": "define the selected checked networking guest imports",
+            "scope": {
+              "modules": [
+                "wago_net",
+                "wago_net_ntp"
+              ]
+            }
+          },
+          {
+            "name": "instance.close.observe",
+            "mode": "required",
+            "reason": "detach network state before exact instance resources close",
+            "scope": {}
+          },
+          {
+            "name": "instance.instantiate.intercept",
+            "mode": "required",
+            "reason": "transactionally attach isolated network state before guest start",
+            "scope": {}
+          }
+        ],
+        "configSchema": {
+          "additionalProperties": false,
+          "type": "object"
+        },
+        "provides": [
+          {
+            "id": "github.com/wago-org/net/service",
+            "major": 1
+          }
+        ]
+      },
+      "definitionDigest": "sha256:da3ce096e5c87d1a79f783b9250034dfa3d79ac4bd3206cc9ac1028ecd335da7"
+    },
+    {
+      "importPath": "github.com/wago-org/net/register",
+      "definition": {
+        "id": "github.com/wago-org/net/tcp",
+        "name": "Wago TCP",
+        "version": "0.1.0",
+        "description": "Bounded checked TCP networking.",
+        "stability": "experimental",
+        "compatibility": {
+          "engines": {
+            "wago": "\u003e=0.1.0"
+          }
+        },
+        "provenance": {
+          "homepage": "https://github.com/wago-org/net#readme",
+          "repository": "https://github.com/wago-org/net",
+          "license": "Apache-2.0",
+          "authors": [
+            "Wago contributors"
+          ]
+        },
+        "authorities": [
+          {
+            "name": "host.caller.identify",
+            "mode": "required",
+            "reason": "resolve exact synchronous callers without instance authority",
+            "scope": {}
+          },
+          {
+            "name": "host.import.define",
+            "mode": "required",
+            "reason": "define the selected checked networking guest imports",
+            "scope": {
+              "modules": [
+                "wago_net",
+                "wago_net_tcp"
+              ]
+            }
+          },
+          {
+            "name": "instance.close.observe",
+            "mode": "required",
+            "reason": "detach network state before exact instance resources close",
+            "scope": {}
+          },
+          {
+            "name": "instance.instantiate.intercept",
+            "mode": "required",
+            "reason": "transactionally attach isolated network state before guest start",
+            "scope": {}
+          }
+        ],
+        "configSchema": {
+          "additionalProperties": false,
+          "type": "object"
+        },
+        "provides": [
+          {
+            "id": "github.com/wago-org/net/service",
+            "major": 1
+          }
+        ]
+      },
+      "definitionDigest": "sha256:d3983477b6e75fc58cdc7df4330a27b7f83a119dd11cb557c17f04c3b7d905c0"
+    },
+    {
+      "importPath": "github.com/wago-org/net/register",
+      "definition": {
+        "id": "github.com/wago-org/net/udp",
+        "name": "Wago UDP",
+        "version": "0.1.0",
+        "description": "Bounded checked UDP networking.",
+        "stability": "experimental",
+        "compatibility": {
+          "engines": {
+            "wago": "\u003e=0.1.0"
+          }
+        },
+        "provenance": {
+          "homepage": "https://github.com/wago-org/net#readme",
+          "repository": "https://github.com/wago-org/net",
+          "license": "Apache-2.0",
+          "authors": [
+            "Wago contributors"
+          ]
+        },
+        "authorities": [
+          {
+            "name": "host.caller.identify",
+            "mode": "required",
+            "reason": "resolve exact synchronous callers without instance authority",
+            "scope": {}
+          },
+          {
+            "name": "host.import.define",
+            "mode": "required",
+            "reason": "define the selected checked networking guest imports",
+            "scope": {
+              "modules": [
+                "wago_net",
+                "wago_net_udp"
+              ]
+            }
+          },
+          {
+            "name": "instance.close.observe",
+            "mode": "required",
+            "reason": "detach network state before exact instance resources close",
+            "scope": {}
+          },
+          {
+            "name": "instance.instantiate.intercept",
+            "mode": "required",
+            "reason": "transactionally attach isolated network state before guest start",
+            "scope": {}
+          }
+        ],
+        "configSchema": {
+          "additionalProperties": false,
+          "type": "object"
+        },
+        "provides": [
+          {
+            "id": "github.com/wago-org/net/service",
+            "major": 1
+          }
+        ]
+      },
+      "definitionDigest": "sha256:945a182caf9b06b4b366e009c15639bc1442bedea11176e2a50ebf8e51241c2f"
+    }
+  ]
+}

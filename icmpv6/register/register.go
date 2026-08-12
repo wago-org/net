@@ -1,4 +1,4 @@
-// Package register self-registers the selective ICMPv6/NDP extension.
+// Package register exposes the explicit ICMPv6 networking catalog entry.
 package register
 
 import (
@@ -7,12 +7,15 @@ import (
 	wago "github.com/wago-org/wago"
 )
 
-func init() {
-	wago.RegisterExtension("net-icmpv6", func() wago.Extension {
-		network := wagonet.New()
-		if err := icmpv6.Register(network); err != nil {
-			panic("wagonet/icmpv6/register: " + err.Error())
-		}
-		return network
+func Provider() wago.PluginProvider {
+	return wagonet.Provider(wagonet.ProviderSpec{
+		ID: "github.com/wago-org/net/icmpv6", Name: "Wago ICMPv6", Description: "Bounded checked ICMPv6 and neighbor discovery.",
+		Modules: []string{wagonet.Module, wagonet.ICMPv6Module},
+		Factory: func() (*wagonet.Network, error) {
+			network := wagonet.New()
+			return network, icmpv6.Register(network)
+		},
 	})
 }
+
+func Providers() []wago.PluginProvider { return []wago.PluginProvider{Provider()} }

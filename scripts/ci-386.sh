@@ -65,9 +65,11 @@ if GOOS=linux GOARCH=386 CGO_ENABLED=0 go test ./... >"$log" 2>&1; then
 fi
 cat "$log"
 
-readonly blocker_path='.audit/wago/src/core/compiler/frontend/frontend.go:'
-readonly blocker_message='undefined: runtime.HostCtrlFrameBytes'
-if ! grep -Fq "$blocker_path" "$log" || ! grep -Fq "$blocker_message" "$log"; then
+readonly plugin_blocker_path='.audit/wago/src/core/plugins/'
+readonly runtime_blocker_path='.audit/wago/src/core/runtime/'
+readonly blocker_pattern='undefined: (cloneMachineCode|prepareMachineCode|mmapCodeRW|SealCode|munmap|storeTrap|TrapInterrupted)$'
+if ! grep -Fq "$plugin_blocker_path" "$log" || ! grep -Fq "$runtime_blocker_path" "$log" ||
+  ! grep -Eq "$blocker_pattern" "$log"; then
   echo 'ci-386: full repository failed for a reason other than the recorded Wago blocker' >&2
   exit 1
 fi
@@ -75,11 +77,11 @@ if grep -E -- '--- FAIL:|panic:' "$log" >/dev/null; then
   echo 'ci-386: tests failed in addition to the recorded Wago compile blocker' >&2
   exit 1
 fi
-unexpected_diagnostics=$(grep -E '\.go:[0-9]+:[0-9]+:' "$log" | grep -Fv "$blocker_message" || true)
+unexpected_diagnostics=$(grep -E '\.go:[0-9]+:[0-9]+:' "$log" | grep -Ev "$blocker_pattern" || true)
 if [[ -n "$unexpected_diagnostics" ]]; then
   printf 'ci-386: unexpected compiler diagnostics:\n%s\n' "$unexpected_diagnostics" >&2
   exit 1
 fi
 
-echo 'ci-386: full build remains blocked only by pinned Wago runtime.HostCtrlFrameBytes support' >&2
+echo 'ci-386: full build remains blocked only by pinned Wago 386 JIT/runtime stubs' >&2
 echo 'ci-386: backend-neutral 386 package tests passed; keep the full attempt visible until Wago supports 386' >&2

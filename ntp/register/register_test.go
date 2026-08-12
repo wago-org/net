@@ -1,21 +1,25 @@
 package register_test
 
 import (
+	"context"
 	"reflect"
 	"testing"
 
 	wagonet "github.com/wago-org/net"
-	_ "github.com/wago-org/net/ntp/register"
+	"github.com/wago-org/net/internal/plugintest"
+	netregister "github.com/wago-org/net/ntp/register"
 	wago "github.com/wago-org/wago"
 )
 
 func TestNTPFactoryHasExactDisabledRuntimeSurface(t *testing.T) {
-	extension, ok := wago.NewExtension("net-ntp")
-	if !ok {
-		t.Fatal("NTP-only extension was not registered")
+	providers := netregister.Providers()
+	if len(providers) != 1 {
+		t.Fatalf("Providers = %d, want 1", len(providers))
 	}
+	provider := providers[0]
 	runtime := wago.NewRuntime()
-	if err := runtime.Use(extension); err != nil {
+	defer runtime.Close()
+	if err := runtime.LoadPlugins(context.Background(), plugintest.Set(provider)); err != nil {
 		t.Fatal(err)
 	}
 	if got, want := runtime.Capabilities(), []wago.Capability{wagonet.CapInfo, wagonet.CapNTP}; !reflect.DeepEqual(got, want) {

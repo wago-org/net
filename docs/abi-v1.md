@@ -15,7 +15,7 @@ and the historical zero-config `Imports(Config{})` helper intentionally expose
 only `wago_net.abi_version`; every resource-owning UDP/TCP/TLS/DNS/ICMPv4/NTP/mDNS/
 DHCPv4/link-local/ICMPv6/DHCPv6 imports and the configured IPv6 namespace import require exact
 Runtime lifecycle identity and are therefore available only through
-extension registration. The completed `internal/backend/lneto/core` plus `/tcp`,
+explicit provider registration. The completed `internal/backend/lneto/core` plus `/tcp`,
 `/udp`, and `/dns` adapter extraction and selective opaque contribution assembly
 change only Go implementation ownership. Unregistered adapters/facets are now
 absent from the Go dependency graph as well as the Wasm import surface. The
@@ -784,12 +784,13 @@ tentative reservation, and instance teardown clears both committed allocations
 and abandoned reservations. Exact default limits remain implementation policy,
 not ABI constants.
 
-The host extension requires physical reinstantiation between class leases.
-Consequently, a Wago class configured with an in-place reset policy is safely
-executed as `ResetReinstantiate` while networking is registered. This is an
+Networking state is attached to one opaque Runtime instance identity before
+guest start and removed during exact instance close. This is an
 embedding/lifecycle guarantee rather than a guest-visible status or layout: no
 handle, queued byte, listener, stream, socket, readiness registration, or quota
-token survives into the next lease.
+token survives that close boundary. An instance-management plugin must close an
+owned instance before replacement; networking does not request management
+authority or define a pooling/reset policy.
 
 ## Compatibility boundary
 

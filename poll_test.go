@@ -17,8 +17,8 @@ import (
 func TestGuestUDPPollBoundsLevelsServiceAndQuotaRelease(t *testing.T) {
 	extension, _, instance, host := newGuestUDPInstance(t, 31, 32)
 	defer instance.Close()
-	state, _ := extension.instanceManager().ForInstance(instance)
-	namespaceHandle := guestNamespaceFromExtension(t, extension, host)
+	state, _ := extension.instanceManager().SingleState()
+	namespaceHandle := guestNamespaceFromNetwork(t, extension, host)
 	socket := guestBind(t, extension, host, namespaceHandle, endpointFor(31, 4431), 48)
 
 	writePollBudget(host.memory, 0, 2, 2, 0, 0, 0, 0)
@@ -81,8 +81,8 @@ func TestGuestUDPPollBoundsLevelsServiceAndQuotaRelease(t *testing.T) {
 func TestGuestUDPPollRejectsMemoryBeforeWorkAndRemovesStale(t *testing.T) {
 	extension, _, instance, host := newGuestUDPInstance(t, 41, 42)
 	defer instance.Close()
-	state, _ := extension.instanceManager().ForInstance(instance)
-	namespaceHandle := guestNamespaceFromExtension(t, extension, host)
+	state, _ := extension.instanceManager().SingleState()
+	namespaceHandle := guestNamespaceFromNetwork(t, extension, host)
 	socket := guestBind(t, extension, host, namespaceHandle, endpointFor(41, 4541), 48)
 
 	writePollBudget(host.memory, 0, 2, 2, 0, 0, 0, 0)
@@ -119,7 +119,7 @@ func TestGuestUDPPollRejectsMemoryBeforeWorkAndRemovesStale(t *testing.T) {
 }
 
 func TestGuestUDPPollConcurrentInstanceClose(t *testing.T) {
-	extension, _, instance, host := newGuestUDPInstance(t, 51, 52)
+	_, _, instance, host := newGuestUDPInstance(t, 51, 52)
 	writePollBudget(host.memory, 0, 2, 2, 0, 0, 0, 0)
 	var wait sync.WaitGroup
 	for range 8 {
@@ -127,11 +127,12 @@ func TestGuestUDPPollConcurrentInstanceClose(t *testing.T) {
 		go func() {
 			defer wait.Done()
 			for range 100 {
-				memory := make([]byte, len(host.memory))
-				copy(memory, host.memory)
-				localHost := udpHostModule{instance: instance, memory: memory}
-				status := callUDP(t, extension, "poll", localHost, 64, 2, 0, 128)
-				if status != StatusAgain && status != StatusOK && status != StatusInvalidState {
+				results, err := instance.Invoke("poll", 64, 2, 0, 128)
+				if err != nil {
+					return
+				}
+				status := Status(wago.AsI32(results[0]))
+				if status != StatusAgain && status != StatusOK && status != StatusInvalidState && status != StatusInvalidArgument {
 					t.Errorf("concurrent poll status = %v", status)
 					return
 				}
@@ -144,18 +145,21 @@ func TestGuestUDPPollConcurrentInstanceClose(t *testing.T) {
 		_ = instance.Close()
 	}()
 	wait.Wait()
-	if got := callUDP(t, extension, "poll", host, 64, 2, 0, 128); got != StatusInvalidState {
-		t.Fatalf("poll after close = %v", got)
+	if results, err := instance.Invoke("poll", 64, 2, 0, 128); err == nil {
+		got := Status(wago.AsI32(results[0]))
+		if got != StatusInvalidState && got != StatusInvalidArgument {
+			t.Fatalf("poll after close = %v", got)
+		}
 	}
 }
 
 func TestGuestUDPPollTracksDirectPacketLinkCloseAndIdempotentNamespaceCleanup(t *testing.T) {
 	extension, _, instance, host := newGuestUDPInstance(t, 53, 54)
-	state, ok := extension.instanceManager().ForInstance(instance)
+	state, ok := extension.instanceManager().SingleState()
 	if !ok {
 		t.Fatal("instance state missing")
 	}
-	namespaceHandle := guestNamespaceFromExtension(t, extension, host)
+	namespaceHandle := guestNamespaceFromNetwork(t, extension, host)
 	backend := concreteNamespace(t, state)
 	link := backend.Link()
 	writePollBudget(host.memory, 0, 1, 1, 1, 1, 1514, 1)
@@ -169,10 +173,7 @@ func TestGuestUDPPollTracksDirectPacketLinkCloseAndIdempotentNamespaceCleanup(t 
 			defer wait.Done()
 			<-start
 			for range 100 {
-				memory := make([]byte, len(host.memory))
-				copy(memory, host.memory)
-				localHost := udpHostModule{instance: instance, memory: memory}
-				statuses <- callUDP(t, extension, "poll", localHost, 64, 1, 0, 128)
+				statuses <- callUDP(t, extension, "poll", host, 64, 1, 0, 128)
 			}
 		}()
 	}

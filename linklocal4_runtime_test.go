@@ -69,7 +69,7 @@ func TestActualBackendGuestLinkLocal4SuccessfulFixedABILifecycle(t *testing.T) {
 	}
 
 	runtime := wago.NewRuntime()
-	if err := runtime.Use(extension); err != nil {
+	if err := loadNetwork(runtime, extension); err != nil {
 		t.Fatal(err)
 	}
 	if got := runtime.Capabilities(); !reflect.DeepEqual(got, []wago.Capability{CapInfo, CapLinkLocal4}) {
@@ -80,7 +80,7 @@ func TestActualBackendGuestLinkLocal4SuccessfulFixedABILifecycle(t *testing.T) {
 			t.Fatalf("unselected protocol import leaked: %s.%s", spec.Module, spec.Name)
 		}
 	}
-	compiled, err := runtime.Compile([]byte{0x00, 0x61, 0x73, 0x6d, 0x01, 0, 0, 0})
+	compiled, err := compileImportHarness(runtime, LinkLocal4Module)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -88,8 +88,9 @@ func TestActualBackendGuestLinkLocal4SuccessfulFixedABILifecycle(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	host := runtimeLinkLocalHost{instance: instance, memory: bytes.Repeat([]byte{0xa5}, 512)}
-	state, ok := extension.instanceManager().ForInstance(instance)
+	host := runtimeLinkLocalHost{instance: instance, memory: instance.Memory().Bytes()}
+	copy(host.memory[:512], bytes.Repeat([]byte{0xa5}, 512))
+	state, ok := extension.instanceManager().SingleState()
 	if !ok {
 		t.Fatal("missing actual link-local state")
 	}
@@ -114,7 +115,8 @@ func TestActualBackendGuestLinkLocal4SuccessfulFixedABILifecycle(t *testing.T) {
 	}
 
 	beforeInvalid := append([]byte(nil), host.memory...)
-	if got := callRuntimeLinkLocal(t, runtime, host, "result", uint64(claim), 480); got != StatusInvalidArgument || !bytes.Equal(host.memory, beforeInvalid) {
+	shortResult := uint64(len(host.memory) - 32)
+	if got := callRuntimeLinkLocal(t, runtime, host, "result", uint64(claim), shortResult); got != StatusInvalidArgument || !bytes.Equal(host.memory, beforeInvalid) {
 		t.Fatalf("short result = %v mutated=%v", got, !bytes.Equal(host.memory, beforeInvalid))
 	}
 
@@ -203,7 +205,7 @@ func TestActualBackendGuestLinkLocal4SuccessfulFixedABILifecycle(t *testing.T) {
 	if err := instance.Close(); err != nil {
 		t.Fatal(err)
 	}
-	if _, exists := extension.instanceManager().ForInstance(instance); exists {
+	if extension.instanceManager().Len() != 0 {
 		t.Fatal("link-local state survived instance close")
 	}
 	if usage, closed := account.Snapshot(); !closed || usage != (quota.Usage{}) {
@@ -222,11 +224,13 @@ func runtimeLinkLocalIPv4Address(namespace *lnetocore.Namespace) netip.Addr {
 
 func callRuntimeLinkLocal(t testing.TB, runtime *wago.Runtime, host runtimeLinkLocalHost, name string, params ...uint64) Status {
 	t.Helper()
-	function, ok := runtime.HostImports()[linklocalbinding.Module+"."+name].(wago.HostFunc)
-	if !ok {
-		t.Fatalf("link-local import %q missing", name)
+	_ = runtime
+	results, err := host.instance.Invoke(name, params...)
+	if err != nil {
+		t.Fatalf("link-local import %q: %v", name, err)
 	}
-	var results [1]uint64
-	function(host, params, results[:])
+	if len(results) != 1 {
+		t.Fatalf("link-local import %q results = %d", name, len(results))
+	}
 	return Status(int32(results[0]))
 }

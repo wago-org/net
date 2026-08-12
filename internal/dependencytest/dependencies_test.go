@@ -140,7 +140,7 @@ func TestSelfRegisterPackageDependencyBoundaries(t *testing.T) {
 			for protocol, dependency := range protocolDependencies {
 				if test.selected[protocol] {
 					if !dependencies[dependency.public] || !dependencies[dependency.binding] || !dependencies[dependency.operation] || !dependencies[dependency.abi] || !dependencies[dependency.namespace] || !dependencies[dependency.adapter] {
-						t.Fatalf("selected %s self-register graph is incomplete", protocol)
+						t.Fatalf("selected %s provider graph is incomplete", protocol)
 					}
 					if test.name != "all" && dependency.register != "" && !dependencies[dependency.register] {
 						t.Fatalf("selected %s granular register package absent", protocol)
@@ -149,19 +149,19 @@ func TestSelfRegisterPackageDependencyBoundaries(t *testing.T) {
 				}
 				if protocol == "tcp" && test.selected["tls"] {
 					if dependencies[dependency.public] || dependencies[dependency.register] || dependencies[dependency.binding] || dependencies[dependency.operation] || dependencies[dependency.abi] {
-						t.Fatal("TLS self-register graph reached raw TCP facade")
+						t.Fatal("TLS composition graph reached raw TCP facade")
 					}
 					if !dependencies[dependency.namespace] || !dependencies[dependency.adapter] {
-						t.Fatal("TLS self-register graph omitted private TCP transport")
+						t.Fatal("TLS composition graph omitted private TCP transport")
 					}
 					continue
 				}
 				if dependencies[dependency.public] || dependencies[dependency.register] || dependencies[dependency.binding] || dependencies[dependency.operation] || dependencies[dependency.abi] || dependencies[dependency.namespace] || dependencies[dependency.adapter] {
-					t.Fatalf("unselected %s compiled by %s self-register graph", protocol, test.name)
+					t.Fatalf("unselected %s compiled by %s provider graph", protocol, test.name)
 				}
 			}
 			if dependencies[modulePath+"/compat"] || dependencies[modulePath+"/internal/namespace"] || dependencies[modulePath+"/internal/backend/lneto"] {
-				t.Fatalf("%s self-register graph reached an aggregate compatibility implementation", test.name)
+				t.Fatalf("%s provider graph reached an aggregate compatibility implementation", test.name)
 			}
 			if test.name == "all" && !dependencies[modulePath+"/register"] {
 				t.Fatal("all-protocol register bundle absent")

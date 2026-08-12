@@ -22,7 +22,7 @@ const (
 
 // Descriptor returns the opaque ICMPv4 module installed by the public facade.
 func Descriptor(backend ...plugin.Backend) plugin.Module {
-	return plugin.NewModule(plugin.ModuleICMPv4, func(registry *wago.Registry, host plugin.Host) {
+	return plugin.NewModule(plugin.ModuleICMPv4, func(registry *plugin.Registrar, host plugin.Host) {
 		registry.Capability(Capability, wago.CapabilityDocs("use checked bounded ICMPv4 echo exchanges for the exact calling instance"))
 		plugin.RegisterBindings(registry.ImportModule(Module), Bindings(host))
 	}, backend...)

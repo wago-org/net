@@ -10,7 +10,6 @@ import (
 
 	wagonet "github.com/wago-org/net"
 	ntpabi "github.com/wago-org/net/internal/abi/ntp"
-	ntpbinding "github.com/wago-org/net/internal/binding/ntp"
 	"github.com/wago-org/net/internal/guest"
 	"github.com/wago-org/net/internal/resource"
 	wago "github.com/wago-org/wago"
@@ -45,7 +44,7 @@ func TestSelectiveNTPRegistrationAndActualBackendLifecycle(t *testing.T) {
 		t.Fatal(err)
 	}
 	runtime := wago.NewRuntime()
-	if err := runtime.Use(network); err != nil {
+	if err := loadNetwork(runtime, network); err != nil {
 		t.Fatal(err)
 	}
 	imports := 0
@@ -67,7 +66,7 @@ func TestSelectiveNTPRegistrationAndActualBackendLifecycle(t *testing.T) {
 	if !foundCapability {
 		t.Fatal("NTP capability not advertised")
 	}
-	module, err := runtime.Compile([]byte{0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00})
+	module, err := compileImportHarness(runtime)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -76,7 +75,7 @@ func TestSelectiveNTPRegistrationAndActualBackendLifecycle(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer instance.Close()
-	host := hostModule{instance: instance, memory: make([]byte, 256)}
+	host := hostModule{instance: instance, memory: instance.Memory().Bytes()}
 	if got := callImport(t, runtime, host, "namespace_default", 80); got != guest.StatusOK {
 		t.Fatalf("namespace_default = %v", got)
 	}
@@ -128,16 +127,16 @@ func TestNTPDenyWinsAndCheckedMemoryPrecedesWork(t *testing.T) {
 		t.Fatal(err)
 	}
 	runtime := wago.NewRuntime()
-	if err := runtime.Use(network); err != nil {
+	if err := loadNetwork(runtime, network); err != nil {
 		t.Fatal(err)
 	}
-	module, _ := runtime.Compile([]byte{0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00})
+	module, _ := compileImportHarness(runtime)
 	instance, err := runtime.Instantiate(context.Background(), module)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer instance.Close()
-	host := hostModule{instance: instance, memory: make([]byte, 128)}
+	host := hostModule{instance: instance, memory: instance.Memory().Bytes()}
 	if got := callImport(t, runtime, host, "namespace_default", 80); got != guest.StatusOK {
 		t.Fatal(got)
 	}
@@ -146,7 +145,7 @@ func TestNTPDenyWinsAndCheckedMemoryPrecedesWork(t *testing.T) {
 		t.Fatalf("deny-wins sync = %v", got)
 	}
 	before := append([]byte(nil), host.memory...)
-	if got := callImport(t, runtime, host, "sync", namespaceHandle, 124); got != guest.StatusInvalidArgument {
+	if got := callImport(t, runtime, host, "sync", namespaceHandle, uint64(len(host.memory)-4)); got != guest.StatusInvalidArgument {
 		t.Fatalf("invalid output sync = %v", got)
 	}
 	if !bytes.Equal(before, host.memory) {
@@ -183,13 +182,11 @@ func TestNTPOptionsRequireExplicitClockAndFiniteConfiguration(t *testing.T) {
 	}
 }
 
-func callImport(t testing.TB, runtime *wago.Runtime, host hostModule, name string, params ...uint64) guest.Status {
+func callImport(t testing.TB, _ *wago.Runtime, host hostModule, name string, params ...uint64) guest.Status {
 	t.Helper()
-	function, ok := runtime.HostImports()[ntpbinding.Module+"."+name].(wago.HostFunc)
-	if !ok {
-		t.Fatalf("NTP import %q missing", name)
+	results, err := host.instance.Invoke(name, params...)
+	if err != nil || len(results) != 1 {
+		t.Fatalf("NTP import %q = %v, %v", name, results, err)
 	}
-	var results [1]uint64
-	function(host, params, results[:])
 	return guest.Status(int32(results[0]))
 }

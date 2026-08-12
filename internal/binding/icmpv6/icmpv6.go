@@ -19,7 +19,7 @@ const (
 )
 
 func Descriptor(backend ...plugin.Backend) plugin.Module {
-	return plugin.NewModule(plugin.ModuleICMPv6, func(registry *wago.Registry, host plugin.Host) {
+	return plugin.NewModule(plugin.ModuleICMPv6, func(registry *plugin.Registrar, host plugin.Host) {
 		registry.Capability(Capability, wago.CapabilityDocs("use checked bounded ICMPv6 echo and Neighbor Discovery for the exact calling instance"))
 		plugin.RegisterBindings(registry.ImportModule(Module), Bindings(host))
 	}, backend...)

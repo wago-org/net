@@ -1,4 +1,4 @@
-// Package register self-registers the selective IPv4 link-local-only Wago networking extension.
+// Package register exposes the explicit IPv4 link-local networking catalog entry.
 package register
 
 import (
@@ -7,12 +7,15 @@ import (
 	wago "github.com/wago-org/wago"
 )
 
-func init() {
-	wago.RegisterExtension("net-linklocal4", func() wago.Extension {
-		network := wagonet.New()
-		if err := linklocal4.Register(network); err != nil {
-			panic("wagonet/linklocal4/register: " + err.Error())
-		}
-		return network
+func Provider() wago.PluginProvider {
+	return wagonet.Provider(wagonet.ProviderSpec{
+		ID: "github.com/wago-org/net/linklocal4", Name: "Wago IPv4 Link-Local", Description: "Bounded checked IPv4 link-local networking.",
+		Modules: []string{wagonet.Module, wagonet.LinkLocal4Module},
+		Factory: func() (*wagonet.Network, error) {
+			network := wagonet.New()
+			return network, linklocal4.Register(network)
+		},
 	})
 }
+
+func Providers() []wago.PluginProvider { return []wago.PluginProvider{Provider()} }

@@ -6,20 +6,23 @@ import (
 	"testing"
 
 	wagonet "github.com/wago-org/net"
-	_ "github.com/wago-org/net/dns/register"
+	netregister "github.com/wago-org/net/dns/register"
+	"github.com/wago-org/net/internal/plugintest"
 	wago "github.com/wago-org/wago"
 	"github.com/wago-org/wago/src/core/compiler/wasm"
-	"github.com/wago-org/wago/testutil/wasmtest"
+	"github.com/wago-org/wago/tests/wasmtest"
 )
 
 func TestDNSFactoryHasExactRuntimeSurface(t *testing.T) {
-	extension, ok := wago.NewExtension("net-dns")
-	if !ok {
-		t.Fatal("DNS-only extension was not registered")
+	providers := netregister.Providers()
+	if len(providers) != 1 {
+		t.Fatalf("Providers = %d, want 1", len(providers))
 	}
+	provider := providers[0]
 	runtime := wago.NewRuntime()
-	if err := runtime.Use(extension); err != nil {
-		t.Fatalf("Use: %v", err)
+	defer runtime.Close()
+	if err := runtime.LoadPlugins(context.Background(), plugintest.Set(provider)); err != nil {
+		t.Fatalf("LoadPlugins: %v", err)
 	}
 	wantCapabilities := []wago.Capability{wagonet.CapDNS, wagonet.CapInfo}
 	if got := runtime.Capabilities(); !reflect.DeepEqual(got, wantCapabilities) {

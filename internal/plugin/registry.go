@@ -1,5 +1,5 @@
 // Package plugin provides the implementation-neutral protocol composition
-// contract used by the root networking extension and its protocol subpackages.
+// contract used by the root networking provider and its protocol subpackages.
 package plugin
 
 import (
@@ -94,14 +94,14 @@ func NewAuthority(config policy.Config) Authority {
 // select them through tcp.Register, udp.Register, or dns.Register.
 type Module struct {
 	key       ModuleKey
-	install   func(*wago.Registry, Host)
+	install   func(*Registrar, Host)
 	backend   Backend
 	authority Authority
 }
 
 // NewModule constructs one protocol descriptor. It is intentionally available
 // only below github.com/wago-org/net's internal-package boundary.
-func NewModule(key ModuleKey, install func(*wago.Registry, Host), backend ...Backend) Module {
+func NewModule(key ModuleKey, install func(*Registrar, Host), backend ...Backend) Module {
 	module := Module{key: key, install: install}
 	if len(backend) == 1 {
 		module.backend = backend[0]
@@ -131,10 +131,39 @@ func (m Module) ConfigureAuthority(target *policy.Config) error {
 	return nil
 }
 
-// Install contributes this module's capability and imports to a Wago registry
-// using the exact shared instance host owned by the root network.
-func (m Module) Install(registry *wago.Registry, host Host) {
+// Registrar keeps protocol descriptors independent of Wago's public registrar
+// shape while preserving exact authority failures for the aggregate plugin.
+type Registrar struct {
+	reg     *wago.Registrar
+	imports *wago.HostImportRegistrar
+	err     error
+}
+
+func (r *Registrar) Capability(cap wago.Capability, options ...wago.CapabilityOption) {
+	if r == nil || r.err != nil {
+		return
+	}
+	r.err = r.reg.GuestCapability(cap, options...)
+}
+
+func (r *Registrar) ImportModule(name string) *wago.ImportModuleBuilder {
+	if r == nil || r.err != nil {
+		return new(wago.ImportModuleBuilder)
+	}
+	module, err := r.imports.Module(name)
+	if err != nil {
+		r.err = err
+		return new(wago.ImportModuleBuilder)
+	}
+	return module
+}
+
+// Install contributes this module's capability and imports through the exact
+// reviewed host-import authority scope.
+func (m Module) Install(reg *wago.Registrar, imports *wago.HostImportRegistrar, host Host) error {
+	registry := &Registrar{reg: reg, imports: imports}
 	m.install(registry, host)
+	return registry.err
 }
 
 // ConfigureBackend contributes protocol-local requirements before the shared

@@ -19,7 +19,7 @@ const (
 )
 
 func Descriptor(backend ...plugin.Backend) plugin.Module {
-	return plugin.NewModule(plugin.ModuleMDNS, func(registry *wago.Registry, host plugin.Host) {
+	return plugin.NewModule(plugin.ModuleMDNS, func(registry *plugin.Registrar, host plugin.Host) {
 		registry.Capability(Capability, wago.CapabilityDocs("use checked bounded multicast DNS queries, configured responses, and announcements"))
 		plugin.RegisterBindings(registry.ImportModule(Module), Bindings(host))
 	}, backend...)

@@ -9,7 +9,6 @@ import (
 
 	wagonet "github.com/wago-org/net"
 	mdnsabi "github.com/wago-org/net/internal/abi/mdns"
-	mdnsbinding "github.com/wago-org/net/internal/binding/mdns"
 	"github.com/wago-org/net/internal/guest"
 	mdnsns "github.com/wago-org/net/internal/namespace/mdns"
 	"github.com/wago-org/net/internal/resource"
@@ -41,7 +40,7 @@ func TestSelectiveMDNSRegistrationAndActualBackendLifecycle(t *testing.T) {
 		t.Fatal(err)
 	}
 	runtime := wago.NewRuntime()
-	if err := runtime.Use(network); err != nil {
+	if err := loadNetwork(runtime, network); err != nil {
 		t.Fatal(err)
 	}
 	imports := 0
@@ -56,7 +55,7 @@ func TestSelectiveMDNSRegistrationAndActualBackendLifecycle(t *testing.T) {
 	if imports != 10 {
 		t.Fatalf("mDNS imports = %d, want 10", imports)
 	}
-	module, err := runtime.Compile([]byte{0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00})
+	module, err := compileImportHarness(runtime)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -65,7 +64,7 @@ func TestSelectiveMDNSRegistrationAndActualBackendLifecycle(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer instance.Close()
-	host := hostModule{instance: instance, memory: make([]byte, 2048)}
+	host := hostModule{instance: instance, memory: instance.Memory().Bytes()}
 	if got := callImport(t, runtime, host, "namespace_default", 1500); got != guest.StatusOK {
 		t.Fatalf("namespace_default = %v", got)
 	}
@@ -146,16 +145,16 @@ func TestMDNSDenyWinsAndOptionsAreFinite(t *testing.T) {
 		t.Fatal(err)
 	}
 	runtime := wago.NewRuntime()
-	if err := runtime.Use(network); err != nil {
+	if err := loadNetwork(runtime, network); err != nil {
 		t.Fatal(err)
 	}
-	module, _ := runtime.Compile([]byte{0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00})
+	module, _ := compileImportHarness(runtime)
 	instance, err := runtime.Instantiate(context.Background(), module)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer instance.Close()
-	host := hostModule{instance: instance, memory: make([]byte, 512)}
+	host := hostModule{instance: instance, memory: instance.Memory().Bytes()}
 	if got := callImport(t, runtime, host, "namespace_default", 400); got != guest.StatusOK {
 		t.Fatal(got)
 	}
@@ -165,18 +164,16 @@ func TestMDNSDenyWinsAndOptionsAreFinite(t *testing.T) {
 		t.Fatalf("deny-wins query = %v", got)
 	}
 	before := append([]byte(nil), host.memory...)
-	if got := callImport(t, runtime, host, "query", namespace, 0, 508); got != guest.StatusInvalidArgument || !bytes.Equal(before, host.memory) {
+	if got := callImport(t, runtime, host, "query", namespace, 0, uint64(len(host.memory)-4)); got != guest.StatusInvalidArgument || !bytes.Equal(before, host.memory) {
 		t.Fatalf("invalid output = %v mutated=%v", got, !bytes.Equal(before, host.memory))
 	}
 }
 
-func callImport(t testing.TB, runtime *wago.Runtime, host hostModule, name string, params ...uint64) guest.Status {
+func callImport(t testing.TB, _ *wago.Runtime, host hostModule, name string, params ...uint64) guest.Status {
 	t.Helper()
-	function, ok := runtime.HostImports()[mdnsbinding.Module+"."+name].(wago.HostFunc)
-	if !ok {
-		t.Fatalf("mDNS import %q missing", name)
+	results, err := host.instance.Invoke(name, params...)
+	if err != nil || len(results) != 1 {
+		t.Fatalf("mDNS import %q = %v, %v", name, results, err)
 	}
-	var results [1]uint64
-	function(host, params, results[:])
 	return guest.Status(int32(results[0]))
 }

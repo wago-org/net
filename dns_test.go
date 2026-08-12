@@ -19,7 +19,7 @@ import (
 	"github.com/wago-org/net/internal/resource"
 	wago "github.com/wago-org/wago"
 	"github.com/wago-org/wago/src/core/compiler/wasm"
-	"github.com/wago-org/wago/testutil/wasmtest"
+	"github.com/wago-org/wago/tests/wasmtest"
 )
 
 type guestDNSNamespace struct {
@@ -105,12 +105,16 @@ func (q *guestDNSQuery) TryNext() (namespace.DNSRecord, namespace.DNSNext, error
 
 func TestDNSBindingsAreRegisteredOnlyAsCompleteTable(t *testing.T) {
 	extension := Init(Config{})
-	runtime := runtimeForExtension(t, extension)
+	runtime := runtimeForNetwork(t, extension)
 	if got := len(extension.dnsBindings()); got != 6 {
 		t.Fatalf("checked DNS bindings = %d, want 6", got)
 	}
 	for _, binding := range extension.dnsBindings() {
-		if _, ok := runtime.HostImports()[DNSModule+"."+binding.name].(wago.HostFunc); !ok {
+		found := false
+		for _, spec := range runtime.ProvidedImports() {
+			found = found || spec.Module == DNSModule && spec.Name == binding.name
+		}
+		if !found {
 			t.Fatalf("registered DNS binding %q missing", binding.name)
 		}
 	}
@@ -130,17 +134,22 @@ func TestDNSBindingsAreRegisteredOnlyAsCompleteTable(t *testing.T) {
 
 func TestGuestDNSUnavailableNamespaceAndCapabilityGate(t *testing.T) {
 	extension := Init(Config{})
-	runtime := runtimeForExtension(t, extension)
-	instance, err := runtime.Instantiate(context.Background(), emptyModule(t, runtime))
+	runtime := runtimeForNetwork(t, extension)
+	module, err := compileImportHarness(runtime, DNSModule)
+	if err != nil {
+		t.Fatal(err)
+	}
+	instance, err := runtime.Instantiate(context.Background(), module)
 	if err != nil {
 		t.Fatalf("instantiate empty DNS guest: %v", err)
 	}
-	host := udpHostModule{instance: instance, memory: bytes.Repeat([]byte{0x5a}, 16)}
-	before := append([]byte(nil), host.memory...)
+	host := udpHostModule{instance: instance, memory: instance.Memory().Bytes()}
+	copy(host.memory[:16], bytes.Repeat([]byte{0x5a}, 16))
+	before := append([]byte(nil), host.memory[:16]...)
 	if got := callRegisteredDNS(t, runtime, "namespace_default", host, 0); got != StatusNotSupported {
 		t.Fatalf("DNS namespace without configuration = %v", got)
 	}
-	if !bytes.Equal(host.memory, before) {
+	if !bytes.Equal(host.memory[:16], before) {
 		t.Fatal("unavailable DNS namespace mutated output")
 	}
 	_ = instance.Close()
@@ -150,7 +159,7 @@ func TestGuestDNSUnavailableNamespaceAndCapabilityGate(t *testing.T) {
 		wasmtest.Section(1, wasmtest.Vec(wasmtest.FuncType([]wasm.ValType{wasm.I32}, []wasm.ValType{wasm.I32}))),
 		wasmtest.Section(2, wasmtest.Vec(importEntry)),
 	)
-	module, err := runtime.Compile(wasmBytes)
+	module, err = runtime.Compile(wasmBytes)
 	if err != nil {
 		t.Fatalf("compile DNS capability module: %v", err)
 	}
@@ -166,8 +175,8 @@ func TestGuestDNSUnavailableNamespaceAndCapabilityGate(t *testing.T) {
 
 func TestRegisteredGuestDNSActualBackendSmoke(t *testing.T) {
 	extension := Init(actualGuestDNSConfig(103))
-	runtime := runtimeForExtension(t, extension)
-	module, err := runtime.Compile([]byte{0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00})
+	runtime := runtimeForNetwork(t, extension)
+	module, err := compileImportHarness(runtime, DNSModule)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -176,7 +185,7 @@ func TestRegisteredGuestDNSActualBackendSmoke(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer instance.Close()
-	host := udpHostModule{instance: instance, memory: make([]byte, 1024)}
+	host := udpHostModule{instance: instance, memory: instance.Memory().Bytes()}
 	if got := callRegisteredDNS(t, runtime, "namespace_default", host, 300); got != StatusOK {
 		t.Fatalf("registered DNS namespace = %v", got)
 	}
@@ -308,7 +317,7 @@ func TestGuestDNSRejectsMalformedMemoryBeforeWork(t *testing.T) {
 
 func TestActualBackendGuestDNSSuccessPollQuotaAndCleanup(t *testing.T) {
 	extension, instance, host := newActualGuestDNSInstance(t, 81)
-	state, ok := extension.instanceManager().ForInstance(instance)
+	state, ok := extension.instanceManager().SingleState()
 	if !ok {
 		t.Fatal("missing actual DNS state")
 	}
@@ -403,7 +412,7 @@ func TestActualBackendGuestDNSSuccessPollQuotaAndCleanup(t *testing.T) {
 	if err := instance.Close(); err != nil {
 		t.Fatalf("close actual DNS instance: %v", err)
 	}
-	if _, exists := extension.instanceManager().ForInstance(instance); exists {
+	if extension.instanceManager().Len() != 0 {
 		t.Fatal("actual DNS state survived instance close")
 	}
 	if usage, closed := account.Snapshot(); !closed || usage != (quota.Usage{}) {
@@ -428,7 +437,7 @@ func TestActualBackendGuestDNSFailureStatuses(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			extension, instance, host := newActualGuestDNSInstance(t, byte(90+test.rcode))
 			defer instance.Close()
-			state, _ := extension.instanceManager().ForInstance(instance)
+			state, _ := extension.instanceManager().SingleState()
 			namespaceHandle := actualGuestDNSNamespaceHandle(t, extension, host)
 			request := namespace.DNSRequest{Name: "example.com", Types: namespace.DNSRecordsA}
 			query := resolveActualGuestDNS(t, extension, host, namespaceHandle, request)
@@ -451,7 +460,7 @@ func TestActualBackendGuestDNSFailureStatuses(t *testing.T) {
 func TestActualBackendGuestDNSTimeoutCancelPolicyKindsAndIsolation(t *testing.T) {
 	extension, instance, host := newActualGuestDNSInstance(t, 101)
 	defer instance.Close()
-	state, _ := extension.instanceManager().ForInstance(instance)
+	state, _ := extension.instanceManager().SingleState()
 	namespaceHandle := actualGuestDNSNamespaceHandle(t, extension, host)
 	request := namespace.DNSRequest{Name: "example.com", Types: namespace.DNSRecordsA}
 	query := resolveActualGuestDNS(t, extension, host, namespaceHandle, request)
@@ -543,7 +552,7 @@ func BenchmarkGuestDNSPoll(b *testing.B) {
 	}
 }
 
-func newGuestDNSHarness(t testing.TB, queries ...*guestDNSQuery) (*Extension, *instance.State, *guestDNSNamespace, udpHostModule) {
+func newGuestDNSHarness(t testing.TB, queries ...*guestDNSQuery) (*Network, *instance.State, *guestDNSNamespace, udpHostModule) {
 	t.Helper()
 	backend := &guestDNSNamespace{queries: append([]*guestDNSQuery(nil), queries...)}
 	manager, err := instance.NewManagerConfigured(instance.Config{
@@ -565,7 +574,7 @@ func newGuestDNSHarness(t testing.TB, queries ...*guestDNSQuery) (*Extension, *i
 	if !ok {
 		t.Fatal("missing attached DNS state")
 	}
-	return &Extension{instances: manager}, state, backend, udpHostModule{instance: wagoInstance, memory: make([]byte, 2048)}
+	return &Network{instances: manager}, state, backend, udpHostModule{instance: wagoInstance, memory: make([]byte, 2048)}
 }
 
 func callDNS(function wago.HostFunc, host udpHostModule, params ...uint64) Status {
@@ -574,17 +583,24 @@ func callDNS(function wago.HostFunc, host udpHostModule, params ...uint64) Statu
 	return Status(int32(results[0]))
 }
 
-func callRegisteredDNS(t testing.TB, runtime *wago.Runtime, name string, host udpHostModule, params ...uint64) Status {
+func callRegisteredDNS(t testing.TB, _ *wago.Runtime, name string, host udpHostModule, params ...uint64) Status {
 	t.Helper()
-	fn, ok := runtime.HostImports()[DNSModule+"."+name].(wago.HostFunc)
-	if !ok {
-		t.Fatalf("registered DNS binding %q missing", name)
+	results, err := host.instance.Invoke(name, params...)
+	if err != nil || len(results) != 1 {
+		t.Fatalf("registered DNS binding %q = %v, %v", name, results, err)
 	}
-	return callDNS(fn, host, params...)
+	return Status(wago.AsI32(results[0]))
 }
 
-func callDNSNamed(t testing.TB, extension *Extension, name string, host udpHostModule, params ...uint64) Status {
+func callDNSNamed(t testing.TB, extension *Network, name string, host udpHostModule, params ...uint64) Status {
 	t.Helper()
+	if host.instance != nil && host.instance.Memory() != nil {
+		results, err := host.instance.Invoke(name, params...)
+		if err != nil || len(results) != 1 {
+			t.Fatalf("DNS import %q = %v, %v", name, results, err)
+		}
+		return Status(wago.AsI32(results[0]))
+	}
 	for _, binding := range extension.dnsBindings() {
 		if binding.name == name {
 			return callDNS(binding.fn, host, params...)
@@ -616,11 +632,11 @@ func actualGuestDNSConfig(id byte) Config {
 	}
 }
 
-func newActualGuestDNSInstance(t testing.TB, id byte) (*Extension, *wago.Instance, udpHostModule) {
+func newActualGuestDNSInstance(t testing.TB, id byte) (*Network, *wago.Instance, udpHostModule) {
 	t.Helper()
 	extension := Init(actualGuestDNSConfig(id))
-	runtime := runtimeForExtension(t, extension)
-	module, err := runtime.Compile([]byte{0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00})
+	runtime := runtimeForNetwork(t, extension)
+	module, err := compileImportHarness(runtime, DNSModule)
 	if err != nil {
 		t.Fatalf("compile empty DNS guest: %v", err)
 	}
@@ -629,10 +645,10 @@ func newActualGuestDNSInstance(t testing.TB, id byte) (*Extension, *wago.Instanc
 		t.Fatalf("instantiate DNS guest: %v", err)
 	}
 	t.Cleanup(func() { _ = instance.Close() })
-	return extension, instance, udpHostModule{instance: instance, memory: make([]byte, 4096)}
+	return extension, instance, udpHostModule{instance: instance, memory: instance.Memory().Bytes()}
 }
 
-func actualGuestDNSNamespaceHandle(t testing.TB, extension *Extension, host udpHostModule) resource.Handle {
+func actualGuestDNSNamespaceHandle(t testing.TB, extension *Network, host udpHostModule) resource.Handle {
 	t.Helper()
 	if got := callDNSNamed(t, extension, "namespace_default", host, 3000); got != StatusOK {
 		t.Fatalf("DNS namespace_default = %v", got)
@@ -640,7 +656,7 @@ func actualGuestDNSNamespaceHandle(t testing.TB, extension *Extension, host udpH
 	return resource.Handle(binary.LittleEndian.Uint64(host.memory[3000:3008]))
 }
 
-func resolveActualGuestDNS(t testing.TB, extension *Extension, host udpHostModule, namespaceHandle resource.Handle, request namespace.DNSRequest) resource.Handle {
+func resolveActualGuestDNS(t testing.TB, extension *Network, host udpHostModule, namespaceHandle resource.Handle, request namespace.DNSRequest) resource.Handle {
 	t.Helper()
 	if !abi.EncodeDNSQueryV1(host.memory, 0, request) {
 		t.Fatalf("encode DNS request %+v", request)
@@ -651,7 +667,7 @@ func resolveActualGuestDNS(t testing.TB, extension *Extension, host udpHostModul
 	return resource.Handle(binary.LittleEndian.Uint64(host.memory[300:308]))
 }
 
-func serviceActualGuestDNSQuery(t testing.TB, extension *Extension, state *instance.State, host udpHostModule) (uint16, uint16) {
+func serviceActualGuestDNSQuery(t testing.TB, extension *Network, state *instance.State, host udpHostModule) (uint16, uint16) {
 	t.Helper()
 	frame := serviceActualGuestDNSQueryFrame(t, extension, state, host)
 	if len(frame) < 14+20+8+12 {
@@ -665,7 +681,7 @@ func serviceActualGuestDNSQuery(t testing.TB, extension *Extension, state *insta
 	return binary.BigEndian.Uint16(frame[udpOffset+8 : udpOffset+10]), binary.BigEndian.Uint16(frame[udpOffset : udpOffset+2])
 }
 
-func serviceActualGuestDNSQueryFrame(t testing.TB, extension *Extension, state *instance.State, host udpHostModule) []byte {
+func serviceActualGuestDNSQueryFrame(t testing.TB, extension *Network, state *instance.State, host udpHostModule) []byte {
 	t.Helper()
 	writePollBudget(host.memory, 1000, 2, 2, 1, 1, 1514, 2)
 	if got := callDNSNamed(t, extension, "poll", host, 1100, 2, 1000, 1200); got != StatusOK {
@@ -683,7 +699,7 @@ func serviceActualGuestDNSQueryFrame(t testing.TB, extension *Extension, state *
 	return append([]byte(nil), frame[:dequeued.FrameBytes]...)
 }
 
-func pollActualGuestDNSUntil(t testing.TB, extension *Extension, host udpHostModule, handle resource.Handle, readiness namespace.Readiness) {
+func pollActualGuestDNSUntil(t testing.TB, extension *Network, host udpHostModule, handle resource.Handle, readiness namespace.Readiness) {
 	t.Helper()
 	for range 6 {
 		writePollBudget(host.memory, 1000, 2, 2, 1, 1, 1514, 2)

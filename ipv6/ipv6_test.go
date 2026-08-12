@@ -10,7 +10,6 @@ import (
 
 	wagonet "github.com/wago-org/net"
 	ipv6abi "github.com/wago-org/net/internal/abi/ipv6"
-	ipv6binding "github.com/wago-org/net/internal/binding/ipv6"
 	"github.com/wago-org/net/internal/guest"
 	ipv6ns "github.com/wago-org/net/internal/namespace/ipv6"
 	"github.com/wago-org/net/internal/resource"
@@ -23,7 +22,7 @@ func TestSelectiveRegistrationAndFiniteConfiguration(t *testing.T) {
 		t.Fatal(err)
 	}
 	runtime := wago.NewRuntime()
-	if err := runtime.Use(network); err != nil {
+	if err := loadNetwork(runtime, network); err != nil {
 		t.Fatal(err)
 	}
 	if got := runtime.Capabilities(); !reflect.DeepEqual(got, []wago.Capability{wagonet.CapInfo, wagonet.CapIPv6}) {
@@ -90,10 +89,10 @@ func TestConfiguredIPv6FailsClosedBeforePublication(t *testing.T) {
 				t.Fatal(err)
 			}
 			runtime := wago.NewRuntime()
-			if err := runtime.Use(network); err != nil {
+			if err := loadNetwork(runtime, network); err != nil {
 				t.Fatal(err)
 			}
-			module, err := runtime.Compile([]byte{0x00, 0x61, 0x73, 0x6d, 0x01, 0, 0, 0})
+			module, err := compileImportHarness(runtime)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -117,7 +116,7 @@ func TestConfiguredIPv6RejectsTerminalCoreConfiguration(t *testing.T) {
 		t.Fatal(err)
 	}
 	runtime := wago.NewRuntime()
-	if err := runtime.Use(network); err == nil {
+	if err := loadNetwork(runtime, network); err == nil {
 		t.Fatal("IPv6 contribution accepted an MTU below 1280")
 	}
 }
@@ -142,7 +141,7 @@ func TestActualLinkLocalConfigurationPreservesNumericScope(t *testing.T) {
 		t.Fatal(err)
 	}
 	runtime, host := instantiate(t, network)
-	if _, ok := runtime.HostImports()[wagonet.TCPModule+".namespace_default"]; ok {
+	if hasImport(runtime, wagonet.TCPModule, "namespace_default") {
 		t.Fatal("IPv6 configuration exposed an unselected TCP import")
 	}
 	if got := callImport(t, runtime, host, "namespace_default", 200); got != guest.StatusOK {
@@ -215,10 +214,10 @@ func TestActualCheckedConfigurationAndDisabledTruth(t *testing.T) {
 func instantiate(t testing.TB, network *wagonet.Network) (*wago.Runtime, hostModule) {
 	t.Helper()
 	runtime := wago.NewRuntime()
-	if err := runtime.Use(network); err != nil {
+	if err := loadNetwork(runtime, network); err != nil {
 		t.Fatal(err)
 	}
-	module, err := runtime.Compile([]byte{0x00, 0x61, 0x73, 0x6d, 0x01, 0, 0, 0})
+	module, err := compileImportHarness(runtime)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -227,16 +226,14 @@ func instantiate(t testing.TB, network *wagonet.Network) (*wago.Runtime, hostMod
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = instance.Close() })
-	return runtime, hostModule{instance: instance, memory: make([]byte, 256)}
+	return runtime, hostModule{instance: instance, memory: instance.Memory().Bytes()}
 }
 
-func callImport(t testing.TB, runtime *wago.Runtime, host hostModule, name string, params ...uint64) guest.Status {
+func callImport(t testing.TB, _ *wago.Runtime, host hostModule, name string, params ...uint64) guest.Status {
 	t.Helper()
-	function, ok := runtime.HostImports()[ipv6binding.Module+"."+name].(wago.HostFunc)
-	if !ok {
-		t.Fatalf("IPv6 import %q missing", name)
+	results, err := host.instance.Invoke(name, params...)
+	if err != nil || len(results) != 1 {
+		t.Fatalf("IPv6 import %q = %v, %v", name, results, err)
 	}
-	var results [1]uint64
-	function(host, params, results[:])
 	return guest.Status(int32(results[0]))
 }

@@ -1,5 +1,4 @@
-// Package register self-registers the selective UDP-only Wago networking
-// extension for custom binaries built by `wago pkg build`.
+// Package register exposes the explicit UDP-only networking catalog entry.
 package register
 
 import (
@@ -8,12 +7,15 @@ import (
 	wago "github.com/wago-org/wago"
 )
 
-func init() {
-	wago.RegisterExtension("net-udp", func() wago.Extension {
-		network := wagonet.New()
-		if err := udp.Register(network); err != nil {
-			panic("wagonet/udp/register: " + err.Error())
-		}
-		return network
+func Provider() wago.PluginProvider {
+	return wagonet.Provider(wagonet.ProviderSpec{
+		ID: "github.com/wago-org/net/udp", Name: "Wago UDP", Description: "Bounded checked UDP networking.",
+		Modules: []string{wagonet.Module, wagonet.UDPModule},
+		Factory: func() (*wagonet.Network, error) {
+			network := wagonet.New()
+			return network, udp.Register(network)
+		},
 	})
 }
+
+func Providers() []wago.PluginProvider { return []wago.PluginProvider{Provider()} }

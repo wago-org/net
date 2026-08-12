@@ -1,21 +1,25 @@
 package register_test
 
 import (
+	"context"
 	"reflect"
 	"testing"
 
 	wagonet "github.com/wago-org/net"
-	_ "github.com/wago-org/net/icmpv4/register"
+	netregister "github.com/wago-org/net/icmpv4/register"
+	"github.com/wago-org/net/internal/plugintest"
 	wago "github.com/wago-org/wago"
 )
 
 func TestICMPv4FactoryHasExactRuntimeSurface(t *testing.T) {
-	extension, ok := wago.NewExtension("net-icmpv4")
-	if !ok {
-		t.Fatal("ICMPv4-only extension was not registered")
+	providers := netregister.Providers()
+	if len(providers) != 1 {
+		t.Fatalf("Providers = %d, want 1", len(providers))
 	}
+	provider := providers[0]
 	runtime := wago.NewRuntime()
-	if err := runtime.Use(extension); err != nil {
+	defer runtime.Close()
+	if err := runtime.LoadPlugins(context.Background(), plugintest.Set(provider)); err != nil {
 		t.Fatal(err)
 	}
 	if got, want := runtime.Capabilities(), []wago.Capability{wagonet.CapICMPv4, wagonet.CapInfo}; !reflect.DeepEqual(got, want) {
