@@ -1,7 +1,4 @@
-// Package register self-registers the selective NTP-only Wago networking
-// extension for custom binaries built by `wago pkg build`. The default
-// self-registration exposes a truthful disabled NTP module until an embedding
-// application uses ntp.Register with an explicit server and clock.
+// Package register exposes the explicit NTP-only networking catalog entry.
 package register
 
 import (
@@ -10,12 +7,15 @@ import (
 	wago "github.com/wago-org/wago"
 )
 
-func init() {
-	wago.RegisterExtension("net-ntp", func() wago.Extension {
-		network := wagonet.New()
-		if err := ntp.Register(network); err != nil {
-			panic("wagonet/ntp/register: " + err.Error())
-		}
-		return network
+func Provider() wago.PluginProvider {
+	return wagonet.Provider(wagonet.ProviderSpec{
+		ID: "github.com/wago-org/net/ntp", Name: "Wago NTP", Description: "Bounded checked NTP networking.",
+		Modules: []string{wagonet.Module, wagonet.NTPModule},
+		Factory: func() (*wagonet.Network, error) {
+			network := wagonet.New()
+			return network, ntp.Register(network)
+		},
 	})
 }
+
+func Providers() []wago.PluginProvider { return []wago.PluginProvider{Provider()} }

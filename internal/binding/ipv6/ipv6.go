@@ -18,7 +18,7 @@ const (
 )
 
 func Descriptor(backend ...plugin.Backend) plugin.Module {
-	return plugin.NewModule(plugin.ModuleIPv6, func(registry *wago.Registry, host plugin.Host) {
+	return plugin.NewModule(plugin.ModuleIPv6, func(registry *plugin.Registrar, host plugin.Host) {
 		registry.Capability(Capability, wago.CapabilityDocs("inspect and service one bounded configured IPv6 namespace"))
 		plugin.RegisterBindings(registry.ImportModule(Module), Bindings(host))
 	}, backend...)

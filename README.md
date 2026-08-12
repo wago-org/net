@@ -65,35 +65,59 @@ UDP-only: truncated responses return `TEMPORARY_FAILURE` because DNS-over-TCP
 fallback is not implemented. Privileged packet access remains absent and
 unsupported.
 
-The primary composition API selects only the protocols a runtime should expose:
+The conventional `/register` catalogs are explicit and side-effect free. A
+generated runtime links the catalog it reviewed and supplies the selections,
+definition digests, exact Authority Grants, configuration, and Contract bindings
+from `wago-lock.json`:
 
 ```go
-network := wagonet.New(
-    wagonet.WithConfig(wagonet.Config{StaticIPv4: deploymentNetwork}),
-)
-if err := tcp.Register(network); err != nil {
-    return err
+providers := tcpregister.Providers() // github.com/wago-org/net/tcp
+set := wago.PluginSet{
+    Providers:  providers,
+    Selections: selectionsFromLock,
 }
-return wago.NewRuntime().Use(network)
+return runtime.LoadPlugins(ctx, set)
 ```
 
-Protocols compose explicitly when a guest needs more than one:
+There is no blank-import discovery or process-global registration. An empty
+catalog leaves an empty Runtime. The root `register.Providers()` catalog exposes
+the reviewed all-protocol provider `github.com/wago-org/net` plus every
+published selective provider declared in `wago.json`. Leaf catalogs are
+convenient subsets with full package IDs, such as `github.com/wago-org/net/tcp`
+and `github.com/wago-org/net/udp`.
+
+Deployment-specific protocol combinations are one immutable provider, so they
+share one exact-instance network state instead of becoming accidentally coupled
+plugins:
 
 ```go
-network := wagonet.New(
-    wagonet.WithConfig(wagonet.Config{StaticIPv4: deploymentNetwork}),
-)
-if err := udp.Register(network); err != nil {
-    return err
-}
-if err := tcp.Register(network); err != nil {
-    return err
-}
-if err := dns.Register(network, dns.Resolver("192.0.2.53")); err != nil {
-    return err
-}
-return wago.NewRuntime().Use(network)
+provider := wagonet.Provider(wagonet.ProviderSpec{
+    ID:          "example.com/acme/runtime/network",
+    Name:        "Acme runtime network",
+    Description: "TCP, UDP, and bounded DNS for the Acme guest",
+    Modules: []string{
+        wagonet.Module, wagonet.TCPModule, wagonet.UDPModule, wagonet.DNSModule,
+    },
+    Factory: func() (*wagonet.Network, error) {
+        network := wagonet.New(
+            wagonet.WithConfig(wagonet.Config{StaticIPv4: deploymentNetwork}),
+        )
+        if err := udp.Register(network); err != nil { return nil, err }
+        if err := tcp.Register(network); err != nil { return nil, err }
+        if err := dns.Register(network, dns.Resolver("192.0.2.53")); err != nil {
+            return nil, err
+        }
+        return network, nil
+    },
+})
 ```
+
+The provider requests `host.import.define` for exactly those four modules plus
+`host.caller.identify`, `instance.instantiate.intercept`, and
+`instance.close.observe`. Registration fails before commit if a required grant
+is absent or wider contributions are attempted. The published configuration is
+an empty strict object (`additionalProperties: false`); deployment configuration
+belongs in the reviewed factory above.
 
 TLS is selected separately and does not imply raw TCP:
 
@@ -112,8 +136,8 @@ if err := wagonettls.Register(network, wagonettls.WithClientProfile(profile)); e
 }
 ```
 
-TLS intentionally has no `tls/register` zero-configuration extension and no
-`net-tls` custom-CLI key. Trust roots, verification identities, ALPN, client
+TLS intentionally has no `tls/register` catalog provider. Trust roots,
+verification identities, ALPN, client
 credentials, and profile IDs are deployment authority that must be supplied by
 explicit Go composition; the repository does not invent placeholder TLS policy.
 
@@ -199,7 +223,7 @@ with a separately configured scoped link-local IPv6 identity. Registering only T
 exposes exactly `net.info` and `net.tls`, `wago_net.abi_version`, and nine
 `wago_net_tls` imports; it does not expose `net.tcp` or `wago_net_tcp`.
 This exact TLS surface is inspected through explicit composition fixtures rather
-than a self-registering extension. Unregistered protocol imports are absent and fail normal WebAssembly import resolution. The public TCP,
+than a zero-policy catalog entry. Unregistered protocol imports are absent and fail normal WebAssembly import resolution. The public TCP,
 UDP, DNS, ICMPv4, NTP, mDNS, DHCPv4, link-local, IPv6, ICMPv6, DHCPv6, and TLS facades each construct
 an opaque descriptor, and all twelve checked host tables live in protocol-specific
 internal binding packages. The
@@ -251,16 +275,24 @@ namespace-facet, ABI, and adapter packages. Protocol authority contributions are
 deep-copied and composed once before manager construction; one immutable policy
 and quota domain remain shared per exact instance, with deny-wins behavior.
 
-The aggregate advanced compatibility path is now explicit:
+The aggregate compatibility constructor can be placed behind a deployment-owned
+provider factory:
 
 ```go
-network := compat.Init(wagonet.Config{
-    // Immutable policy, finite quota/readiness, packet-link, static IPv4,
-    // UDP queue, TCP pool, and bounded DNS resolver settings.
+provider := wagonet.Provider(wagonet.ProviderSpec{
+    ID:          "example.com/acme/runtime/compat-network",
+    Name:        "Acme compatibility network",
+    Description: "Reviewed aggregate UDP, TCP, and DNS configuration",
+    Modules: []string{
+        wagonet.Module, wagonet.UDPModule, wagonet.TCPModule, wagonet.DNSModule,
+    },
+    Factory: func() (*wagonet.Network, error) {
+        return compat.Init(wagonet.Config{
+            // Immutable policy, finite quota/readiness, packet-link, static
+            // IPv4, UDP queue, TCP pool, and bounded DNS resolver settings.
+        }), nil
+    },
 })
-if err := wago.NewRuntime().Use(network); err != nil {
-    return err
-}
 ```
 
 Import `github.com/wago-org/net/compat` for that constructor. The former root
@@ -274,36 +306,51 @@ storage through `tcp.WithConfig(tcp.Config{...})`,
 `udp.WithConfig(udp.Config{...})`, or `dns.WithConfig(dns.Config{...})`; the
 compatibility constructor maps the legacy aggregate protocol fields explicitly.
 
-The extension declares that networking state requires physical reinstantiation.
-Wago therefore downgrades `ResetMemorySnapshot` and other in-place class reset
-requests to `ResetReinstantiate`; UDP/TCP/DNS handles, queues, policy state, and
-quota accounts cannot cross leases even when callers request snapshot reuse.
-
-Custom Wago binaries can self-register exactly one protocol without compiling
-the others:
+Custom Wago binaries link only the explicit protocol catalogs they need:
 
 ```go
-import _ "github.com/wago-org/net/tcp/register" // extension key: net-tcp
-// or github.com/wago-org/net/udp/register       // extension key: net-udp
-// or github.com/wago-org/net/dns/register       // extension key: net-dns
-// or github.com/wago-org/net/ipv6/register      // extension key: net-ipv6
-// or github.com/wago-org/net/icmpv6/register    // extension key: net-icmpv6
-// or github.com/wago-org/net/dhcpv6/register    // extension key: net-dhcpv6
+providers := tcpregister.Providers()
+// Provider ID: github.com/wago-org/net/tcp
 ```
 
-The root package remains the explicit all-protocol bundle:
+The root catalog contains the explicit all-protocol bundle and every published
+selective provider (TLS excluded). The lockfile selection chooses the exact ID
+to load:
 
 ```go
-import _ "github.com/wago-org/net/register" // extension key: net
+providers := netregister.Providers()
+// Includes github.com/wago-org/net and each manifest subpackage ID.
 ```
 
 The granular packages install protocol defaults but do not invent deployment
 IPv4 or IPv6 identity/link configuration; DNS resolver storage also remains disabled in
-the zero-configuration self-registering form. Applications needing those values
+the zero-configuration catalog form. Applications needing those values
 should use explicit `wagonet.New` composition. Likewise, low-level `InfoImports`
 and `Imports(Config{})` stay limited to the stateless core ABI-version surface
 rather than attempting to expose configured protocol resources without exact
 instance ownership.
+
+## Cross-plugin contract
+
+Networking provides `github.com/wago-org/net/service` major 1 as the typed
+`wagonet.Contract`. A consumer declares both a `PluginRequirement` for the exact
+network provider ID and a required `ContractRequirement`, then obtains a
+`*plugin.Ref[wagonet.Service]` with `plugin.Require`. Calls must stay inside
+`Ref.With`; the reference cannot be retained as an unleased service value.
+
+`Service.ImportModules` returns a copy of the immutable selected topology.
+`Service.Ready(caller)` resolves only the active synchronous guest caller and
+does not expose a Runtime, Instance, namespace, or resource handle. Runtime
+shutdown rejects new calls, waits for calls already inside `Ref.With`, stops
+consumers before the provider, and revokes the reference. Missing dependencies,
+unreviewed bindings, incompatible Contract majors, forged callers, and calls
+after revocation all fail closed.
+
+The caller retains the handle for a direct Runtime instance, but Runtime shutdown
+logically closes and drains that instance before plugin teardown. Its close
+observer releases every network resource and removes the opaque identity; later
+calls fail closed and a caller's later `Instance.Close` is an idempotent no-op.
+Plugin-managed instance owners likewise close what they own before replacement.
 
 The guest ABI is custom to Wago. It may follow WASI socket semantics where useful,
 but it is not binary-compatible with WASI Component Model resources.
@@ -365,8 +412,8 @@ synthetic linked ready/blocked/tamper/wrong-link interoperability chains without
 signature bytes, trust keys, production identity, or activation claims; audits
 unsupported pool topology; runs bounded
 fuzz smoke, benchmarks, TinyGo,
-cross-build, direct/dependency inspection, granular `net-tcp`/`net-udp`/`net-dns`
-and aggregate `net` custom CLI inspection, and final clean-tree checks; and
+cross-build, direct/dependency inspection, granular `/tcp`, `/udp`, and `/dns`
+provider inspection, aggregate root-provider inspection, and final clean-tree checks; and
 records disposable artifacts under `.wago/release-signoff`:
 
 ```sh

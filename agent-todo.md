@@ -1,5 +1,10 @@
 # Wago networking implementation ledger
 
+> Historical implementation ledger: pre-vNext Wago pins, registration API
+> snippets, and release evidence below are archival. The current explicit
+> provider, Authority, lifecycle, and Contract API is documented in `README.md`
+> and `docs/architecture.md`.
+
 ## Mission
 
 Deliver a production-quality family of capability-gated Wago networking plugins
@@ -31,7 +36,7 @@ and lneto as the first backend.
 ## TLS client slice (July 20, 2026)
 
 - Added granular public package `github.com/wago-org/net/tls`; TLS intentionally
-  has no self-registering package or `net-tls` key because deployment trust and
+  has no default catalog provider because deployment trust and
   identity authority must be supplied explicitly by the host.
 - Explicit TLS-only composition is exactly `net.info`, `net.tls`,
   `wago_net.abi_version`, and nine `wago_net_tls` imports; raw TCP

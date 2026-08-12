@@ -1,20 +1,24 @@
 package register_test
 
 import (
+	"context"
 	"testing"
 
 	wagonet "github.com/wago-org/net"
-	_ "github.com/wago-org/net/icmpv6/register"
+	netregister "github.com/wago-org/net/icmpv6/register"
+	"github.com/wago-org/net/internal/plugintest"
 	wago "github.com/wago-org/wago"
 )
 
 func TestGranularFactory(t *testing.T) {
-	extension, ok := wago.NewExtension("net-icmpv6")
-	if !ok {
-		t.Fatal("net-icmpv6 extension absent")
+	providers := netregister.Providers()
+	if len(providers) != 1 {
+		t.Fatalf("Providers = %d, want 1", len(providers))
 	}
+	provider := providers[0]
 	runtime := wago.NewRuntime()
-	if err := runtime.Use(extension); err != nil {
+	defer runtime.Close()
+	if err := runtime.LoadPlugins(context.Background(), plugintest.Set(provider)); err != nil {
 		t.Fatal(err)
 	}
 	imports := 0

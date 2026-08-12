@@ -1,6 +1,4 @@
-// Package register self-registers the selective DNS-only Wago networking
-// extension for custom binaries built by `wago pkg build`. Resolver/storage
-// remain disabled until an explicitly configured composition is used.
+// Package register exposes the explicit DNS-only networking catalog entry.
 package register
 
 import (
@@ -9,12 +7,15 @@ import (
 	wago "github.com/wago-org/wago"
 )
 
-func init() {
-	wago.RegisterExtension("net-dns", func() wago.Extension {
-		network := wagonet.New()
-		if err := dns.Register(network); err != nil {
-			panic("wagonet/dns/register: " + err.Error())
-		}
-		return network
+func Provider() wago.PluginProvider {
+	return wagonet.Provider(wagonet.ProviderSpec{
+		ID: "github.com/wago-org/net/dns", Name: "Wago DNS", Description: "Bounded checked DNS networking.",
+		Modules: []string{wagonet.Module, wagonet.DNSModule},
+		Factory: func() (*wagonet.Network, error) {
+			network := wagonet.New()
+			return network, dns.Register(network)
+		},
 	})
 }
+
+func Providers() []wago.PluginProvider { return []wago.PluginProvider{Provider()} }

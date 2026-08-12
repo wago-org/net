@@ -6,20 +6,23 @@ import (
 	"testing"
 
 	wagonet "github.com/wago-org/net"
-	_ "github.com/wago-org/net/ipv6/register"
+	"github.com/wago-org/net/internal/plugintest"
+	netregister "github.com/wago-org/net/ipv6/register"
 	wago "github.com/wago-org/wago"
 	"github.com/wago-org/wago/src/core/compiler/wasm"
-	"github.com/wago-org/wago/testutil/wasmtest"
+	"github.com/wago-org/wago/tests/wasmtest"
 )
 
 func TestIPv6FactoryHasExactRuntimeSurface(t *testing.T) {
-	extension, ok := wago.NewExtension("net-ipv6")
-	if !ok {
-		t.Fatal("IPv6-only extension was not registered")
+	providers := netregister.Providers()
+	if len(providers) != 1 {
+		t.Fatalf("Providers = %d, want 1", len(providers))
 	}
+	provider := providers[0]
 	runtime := wago.NewRuntime()
-	if err := runtime.Use(extension); err != nil {
-		t.Fatalf("Use: %v", err)
+	defer runtime.Close()
+	if err := runtime.LoadPlugins(context.Background(), plugintest.Set(provider)); err != nil {
+		t.Fatalf("LoadPlugins: %v", err)
 	}
 	if got, want := runtime.Capabilities(), []wago.Capability{wagonet.CapInfo, wagonet.CapIPv6}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("capabilities = %v, want %v", got, want)

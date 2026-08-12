@@ -10,7 +10,6 @@ import (
 
 	wagonet "github.com/wago-org/net"
 	dhcpabi "github.com/wago-org/net/internal/abi/dhcpv6"
-	dhcpbinding "github.com/wago-org/net/internal/binding/dhcpv6"
 	"github.com/wago-org/net/internal/guest"
 	dhcpns "github.com/wago-org/net/internal/namespace/dhcpv6"
 	"github.com/wago-org/net/internal/policy"
@@ -105,10 +104,10 @@ func (h hostModule) Instance() *wago.Instance { return h.instance }
 func instantiate(t testing.TB, network *wagonet.Network) (*wago.Runtime, hostModule) {
 	t.Helper()
 	runtime := wago.NewRuntime()
-	if err := runtime.Use(network); err != nil {
+	if err := loadNetwork(runtime, network); err != nil {
 		t.Fatal(err)
 	}
-	module, err := runtime.Compile([]byte{0, 0x61, 0x73, 0x6d, 1, 0, 0, 0})
+	module, err := compileImportHarness(runtime)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -117,15 +116,13 @@ func instantiate(t testing.TB, network *wagonet.Network) (*wago.Runtime, hostMod
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = instance.Close() })
-	return runtime, hostModule{instance: instance, memory: make([]byte, 4096)}
+	return runtime, hostModule{instance: instance, memory: instance.Memory().Bytes()}
 }
-func call(t testing.TB, runtime *wago.Runtime, host hostModule, name string, params ...uint64) guest.Status {
+func call(t testing.TB, _ *wago.Runtime, host hostModule, name string, params ...uint64) guest.Status {
 	t.Helper()
-	fn, ok := runtime.HostImports()[dhcpbinding.Module+"."+name].(wago.HostFunc)
-	if !ok {
-		t.Fatalf("import %q missing", name)
+	results, err := host.instance.Invoke(name, params...)
+	if err != nil || len(results) != 1 {
+		t.Fatalf("DHCPv6 import %q = %v, %v", name, results, err)
 	}
-	var results [1]uint64
-	fn(host, params, results[:])
 	return guest.Status(int32(results[0]))
 }

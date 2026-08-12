@@ -6,13 +6,15 @@ import (
 
 	wagonet "github.com/wago-org/net"
 	"github.com/wago-org/net/compat"
+	"github.com/wago-org/net/internal/plugintest"
 	wago "github.com/wago-org/wago"
 )
 
 func TestInitRegistersExplicitAggregateSurface(t *testing.T) {
 	runtime := wago.NewRuntime()
-	if err := runtime.Use(compat.Init(wagonet.Config{})); err != nil {
-		t.Fatalf("Use: %v", err)
+	defer runtime.Close()
+	if err := plugintest.LoadNetwork(runtime, compat.Init(wagonet.Config{})); err != nil {
+		t.Fatalf("LoadPlugins: %v", err)
 	}
 
 	wantCapabilities := []wago.Capability{wagonet.CapDNS, wagonet.CapInfo, wagonet.CapTCP, wagonet.CapUDP}

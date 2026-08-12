@@ -19,8 +19,8 @@ import (
 // Init and the helpers in this file preserve the historical aggregate surface
 // only for the root package's same-package regression suite. Production callers
 // use compat.Init or explicit protocol registration.
-func Init(config Config) *Extension {
-	extension := newExtension(config)
+func Init(config Config) *Network {
+	extension := newNetwork(config)
 	if extension.configErr == nil {
 		if err := extension.registerAllProtocols(); err != nil {
 			extension.configErr = err
@@ -29,7 +29,7 @@ func Init(config Config) *Extension {
 	return extension
 }
 
-func (e *Extension) registerAllProtocols() error {
+func (e *Network) registerAllProtocols() error {
 	for _, descriptor := range aggregateTestDescriptors(e.config) {
 		if err := e.RegisterModule(descriptor); err != nil {
 			return err
@@ -38,9 +38,9 @@ func (e *Extension) registerAllProtocols() error {
 	return nil
 }
 
-func (e *Extension) registerUDPModule() error { return e.RegisterModule(udpbinding.Descriptor()) }
-func (e *Extension) registerTCPModule() error { return e.RegisterModule(tcpbinding.Descriptor()) }
-func (e *Extension) registerDNSModule() error { return e.RegisterModule(dnsbinding.Descriptor()) }
+func (e *Network) registerUDPModule() error { return e.RegisterModule(udpbinding.Descriptor()) }
+func (e *Network) registerTCPModule() error { return e.RegisterModule(tcpbinding.Descriptor()) }
+func (e *Network) registerDNSModule() error { return e.RegisterModule(dnsbinding.Descriptor()) }
 
 func aggregateTestDescriptors(config Config) []plugin.Module {
 	var udpConfig udpbackend.Config
@@ -104,38 +104,38 @@ func protocolTestBindings(bindings []plugin.Binding) []binding {
 	return converted
 }
 
-func (e *Extension) tcpBindings() []binding {
+func (e *Network) tcpBindings() []binding {
 	return protocolTestBindings(tcpbinding.Bindings(plugin.NewHost(e.instanceManager())))
 }
 
-func (e *Extension) udpBindings() []binding {
+func (e *Network) udpBindings() []binding {
 	return protocolTestBindings(udpbinding.Bindings(plugin.NewHost(e.instanceManager())))
 }
 
-func (e *Extension) dnsBindings() []binding {
+func (e *Network) dnsBindings() []binding {
 	return protocolTestBindings(dnsbinding.Bindings(plugin.NewHost(e.instanceManager())))
 }
 
-func (e *Extension) dnsNamespaceDefault(module wago.HostModule, params, results []uint64) {
+func (e *Network) dnsNamespaceDefault(module wago.HostModule, params, results []uint64) {
 	dnsbinding.NamespaceDefault(plugin.NewHost(e.instanceManager()), module, params, results)
 }
 
-func (e *Extension) dnsResolve(module wago.HostModule, params, results []uint64) {
+func (e *Network) dnsResolve(module wago.HostModule, params, results []uint64) {
 	dnsbinding.Resolve(plugin.NewHost(e.instanceManager()), module, params, results)
 }
 
-func (e *Extension) dnsNext(module wago.HostModule, params, results []uint64) {
+func (e *Network) dnsNext(module wago.HostModule, params, results []uint64) {
 	dnsbinding.Next(plugin.NewHost(e.instanceManager()), module, params, results)
 }
 
-func (e *Extension) dnsCancel(module wago.HostModule, params, results []uint64) {
+func (e *Network) dnsCancel(module wago.HostModule, params, results []uint64) {
 	dnsbinding.Cancel(plugin.NewHost(e.instanceManager()), module, params, results)
 }
 
-func (e *Extension) dnsClose(module wago.HostModule, params, results []uint64) {
+func (e *Network) dnsClose(module wago.HostModule, params, results []uint64) {
 	dnsbinding.Close(plugin.NewHost(e.instanceManager()), module, params, results)
 }
 
-func (e *Extension) dnsPoll(module wago.HostModule, params, results []uint64) {
+func (e *Network) dnsPoll(module wago.HostModule, params, results []uint64) {
 	dnsbinding.Poll(plugin.NewHost(e.instanceManager()), module, params, results)
 }

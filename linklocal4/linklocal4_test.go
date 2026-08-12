@@ -11,7 +11,6 @@ import (
 
 	wagonet "github.com/wago-org/net"
 	linklocalabi "github.com/wago-org/net/internal/abi/linklocal4"
-	linklocalbinding "github.com/wago-org/net/internal/binding/linklocal4"
 	"github.com/wago-org/net/internal/guest"
 	linklocalns "github.com/wago-org/net/internal/namespace/linklocal4"
 	"github.com/wago-org/net/internal/resource"
@@ -28,7 +27,7 @@ func TestSelectiveRegistrationAndExplicitFiniteConfiguration(t *testing.T) {
 		t.Fatal(err)
 	}
 	runtime := wago.NewRuntime()
-	if err := runtime.Use(network); err != nil {
+	if err := loadNetwork(runtime, network); err != nil {
 		t.Fatal(err)
 	}
 	if got := runtime.Capabilities(); !reflect.DeepEqual(got, []wago.Capability{wagonet.CapInfo, wagonet.CapLinkLocal4}) {
@@ -122,10 +121,10 @@ func TestActualBackendExactLifecycleAndDenyWins(t *testing.T) {
 func instantiate(t testing.TB, network *wagonet.Network) (*wago.Runtime, hostModule) {
 	t.Helper()
 	runtime := wago.NewRuntime()
-	if err := runtime.Use(network); err != nil {
+	if err := loadNetwork(runtime, network); err != nil {
 		t.Fatal(err)
 	}
-	module, err := runtime.Compile([]byte{0x00, 0x61, 0x73, 0x6d, 0x01, 0, 0, 0})
+	module, err := compileImportHarness(runtime)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -134,16 +133,14 @@ func instantiate(t testing.TB, network *wagonet.Network) (*wago.Runtime, hostMod
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = instance.Close() })
-	return runtime, hostModule{instance: instance, memory: make([]byte, 256)}
+	return runtime, hostModule{instance: instance, memory: instance.Memory().Bytes()}
 }
 
-func callImport(t testing.TB, runtime *wago.Runtime, host hostModule, name string, params ...uint64) guest.Status {
+func callImport(t testing.TB, _ *wago.Runtime, host hostModule, name string, params ...uint64) guest.Status {
 	t.Helper()
-	function, ok := runtime.HostImports()[linklocalbinding.Module+"."+name].(wago.HostFunc)
-	if !ok {
-		t.Fatalf("link-local import %q missing", name)
+	results, err := host.instance.Invoke(name, params...)
+	if err != nil || len(results) != 1 {
+		t.Fatalf("link-local import %q = %v, %v", name, results, err)
 	}
-	var results [1]uint64
-	function(host, params, results[:])
 	return guest.Status(int32(results[0]))
 }

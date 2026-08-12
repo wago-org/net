@@ -8,7 +8,7 @@ import (
 
 	wago "github.com/wago-org/wago"
 	"github.com/wago-org/wago/src/core/compiler/wasm"
-	"github.com/wago-org/wago/testutil/wasmtest"
+	"github.com/wago-org/wago/tests/wasmtest"
 )
 
 func TestSelectiveProtocolRegistrationMatrix(t *testing.T) {
@@ -47,8 +47,10 @@ func TestSelectiveProtocolRegistrationMatrix(t *testing.T) {
 			}
 
 			runtime := wago.NewRuntime()
-			if err := runtime.Use(network); err != nil {
-				t.Fatalf("Use: %v", err)
+			if test.protocols != "" {
+				if err := loadNetwork(runtime, network); err != nil {
+					t.Fatalf("LoadPlugins: %v", err)
+				}
 			}
 			if got := runtime.Capabilities(); !reflect.DeepEqual(got, test.capabilities) {
 				t.Fatalf("Capabilities = %v, want %v", got, test.capabilities)
@@ -73,7 +75,7 @@ func TestProtocolRegistrationFreezesAndRejectsDuplicates(t *testing.T) {
 		t.Fatalf("duplicate TCP registration = %v", err)
 	}
 	runtime := wago.NewRuntime()
-	if err := runtime.Use(network); err != nil {
+	if err := loadNetwork(runtime, network); err != nil {
 		t.Fatalf("Use: %v", err)
 	}
 	if err := network.registerUDPModule(); !errors.Is(err, ErrProtocolRegistrationFrozen) {
@@ -87,7 +89,7 @@ func TestUnregisteredProtocolFailsOrdinaryImportResolution(t *testing.T) {
 		t.Fatalf("register TCP: %v", err)
 	}
 	runtime := wago.NewRuntime()
-	if err := runtime.Use(network); err != nil {
+	if err := loadNetwork(runtime, network); err != nil {
 		t.Fatalf("Use: %v", err)
 	}
 

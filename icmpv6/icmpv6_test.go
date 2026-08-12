@@ -10,7 +10,6 @@ import (
 
 	wagonet "github.com/wago-org/net"
 	icmpabi "github.com/wago-org/net/internal/abi/icmpv6"
-	icmpbinding "github.com/wago-org/net/internal/binding/icmpv6"
 	"github.com/wago-org/net/internal/guest"
 	nscore "github.com/wago-org/net/internal/namespace/core"
 	icmpns "github.com/wago-org/net/internal/namespace/icmpv6"
@@ -28,7 +27,7 @@ func TestSelectiveRegistrationSurface(t *testing.T) {
 		t.Fatal(err)
 	}
 	runtime := wago.NewRuntime()
-	if err := runtime.Use(network); err != nil {
+	if err := loadNetwork(runtime, network); err != nil {
 		t.Fatal(err)
 	}
 	if got := runtime.Capabilities(); !reflect.DeepEqual(got, []wago.Capability{wagonet.CapICMPv6, wagonet.CapInfo}) {
@@ -171,10 +170,10 @@ func TestCheckedSeedLookupEchoCancelAndDisabledTruth(t *testing.T) {
 func instantiate(t testing.TB, network *wagonet.Network) (*wago.Runtime, hostModule) {
 	t.Helper()
 	runtime := wago.NewRuntime()
-	if err := runtime.Use(network); err != nil {
+	if err := loadNetwork(runtime, network); err != nil {
 		t.Fatal(err)
 	}
-	module, err := runtime.Compile([]byte{0x00, 0x61, 0x73, 0x6d, 0x01, 0, 0, 0})
+	module, err := compileImportHarness(runtime)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -183,16 +182,14 @@ func instantiate(t testing.TB, network *wagonet.Network) (*wago.Runtime, hostMod
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = instance.Close() })
-	return runtime, hostModule{instance: instance, memory: make([]byte, 512)}
+	return runtime, hostModule{instance: instance, memory: instance.Memory().Bytes()}
 }
 
-func call(t testing.TB, runtime *wago.Runtime, host hostModule, name string, params ...uint64) guest.Status {
+func call(t testing.TB, _ *wago.Runtime, host hostModule, name string, params ...uint64) guest.Status {
 	t.Helper()
-	function, ok := runtime.HostImports()[icmpbinding.Module+"."+name].(wago.HostFunc)
-	if !ok {
-		t.Fatalf("ICMPv6 import %q missing", name)
+	results, err := host.instance.Invoke(name, params...)
+	if err != nil || len(results) != 1 {
+		t.Fatalf("ICMPv6 import %q = %v, %v", name, results, err)
 	}
-	var results [1]uint64
-	function(host, params, results[:])
 	return guest.Status(int32(results[0]))
 }

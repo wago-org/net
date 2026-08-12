@@ -19,7 +19,7 @@ const (
 )
 
 func Descriptor(backend ...plugin.Backend) plugin.Module {
-	return plugin.NewModule(plugin.ModuleLinkLocal4, func(registry *wago.Registry, host plugin.Host) {
+	return plugin.NewModule(plugin.ModuleLinkLocal4, func(registry *plugin.Registrar, host plugin.Host) {
 		registry.Capability(Capability, wago.CapabilityDocs("use bounded IPv4 link-local/APIPA claim-and-defend operations"))
 		plugin.RegisterBindings(registry.ImportModule(Module), Bindings(host))
 	}, backend...)

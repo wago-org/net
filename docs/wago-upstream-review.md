@@ -1,5 +1,8 @@
 # Wago merged lifecycle/worker upstream review
 
+> Historical pre-vNext review evidence. The migrated networking provider uses
+> the exact Wago revision selected by `go.mod`, not the merge recorded below.
+
 Networking currently depends on the exact Wago merge object
 `97e6f91e6c822491577faa86f3c30aa5a8fff1e8`. This object must be published
 without rebasing, squashing, or replacing either parent:

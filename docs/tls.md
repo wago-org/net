@@ -36,10 +36,11 @@ loopback gate; raw TCP still requires its own TCP-scoped grant. Multicast and
 limited broadcast remain unsupported TLS destinations even if advanced policy
 mentions those endpoint classes.
 
-TLS intentionally has no `tls/register` package or zero-configuration extension.
-A self-registering package cannot safely invent trust roots, profile IDs,
+TLS intentionally has no `tls/register` catalog provider. An explicit default
+provider cannot safely invent trust roots, profile IDs,
 verification identities, ALPN, or client credentials. Hosts must call
-`tls.NewClientProfile` and `tls.Register` explicitly in Go composition.
+`tls.NewClientProfile` and `tls.Register` in a deployment-owned
+`wagonet.Provider` factory.
 
 ## Nonblocking engine
 

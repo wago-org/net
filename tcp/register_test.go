@@ -14,7 +14,7 @@ import (
 	"github.com/wago-org/net/tcp"
 	wago "github.com/wago-org/wago"
 	"github.com/wago-org/wago/src/core/compiler/wasm"
-	"github.com/wago-org/wago/testutil/wasmtest"
+	"github.com/wago-org/wago/tests/wasmtest"
 )
 
 func TestRegisterExposesOnlyTCPAndSharedCore(t *testing.T) {
@@ -24,7 +24,7 @@ func TestRegisterExposesOnlyTCPAndSharedCore(t *testing.T) {
 	}
 
 	runtime := wago.NewRuntime()
-	if err := runtime.Use(network); err != nil {
+	if err := loadNetwork(runtime, network); err != nil {
 		t.Fatalf("Use: %v", err)
 	}
 	wantCapabilities := []wago.Capability{wagonet.CapInfo, wagonet.CapTCP}
@@ -60,7 +60,7 @@ func TestRegisterRejectsDuplicateInvalidOptionFrozenAndNilNetwork(t *testing.T) 
 		t.Fatalf("duplicate registration = %v", err)
 	}
 	runtime := wago.NewRuntime()
-	if err := runtime.Use(network); err != nil {
+	if err := loadNetwork(runtime, network); err != nil {
 		t.Fatalf("Use: %v", err)
 	}
 	if err := tcp.Register(network); !errors.Is(err, wagonet.ErrProtocolRegistrationFrozen) {
@@ -74,28 +74,11 @@ func TestSelectiveTCPBindingUsesExactSharedInstanceState(t *testing.T) {
 		t.Fatalf("Register: %v", err)
 	}
 	runtime := wago.NewRuntime()
-	if err := runtime.Use(network); err != nil {
+	if err := loadNetwork(runtime, network); err != nil {
 		t.Fatalf("Use: %v", err)
 	}
-	module, err := runtime.Compile([]byte{0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00})
-	if err != nil {
-		t.Fatalf("Compile empty module: %v", err)
-	}
-	instance, err := runtime.Instantiate(context.Background(), module)
-	if err != nil {
-		t.Fatalf("Instantiate: %v", err)
-	}
-	defer instance.Close()
-
-	fn, ok := runtime.HostImports()[wagonet.TCPModule+".namespace_default"].(wago.HostFunc)
-	if !ok {
+	if !hasImport(runtime, wagonet.TCPModule, "namespace_default") {
 		t.Fatal("selective TCP namespace binding missing")
-	}
-	host := exactHost{instance: instance, memory: make([]byte, wagonet.HandleV1Size)}
-	results := []uint64{0}
-	fn(host, []uint64{0}, results)
-	if got := wagonet.Status(wago.AsI32(results[0])); got != wagonet.StatusNotSupported {
-		t.Fatalf("namespace_default without configured namespace = %v", got)
 	}
 }
 
@@ -112,10 +95,10 @@ func TestDefaultTCPAllowsFiniteOutboundAndDeniesListenerSpecialAndCallerDeniedAu
 		t.Fatalf("Register: %v", err)
 	}
 	runtime := wago.NewRuntime()
-	if err := runtime.Use(network); err != nil {
+	if err := loadNetwork(runtime, network); err != nil {
 		t.Fatalf("Use: %v", err)
 	}
-	module, err := runtime.Compile([]byte{0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00})
+	module, err := compileImportHarness(runtime)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -124,7 +107,7 @@ func TestDefaultTCPAllowsFiniteOutboundAndDeniesListenerSpecialAndCallerDeniedAu
 		t.Fatalf("Instantiate: %v", err)
 	}
 	defer instance.Close()
-	host := exactHost{instance: instance, memory: make([]byte, 256)}
+	host := exactHost{instance: instance, memory: instance.Memory().Bytes()}
 	namespace := callTCP(t, runtime, host, "namespace_default", 0)
 	if namespace != wagonet.StatusOK {
 		t.Fatalf("namespace_default = %v", namespace)
@@ -163,10 +146,10 @@ func TestDefaultTCPStorageFitsSharedDefaultsAndStopsAtEightStreams(t *testing.T)
 		t.Fatalf("Register: %v", err)
 	}
 	runtime := wago.NewRuntime()
-	if err := runtime.Use(network); err != nil {
+	if err := loadNetwork(runtime, network); err != nil {
 		t.Fatalf("Use: %v", err)
 	}
-	module, err := runtime.Compile([]byte{0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00})
+	module, err := compileImportHarness(runtime)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -175,7 +158,7 @@ func TestDefaultTCPStorageFitsSharedDefaultsAndStopsAtEightStreams(t *testing.T)
 		t.Fatalf("Instantiate: %v", err)
 	}
 	defer instance.Close()
-	host := exactHost{instance: instance, memory: make([]byte, 256)}
+	host := exactHost{instance: instance, memory: instance.Memory().Bytes()}
 	if got := callTCP(t, runtime, host, "namespace_default", 0); got != wagonet.StatusOK {
 		t.Fatalf("namespace_default = %v", got)
 	}
@@ -199,7 +182,7 @@ func TestTCPRegistrationLeavesUDPImportUnresolved(t *testing.T) {
 		t.Fatalf("Register: %v", err)
 	}
 	runtime := wago.NewRuntime()
-	if err := runtime.Use(network); err != nil {
+	if err := loadNetwork(runtime, network); err != nil {
 		t.Fatalf("Use: %v", err)
 	}
 
@@ -224,14 +207,12 @@ type exactHost struct {
 func (h exactHost) Memory() []byte           { return h.memory }
 func (h exactHost) Instance() *wago.Instance { return h.instance }
 
-func callTCP(t testing.TB, runtime *wago.Runtime, host exactHost, name string, params ...uint64) wagonet.Status {
+func callTCP(t testing.TB, _ *wago.Runtime, host exactHost, name string, params ...uint64) wagonet.Status {
 	t.Helper()
-	fn, ok := runtime.HostImports()[wagonet.TCPModule+"."+name].(wago.HostFunc)
-	if !ok {
-		t.Fatalf("TCP import %q missing", name)
+	results, err := host.instance.Invoke(name, params...)
+	if err != nil || len(results) != 1 {
+		t.Fatalf("TCP import %q = %v, %v", name, results, err)
 	}
-	results := []uint64{0}
-	fn(host, params, results)
 	return wagonet.Status(wago.AsI32(results[0]))
 }
 

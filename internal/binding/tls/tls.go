@@ -22,7 +22,7 @@ const (
 )
 
 func Descriptor(backend ...plugin.Backend) plugin.Module {
-	return plugin.NewModule(plugin.ModuleTLS, func(registry *wago.Registry, host plugin.Host) {
+	return plugin.NewModule(plugin.ModuleTLS, func(registry *plugin.Registrar, host plugin.Host) {
 		registry.Capability(Capability, wago.CapabilityDocs("use checked outbound verified TLS client streams for the exact calling instance"))
 		plugin.RegisterBindings(registry.ImportModule(Module), Bindings(host))
 	}, backend...)

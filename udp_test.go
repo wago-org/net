@@ -16,7 +16,7 @@ import (
 	"github.com/wago-org/net/internal/resource"
 	wago "github.com/wago-org/wago"
 	"github.com/wago-org/wago/src/core/compiler/wasm"
-	"github.com/wago-org/wago/testutil/wasmtest"
+	"github.com/wago-org/wago/tests/wasmtest"
 )
 
 type udpHostModule struct {
@@ -29,25 +29,30 @@ func (m udpHostModule) Instance() *wago.Instance { return m.instance }
 
 func TestGuestUDPUnavailableNamespaceIsTruthful(t *testing.T) {
 	extension := Init(Config{})
-	runtime := runtimeForExtension(t, extension)
-	instance, err := runtime.Instantiate(context.Background(), emptyModule(t, runtime))
+	runtime := runtimeForNetwork(t, extension)
+	module, err := compileImportHarness(runtime, UDPModule)
+	if err != nil {
+		t.Fatal(err)
+	}
+	instance, err := runtime.Instantiate(context.Background(), module)
 	if err != nil {
 		t.Fatalf("Instantiate: %v", err)
 	}
 	defer instance.Close()
-	host := udpHostModule{instance: instance, memory: bytes.Repeat([]byte{0x5a}, 16)}
-	before := append([]byte(nil), host.memory...)
+	host := udpHostModule{instance: instance, memory: instance.Memory().Bytes()}
+	copy(host.memory[:16], bytes.Repeat([]byte{0x5a}, 16))
+	before := append([]byte(nil), host.memory[:16]...)
 	if got := callUDP(t, extension, "namespace_default", host, 0); got != StatusNotSupported {
 		t.Fatalf("namespace without configuration = %v", got)
 	}
-	if !bytes.Equal(host.memory, before) {
+	if !bytes.Equal(host.memory[:16], before) {
 		t.Fatal("unavailable namespace mutated output")
 	}
 }
 
 func TestGuestUDPImportCapabilityGate(t *testing.T) {
 	extension := Init(Config{})
-	runtime := runtimeForExtension(t, extension)
+	runtime := runtimeForNetwork(t, extension)
 	importEntry := append(append(wasmtest.Name(UDPModule), wasmtest.Name("namespace_default")...), 0x00, 0x00)
 	wasm := wasmtest.Module(
 		wasmtest.Section(1, wasmtest.Vec(wasmtest.FuncType([]wasm.ValType{wasm.I32}, []wasm.ValType{wasm.I32}))),
@@ -74,7 +79,7 @@ func TestGuestUDPImportsIsolationPolicyQuotaAndClose(t *testing.T) {
 	defer secondInstance.Close()
 
 	firstNamespace := guestNamespace(t, firstRuntime, firstHost)
-	secondNamespace := guestNamespaceFromExtension(t, secondExt, secondHost)
+	secondNamespace := guestNamespaceFromNetwork(t, secondExt, secondHost)
 	firstSocket := guestBind(t, firstExt, firstHost, firstNamespace, endpointFor(1, 4101), 64)
 	secondSocket := guestBind(t, secondExt, secondHost, secondNamespace, endpointFor(2, 4102), 64)
 
@@ -126,11 +131,11 @@ func TestGuestUDPEmptyTruncationAndFailedMemoryWrites(t *testing.T) {
 	receiverExt, _, receiverInstance, receiverHost := newGuestUDPInstance(t, 12, 11)
 	defer senderInstance.Close()
 	defer receiverInstance.Close()
-	senderState, _ := senderExt.instanceManager().ForInstance(senderInstance)
-	receiverState, _ := receiverExt.instanceManager().ForInstance(receiverInstance)
+	senderState, _ := senderExt.instanceManager().SingleState()
+	receiverState, _ := receiverExt.instanceManager().SingleState()
 
-	senderNamespace := guestNamespaceFromExtension(t, senderExt, senderHost)
-	receiverNamespace := guestNamespaceFromExtension(t, receiverExt, receiverHost)
+	senderNamespace := guestNamespaceFromNetwork(t, senderExt, senderHost)
+	receiverNamespace := guestNamespaceFromNetwork(t, receiverExt, receiverHost)
 	sender := guestBind(t, senderExt, senderHost, senderNamespace, endpointFor(11, 4211), 64)
 	receiver := guestBind(t, receiverExt, receiverHost, receiverNamespace, endpointFor(12, 4212), 64)
 
@@ -193,8 +198,8 @@ func TestGuestUDPEmptyTruncationAndFailedMemoryWrites(t *testing.T) {
 func TestGuestUDPBindValidatesOutputBeforeAllocation(t *testing.T) {
 	extension, _, instance, host := newGuestUDPInstance(t, 21, 22)
 	defer instance.Close()
-	state, _ := extension.instanceManager().ForInstance(instance)
-	namespaceHandle := guestNamespaceFromExtension(t, extension, host)
+	state, _ := extension.instanceManager().SingleState()
+	namespaceHandle := guestNamespaceFromNetwork(t, extension, host)
 	encodeGuestEndpoint(t, host.memory, 0, endpointFor(21, 4321))
 	if got := callUDP(t, extension, "bind", host, uint64(namespaceHandle), 0, uint64(len(host.memory)-4)); got != StatusInvalidArgument {
 		t.Fatalf("bad output bind = %v", got)
@@ -208,7 +213,7 @@ func TestGuestUDPBindValidatesOutputBeforeAllocation(t *testing.T) {
 	}
 }
 
-func newGuestUDPInstance(t testing.TB, localLast, gatewayLast byte) (*Extension, *wago.Runtime, *wago.Instance, udpHostModule) {
+func newGuestUDPInstance(t testing.TB, localLast, gatewayLast byte) (*Network, *wago.Runtime, *wago.Instance, udpHostModule) {
 	t.Helper()
 	limits := QuotaLimits{Resources: 2, UDPResources: 1, QueuedBytes: 128, ServiceUnits: 32}
 	ready := ReadinessConfig{MaxRegistrations: 2}
@@ -227,8 +232,8 @@ func newGuestUDPInstance(t testing.TB, localLast, gatewayLast byte) (*Extension,
 			UDP:  UDPConfig{MaxSockets: 1, ReceiveBytes: 64, TransmitBytes: 64, ReceiveDatagrams: 2, TransmitDatagrams: 2, MaxPayloadBytes: 32},
 		},
 	})
-	runtime := runtimeForExtension(t, extension)
-	module, err := runtime.Compile([]byte{0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00})
+	runtime := runtimeForNetwork(t, extension)
+	module, err := compileImportHarness(runtime, UDPModule)
 	if err != nil {
 		t.Fatalf("Compile empty UDP guest: %v", err)
 	}
@@ -236,33 +241,31 @@ func newGuestUDPInstance(t testing.TB, localLast, gatewayLast byte) (*Extension,
 	if err != nil {
 		t.Fatalf("Instantiate UDP guest: %v", err)
 	}
-	return extension, runtime, instance, udpHostModule{instance: instance, memory: make([]byte, 512)}
+	return extension, runtime, instance, udpHostModule{instance: instance, memory: instance.Memory().Bytes()}
 }
 
-func runtimeForExtension(t testing.TB, extension *Extension) *wago.Runtime {
+func runtimeForNetwork(t testing.TB, extension *Network) *wago.Runtime {
 	t.Helper()
 	runtime := wago.NewRuntime()
-	if err := runtime.Use(extension); err != nil {
+	if err := loadNetwork(runtime, extension); err != nil {
 		t.Fatalf("Use UDP extension: %v", err)
 	}
 	return runtime
 }
 
-func guestNamespace(t testing.TB, runtime *wago.Runtime, host udpHostModule) resource.Handle {
+func guestNamespace(t testing.TB, _ *wago.Runtime, host udpHostModule) resource.Handle {
 	t.Helper()
-	fn, ok := runtime.HostImports()[UDPModule+".namespace_default"].(wago.HostFunc)
-	if !ok {
-		t.Fatal("namespace_default binding missing")
+	results, err := host.instance.Invoke("namespace_default", 0)
+	if err != nil || len(results) != 1 {
+		t.Fatalf("namespace_default = %v, %v", results, err)
 	}
-	results := []uint64{0}
-	fn(host, []uint64{0}, results)
 	if got := Status(wago.AsI32(results[0])); got != StatusOK {
 		t.Fatalf("namespace_default = %v", got)
 	}
 	return resource.Handle(binary.LittleEndian.Uint64(host.memory[:8]))
 }
 
-func guestNamespaceFromExtension(t testing.TB, extension *Extension, host udpHostModule) resource.Handle {
+func guestNamespaceFromNetwork(t testing.TB, extension *Network, host udpHostModule) resource.Handle {
 	t.Helper()
 	if got := callUDP(t, extension, "namespace_default", host, 0); got != StatusOK {
 		t.Fatalf("namespace_default = %v", got)
@@ -270,7 +273,7 @@ func guestNamespaceFromExtension(t testing.TB, extension *Extension, host udpHos
 	return resource.Handle(binary.LittleEndian.Uint64(host.memory[:8]))
 }
 
-func guestBind(t testing.TB, extension *Extension, host udpHostModule, namespaceHandle resource.Handle, local namespace.Endpoint, out uint32) resource.Handle {
+func guestBind(t testing.TB, extension *Network, host udpHostModule, namespaceHandle resource.Handle, local namespace.Endpoint, out uint32) resource.Handle {
 	t.Helper()
 	encodeGuestEndpoint(t, host.memory, 0, local)
 	if got := callUDP(t, extension, "bind", host, uint64(namespaceHandle), 0, uint64(out)); got != StatusOK {
@@ -279,8 +282,15 @@ func guestBind(t testing.TB, extension *Extension, host udpHostModule, namespace
 	return resource.Handle(binary.LittleEndian.Uint64(host.memory[out : out+8]))
 }
 
-func callUDP(t testing.TB, extension *Extension, name string, host udpHostModule, params ...uint64) Status {
+func callUDP(t testing.TB, extension *Network, name string, host udpHostModule, params ...uint64) Status {
 	t.Helper()
+	if host.instance != nil && host.instance.Memory() != nil {
+		results, err := host.instance.Invoke(name, params...)
+		if err != nil || len(results) != 1 {
+			t.Fatalf("UDP import %q = %v, %v", name, results, err)
+		}
+		return Status(wago.AsI32(results[0]))
+	}
 	var binding wago.HostFunc
 	for _, candidate := range extension.udpBindings() {
 		if candidate.name == name {
@@ -347,5 +357,3 @@ func concreteNamespace(t testing.TB, state *instance.State) linkedNamespace {
 	}
 	return backend
 }
-
-var _ wago.InstanceHostModule = udpHostModule{}

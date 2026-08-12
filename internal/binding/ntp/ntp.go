@@ -22,7 +22,7 @@ const (
 
 // Descriptor returns the opaque NTP module installed by the public facade.
 func Descriptor(backend ...plugin.Backend) plugin.Module {
-	return plugin.NewModule(plugin.ModuleNTP, func(registry *wago.Registry, host plugin.Host) {
+	return plugin.NewModule(plugin.ModuleNTP, func(registry *plugin.Registrar, host plugin.Host) {
 		registry.Capability(Capability, wago.CapabilityDocs("use checked bounded NTP synchronizations with explicit host clock authority"))
 		plugin.RegisterBindings(registry.ImportModule(Module), Bindings(host))
 	}, backend...)

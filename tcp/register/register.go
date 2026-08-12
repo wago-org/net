@@ -1,5 +1,4 @@
-// Package register self-registers the selective TCP-only Wago networking
-// extension for custom binaries built by `wago pkg build`.
+// Package register exposes the explicit TCP-only networking catalog entry.
 package register
 
 import (
@@ -8,12 +7,15 @@ import (
 	wago "github.com/wago-org/wago"
 )
 
-func init() {
-	wago.RegisterExtension("net-tcp", func() wago.Extension {
-		network := wagonet.New()
-		if err := tcp.Register(network); err != nil {
-			panic("wagonet/tcp/register: " + err.Error())
-		}
-		return network
+func Provider() wago.PluginProvider {
+	return wagonet.Provider(wagonet.ProviderSpec{
+		ID: "github.com/wago-org/net/tcp", Name: "Wago TCP", Description: "Bounded checked TCP networking.",
+		Modules: []string{wagonet.Module, wagonet.TCPModule},
+		Factory: func() (*wagonet.Network, error) {
+			network := wagonet.New()
+			return network, tcp.Register(network)
+		},
 	})
 }
+
+func Providers() []wago.PluginProvider { return []wago.PluginProvider{Provider()} }

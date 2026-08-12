@@ -15,6 +15,7 @@ import (
 	"github.com/wago-org/net/dns"
 	"github.com/wago-org/net/icmpv4"
 	"github.com/wago-org/net/icmpv6"
+	"github.com/wago-org/net/internal/plugintest"
 	"github.com/wago-org/net/ipv6"
 	"github.com/wago-org/net/linklocal4"
 	"github.com/wago-org/net/mdns"
@@ -24,7 +25,7 @@ import (
 	"github.com/wago-org/net/udp"
 	wago "github.com/wago-org/wago"
 	"github.com/wago-org/wago/src/core/compiler/wasm"
-	"github.com/wago-org/wago/testutil/wasmtest"
+	"github.com/wago-org/wago/tests/wasmtest"
 )
 
 type protocolSelection struct {
@@ -86,8 +87,11 @@ func TestPublicSelectiveCompositionMatrix(t *testing.T) {
 			slices.Sort(wantCaps)
 
 			runtime := wago.NewRuntime()
-			if err := runtime.Use(network); err != nil {
-				t.Fatalf("Use: %v", err)
+			defer runtime.Close()
+			if mask != 0 {
+				if err := plugintest.LoadNetwork(runtime, network); err != nil {
+					t.Fatalf("LoadPlugins: %v", err)
+				}
 			}
 			if got := runtime.Capabilities(); !reflect.DeepEqual(got, wantCaps) {
 				t.Fatalf("Capabilities = %v, want %v", got, wantCaps)

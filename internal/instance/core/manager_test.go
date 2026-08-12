@@ -191,7 +191,7 @@ type fakePollable struct{}
 func (fakePollable) Close() error                   { return nil }
 func (fakePollable) Readiness() namespace.Readiness { return namespace.ReadyReadable }
 
-func TestLifecycleHooksAttachAndDetachExactInstance(t *testing.T) {
+func TestAttachAndDetachExactInstance(t *testing.T) {
 	backend := new(fakeNamespace)
 	config := DefaultConfig()
 	config.NamespaceFactory = func(*policy.Policy, *quota.Account) (nscore.Namespace, error) {
@@ -202,24 +202,24 @@ func TestLifecycleHooksAttachAndDetachExactInstance(t *testing.T) {
 		t.Fatal(err)
 	}
 	instance := new(wago.Instance)
-	if err := manager.AfterInstantiate(nil, instance); err != nil {
+	if err := manager.Attach(instance); err != nil {
 		t.Fatal(err)
 	}
 	if _, ok := manager.ForInstance(instance); !ok {
 		t.Fatal("lifecycle hook did not publish exact instance state")
 	}
-	if err := manager.AfterInstantiate(nil, instance); !errors.Is(err, ErrAlreadyAttached) {
-		t.Fatalf("duplicate AfterInstantiate = %v", err)
+	if err := manager.Attach(instance); !errors.Is(err, ErrAlreadyAttached) {
+		t.Fatalf("duplicate Attach = %v", err)
 	}
-	manager.BeforeClose(nil)
-	if _, ok := manager.ForInstance(instance); !ok {
-		t.Fatal("nil close context detached live instance")
+	if err := manager.Detach(instance); err != nil {
+		t.Fatal(err)
 	}
-	manager.BeforeClose(&wago.InstanceContext{Instance: instance})
 	if _, ok := manager.ForInstance(instance); ok {
-		t.Fatal("BeforeClose retained exact instance state")
+		t.Fatal("Detach retained exact instance state")
 	}
-	manager.BeforeClose(&wago.InstanceContext{Instance: instance})
+	if err := manager.Detach(instance); err != nil {
+		t.Fatal(err)
+	}
 	if backend.closed.Load() != 1 {
 		t.Fatalf("backend close calls = %d, want 1", backend.closed.Load())
 	}
@@ -558,7 +558,7 @@ func TestPanickingAttachmentRollsBackAndAllowsRetry(t *testing.T) {
 		t.Fatal("panicking attachment published state")
 	}
 	manager.mu.RLock()
-	_, retained := manager.attaching[instance]
+	_, retained := manager.attaching[instanceKey{direct: instance}]
 	manager.mu.RUnlock()
 	if retained {
 		t.Fatal("panicking attachment retained lifecycle record")
@@ -582,12 +582,13 @@ func TestLifecycleAttemptCompletionIsIdempotent(t *testing.T) {
 	manager := NewManager()
 	instance := new(wago.Instance)
 
-	attachment, err := manager.beginAttachment(instance)
+	key := instanceKey{direct: instance}
+	attachment, err := manager.beginAttachment(key)
 	if err != nil {
 		t.Fatal(err)
 	}
-	manager.finishAttachment(instance, attachment)
-	manager.finishAttachment(instance, attachment)
+	manager.finishAttachment(key, attachment)
+	manager.finishAttachment(key, attachment)
 	select {
 	case <-attachment.done:
 	default:
@@ -598,10 +599,10 @@ func TestLifecycleAttemptCompletionIsIdempotent(t *testing.T) {
 	secondErr := errors.New("duplicate teardown result")
 	detachment := &detachmentAttempt{done: make(chan struct{})}
 	manager.mu.Lock()
-	manager.detaching[instance] = detachment
+	manager.detaching[key] = detachment
 	manager.mu.Unlock()
-	manager.finishDetachment(instance, detachment, firstErr)
-	manager.finishDetachment(instance, detachment, secondErr)
+	manager.finishDetachment(key, detachment, firstErr)
+	manager.finishDetachment(key, detachment, secondErr)
 	select {
 	case <-detachment.done:
 	default:
@@ -615,7 +616,8 @@ func TestLifecycleAttemptCompletionIsIdempotent(t *testing.T) {
 func TestAttachmentCompletionRetiresRecordAcrossRollbackClosePanic(t *testing.T) {
 	manager := NewManager()
 	instance := new(wago.Instance)
-	attempt, err := manager.beginAttachment(instance)
+	key := instanceKey{direct: instance}
+	attempt, err := manager.beginAttachment(key)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -632,7 +634,7 @@ func TestAttachmentCompletionRetiresRecordAcrossRollbackClosePanic(t *testing.T)
 	var recovered any
 	func() {
 		defer func() { recovered = recover() }()
-		manager.completeAttachment(instance, attempt, state, false, originalPanic, true)
+		manager.completeAttachment(key, attempt, state, false, originalPanic, true)
 	}()
 	if recovered != originalPanic {
 		t.Fatalf("recovered panic = %v, want original %v", recovered, originalPanic)
@@ -648,7 +650,7 @@ func TestAttachmentCompletionRetiresRecordAcrossRollbackClosePanic(t *testing.T)
 		t.Fatalf("manager length = %d, want zero", manager.Len())
 	}
 	manager.mu.RLock()
-	_, retained := manager.attaching[instance]
+	_, retained := manager.attaching[key]
 	manager.mu.RUnlock()
 	if retained {
 		t.Fatal("rollback panic retained attachment record")
@@ -661,7 +663,8 @@ func TestAttachmentCompletionRetiresRecordAcrossRollbackClosePanic(t *testing.T)
 	}
 
 	cleanupOnlyInstance := new(wago.Instance)
-	cleanupOnlyAttempt, err := manager.beginAttachment(cleanupOnlyInstance)
+	cleanupOnlyKey := instanceKey{direct: cleanupOnlyInstance}
+	cleanupOnlyAttempt, err := manager.beginAttachment(cleanupOnlyKey)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -670,7 +673,7 @@ func TestAttachmentCompletionRetiresRecordAcrossRollbackClosePanic(t *testing.T)
 	recovered = nil
 	func() {
 		defer func() { recovered = recover() }()
-		manager.completeAttachment(cleanupOnlyInstance, cleanupOnlyAttempt, cleanupOnlyState, false, nil, false)
+		manager.completeAttachment(cleanupOnlyKey, cleanupOnlyAttempt, cleanupOnlyState, false, nil, false)
 	}()
 	if recovered != cleanupPanic {
 		t.Fatalf("cleanup-only panic = %v, want %v", recovered, cleanupPanic)
@@ -679,7 +682,7 @@ func TestAttachmentCompletionRetiresRecordAcrossRollbackClosePanic(t *testing.T)
 		t.Fatalf("cleanup-only quota usage=%+v closed=%v", usage, closed)
 	}
 	manager.mu.RLock()
-	_, retained = manager.attaching[cleanupOnlyInstance]
+	_, retained = manager.attaching[cleanupOnlyKey]
 	manager.mu.RUnlock()
 	if retained {
 		t.Fatal("cleanup-only panic retained attachment record")
@@ -841,8 +844,8 @@ func TestDetachCoordinatesWaitersReattachmentAndUnrelatedInstances(t *testing.T)
 		t.Fatalf("first backend close count = %d, want 1", firstBackend.closed.Load())
 	}
 	manager.mu.RLock()
-	_, attaching := manager.attaching[instance]
-	_, detaching := manager.detaching[instance]
+	_, attaching := manager.attaching[instanceKey{direct: instance}]
+	_, detaching := manager.detaching[instanceKey{direct: instance}]
 	manager.mu.RUnlock()
 	if attaching || detaching {
 		t.Fatalf("completed lifecycle retained records attaching=%v detaching=%v", attaching, detaching)
@@ -966,7 +969,7 @@ func TestDetachPanicRestoresInvariantsAndCoordinatesWaiters(t *testing.T) {
 		t.Fatalf("old state retained teardown scratch namespace=%v poll=%v output=%v", oldState.NamespaceHandle(), oldState.pollEvents, oldState.outputScratch)
 	}
 	manager.mu.RLock()
-	_, retained := manager.detaching[instance]
+	_, retained := manager.detaching[instanceKey{direct: instance}]
 	manager.mu.RUnlock()
 	if retained {
 		t.Fatal("panicking teardown retained detachment record")

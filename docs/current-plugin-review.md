@@ -1,5 +1,8 @@
 # Current plugin review evidence and publication gate
 
+> Historical pre-vNext review evidence. It does not approve or describe the
+> explicit-provider vNext branch; regenerate it before release.
+
 The production networking pin remains the ordered-parent Wago merge
 `97e6f91e6c822491577faa86f3c30aa5a8fff1e8`. A separate review line proves the
 same least-authority lifecycle contract on current Wago plugin APIs without

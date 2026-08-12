@@ -19,7 +19,7 @@ const (
 )
 
 func Descriptor(backend ...plugin.Backend) plugin.Module {
-	return plugin.NewModule(plugin.ModuleDHCPv6, func(registry *wago.Registry, host plugin.Host) {
+	return plugin.NewModule(plugin.ModuleDHCPv6, func(registry *plugin.Registrar, host plugin.Host) {
 		registry.Capability(Capability, wago.CapabilityDocs("use the bounded checked initial DHCPv6 client acquisition subset"))
 		plugin.RegisterBindings(registry.ImportModule(Module), Bindings(host))
 	}, backend...)

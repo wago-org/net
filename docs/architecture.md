@@ -18,7 +18,7 @@ backend must be able to implement the same guest ABI.
 
 ## Import namespace decision
 
-Wago assigns one extension owner to an entire import module. Two extensions cannot
+Wago assigns one plugin provider to an entire import module. Two providers cannot
 independently add functions to the same module under the default collision policy.
 The suite therefore uses **protocol import modules**:
 
@@ -37,7 +37,7 @@ The suite therefore uses **protocol import modules**:
 - `wago_net_dhcpv6` for bounded initial DHCPv6 acquisition and copied configuration observations.
 
 This permits narrow per-protocol capabilities and independent ABI evolution
-without multiple owners competing for `wago_net`. The current root extension is
+without multiple owners competing for `wago_net`. The current root provider is
 the explicit provider for shared per-instance state across its core and complete
 protocol modules; no process-global state or placeholder protocol module is used.
 
@@ -294,13 +294,14 @@ covers all 4096 selective registrations.
 Granular `tcp/register`, `udp/register`, `dns/register`, `icmpv4/register`,
 `ntp/register`, `mdns/register`, `dhcpv4/register`, `linklocal4/register`,
 `ipv6/register`, `icmpv6/register`, and `dhcpv6/register` packages own only their
-selected public facade and exact implementation graph. TLS intentionally has no
-self-registering package because no secure zero-configuration extension can
+selected public facade and exact implementation graph. Each exports explicit
+`Provider` and `Providers` functions and has no registration `init`. TLS
+intentionally has no catalog provider because no secure zero-configuration plugin can
 invent trust roots, identities, ALPN, credentials, or profile IDs. Explicit TLS
 Go composition may compile the neutral TCP facet and private lneto TCP adapter,
 but not the public TCP facade, TCP binding, TCP instance operations, or TCP ABI.
-The root `register` package intentionally continues to compose the eleven
-previously signed-off protocols in one extension rather than using the aggregate
+The root `register` package intentionally composes the eleven protocols in one
+provider rather than using the aggregate
 compatibility constructor. TLS remains granular-only until TinyGo and complete
 release-signoff evidence are refreshed.
 
@@ -316,10 +317,10 @@ path eliminates quota-token allocations; pointer-backed host-module benchmarks
 now measure the complete UDP and TCP guest poll calls at zero allocations rather
 than including a value-to-interface boxing artifact.
 
-Each `Extension` owns one private instance-state manager shared by its core,
+Each selected networking provider owns one private instance-state manager shared by its core,
 UDP, TCP, DNS, ICMPv4, NTP, mDNS, DHCPv4, link-local, IPv6, ICMPv6, and DHCPv6 module bindings. Runtime instantiation attaches one resource table,
-readiness coordinator, immutable policy, and finite quota ledger to the exact
-`*wago.Instance`. Optional static
+readiness coordinator, immutable policy, and finite quota ledger to an opaque
+`wago.InstanceIdentity`. Optional static
 IPv4 configuration transactionally reserves namespace quota, constructs the
 backend, inserts a generation-safe handle, and registers bounded readiness before
 the state is published. UDP, TCP, DNS, ICMPv4, NTP, mDNS, DHCPv4, link-local,
@@ -336,9 +337,11 @@ mutate output. TCP guest bindings prevalidate all complete
 endpoint, descriptor, payload, result, event, and poll ranges before backend
 work. Connect and accept roll back newly owned handles if descriptor encoding
 cannot complete; AGAIN and EOF stream results leave guest outputs unchanged.
-Host imports recover exact identity through the additive
-`wago.InstanceHostModule` interface, and `BeforeClose` removes the attachment
-before polling shutdown, reverse-creation resource cleanup, and quota shutdown.
+Host imports recover the active synchronous caller only through the separately
+granted `wago.CallerResolver`. A granted instantiate interceptor attaches state
+after exact identity exists but before guest start, and a granted close observer
+removes the attachment before polling shutdown, reverse-creation resource
+cleanup, and quota shutdown.
 That unpublish-before-close step is intentional: new manager lookups fail closed
 immediately, while any in-flight `State.WithLock` or `State.Poll` call still
 holds the per-state lifecycle mutex until its callback returns and teardown can
@@ -349,38 +352,34 @@ after those invariants are restored; concurrent detach waiters receive the
 stable `ErrTeardownPanicked` result, same-instance reattachment waits for record
 retirement, and unrelated instances continue independently. Panic capture and
 re-propagation occur in separate ordinary call frames so the same policy works
-under both standard Go and TinyGo. The extension also calls
-`Registry.RequireReinstantiation`, so class
-resets that would reuse a physical instance are engine-downgraded to the same
-deterministic close-and-recreate path. Failed later setup and class replacement
-use that close path as well. No process-global instance map is used. The low-level
-`InfoImports` bundle remains suitable only for stateless core imports such as
-`abi_version`; resource-owning protocol extensions require the Runtime
-lifecycle path.
+under both standard Go and TinyGo. Failed later setup closes the exact instance,
+invokes the same detach path, and leaves no published network state. No
+process-global instance map is used. The low-level `InfoImports` bundle remains
+suitable only for stateless core imports such as `abi_version`;
+resource-owning protocol providers require the Runtime lifecycle path.
 
-The companion Wago branch `net/instance-close-hooks` now merges both prerequisite
-histories at `97e6f91`: its first parent preserves lifecycle/reset/identity work
-through `54499ba`, while its second parent preserves the divergent worker plugin
-history at `ffd5ef4b`. Runtime instance metadata carries origin, GC inheritance,
-and an optional expiring worker host-call scope outside `Instance`, so the
-776-byte instance layout and TinyGo-compatible `HostFunc` shape remain unchanged.
-Worker registration is transactional, workers retain finite runtime/queue quotas,
-linked parent close waits for child disposal, hook panics cannot skip network
-cleanup, and direct or worker host calls still expose exact instance identity.
+Callers retain direct Runtime instance handles, but `Runtime.Close` logically
+closes and drains every Runtime-created instance before plugin teardown. The
+retained handle is closed: networking calls fail, exact close observation has
+already released its state, and a later `Instance.Close` is idempotent. This
+preserves deterministic cleanup without granting networking instance-management
+authority.
 
-## Pool reset enforcement
+## Plugin graph and cross-plugin calls
 
-The networking extension declares `Registry.RequireReinstantiation`. A class may
-still request `wago.ResetMemorySnapshot`, but `Class.ResetPolicy` reports and
-`Lease.Release` enforces `wago.ResetReinstantiate` while networking is registered.
-The old physical instance is closed before its fresh replacement is published;
-old UDP/TCP/DNS handles become closed in the retired state and fail as
-cross-table handles in the new state. Tests rebind UDP/TCP resources on fresh
-leases and exercise linked workers whose child instances own all three protocol
-kinds. Parent release waits for worker disposal, reverse hooks observe state
-before networking detaches it, an isolated hook panic cannot prevent cleanup,
-failed callback validation retires the child's state and releases worker quota,
-and the next lease receives fresh parent and worker identities.
+Every provider requests `host.import.define` only for `wago_net` plus its exact
+selected protocol modules. Caller identification, instantiate interception, and
+close observation are independent required Authorities. The Runtime validates
+the complete definition, grant, contribution, dependency, and Contract graph
+before committing registration.
+
+Networking provides `github.com/wago-org/net/service` major 1. Consumers must
+declare an explicit plugin requirement for the chosen provider and bind this
+typed Contract. `plugin.Ref.With` is the only supported call path: it holds an
+in-flight lease, shutdown rejects new calls and drains existing calls, and the
+reference is revoked before provider teardown. The service exposes only copied
+module topology and active-caller readiness; it does not expose Runtime,
+Instance, namespace, or resource ownership.
 
 ## Release gate
 
@@ -388,8 +387,8 @@ and the next lease receives fresh parent and worker identities.
 pins the merged Wago branch and the lneto/WASI audits, runs standard Go, race,
 discovered bounded fuzz, every benchmark discovered by
 `scripts/benchmark-smoke.sh`, TinyGo, a distinct package cross-build, optional
-bounded native/QEMU arm64 execution, custom CLI inspection, source-boundary and
-plugin-plan compatibility and reviewed-upstream WASI audits, companion
+bounded native/QEMU arm64 execution, provider inspection, source-boundary and
+reviewed-upstream WASI audits, companion
 repository tests, and final clean checks. It then exports deterministic non-thin
 Git packs containing the exact plugin subject and pinned Wago/lneto/WASI commit
 and source-tree objects, including both ordered Wago parents, before emitting a
@@ -407,7 +406,6 @@ known WASI preview-1 native SIGSEGV are documented in
 `docs/release-signoff.md`. Baseline hosted CI fetches the exact reviewed Wago and
 lneto commits into ignored dependency worktrees and runs ordinary, shuffled,
 race, vet, checkptr, and backend-neutral linux/386 checks. Full linux/386 remains
-visibly blocked by pinned Wago's missing `runtime.HostCtrlFrameBytes`; production
-activation still depends on the stricter publication, arm64-execution, and WASI
-release gates. The reviewed newer plugin-plan snapshot requires a separate
-identity/cleanup/worker migration and is not a substitute pin.
+visibly blocked by the recorded Wago line's missing `runtime.HostCtrlFrameBytes`;
+production activation still depends on refreshing the release evidence against
+the exact vNext Wago revision, arm64 execution, and the WASI release gates.

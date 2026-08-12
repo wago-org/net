@@ -1,26 +1,30 @@
 {
-  "schema": "wago-plugin/v1",
-  "module": "github.com/wago-org/net",
-  "name": "Wago Networking",
-  "version": "0.0.0",
-  "description": "Private experimental capability-gated networking plugins for an exactly reviewed Wago source revision, backed initially by lneto.",
-  "stability": "experimental",
-  "license": "Apache-2.0",
-  "homepage": "https://github.com/wago-org/net",
-  "repository": "https://github.com/wago-org/net",
-  "authors": ["The wago authors"],
-  "private": true,
-  "keywords": [
-    "networking",
-    "tcp",
-    "udp",
-    "dns",
-    "capability-gated",
-    "wago",
-    "lneto",
-    "wasm"
-  ],
-  "engines": {
-    "wago": "0.1.0"
+  "$schema": "https://wago.sh/v1/schema.json",
+  "package": {
+    "module": "github.com/wago-org/net",
+    "version": "0.1.0",
+    "name": "Wago Networking",
+    "description": "Bounded capability-gated TCP, UDP, DNS, and network protocol plugins for Wago.",
+    "stability": "experimental",
+    "license": "Apache-2.0",
+    "homepage": "https://github.com/wago-org/net#readme",
+    "repository": "https://github.com/wago-org/net",
+    "category": "networking",
+    "tags": ["networking", "tcp", "udp", "dns", "capability-gated", "wasm"],
+    "authors": [{"name": "Wago contributors"}],
+    "engines": {"wago": ">=0.1.0"},
+    "subpackages": [
+      {"module": "github.com/wago-org/net/dhcpv4", "name": "Wago DHCPv4", "description": "Bounded checked DHCPv4 networking.", "stability": "experimental", "tags": ["networking", "dhcpv4"]},
+      {"module": "github.com/wago-org/net/dhcpv6", "name": "Wago DHCPv6", "description": "Bounded checked initial DHCPv6 acquisition.", "stability": "experimental", "tags": ["networking", "dhcpv6"]},
+      {"module": "github.com/wago-org/net/dns", "name": "Wago DNS", "description": "Bounded checked DNS networking.", "stability": "experimental", "tags": ["networking", "dns"]},
+      {"module": "github.com/wago-org/net/icmpv4", "name": "Wago ICMPv4", "description": "Bounded checked ICMPv4 networking.", "stability": "experimental", "tags": ["networking", "icmpv4"]},
+      {"module": "github.com/wago-org/net/icmpv6", "name": "Wago ICMPv6", "description": "Bounded checked ICMPv6 and neighbor discovery.", "stability": "experimental", "tags": ["networking", "icmpv6"]},
+      {"module": "github.com/wago-org/net/ipv6", "name": "Wago IPv6", "description": "Bounded checked IPv6 networking.", "stability": "experimental", "tags": ["networking", "ipv6"]},
+      {"module": "github.com/wago-org/net/linklocal4", "name": "Wago IPv4 Link-Local", "description": "Bounded checked IPv4 link-local networking.", "stability": "experimental", "tags": ["networking", "link-local"]},
+      {"module": "github.com/wago-org/net/mdns", "name": "Wago mDNS", "description": "Bounded checked multicast DNS networking.", "stability": "experimental", "tags": ["networking", "mdns"]},
+      {"module": "github.com/wago-org/net/ntp", "name": "Wago NTP", "description": "Bounded checked NTP networking.", "stability": "experimental", "tags": ["networking", "ntp"]},
+      {"module": "github.com/wago-org/net/tcp", "name": "Wago TCP", "description": "Bounded checked TCP networking.", "stability": "experimental", "tags": ["networking", "tcp"]},
+      {"module": "github.com/wago-org/net/udp", "name": "Wago UDP", "description": "Bounded checked UDP networking.", "stability": "experimental", "tags": ["networking", "udp"]}
+    ]
   }
 }

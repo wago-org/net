@@ -9,7 +9,7 @@ import (
 	"sort"
 )
 
-const AggregateKey = "net"
+const AggregateKey = "github.com/wago-org/net"
 
 //go:embed policy.json
 var policyJSON []byte

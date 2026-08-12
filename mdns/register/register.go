@@ -1,4 +1,4 @@
-// Package register self-registers the selective mDNS-only Wago networking extension.
+// Package register exposes the explicit mDNS-only networking catalog entry.
 package register
 
 import (
@@ -7,12 +7,15 @@ import (
 	wago "github.com/wago-org/wago"
 )
 
-func init() {
-	wago.RegisterExtension("net-mdns", func() wago.Extension {
-		network := wagonet.New()
-		if err := mdns.Register(network); err != nil {
-			panic("wagonet/mdns/register: " + err.Error())
-		}
-		return network
+func Provider() wago.PluginProvider {
+	return wagonet.Provider(wagonet.ProviderSpec{
+		ID: "github.com/wago-org/net/mdns", Name: "Wago mDNS", Description: "Bounded checked multicast DNS networking.",
+		Modules: []string{wagonet.Module, wagonet.MDNSModule},
+		Factory: func() (*wagonet.Network, error) {
+			network := wagonet.New()
+			return network, mdns.Register(network)
+		},
 	})
 }
+
+func Providers() []wago.PluginProvider { return []wago.PluginProvider{Provider()} }
