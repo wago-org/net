@@ -63,9 +63,26 @@ func TestClientHandshakeVerificationALPNAndPlaintext(t *testing.T) {
 			t.Fatalf("handshake did not complete: ready=%v terminal=%v verified=%v client-out=%d server-out=%d", client.Readiness(), terminal, verified, client.bridge.cipherPending(), serverBridge.cipherPending())
 		}
 	}
-	if err := <-serverDone; err != nil {
-		t.Fatal(err)
+	deadline := time.NewTimer(5 * time.Second)
+	defer deadline.Stop()
+	for {
+		select {
+		case err := <-serverDone:
+			if err != nil {
+				t.Fatal(err)
+			}
+			goto serverReady
+		case <-deadline.C:
+			t.Fatal("server handshake did not complete")
+		default:
+			if _, _, err := client.TryService(nscore.ServiceBudget{Packets: 8, Bytes: 64 << 10, Operations: 8}); err != nil {
+				t.Fatal(err)
+			}
+			runtime.Gosched()
+		}
 	}
+
+serverReady:
 	info, ok := client.ConnectionInfo()
 	if !ok || info.NegotiatedALPN != "h2" || info.TLSVersion != cryptotls.VersionTLS13 || info.PeerLeafSPKI256 == ([32]byte{}) {
 		t.Fatalf("connection info = %+v, %v", info, ok)
