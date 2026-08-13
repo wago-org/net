@@ -59,9 +59,12 @@ with open(destination, "w", encoding="utf-8") as stream:
         stream.write(f"{package}\t{name}\n")
 PY
 
-mapfile -t pairs <"$targets"
+pairs=()
+while IFS= read -r pair; do
+  pairs[${#pairs[@]}]=$pair
+done <"$targets"
 ((${#pairs[@]} != 0)) || fail 'no benchmarks discovered'
-packages=$(cut -f1 "$targets" | LC_ALL=C sort -u | wc -l)
+packages=$(cut -f1 "$targets" | LC_ALL=C sort -u | wc -l | tr -d '[:space:]')
 detail="targets=${#pairs[@]} packages=$packages benchtime=$benchtime count=$count cpu=$cpu benchmem=true"
 printf '%s\n' "$detail" | tee "$log_dir/detail.txt"
 

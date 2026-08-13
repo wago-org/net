@@ -168,7 +168,7 @@ func TestNetworkContractGraphCallerIdentityInFlightAndRevocation(t *testing.T) {
 	}()
 	<-entered
 	closeDone := make(chan error, 1)
-	go func() { closeDone <- runtime.Close() }()
+	go func() { closeDone <- runtime.CloseContext(context.Background()) }()
 	select {
 	case err := <-closeDone:
 		t.Fatalf("runtime closed before leased call returned: %v", err)
@@ -381,15 +381,15 @@ func TestRuntimeShutdownClosesDirectInstanceAndDetachesState(t *testing.T) {
 	if got := network.instanceManager().Len(); got != 1 {
 		t.Fatalf("attached network states = %d, want 1", got)
 	}
-	if err := runtime.Close(); err != nil {
+	if err := runtime.CloseContext(context.Background()); err != nil {
 		t.Fatal(err)
 	}
 	if got := network.instanceManager().Len(); got != 0 {
-		t.Fatalf("network states after Runtime.Close = %d, want 0", got)
+		t.Fatalf("network states after Runtime.CloseContext = %d, want 0", got)
 	}
 	results, err := instance.Invoke("namespace_default", 0)
 	if err == nil || len(results) != 0 {
-		t.Fatalf("closed instance call after Runtime.Close = %v, %v; want error", results, err)
+		t.Fatalf("closed instance call after Runtime.CloseContext = %v, %v; want error", results, err)
 	}
 	if err := instance.Close(); err != nil {
 		t.Fatal(err)

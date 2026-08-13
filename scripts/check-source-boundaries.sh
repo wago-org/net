@@ -4,7 +4,10 @@ set -euo pipefail
 root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 cd "$root"
 
-mapfile -t lneto_imports < <(
+lneto_imports=()
+while IFS= read -r file; do
+  lneto_imports[${#lneto_imports[@]}]=$file
+done < <(
   grep -RIl 'github.com/soypat/lneto' . \
     --include='*.go' --exclude-dir=.git --exclude-dir=.audit --exclude-dir=.wago \
     | sort

@@ -100,11 +100,11 @@ func prepareSourceObjectOutputDirectory(outputDir string, sets []SourceObjectSet
 		if target == string(filepath.Separator) {
 			return preparedArtifactDirectory{}, fmt.Errorf("release provenance: unsafe source-object output directory %q: a path component resolves through the filesystem root", resolvedOutput)
 		}
-		if target == resolvedWorkingDirectory || pathContains(target, resolvedWorkingDirectory) {
+		if target == resolvedWorkingDirectory || pathContains(resolvedWorkingDirectory, target) {
 			return preparedArtifactDirectory{}, fmt.Errorf("release provenance: unsafe source-object output directory %q: a path component resolves through the current working directory or one of its ancestors", resolvedOutput)
 		}
 		for _, unsafeRoot := range unsafeRoots {
-			if target == unsafeRoot || pathContains(target, unsafeRoot) {
+			if target == unsafeRoot || pathContains(unsafeRoot, target) {
 				return preparedArtifactDirectory{}, fmt.Errorf("release provenance: unsafe source-object output directory %q: a path component resolves through %q", resolvedOutput, unsafeRoot)
 			}
 		}
