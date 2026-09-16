@@ -116,7 +116,7 @@ func instantiate(t testing.TB, network *wagonet.Network) (*wago.Runtime, hostMod
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = instance.Close() })
-	return runtime, hostModule{instance: instance, memory: instance.Memory().Bytes()}
+	return runtime, hostModule{instance: instance, memory: instance.Memory().UnsafeBytes()}
 }
 func call(t testing.TB, _ *wago.Runtime, host hostModule, name string, params ...uint64) guest.Status {
 	t.Helper()

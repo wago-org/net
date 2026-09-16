@@ -146,16 +146,11 @@ func (r *Registrar) Capability(cap wago.Capability, options ...wago.CapabilityOp
 	r.err = r.reg.GuestCapability(cap, options...)
 }
 
-func (r *Registrar) ImportModule(name string) *wago.ImportModuleBuilder {
+func (r *Registrar) ImportModule(name string) *ImportModule {
 	if r == nil || r.err != nil {
-		return new(wago.ImportModuleBuilder)
+		return new(ImportModule)
 	}
-	module, err := r.imports.Module(name)
-	if err != nil {
-		r.err = err
-		return new(wago.ImportModuleBuilder)
-	}
-	return module
+	return &ImportModule{imports: r.imports, name: name}
 }
 
 // Install contributes this module's capability and imports through the exact

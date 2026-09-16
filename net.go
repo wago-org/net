@@ -550,11 +550,7 @@ func (e *Network) registerPlugin(reg *wago.Registrar, declaredModules []string) 
 	if err := reg.GuestCapability(CapInfo, wago.CapabilityDocs("inspect the Wago networking ABI and interfaces")); err != nil {
 		return err
 	}
-	coreModule, err := imports.Module(Module)
-	if err != nil {
-		return err
-	}
-	registerBindings(coreModule, e.bindings())
+	registerBindings(imports, Module, e.bindings())
 	host := plugin.NewRuntimeHost(instances, callers)
 	for _, module := range modules {
 		if err := module.Install(reg, imports, host); err != nil {
@@ -594,10 +590,10 @@ func (s *networkService) Ready(caller wago.HostModule) bool {
 // low-level Instantiate path. It is limited to shared inspection helpers such
 // as abi_version; resource-owning protocol imports require the Runtime
 // provider path so per-instance lifecycle state can be attached and cleaned.
-func InfoImports() wago.Imports {
-	imports := make(wago.Imports)
+func InfoImports() *wago.Imports {
+	imports := wago.NewImports()
 	for _, binding := range newNetwork(Config{}).bindings() {
-		imports[Module+"."+binding.name] = binding.fn
+		imports.HostFunc(Module, binding.name, binding.callback()).Params(binding.params...).Results(binding.results...).Capability(binding.capability).Docs(binding.docs)
 	}
 	return imports
 }
@@ -606,7 +602,7 @@ func InfoImports() wago.Imports {
 // configuration is accepted because low-level imports cannot own configured
 // protocol resources or lifecycle state; configured callers must fail closed
 // and use the Runtime provider path instead.
-func Imports(config Config) wago.Imports {
+func Imports(config Config) *wago.Imports {
 	if !lowLevelImportsAllowed(config) {
 		return nil
 	}
@@ -627,9 +623,9 @@ func policyConfigConfigured(config policy.Config) bool {
 		len(config.BroadcastTransports) != 0 || len(config.PrivilegedBindTransports) != 0
 }
 
-func registerBindings(module *wago.ImportModuleBuilder, bindings []binding) {
+func registerBindings(imports *wago.HostImportRegistrar, module string, bindings []binding) {
 	for _, binding := range bindings {
-		module.Func(binding.name, binding.fn).
+		imports.HostFunc(module, binding.name, binding.callback()).
 			Params(binding.params...).
 			Results(binding.results...).
 			Capability(binding.capability).
@@ -639,11 +635,17 @@ func registerBindings(module *wago.ImportModuleBuilder, bindings []binding) {
 
 type binding struct {
 	name       string
-	fn         wago.HostFunc
+	fn         plugin.HostFunc
 	params     []wago.ValType
 	results    []wago.ValType
 	capability wago.Capability
 	docs       string
+}
+
+func (b binding) callback() wago.CallerHostCallFunc {
+	return func(caller wago.Caller, call wago.HostCall) {
+		b.fn(caller, call.ParamSlots(), call.ResultSlots())
+	}
 }
 
 func (e *Network) bindings() []binding {

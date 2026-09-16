@@ -14,12 +14,13 @@ import (
 	"github.com/wago-org/net/internal/namespace"
 	nscore "github.com/wago-org/net/internal/namespace/core"
 	"github.com/wago-org/net/internal/packetlink"
+	"github.com/wago-org/net/internal/plugin"
 	"github.com/wago-org/net/internal/policy"
 	"github.com/wago-org/net/internal/quota"
 	"github.com/wago-org/net/internal/resource"
 	wago "github.com/wago-org/wago"
 	"github.com/wago-org/wago/src/core/compiler/wasm"
-	"github.com/wago-org/wago/tests/wasmtest"
+	"github.com/wago-org/wago/tests/support/wasmtest"
 )
 
 type guestDNSNamespace struct {
@@ -125,9 +126,9 @@ func TestDNSBindingsAreRegisteredOnlyAsCompleteTable(t *testing.T) {
 	if !foundCapability {
 		t.Fatal("complete DNS capability was not advertised")
 	}
-	for name := range InfoImports() {
-		if len(name) >= len(DNSModule)+1 && name[:len(DNSModule)+1] == DNSModule+"." {
-			t.Fatalf("low-level stateless imports exposed DNS resource function %q", name)
+	for _, binding := range extension.dnsBindings() {
+		if _, ok := InfoImports().Lookup(DNSModule, binding.name); ok {
+			t.Fatalf("low-level stateless imports exposed DNS resource function %q", binding.name)
 		}
 	}
 }
@@ -143,7 +144,7 @@ func TestGuestDNSUnavailableNamespaceAndCapabilityGate(t *testing.T) {
 	if err != nil {
 		t.Fatalf("instantiate empty DNS guest: %v", err)
 	}
-	host := udpHostModule{instance: instance, memory: instance.Memory().Bytes()}
+	host := udpHostModule{instance: instance, memory: instance.Memory().UnsafeBytes()}
 	copy(host.memory[:16], bytes.Repeat([]byte{0x5a}, 16))
 	before := append([]byte(nil), host.memory[:16]...)
 	if got := callRegisteredDNS(t, runtime, "namespace_default", host, 0); got != StatusNotSupported {
@@ -185,7 +186,7 @@ func TestRegisteredGuestDNSActualBackendSmoke(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer instance.Close()
-	host := udpHostModule{instance: instance, memory: instance.Memory().Bytes()}
+	host := udpHostModule{instance: instance, memory: instance.Memory().UnsafeBytes()}
 	if got := callRegisteredDNS(t, runtime, "namespace_default", host, 300); got != StatusOK {
 		t.Fatalf("registered DNS namespace = %v", got)
 	}
@@ -577,7 +578,7 @@ func newGuestDNSHarness(t testing.TB, queries ...*guestDNSQuery) (*Network, *ins
 	return &Network{instances: manager}, state, backend, udpHostModule{instance: wagoInstance, memory: make([]byte, 2048)}
 }
 
-func callDNS(function wago.HostFunc, host udpHostModule, params ...uint64) Status {
+func callDNS(function plugin.HostFunc, host udpHostModule, params ...uint64) Status {
 	var results [1]uint64
 	function(host, params, results[:])
 	return Status(int32(results[0]))
@@ -645,7 +646,7 @@ func newActualGuestDNSInstance(t testing.TB, id byte) (*Network, *wago.Instance,
 		t.Fatalf("instantiate DNS guest: %v", err)
 	}
 	t.Cleanup(func() { _ = instance.Close() })
-	return extension, instance, udpHostModule{instance: instance, memory: instance.Memory().Bytes()}
+	return extension, instance, udpHostModule{instance: instance, memory: instance.Memory().UnsafeBytes()}
 }
 
 func actualGuestDNSNamespaceHandle(t testing.TB, extension *Network, host udpHostModule) resource.Handle {

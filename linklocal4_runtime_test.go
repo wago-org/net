@@ -88,7 +88,7 @@ func TestActualBackendGuestLinkLocal4SuccessfulFixedABILifecycle(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	host := runtimeLinkLocalHost{instance: instance, memory: instance.Memory().Bytes()}
+	host := runtimeLinkLocalHost{instance: instance, memory: instance.Memory().UnsafeBytes()}
 	copy(host.memory[:512], bytes.Repeat([]byte{0xa5}, 512))
 	state, ok := extension.instanceManager().SingleState()
 	if !ok {

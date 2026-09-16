@@ -14,7 +14,7 @@ import (
 	"github.com/wago-org/net/udp"
 	wago "github.com/wago-org/wago"
 	"github.com/wago-org/wago/src/core/compiler/wasm"
-	"github.com/wago-org/wago/tests/wasmtest"
+	"github.com/wago-org/wago/tests/support/wasmtest"
 )
 
 func TestRegisterExposesOnlyUDPAndSharedCore(t *testing.T) {
@@ -113,7 +113,7 @@ func TestDefaultUDPAllowsEphemeralUnicastAndDeniesServerSpecialAndCallerDeniedAu
 		t.Fatalf("Instantiate: %v", err)
 	}
 	defer instance.Close()
-	host := exactHost{instance: instance, memory: instance.Memory().Bytes()}
+	host := exactHost{instance: instance, memory: instance.Memory().UnsafeBytes()}
 	if got := callUDP(t, runtime, host, "namespace_default", 0); got != wagonet.StatusOK {
 		t.Fatalf("namespace_default = %v", got)
 	}
@@ -170,7 +170,7 @@ func TestDefaultUDPStorageFitsSharedDefaultsAndStopsAtEightSockets(t *testing.T)
 		t.Fatalf("Instantiate: %v", err)
 	}
 	defer instance.Close()
-	host := exactHost{instance: instance, memory: instance.Memory().Bytes()}
+	host := exactHost{instance: instance, memory: instance.Memory().UnsafeBytes()}
 	if got := callUDP(t, runtime, host, "namespace_default", 0); got != wagonet.StatusOK {
 		t.Fatalf("namespace_default = %v", got)
 	}

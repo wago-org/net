@@ -14,13 +14,14 @@ import (
 	instance "github.com/wago-org/net/internal/instance/core"
 	"github.com/wago-org/net/internal/namespace"
 	nscore "github.com/wago-org/net/internal/namespace/core"
+	"github.com/wago-org/net/internal/plugin"
 	"github.com/wago-org/net/internal/policy"
 	"github.com/wago-org/net/internal/quota"
 	"github.com/wago-org/net/internal/readiness"
 	"github.com/wago-org/net/internal/resource"
 	wago "github.com/wago-org/wago"
 	"github.com/wago-org/wago/src/core/compiler/wasm"
-	"github.com/wago-org/wago/tests/wasmtest"
+	"github.com/wago-org/wago/tests/support/wasmtest"
 )
 
 func TestTCPBindingsAreRegisteredOnlyAsCompleteTable(t *testing.T) {
@@ -45,12 +46,12 @@ func TestTCPBindingsAreRegisteredOnlyAsCompleteTable(t *testing.T) {
 	if !foundCapability {
 		t.Fatal("complete TCP capability was not advertised")
 	}
-	if imports := Imports(guestTCPConfig(1, 2)); len(imports) != 0 {
+	if imports := Imports(guestTCPConfig(1, 2)); imports != nil {
 		t.Fatalf("configured low-level imports = %v, want none", imports)
 	}
-	for name := range InfoImports() {
-		if len(name) >= len(TCPModule)+1 && name[:len(TCPModule)+1] == TCPModule+"." {
-			t.Fatalf("low-level stateless imports exposed TCP resource function %q", name)
+	for _, binding := range extension.tcpBindings() {
+		if _, ok := InfoImports().Lookup(TCPModule, binding.name); ok {
+			t.Fatalf("low-level stateless imports exposed TCP resource function %q", binding.name)
 		}
 	}
 }
@@ -67,7 +68,7 @@ func TestGuestTCPUnavailableNamespaceIsTruthful(t *testing.T) {
 		t.Fatalf("Instantiate: %v", err)
 	}
 	defer instance.Close()
-	host := udpHostModule{instance: instance, memory: instance.Memory().Bytes()}
+	host := udpHostModule{instance: instance, memory: instance.Memory().UnsafeBytes()}
 	copy(host.memory[:16], bytes.Repeat([]byte{0x5a}, 16))
 	before := append([]byte(nil), host.memory[:16]...)
 	if got := callRegisteredTCP(t, runtime, "namespace_default", host, 0); got != StatusNotSupported {
@@ -319,7 +320,7 @@ func TestGuestTCPConnectRollsBackInvalidBackendDescriptor(t *testing.T) {
 		t.Fatalf("instantiate: %v", err)
 	}
 	defer inst.Close()
-	host := udpHostModule{instance: inst, memory: inst.Memory().Bytes()}
+	host := udpHostModule{instance: inst, memory: inst.Memory().UnsafeBytes()}
 	namespaceHandle := guestTCPNamespace(t, extension, host)
 	encodeGuestEndpoint(t, host.memory, 0, endpointFor(31, 4631))
 	before := append([]byte(nil), host.memory...)
@@ -497,7 +498,7 @@ func TestGuestTCPAcceptRollsBackInvalidDescriptor(t *testing.T) {
 		t.Fatalf("instantiate: %v", err)
 	}
 	defer inst.Close()
-	host := udpHostModule{instance: inst, memory: inst.Memory().Bytes()}
+	host := udpHostModule{instance: inst, memory: inst.Memory().UnsafeBytes()}
 	copy(host.memory[:256], bytes.Repeat([]byte{0x5a}, 256))
 	state, _ := manager.SingleState()
 	listenerHandle, err := state.Resources().Add(resource.KindTCPListener, listener)
@@ -637,7 +638,7 @@ func instantiateGuestTCP(t testing.TB, config Config) (*Network, *wago.Runtime, 
 	if err != nil {
 		t.Fatalf("Instantiate TCP guest: %v", err)
 	}
-	return extension, runtime, instance, udpHostModule{instance: instance, memory: instance.Memory().Bytes()}
+	return extension, runtime, instance, udpHostModule{instance: instance, memory: instance.Memory().UnsafeBytes()}
 }
 
 func guestTCPConfig(localLast, gatewayLast byte) Config {
@@ -704,7 +705,7 @@ func callTCP(t testing.TB, extension *Network, name string, host udpHostModule, 
 	return Status(wago.AsI32(results[0]))
 }
 
-func findTCPBinding(extension *Network, name string) wago.HostFunc {
+func findTCPBinding(extension *Network, name string) plugin.HostFunc {
 	for _, candidate := range extension.tcpBindings() {
 		if candidate.name == name {
 			return candidate.fn

@@ -64,7 +64,7 @@ func TestSelectiveMDNSRegistrationAndActualBackendLifecycle(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer instance.Close()
-	host := hostModule{instance: instance, memory: instance.Memory().Bytes()}
+	host := hostModule{instance: instance, memory: instance.Memory().UnsafeBytes()}
 	if got := callImport(t, runtime, host, "namespace_default", 1500); got != guest.StatusOK {
 		t.Fatalf("namespace_default = %v", got)
 	}
@@ -154,7 +154,7 @@ func TestMDNSDenyWinsAndOptionsAreFinite(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer instance.Close()
-	host := hostModule{instance: instance, memory: instance.Memory().Bytes()}
+	host := hostModule{instance: instance, memory: instance.Memory().UnsafeBytes()}
 	if got := callImport(t, runtime, host, "namespace_default", 400); got != guest.StatusOK {
 		t.Fatal(got)
 	}

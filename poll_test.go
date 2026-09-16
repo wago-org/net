@@ -9,6 +9,7 @@ import (
 
 	"github.com/wago-org/net/internal/namespace"
 	"github.com/wago-org/net/internal/packetlink"
+	"github.com/wago-org/net/internal/plugin"
 	"github.com/wago-org/net/internal/quota"
 	"github.com/wago-org/net/internal/resource"
 	wago "github.com/wago-org/wago"
@@ -252,7 +253,7 @@ func BenchmarkGuestUDPPoll(b *testing.B) {
 	extension, _, instance, host := newGuestUDPInstance(b, 71, 72)
 	defer instance.Close()
 	writePollBudget(host.memory, 0, 2, 2, 0, 0, 0, 0)
-	var poll wago.HostFunc
+	var poll plugin.HostFunc
 	for _, binding := range extension.udpBindings() {
 		if binding.name == "poll" {
 			poll = binding.fn

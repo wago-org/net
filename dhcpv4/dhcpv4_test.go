@@ -110,7 +110,7 @@ func TestActualBackendExactLeaseLifecycleAndDenyWins(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer instance.Close()
-	host := hostModule{instance: instance, memory: instance.Memory().Bytes()}
+	host := hostModule{instance: instance, memory: instance.Memory().UnsafeBytes()}
 	if got := callImport(t, runtime, host, "namespace_default", 400); got != guest.StatusOK {
 		t.Fatal(got)
 	}
@@ -140,7 +140,7 @@ func TestActualBackendExactLeaseLifecycleAndDenyWins(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer instance2.Close()
-	host2 := hostModule{instance: instance2, memory: instance2.Memory().Bytes()}
+	host2 := hostModule{instance: instance2, memory: instance2.Memory().UnsafeBytes()}
 	if callImport(t, runtime2, host2, "namespace_default", 400) != guest.StatusOK {
 		t.Fatal("namespace")
 	}
