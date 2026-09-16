@@ -48,11 +48,8 @@ func consumerProvider(consumer *contractConsumer, networkID string) wago.PluginP
 			if err != nil {
 				return err
 			}
-			module, err := imports.Module("net_consumer")
-			if err != nil {
-				return err
-			}
-			module.Func("ready", func(caller wago.HostModule, _, results []uint64) {
+			imports.HostFunc("net_consumer", "ready", func(caller wago.Caller, call wago.HostCall) {
+				results := call.ResultSlots()
 				if len(results) != 1 {
 					return
 				}
@@ -142,7 +139,7 @@ func TestNetworkContractGraphCallerIdentityInFlightAndRevocation(t *testing.T) {
 		if service.ImportModules()[0] == "mutated" {
 			return errors.New("network service leaked mutable topology")
 		}
-		forged := udpHostModule{instance: instance, memory: instance.Memory().Bytes()}
+		forged := udpHostModule{instance: instance, memory: instance.Memory().UnsafeBytes()}
 		if service.Ready(forged) {
 			return errors.New("network service accepted a forged caller module")
 		}

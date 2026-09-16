@@ -14,7 +14,7 @@ import (
 	dnsns "github.com/wago-org/net/internal/namespace/dns"
 	wago "github.com/wago-org/wago"
 	"github.com/wago-org/wago/src/core/compiler/wasm"
-	"github.com/wago-org/wago/tests/wasmtest"
+	"github.com/wago-org/wago/tests/support/wasmtest"
 )
 
 func TestRegisterExposesOnlyDNSAndSharedCore(t *testing.T) {
@@ -117,7 +117,7 @@ func TestDefaultDNSResolverAllowsFiniteQueriesAndCallerDenyWins(t *testing.T) {
 		t.Fatalf("Instantiate: %v", err)
 	}
 	defer instance.Close()
-	host := exactHost{instance: instance, memory: instance.Memory().Bytes()}
+	host := exactHost{instance: instance, memory: instance.Memory().UnsafeBytes()}
 	if got := callDNS(t, runtime, host, "namespace_default", 900); got != wagonet.StatusOK {
 		t.Fatalf("namespace_default = %v", got)
 	}
@@ -158,7 +158,7 @@ func TestDefaultDNSStorageFitsSharedDefaultsAndStopsAtEightQueries(t *testing.T)
 		t.Fatalf("Instantiate: %v", err)
 	}
 	defer instance.Close()
-	host := exactHost{instance: instance, memory: instance.Memory().Bytes()}
+	host := exactHost{instance: instance, memory: instance.Memory().UnsafeBytes()}
 	if got := callDNS(t, runtime, host, "namespace_default", 900); got != wagonet.StatusOK {
 		t.Fatalf("namespace_default = %v", got)
 	}

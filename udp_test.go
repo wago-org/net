@@ -13,10 +13,11 @@ import (
 	"github.com/wago-org/net/internal/namespace"
 	nscore "github.com/wago-org/net/internal/namespace/core"
 	"github.com/wago-org/net/internal/packetlink"
+	"github.com/wago-org/net/internal/plugin"
 	"github.com/wago-org/net/internal/resource"
 	wago "github.com/wago-org/wago"
 	"github.com/wago-org/wago/src/core/compiler/wasm"
-	"github.com/wago-org/wago/tests/wasmtest"
+	"github.com/wago-org/wago/tests/support/wasmtest"
 )
 
 type udpHostModule struct {
@@ -39,7 +40,7 @@ func TestGuestUDPUnavailableNamespaceIsTruthful(t *testing.T) {
 		t.Fatalf("Instantiate: %v", err)
 	}
 	defer instance.Close()
-	host := udpHostModule{instance: instance, memory: instance.Memory().Bytes()}
+	host := udpHostModule{instance: instance, memory: instance.Memory().UnsafeBytes()}
 	copy(host.memory[:16], bytes.Repeat([]byte{0x5a}, 16))
 	before := append([]byte(nil), host.memory[:16]...)
 	if got := callUDP(t, extension, "namespace_default", host, 0); got != StatusNotSupported {
@@ -241,7 +242,7 @@ func newGuestUDPInstance(t testing.TB, localLast, gatewayLast byte) (*Network, *
 	if err != nil {
 		t.Fatalf("Instantiate UDP guest: %v", err)
 	}
-	return extension, runtime, instance, udpHostModule{instance: instance, memory: instance.Memory().Bytes()}
+	return extension, runtime, instance, udpHostModule{instance: instance, memory: instance.Memory().UnsafeBytes()}
 }
 
 func runtimeForNetwork(t testing.TB, extension *Network) *wago.Runtime {
@@ -291,7 +292,7 @@ func callUDP(t testing.TB, extension *Network, name string, host udpHostModule, 
 		}
 		return Status(wago.AsI32(results[0]))
 	}
-	var binding wago.HostFunc
+	var binding plugin.HostFunc
 	for _, candidate := range extension.udpBindings() {
 		if candidate.name == name {
 			binding = candidate.fn

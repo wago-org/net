@@ -104,7 +104,7 @@ func TestPublicTLSRegistrationLoopbackOptionControlsOnlyTLSConnect(t *testing.T)
 				t.Fatal(err)
 			}
 			defer instance.Close()
-			host := tlsExactHost{instance: instance, memory: instance.Memory().Bytes()}
+			host := tlsExactHost{instance: instance, memory: instance.Memory().UnsafeBytes()}
 			if got := callTLS(t, runtime, host, "namespace_default", 0); got != wagonet.StatusOK {
 				t.Fatalf("namespace_default = %v", got)
 			}

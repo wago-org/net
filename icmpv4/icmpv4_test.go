@@ -72,7 +72,7 @@ func TestSelectiveICMPv4RegistrationAndActualBackendLifecycle(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer instance.Close()
-	host := hostModule{instance: instance, memory: instance.Memory().Bytes()}
+	host := hostModule{instance: instance, memory: instance.Memory().UnsafeBytes()}
 	if got := callImport(t, runtime, host, "namespace_default", 80); got != guest.StatusOK {
 		t.Fatalf("namespace_default = %v", got)
 	}
@@ -154,7 +154,7 @@ func TestICMPv4DenyWinsAndCheckedMemoryPrecedesWork(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer instance.Close()
-	host := hostModule{instance: instance, memory: instance.Memory().Bytes()}
+	host := hostModule{instance: instance, memory: instance.Memory().UnsafeBytes()}
 	if got := callImport(t, runtime, host, "namespace_default", 80); got != guest.StatusOK {
 		t.Fatal(got)
 	}

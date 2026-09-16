@@ -338,7 +338,7 @@ func attachManager(t testing.TB, backend ntpns.Namespace) (*instancecore.Manager
 	return manager, instance
 }
 
-func bindingByName(t testing.TB, bindings []plugin.Binding, name string) wago.HostFunc {
+func bindingByName(t testing.TB, bindings []plugin.Binding, name string) plugin.HostFunc {
 	t.Helper()
 	for _, binding := range bindings {
 		if binding.Name == name {
@@ -349,7 +349,7 @@ func bindingByName(t testing.TB, bindings []plugin.Binding, name string) wago.Ho
 	return nil
 }
 
-func callBinding(t testing.TB, function wago.HostFunc, host testHost, params ...uint64) guest.Status {
+func callBinding(t testing.TB, function plugin.HostFunc, host testHost, params ...uint64) guest.Status {
 	t.Helper()
 	var results [1]uint64
 	function(host, params, results[:])

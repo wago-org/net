@@ -10,7 +10,7 @@ import (
 	netregister "github.com/wago-org/net/ipv6/register"
 	wago "github.com/wago-org/wago"
 	"github.com/wago-org/wago/src/core/compiler/wasm"
-	"github.com/wago-org/wago/tests/wasmtest"
+	"github.com/wago-org/wago/tests/support/wasmtest"
 )
 
 func TestIPv6FactoryHasExactRuntimeSurface(t *testing.T) {
