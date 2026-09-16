@@ -4,5 +4,5 @@ go 1.24
 
 require (
 	github.com/soypat/lneto v0.0.0-20260710133615-ab1a0c735a8b
-	github.com/wago-org/wago v0.1.0-beta.8.0.20260916033857-43d658fadbdf
+	github.com/wago-org/wago v0.1.0-beta.8.0.20260916041951-35866fb07970
 )
