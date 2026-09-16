@@ -20,7 +20,7 @@ func TestCIPrepareDependenciesSelectsExactWorktrees(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, revision := range []string{
-		"1c58c9862d25a0a564786284a1967831f1ae9d61",
+		"6f31d3371e1d7f19fd2eb8eac41f8416eedee233",
 		"ab1a0c735a8b534a1d6322a3e245bc11a09431e7",
 	} {
 		if !strings.Contains(string(scriptData), revision) {
