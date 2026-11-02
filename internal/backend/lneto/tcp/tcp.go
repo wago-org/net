@@ -24,6 +24,8 @@ const (
 	ingressOrder                    = 15
 	closeOrder                      = 20
 	maxEagerTCPListenerStorageBytes = 256 << 20
+	maxIdleTCPReuseStorageBytes     = 1 << 20
+	maxIdleTCPListenerSlots         = 256
 	maxTCPStreamCapacityHint        = 16
 )
 
@@ -42,10 +44,10 @@ type Adapter struct {
 	quotas              *quota.Account
 	config              Config
 	listeners           []*tcpListener
-	freeListenerPools   []tcpPool
+	freeListenerPool    tcpPool
 	streams             []*tcpStream
 	outboundStreams     int
-	freeOutboundStorage [][]byte
+	freeOutboundStorage *tcpOutboundStorage
 	portOwner           *lnetocore.TCPPortOwner
 	nextISS             lnetotcp.Value
 }
@@ -95,9 +97,8 @@ func New(common *lnetocore.Namespace, config Config) (*Adapter, error) {
 		common.Unlock()
 		return n, nil
 	}
-	n.listeners = make([]*tcpListener, 0, config.MaxListeners)
+	n.listeners = make([]*tcpListener, 0, listenerCapacityHint(config))
 	n.streams = make([]*tcpStream, 0, streamCapacityHint(config))
-	n.prepareReusePools()
 	common.Unlock()
 	if err := common.Install(lnetocore.Participant{IngressOrder: ingressOrder, Ingress: n.ingressLocked, CloseOrder: closeOrder, Close: n.CloseLocked}); err != nil {
 		return nil, err
@@ -167,6 +168,14 @@ func tcpStreamStorageBytes(config Config) (uint64, bool) {
 	return checked.AddUint64(uint64(config.ReceiveBytes), uint64(config.TransmitBytes))
 }
 
+func listenerCapacityHint(config Config) int {
+	hint := uint64(config.MaxListeners)
+	if hint > maxTCPStreamCapacityHint {
+		hint = maxTCPStreamCapacityHint
+	}
+	return int(hint)
+}
+
 func streamCapacityHint(config Config) int {
 	hint := uint64(config.MaxListeners) + uint64(config.MaxOutboundStreams)
 	if hint > maxTCPStreamCapacityHint {
@@ -175,32 +184,19 @@ func streamCapacityHint(config Config) int {
 	return int(hint)
 }
 
-func (n *Adapter) prepareReusePools() {
-	if n == nil {
-		return
-	}
-	if n.config.MaxListeners > 0 {
-		n.freeListenerPools = make([]tcpPool, 0, n.config.MaxListeners)
-	}
-	if n.config.MaxOutboundStreams > 0 {
-		n.freeOutboundStorage = make([][]byte, 0, n.config.MaxOutboundStreams)
-	}
-}
-
 func (n *Adapter) acquireListenerLocked(local nscore.Endpoint) (*tcpListener, error) {
 	if n == nil {
 		return nil, lneto.ErrInvalidConfig
 	}
-	var pool tcpPool
-	if len(n.freeListenerPools) == 0 {
+	pool := n.freeListenerPool
+	n.freeListenerPool = tcpPool{}
+	if pool.slots == nil {
 		created, err := newTCPPool(n, n.config.AcceptBacklog, n.config)
 		if err != nil {
 			return nil, err
 		}
 		pool = created
 	} else {
-		pool = n.freeListenerPools[len(n.freeListenerPools)-1]
-		n.freeListenerPools = n.freeListenerPools[:len(n.freeListenerPools)-1]
 		pool.resetLocked(n)
 	}
 	return &tcpListener{owner: n, local: local, pool: pool}, nil
@@ -211,7 +207,11 @@ func (n *Adapter) recycleListenerLocked(listener *tcpListener) {
 		return
 	}
 	listener.pool.releaseLocked()
-	n.freeListenerPools = append(n.freeListenerPools, listener.pool)
+	if n.freeListenerPool.slots == nil && len(listener.pool.slots) <= maxIdleTCPListenerSlots && len(listener.pool.storage) <= maxIdleTCPReuseStorageBytes {
+		n.freeListenerPool = listener.pool
+	} else {
+		listener.pool.destroyLocked()
+	}
 	listener.pool = tcpPool{}
 	listener.listener = lnetotcp.Listener{}
 	listener.local = nscore.Endpoint{}
@@ -224,34 +224,61 @@ func (n *Adapter) prepareOutboundStreamLocked(stream *tcpStream, retained uint64
 	if n == nil || stream == nil || stream.owner != n || stream.portLease.TCPPort() == 0 {
 		return lneto.ErrInvalidConfig
 	}
-	if err := n.quotas.AcquireResourceAndQueuedBytes(&stream.retained, quota.ResourceTCP, 1, retained); err != nil {
+	storage := n.freeOutboundStorage
+	reused := storage != nil
+	n.freeOutboundStorage = nil
+	if storage == nil {
+		storage = new(tcpOutboundStorage)
+	}
+	stream.outboundStorage = storage
+	if err := n.quotas.AcquireResourceAndQueuedBytes(&storage.retained, quota.ResourceTCP, 1, retained); err != nil {
+		storage.retained = quota.Charge{}
+		if reused {
+			n.freeOutboundStorage = storage
+		}
+		stream.outboundStorage = nil
 		return err
 	}
-	stream.allocation = &stream.retained
-	if len(n.freeOutboundStorage) == 0 {
-		stream.storage = make([]byte, int(retained))
-	} else {
-		stream.storage = n.freeOutboundStorage[len(n.freeOutboundStorage)-1]
-		n.freeOutboundStorage = n.freeOutboundStorage[:len(n.freeOutboundStorage)-1]
+	if storage.bytes == nil {
+		storage.bytes = make([]byte, int(retained))
 	}
+	stream.conn = &stream.connValue
+	stream.storage = storage.bytes
+	stream.allocation = &storage.retained
 	return nil
+}
+
+func (n *Adapter) recycleOutboundStorageLocked(storage *tcpOutboundStorage) {
+	if n == nil || storage == nil {
+		return
+	}
+	storage.retained = quota.Charge{}
+	clear(storage.bytes)
+	if n.freeOutboundStorage == nil && len(storage.bytes) <= maxIdleTCPReuseStorageBytes {
+		n.freeOutboundStorage = storage
+	} else {
+		storage.bytes = nil
+	}
 }
 
 func (n *Adapter) recycleOutboundStreamLocked(stream *tcpStream) {
 	if n == nil || stream == nil {
 		return
 	}
-	clear(stream.storage)
-	n.freeOutboundStorage = append(n.freeOutboundStorage, stream.storage)
+	if stream.outboundStorage != nil {
+		n.recycleOutboundStorageLocked(stream.outboundStorage)
+	} else {
+		clear(stream.storage)
+	}
 	stream.conn = nil
 	stream.connValue = lnetotcp.Conn{}
 	stream.storage = nil
+	stream.outboundStorage = nil
 	stream.local = nscore.Endpoint{}
 	stream.remote = nscore.Endpoint{}
 	stream.portLease = lnetocore.TCPPortLease{}
 	stream.slot = nil
 	stream.allocation = nil
-	stream.retained = quota.Charge{}
 	stream.connected = false
 	stream.shutdown = false
 	stream.terminal = false
@@ -270,17 +297,22 @@ type tcpListener struct {
 	closed    bool
 }
 
+type tcpOutboundStorage struct {
+	retained quota.Charge
+	bytes    []byte
+}
+
 type tcpStream struct {
-	owner     *Adapter
-	conn      *lnetotcp.Conn
-	connValue lnetotcp.Conn
-	storage   []byte
-	local     nscore.Endpoint
-	remote    nscore.Endpoint
-	slot      *tcpPoolSlot
+	owner           *Adapter
+	conn            *lnetotcp.Conn
+	connValue       lnetotcp.Conn
+	storage         []byte
+	outboundStorage *tcpOutboundStorage
+	local           nscore.Endpoint
+	remote          nscore.Endpoint
+	slot            *tcpPoolSlot
 
 	allocation *quota.Charge
-	retained   quota.Charge
 	portLease  lnetocore.TCPPortLease
 	connected  bool
 	shutdown   bool
@@ -292,6 +324,7 @@ type tcpStream struct {
 type tcpPool struct {
 	owner   *Adapter
 	slots   []tcpPoolSlot
+	storage []byte
 	nextISS lnetotcp.Value
 }
 
@@ -311,14 +344,14 @@ func newTCPPool(owner *Adapter, count uint16, config Config) (tcpPool, error) {
 		return pool, nil
 	}
 	stride, _ := tcpStreamStorageBytes(config)
-	storage := make([]byte, int(uint64(count)*stride))
+	pool.storage = make([]byte, int(uint64(count)*stride))
 	strideBytes := int(stride)
 	for i := range pool.slots {
 		start := i * strideBytes
 		rxEnd := start + config.ReceiveBytes
 		if err := pool.slots[i].conn.Configure(lnetotcp.ConnConfig{
-			RxBuf:             storage[start:rxEnd],
-			TxBuf:             storage[rxEnd : start+strideBytes],
+			RxBuf:             pool.storage[start:rxEnd],
+			TxBuf:             pool.storage[rxEnd : start+strideBytes],
 			TxPacketQueueSize: config.TransmitPackets,
 			RWBackoff:         immediateBackoff,
 		}); err != nil {
@@ -412,6 +445,7 @@ func (p *tcpPool) releaseLocked() {
 		slot.inUse = false
 		slot.quotaOwned = false
 	}
+	clear(p.storage)
 }
 
 func (p *tcpPool) destroyLocked() {
@@ -420,6 +454,7 @@ func (p *tcpPool) destroyLocked() {
 	}
 	p.releaseLocked()
 	p.slots = nil
+	p.storage = nil
 	p.owner = nil
 }
 
@@ -685,7 +720,7 @@ func (n *Adapter) TryConnectAuthorized(remote nscore.Endpoint, authorize Connect
 		stream.portLease.ReleaseLocked()
 		return nil, 0, lnetocore.MapError(err)
 	}
-	conn := &stream.connValue
+	conn := stream.conn
 	if err := conn.Configure(lnetotcp.ConnConfig{
 		RxBuf:             stream.storage[:n.config.ReceiveBytes],
 		TxBuf:             stream.storage[n.config.ReceiveBytes:],
@@ -693,7 +728,7 @@ func (n *Adapter) TryConnectAuthorized(remote nscore.Endpoint, authorize Connect
 		RWBackoff:         immediateBackoff,
 	}); err != nil {
 		stream.allocation.Release()
-		stream.retained.ResetReleased()
+		stream.outboundStorage.retained.ResetReleased()
 		stream.portLease.ReleaseLocked()
 		n.recycleOutboundStreamLocked(stream)
 		return nil, 0, lnetocore.MapError(err)
@@ -701,7 +736,7 @@ func (n *Adapter) TryConnectAuthorized(remote nscore.Endpoint, authorize Connect
 	if err := n.stack.DialTCP(conn, localPort, netip.AddrPortFrom(remote.Address, remote.Port)); err != nil {
 		conn.Abort()
 		stream.allocation.Release()
-		stream.retained.ResetReleased()
+		stream.outboundStorage.retained.ResetReleased()
 		stream.portLease.ReleaseLocked()
 		n.recycleOutboundStreamLocked(stream)
 		return nil, 0, lnetocore.MapError(err)
@@ -1045,8 +1080,8 @@ func (s *tcpStream) closeLocked() error {
 	}
 	if s.allocation != nil {
 		s.allocation.Release()
-		if s.allocation == &s.retained {
-			s.retained.ResetReleased()
+		if s.outboundStorage != nil && s.allocation == &s.outboundStorage.retained {
+			s.outboundStorage.retained.ResetReleased()
 		}
 		s.allocation = nil
 	}
@@ -1114,14 +1149,13 @@ func (n *Adapter) CloseLocked() {
 	for len(n.streams) > 0 {
 		n.streams[len(n.streams)-1].closeLocked()
 	}
-	for i := range n.freeListenerPools {
-		n.freeListenerPools[i].destroyLocked()
-	}
-	for i := range n.freeOutboundStorage {
-		clear(n.freeOutboundStorage[i])
+	n.freeListenerPool.destroyLocked()
+	if n.freeOutboundStorage != nil {
+		n.recycleOutboundStorageLocked(n.freeOutboundStorage)
+		n.freeOutboundStorage = nil
 	}
 	n.portOwner = nil
-	n.freeListenerPools = nil
+	n.freeListenerPool = tcpPool{}
 	n.listeners = nil
 	n.freeOutboundStorage = nil
 	n.streams = nil
