@@ -108,7 +108,7 @@ echo "ok  $3  0.001s"
 	for _, want := range []string{
 		"TIMEOUT github.com/wago-org/net after 1s (attempt 1/2); retrying",
 		"PASS github.com/wago-org/net (attempt 2/2)",
-		"all 123 supported packages passed",
+		"all 124 supported packages passed",
 	} {
 		if !bytes.Contains(output, []byte(want)) {
 			t.Fatalf("TinyGo timeout retry output omits %q\n%s", want, output)

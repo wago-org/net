@@ -1671,7 +1671,7 @@ No repository-owned workstream or completion criterion from this hardening reque
   configurable for focused validation but remain finite and fail closed.
 - Added a regression with a fake TinyGo process that wedges the root package on
   its first attempt, proving the watchdog retries exactly once and still covers
-  all 123 supported packages.
+  all 124 supported packages.
 - The remaining feature backlog at that point was HTTP/HTTPS APIs, portable
   TinyGo TLS, executed arm64 evidence, strict release adoption, and the
   separately documented protocol-expansion exclusions.
