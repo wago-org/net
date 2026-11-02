@@ -15,6 +15,10 @@ func BenchmarkTLS13Handshake(b *testing.B) {
 	profile := secureTestProfile(roots, "api.example.com")
 	profile.Config.NextProtos = []string{"h2"}
 	profile.RequiredALPN = "h2"
+	profile, err := profile.Clone()
+	if err != nil {
+		b.Fatal(err)
+	}
 	b.ReportAllocs()
 	for b.Loop() {
 		serverBridge := newBridgeConn(64<<10, 64<<10, 1<<20)
@@ -66,6 +70,10 @@ func BenchmarkTLS13ServerHandshake(b *testing.B) {
 		},
 		RequiredALPN: "h2", MaxCertificateChainBytes: 64 << 10, MaxPeerCertificates: 4,
 	}
+	profile, err := profile.Clone()
+	if err != nil {
+		b.Fatal(err)
+	}
 	b.ReportAllocs()
 	for b.Loop() {
 		clientBridge := newBridgeConn(64<<10, 64<<10, 1<<20)
@@ -90,6 +98,34 @@ func BenchmarkTLS13ServerHandshake(b *testing.B) {
 			runtime.Gosched()
 		}
 		if err := <-clientDone; err != nil {
+			b.Fatal(err)
+		}
+		if err := server.Close(); err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
+func BenchmarkTLS13ServerStreamConstructionWithLargeImmutableProfile(b *testing.B) {
+	certificate, _ := testCertificate(b, "server.example.com")
+	certificate.OCSPStaple = make([]byte, 64<<10)
+	certificate.SignedCertificateTimestamps = [][]byte{make([]byte, 16<<10), make([]byte, 16<<10)}
+	profile := ServerProfile{
+		ID: 10,
+		Config: &cryptotls.Config{
+			Certificates: []cryptotls.Certificate{certificate}, MinVersion: cryptotls.VersionTLS13,
+			MaxVersion: cryptotls.VersionTLS13, SessionTicketsDisabled: true,
+		},
+		MaxCertificateChainBytes: 256 << 10, MaxPeerCertificates: 4,
+	}
+	profile, err := profile.Clone()
+	if err != nil {
+		b.Fatal(err)
+	}
+	b.ReportAllocs()
+	for b.Loop() {
+		server, err := NewServer(&memoryTransport{peer: newBridgeConn(64<<10, 64<<10, 1<<20)}, profile, testLimits())
+		if err != nil {
 			b.Fatal(err)
 		}
 		if err := server.Close(); err != nil {

@@ -12,9 +12,13 @@ TCP ownership exactly once.
 Hosts construct immutable profiles with `NewClientProfile`, exact profile IDs,
 `AllowServerNames`, optional `RequireALPN`, and an ordinary `*crypto/tls.Config`.
 The configuration, roots, certificate DER, ALPN list, and name authority are
-cloned. Later caller mutation cannot change registration. Client certificate
-chains and leaf/key correspondence are parsed eagerly. Private keys stay in host
-memory and no certificate chain or private key appears in the guest ABI.
+cloned into an immutable registration/instance snapshot. Later caller mutation
+cannot change registration. Streams borrow that adapter-owned snapshot rather
+than deep-cloning trust pools, authority maps, and certificate data again; a
+client creates only the shallow per-connection `crypto/tls.Config` shell needed
+to set its authorized `ServerName`. Client certificate chains and leaf/key
+correspondence are parsed eagerly. Private keys stay in host memory and no
+certificate chain or private key appears in the guest ABI.
 
 The first release rejects `InsecureSkipVerify`, `KeyLogWriter`, renegotiation,
 verification callbacks, certificate-selection callbacks, caller-supplied clock
@@ -48,9 +52,13 @@ mentions those endpoint classes.
 Hosts construct server profiles with `NewServerProfile` and static certificate
 chains. Every DER certificate is parsed during profile construction, each chain
 link is signature-checked, and each leaf public key must match its private key.
-Certificate DER, OCSP staples, SCTs, ALPN, and CA pools are cloned. Private keys
-remain host-owned but are restricted to standard in-memory RSA, NIST ECDSA, and
-Ed25519 implementations. Arbitrary `crypto.Signer` wrappers and HSM callbacks are
+Certificate DER, OCSP staples, SCTs, ALPN, and CA pools are cloned into the
+immutable adapter snapshot. Accepted streams share that read-only snapshot;
+they do not recopy certificate chains, OCSP/SCT data, or client CA pools.
+Concurrent-handshake race coverage verifies the shared standard-library server
+configuration. Private keys remain host-owned but are restricted to standard
+in-memory RSA, NIST ECDSA, and Ed25519 implementations. Arbitrary
+`crypto.Signer` wrappers and HSM callbacks are
 rejected because `crypto.Signer.Sign` has no cancellation contract and could
 otherwise prevent deterministic worker teardown. Dynamic certificate/config
 selection and verification callbacks are also rejected. Client SNI may select
@@ -91,10 +99,12 @@ the graceful TLS stream path: it drains accepted plaintext and emits
 `close_notify`, while peer `close_notify` becomes stable EOF. Resource `close`
 remains the bounded abort path: it cancels the handshake, closes the bridge,
 wakes every condition wait, joins all three workers, clears retained plaintext,
-and aborts the private TCP stream without waiting for peer packets or
-acknowledgements. Shared namespace teardown joins workers, clears any bounded
-client resumption cache, and releases its quota before the private TCP
-participant releases transport state.
+ciphertext, scratch, channel-binding, connection-metadata, and profile references,
+drops their backing slices immediately, and aborts the private TCP stream without
+waiting for peer packets or acknowledgements. Worker-only shared-namespace
+teardown performs the same memory release before the private TCP participant
+releases transport state, then clears any bounded client resumption cache and its
+quota.
 
 The current bounded bridge is intentionally granular-only and experimental. It
 has a named standard-Go ordinary/race release check in `scripts/tls-signoff.sh`.
