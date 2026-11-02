@@ -258,8 +258,15 @@ Irrelevant records, unrequested address types, and semantic duplicates are
 ignored. Conflicting CNAME targets, CNAME loops, malformed compression,
 malformed resources, and retention-limit overflow fail closed. A successful
 response may contain no relevant records, in which case `next` returns `EOF`.
-Truncated UDP responses return `TEMPORARY_FAILURE`; ABI v1 does not implement
-DNS-over-TCP fallback.
+TCP fallback is a host registration option and does not change the six-function
+ABI. When disabled, truncated UDP responses return `TEMPORARY_FAILURE`. When
+`dns.EnableTCPFallback` is enabled, a valid correlated truncation response
+retires the UDP transport and starts one private TCP stream to the same resolver.
+The backend uses DNS's two-byte length framing and the existing query handle,
+record iterator, cancellation, close, and poll operations. Exact TCP response
+bytes, service attempts, TCP buffers, port ownership, quota, and teardown are
+bounded; raw-TCP denies apply, while no `net.tcp` capability or `wago_net_tcp`
+import is exposed.
 
 ## ICMPv4 module, signatures, and layouts
 
