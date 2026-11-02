@@ -9,6 +9,7 @@ import (
 	wagonet "github.com/wago-org/net"
 	tcptlsfixture "github.com/wago-org/net/internal/dependencytest/testdata/tcptls"
 	tlsfixture "github.com/wago-org/net/internal/dependencytest/testdata/tls"
+	"github.com/wago-org/net/internal/plugintest"
 	wago "github.com/wago-org/wago"
 )
 
@@ -28,8 +29,9 @@ func TestTLSFixtureRuntimeInspection(t *testing.T) {
 				t.Fatalf("compose fixture: %v", err)
 			}
 			runtime := wago.NewRuntime()
-			if err := runtime.Use(network); err != nil {
-				t.Fatalf("Use: %v", err)
+			defer runtime.Close()
+			if err := plugintest.LoadNetwork(runtime, network); err != nil {
+				t.Fatalf("LoadPlugins: %v", err)
 			}
 			if got := runtime.Capabilities(); !reflect.DeepEqual(got, test.capabilities) {
 				t.Fatalf("Capabilities = %v, want %v", got, test.capabilities)
