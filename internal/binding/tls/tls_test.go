@@ -2,16 +2,57 @@ package tls
 
 import (
 	"bytes"
+	"net/netip"
 	"testing"
 
 	"github.com/wago-org/net/internal/guest"
+	instancecore "github.com/wago-org/net/internal/instance/core"
+	nscore "github.com/wago-org/net/internal/namespace/core"
+	tlsns "github.com/wago-org/net/internal/namespace/tls"
 	"github.com/wago-org/net/internal/plugin"
+	"github.com/wago-org/net/internal/resource"
 	wago "github.com/wago-org/wago"
 )
 
 type memoryModule struct{ memory []byte }
 
 func (module memoryModule) Memory() []byte { return module.memory }
+
+type attachedMemoryModule struct {
+	memoryModule
+	instance *wago.Instance
+}
+
+func (module attachedMemoryModule) Instance() *wago.Instance { return module.instance }
+
+type pendingInfoStream struct {
+	endpoint nscore.Endpoint
+	binding  [tlsns.ChannelBindingBytes]byte
+	ready    bool
+}
+
+func (*pendingInfoStream) Close() error                           { return nil }
+func (*pendingInfoStream) Readiness() nscore.Readiness            { return nscore.ReadyConnected }
+func (stream *pendingInfoStream) LocalEndpoint() nscore.Endpoint  { return stream.endpoint }
+func (stream *pendingInfoStream) RemoteEndpoint() nscore.Endpoint { return stream.endpoint }
+func (*pendingInfoStream) TryFinishConnect() (nscore.Progress, error) {
+	return nscore.ProgressInProgress, nil
+}
+func (*pendingInfoStream) TryRead([]byte) (nscore.IOResult, error) {
+	return nscore.IOResult{State: nscore.IOWouldBlock}, nil
+}
+func (*pendingInfoStream) TryWrite([]byte) (nscore.IOResult, error) {
+	return nscore.IOResult{State: nscore.IOWouldBlock}, nil
+}
+func (*pendingInfoStream) TryShutdownWrite() (nscore.Progress, error) {
+	return nscore.ProgressInProgress, nil
+}
+func (*pendingInfoStream) ConnectionInfo() (tlsns.ConnectionInfo, bool) {
+	return tlsns.ConnectionInfo{}, false
+}
+func (stream *pendingInfoStream) ChannelBinding() ([tlsns.ChannelBindingBytes]byte, bool) {
+	return stream.binding, stream.ready
+}
 
 func TestBindingsRejectMalformedAndOverlappingRangesWithoutMutation(t *testing.T) {
 	bindings := Bindings(plugin.Host{})
@@ -42,13 +83,104 @@ func TestBindingsRejectMalformedAndOverlappingRangesWithoutMutation(t *testing.T
 		t.Fatal("malformed read mutated memory")
 	}
 
-	results[0] = 0
-	byName["connection_info"].Func(memoryModule{memory}, []uint64{1, ^uint64(0)}, results)
-	if got := guest.Status(wago.AsI32(results[0])); got != guest.StatusInvalidArgument {
-		t.Fatalf("info status = %v", got)
+	for _, name := range []string{"connection_info", "connection_info_v2", "channel_binding"} {
+		results[0] = 0
+		byName[name].Func(memoryModule{memory}, []uint64{1, ^uint64(0)}, results)
+		if got := guest.Status(wago.AsI32(results[0])); got != guest.StatusInvalidArgument {
+			t.Fatalf("%s malformed status = %v", name, got)
+		}
+		if !bytes.Equal(memory, before) {
+			t.Fatalf("malformed %s mutated memory", name)
+		}
+
+		results[0] = 0
+		byName[name].Func(memoryModule{memory}, []uint64{1, 64}, results)
+		if got := guest.Status(wago.AsI32(results[0])); got == guest.StatusOK {
+			t.Fatalf("%s unexpectedly succeeded without an instance", name)
+		}
+		if !bytes.Equal(memory, before) {
+			t.Fatalf("failed %s mutated output", name)
+		}
 	}
-	if !bytes.Equal(memory, before) {
-		t.Fatal("malformed info mutated memory")
+}
+
+func TestConnectionInfoVersionsLeaveOutputUnchangedOnWouldBlock(t *testing.T) {
+	manager, err := instancecore.NewManagerConfigured(instancecore.DefaultConfig())
+	if err != nil {
+		t.Fatal(err)
+	}
+	instance := new(wago.Instance)
+	if err := manager.Attach(instance); err != nil {
+		t.Fatal(err)
+	}
+	defer manager.Detach(instance)
+	state, ok := manager.ForInstance(instance)
+	if !ok {
+		t.Fatal("instance state missing")
+	}
+	stream := &pendingInfoStream{endpoint: nscore.Endpoint{Address: netip.MustParseAddr("192.0.2.1"), Port: 443}}
+	handle, err := state.Resources().Add(resource.KindTLSStream, stream)
+	if err != nil {
+		t.Fatal(err)
+	}
+	bindings := Bindings(plugin.NewHost(manager))
+	byName := make(map[string]plugin.Binding, len(bindings))
+	for _, binding := range bindings {
+		byName[binding.Name] = binding
+	}
+	memory := bytes.Repeat([]byte{0xa5}, 256)
+	before := append([]byte(nil), memory...)
+	module := attachedMemoryModule{memoryModule: memoryModule{memory: memory}, instance: instance}
+	for _, name := range []string{"connection_info", "connection_info_v2", "channel_binding"} {
+		results := []uint64{0}
+		byName[name].Func(module, []uint64{uint64(handle), 32}, results)
+		if got := guest.Status(wago.AsI32(results[0])); got != guest.StatusAgain {
+			t.Fatalf("%s status = %v, want AGAIN", name, got)
+		}
+		if !bytes.Equal(memory, before) {
+			t.Fatalf("%s mutated would-block output", name)
+		}
+	}
+}
+
+func TestChannelBindingWritesExactFixedOutput(t *testing.T) {
+	manager, err := instancecore.NewManagerConfigured(instancecore.DefaultConfig())
+	if err != nil {
+		t.Fatal(err)
+	}
+	instance := new(wago.Instance)
+	if err := manager.Attach(instance); err != nil {
+		t.Fatal(err)
+	}
+	defer manager.Detach(instance)
+	state, ok := manager.ForInstance(instance)
+	if !ok {
+		t.Fatal("instance state missing")
+	}
+	stream := &pendingInfoStream{endpoint: nscore.Endpoint{Address: netip.MustParseAddr("192.0.2.1"), Port: 443}, ready: true}
+	for index := range stream.binding {
+		stream.binding[index] = byte(index + 1)
+	}
+	handle, err := state.Resources().Add(resource.KindTLSStream, stream)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var binding plugin.Binding
+	for _, candidate := range Bindings(plugin.NewHost(manager)) {
+		if candidate.Name == "channel_binding" {
+			binding = candidate
+			break
+		}
+	}
+	memory := bytes.Repeat([]byte{0xa5}, 48)
+	module := attachedMemoryModule{memoryModule: memoryModule{memory: memory}, instance: instance}
+	results := []uint64{0}
+	binding.Func(module, []uint64{uint64(handle), 8}, results)
+	if got := guest.Status(wago.AsI32(results[0])); got != guest.StatusOK {
+		t.Fatalf("channel binding status = %v", got)
+	}
+	if !bytes.Equal(memory[:8], bytes.Repeat([]byte{0xa5}, 8)) || !bytes.Equal(memory[8:40], stream.binding[:]) || !bytes.Equal(memory[40:], bytes.Repeat([]byte{0xa5}, 8)) {
+		t.Fatal("channel binding output was not exact")
 	}
 }
 

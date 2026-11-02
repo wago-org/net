@@ -26,6 +26,27 @@ func TestTLSAuthorityIsDistinctAndHonorsRawTCPDeny(t *testing.T) {
 	}
 }
 
+func TestTLSServerAuthorityIsDistinctAndHonorsRawTCPDeny(t *testing.T) {
+	denied := netip.MustParsePrefix("192.0.2.9/32")
+	compiled, err := Compile(Config{Rules: []Rule{
+		{Action: ActionAllow, Transports: []Transport{TransportTLS}, Directions: []Direction{DirectionInbound}},
+		{Action: ActionDeny, Transports: []Transport{TransportTCP}, Directions: []Direction{DirectionInbound}, Prefixes: []netip.Prefix{denied}},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	allowed := netip.MustParseAddr("192.0.2.8")
+	if !compiled.CheckEndpoint(OperationTLSListen, allowed, 8443) {
+		t.Fatal("TLS server authority denied ordinary endpoint")
+	}
+	if compiled.CheckEndpoint(OperationTCPListen, allowed, 8443) {
+		t.Fatal("TLS server authority implied raw TCP listen")
+	}
+	if compiled.CheckEndpoint(OperationTLSListen, denied.Addr(), 8443) {
+		t.Fatal("raw TCP inbound deny failed to constrain private TLS listener")
+	}
+}
+
 func TestTLSSpecialClassesRemainTLSScoped(t *testing.T) {
 	compiled, err := Compile(Config{
 		Rules:              []Rule{{Action: ActionAllow, Transports: []Transport{TransportTLS}, Directions: []Direction{DirectionOutbound}}},
