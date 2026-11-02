@@ -1,0 +1,17 @@
+ordinary	github.com/wago-org/net/internal/abi/tls	^Test	fixed checked TLS ABI
+ordinary	github.com/wago-org/net/internal/backend/gotls	^Test	standard-library TLS security and lifecycle engine
+ordinary	github.com/wago-org/net/internal/backend/lneto/core	^TestTCPPort	shared TCP local-port lease ownership
+ordinary	github.com/wago-org/net/internal/backend/lneto/tcp	^(TestTCPConnectLoopbackRequiresTCPScopedAuthority|TestQuotaDeniedConnectDoesNotAllocateOrRetainOutboundStorage|TestOutboundStreamCountTracksReuseAndCoreClose)$	private transport policy and quota behavior
+ordinary	github.com/wago-org/net/internal/backend/lneto/tls	^Test	mixed raw TCP and private TLS transport
+ordinary	github.com/wago-org/net/internal/binding/tls	^Test	checked guest binding surface
+ordinary	github.com/wago-org/net/internal/dependencytest	^(TestFixtureDependencyBoundaries|TestSelfRegisterPackageDependencyBoundaries|TestTLSFixtureRuntimeInspection)$	composition and dependency isolation
+ordinary	github.com/wago-org/net/internal/instance/tls	^Test	kind-safe instance resource ownership
+ordinary	github.com/wago-org/net/internal/namespace/tls	^Test	backend-neutral TLS contract
+ordinary	github.com/wago-org/net/tls	^Test	explicit public profile and registration composition
+race	github.com/wago-org/net/internal/backend/gotls	^Test	worker bridge security and lifecycle races
+race	github.com/wago-org/net/internal/backend/lneto/core	^TestTCPPort	shared TCP lease concurrency and teardown
+race	github.com/wago-org/net/internal/backend/lneto/tcp	^(TestTCPConnectLoopbackRequiresTCPScopedAuthority|TestQuotaDeniedConnectDoesNotAllocateOrRetainOutboundStorage|TestOutboundStreamCountTracksReuseAndCoreClose)$	private transport concurrency and quota release
+race	github.com/wago-org/net/internal/backend/lneto/tls	^Test	mixed raw TCP and TLS transport races
+race	github.com/wago-org/net/internal/binding/tls	^Test	checked binding concurrency
+race	github.com/wago-org/net/internal/instance/tls	^Test	instance handle and teardown concurrency
+race	github.com/wago-org/net/tls	^Test	public TLS composition concurrency

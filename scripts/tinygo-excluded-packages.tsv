@@ -1,0 +1,5 @@
+github.com/wago-org/net/internal/backend/gotls	requires standard Go crypto/tls client APIs unavailable in TinyGo
+github.com/wago-org/net/internal/backend/lneto/tls	depends on the standard-Go-only crypto/tls engine
+github.com/wago-org/net/internal/dependencytest/testdata/tcptls	composition fixture depends on the standard-Go-only crypto/tls engine
+github.com/wago-org/net/internal/dependencytest/testdata/tls	composition fixture depends on the standard-Go-only crypto/tls engine
+github.com/wago-org/net/tls	depends on the standard-Go-only crypto/tls engine

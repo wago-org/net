@@ -98,19 +98,24 @@ serverReady:
 	if err != nil || result.Bytes != 5 {
 		t.Fatalf("write = %+v, %v", result, err)
 	}
-	for attempt := 0; attempt < 10000; attempt++ {
-		_, _, _ = client.TryService(nscore.ServiceBudget{Packets: 8, Bytes: 64 << 10, Operations: 8})
+	plaintextDeadline := time.NewTimer(5 * time.Second)
+	defer plaintextDeadline.Stop()
+	for {
+		if _, _, err := client.TryService(nscore.ServiceBudget{Packets: 8, Bytes: 64 << 10, Operations: 8}); err != nil {
+			t.Fatal(err)
+		}
 		select {
 		case got := <-serverRead:
 			if got != "hello" {
 				t.Fatalf("server read %q", got)
 			}
 			return
+		case <-plaintextDeadline.C:
+			t.Fatalf("plaintext did not reach peer: client-out=%d server-out=%d", client.bridge.cipherPending(), serverBridge.cipherPending())
 		default:
 			runtime.Gosched()
 		}
 	}
-	t.Fatal("plaintext did not reach peer")
 }
 
 func TestTransportEOFConsumesExactlyOneServiceOperation(t *testing.T) {
