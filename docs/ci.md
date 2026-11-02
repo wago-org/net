@@ -10,7 +10,7 @@ and build caches enabled and has seven bounded jobs:
   composition, security, ABI, dependency, mixed-transport, EOF, quota, and worker
   lifecycle ordinary/race evidence;
 - **tinygo-supported** installs pinned TinyGo 0.41.1 and runs
-  `scripts/tinygo-supported-test.sh` across the exact 123-package supported
+  `scripts/tinygo-supported-test.sh` across the exact 124-package supported
   surface while retaining the reviewed five-package TLS exclusion;
 - **race** runs the complete suite with the race detector and shuffle, with five
   repetitions only for scheduled or manually requested deep checks;

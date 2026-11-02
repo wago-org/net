@@ -137,7 +137,7 @@ The gate performs, in order:
 
 ### TLS platform-boundary validation on July 20, 2026
 
-The release platform matrix now discovers 128 tracked repository packages. The
+The release platform matrix now discovers 129 tracked repository packages. The
 reviewed standard-Go-only TLS closure is exactly five packages:
 
 - `github.com/wago-org/net/internal/backend/gotls`;
@@ -146,7 +146,7 @@ reviewed standard-Go-only TLS closure is exactly five packages:
 - `github.com/wago-org/net/internal/dependencytest/testdata/tls`; and
 - `github.com/wago-org/net/tls`.
 
-TinyGo 0.41.1 tests the remaining 123 packages individually and retains one log
+TinyGo 0.41.1 tests the remaining 124 packages individually and retains one log
 per package. The explicit standard-Go TLS signoff runs 17 package profiles
 (10 ordinary and seven race) resolving 109 named test targets. Arm64 signoff
 cross-compiles four test binaries; the current local auto profile is truthfully

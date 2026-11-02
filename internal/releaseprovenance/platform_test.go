@@ -75,7 +75,7 @@ func platformFixture(t testing.TB) []Check {
 	t.Helper()
 	return []Check{
 		{Name: "tls-standard-go", Status: "pass", Detail: "standard_go_tls=tested aggregate_registration=absent self_registration=absent scope=outbound-client-only ordinary_packages=10 race_packages=7 test_targets=109 package_runs=17"},
-		{Name: "tinygo-test", Status: "pass", Detail: "repository_packages=128 supported_packages=123 excluded_packages=5 exclusion_root=github.com/wago-org/net/internal/backend/gotls"},
+		{Name: "tinygo-test", Status: "pass", Detail: "repository_packages=129 supported_packages=124 excluded_packages=5 exclusion_root=github.com/wago-org/net/internal/backend/gotls"},
 	}
 }
 
@@ -136,7 +136,7 @@ func writePlatformFixture(t testing.TB, dir string) {
 		writeTestFile(t, filepath.Join(dir, "tls", "logs", mode, relative, "test.log"), content)
 	}
 
-	writeTestFile(t, filepath.Join(dir, "tinygo", "detail.txt"), "mode=test\ntinygo_version=tinygo version fixture\nrepository_packages=128\nsupported_packages=123\nexcluded_packages=5\nexclusion_root=github.com/wago-org/net/internal/backend/gotls\n")
+	writeTestFile(t, filepath.Join(dir, "tinygo", "detail.txt"), "mode=test\ntinygo_version=tinygo version fixture\nrepository_packages=129\nsupported_packages=124\nexcluded_packages=5\nexclusion_root=github.com/wago-org/net/internal/backend/gotls\n")
 	var supported []string
 	supported = append(supported, "github.com/wago-org/net", "github.com/wago-org/net/register")
 	for index := 0; len(supported) < platformSupportedPackages; index++ {

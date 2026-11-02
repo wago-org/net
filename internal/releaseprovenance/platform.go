@@ -11,8 +11,8 @@ import (
 )
 
 const (
-	platformRepositoryPackages = 128
-	platformSupportedPackages  = 123
+	platformRepositoryPackages = 129
+	platformSupportedPackages  = 124
 	platformExcludedPackages   = 5
 	platformTLSTestTargets     = 109
 )
@@ -173,8 +173,8 @@ func validateTinyGoArtifacts(root string, checks []Check) error {
 		}
 		values[key] = value
 	}
-	if values["mode"] != "test" || values["tinygo_version"] == "" || values["repository_packages"] != "128" ||
-		values["supported_packages"] != "123" || values["excluded_packages"] != "5" ||
+	if values["mode"] != "test" || values["tinygo_version"] == "" || values["repository_packages"] != "129" ||
+		values["supported_packages"] != "124" || values["excluded_packages"] != "5" ||
 		values["exclusion_root"] != "github.com/wago-org/net/internal/backend/gotls" || len(values) != 6 {
 		return fmt.Errorf("release provenance: TinyGo detail does not match the reviewed supported surface")
 	}

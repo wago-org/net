@@ -1578,7 +1578,7 @@ No repository-owned workstream or completion criterion from this hardening reque
 ## TLS release/platform integration — July 20, 2026
 
 - Added an exact fail-closed TinyGo package matrix. Discovery includes tracked
-  `testdata` directories and finds 128 repository packages: 123 are tested
+  `testdata` directories and finds 129 repository packages: 124 are tested
   individually under TinyGo 0.41.1 and exactly five real-TLS packages are
   retained as standard-Go-only with reviewed reasons.
 - Added explicit standard-Go TLS signoff with ten ordinary and seven race package
